@@ -40,20 +40,20 @@ impl<VectorType> DiskIndexReader<VectorType> {
 
         let pq_compressed_data = PQStorage::load_pq_compressed_vectors_bin::<Storage>(
             &pq_compressed_data_path,
-            metadata.npoints,
+            metadata.npoints(),
             pq_pivot_table.get_num_chunks(),
             storage_provider,
         )?;
         info!(
             "Loaded PQ centroids and in-memory compressed vectors. #points:{} #pq_chunks: {}",
-            metadata.npoints,
+            metadata.npoints(),
             pq_pivot_table.get_num_chunks()
         );
 
         Ok(DiskIndexReader {
             phantom: PhantomData,
             pq_data: Arc::<PQData>::new(PQData::new(pq_pivot_table, pq_compressed_data)?),
-            num_points: metadata.npoints,
+            num_points: metadata.npoints(),
         })
     }
 

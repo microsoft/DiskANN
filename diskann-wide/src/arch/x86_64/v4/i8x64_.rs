@@ -19,9 +19,9 @@ use crate::{
     traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
 };
 
-////////////////////
-// 8-bit unsigned //
-////////////////////
+//////////////////
+// 8-bit signed //
+//////////////////
 
 macros::x86_define_register!(i8x64, __m512i, BitMask<64, V4>, i8, 64, V4);
 macros::x86_define_splat!(i8x64 as i8, _mm512_set1_epi8, "avx512f");

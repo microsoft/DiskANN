@@ -56,13 +56,13 @@
 //! ```
 //! use experimental_multi_vector_bench::{
 //!     Chamfer, SimdApproach, TransposedWithTilingApproach,
-//!     MultiVector, TransposedMultiVector, Standard,
+//!     MultiVector, Standard, transpose_multi_vector,
 //! };
 //! use diskann_vector::DistanceFunction;
 //!
 //! // Create multi-vectors
-//! let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-//! let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
+//! let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+//! let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
 //!
 //! // Basic: SIMD-accelerated
 //! let chamfer = Chamfer::<SimdApproach>::new();
@@ -70,7 +70,7 @@
 //!
 //! // Optimized: transpose documents for better cache utilization
 //! let chamfer = Chamfer::<TransposedWithTilingApproach>::new();
-//! let transposed_doc = TransposedMultiVector::from(&doc);
+//! let transposed_doc = transpose_multi_vector(&doc);
 //! let distance = chamfer.evaluate_similarity(&query, &transposed_doc);
 //!
 //! // For large Q×D: use SGEMM (best for ≥16 queries × ≥64 docs)
@@ -90,7 +90,7 @@ pub use distance::{
     Chamfer, NaiveApproach, QueryTransposedWithTilingApproach, SgemmApproach, SgemmScratch,
     SimdApproach, TransposedApproach, TransposedWithTilingApproach,
 };
-pub use multi_vector::TransposedMultiVector;
+pub use multi_vector::{transpose_multi_vector, TransposedMultiVector};
 
 // Re-export types from diskann-quantization for unified multi-vector representation
 pub use diskann_quantization::multi_vector::{distance::QueryMatRef, Mat, MatRef, Standard};

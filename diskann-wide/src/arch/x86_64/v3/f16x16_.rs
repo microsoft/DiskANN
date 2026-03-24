@@ -37,6 +37,12 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip!(
+    f16x16,
+    f16x8,
+    _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15),
+    _mm_setr_epi8(0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15)
+);
 
 impl X86Splat for f16x16 {
     #[inline(always)]
@@ -46,7 +52,7 @@ impl X86Splat for f16x16 {
         // (1) .to_bits() -> Returns the underlying `u16` from the `f16`.
         // (2) as i16 -> Bit-cast to `i16` to give to the intrinsic.
         //
-        // SAFETY: `_mm256_set1_epi` requires AVX - implied by V3.
+        // SAFETY: `_mm256_set1_epi16` requires AVX - implied by V3.
         Self(unsafe { _mm256_set1_epi16(value.to_bits() as i16) })
     }
 }
@@ -56,7 +62,7 @@ impl X86LoadStore for f16x16 {
     unsafe fn load_simd(_: V3, ptr: *const f16) -> Self {
         // SAFETY: Pointer access guaranteed by caller.
         //
-        // `_mm256_loadu_si256` requires AVX - implied by V4.
+        // `_mm256_loadu_si256` requires AVX - implied by V3.
         Self(unsafe { _mm256_loadu_si256(ptr as *const Self::Underlying) })
     }
 
@@ -80,7 +86,7 @@ impl X86LoadStore for f16x16 {
     unsafe fn store_simd(self, ptr: *mut f16) {
         // SAFETY: Pointer access guaranteed by caller.
         //
-        // `_mm256_storeu_si256` requires AVX - implied by V4.
+        // `_mm256_storeu_si256` requires AVX - implied by V3.
         unsafe { _mm256_storeu_si256(ptr as *mut Self::Underlying, self.to_underlying()) }
     }
 
@@ -137,4 +143,5 @@ mod test_x86_f16 {
     }
 
     test_utils::ops::test_splitjoin!(f16x16 => f16x8, 0x3954a106e0cfdb7b, V3::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(f16x16 => f16x8, 0x6b2e0f9d8a41c573, V3::new_checked_uncached());
 }

@@ -19,9 +19,9 @@ use crate::{
     traits::{SIMDAbs, SIMDMask, SIMDMulAdd, SIMDVector},
 };
 
-////////////////////
-// 8-bit unsigned //
-////////////////////
+//////////////////
+// 8-bit signed //
+//////////////////
 
 macros::x86_define_register!(i8x32, __m256i, BitMask<32, V4>, i8, 32, V4);
 macros::x86_define_splat!(i8x32 as i8, _mm256_set1_epi8, "avx");
@@ -32,6 +32,12 @@ macros::x86_splitjoin!(
     _mm256_extracti128_si256,
     _mm256_set_m128i,
     "avx2"
+);
+macros::x86_zipunzip!(
+    i8x32,
+    i8x16,
+    _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15),
+    _mm_setr_epi8(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15)
 );
 
 impl std::ops::Mul for i8x32 {
@@ -138,6 +144,9 @@ mod test_x86_i8 {
     test_utils::ops::test_mul!(i8x32, 0x0f4caa80eceaa523, V4::new_checked_uncached());
     test_utils::ops::test_fma!(i8x32, 0xb8f702ba85375041, V4::new_checked_uncached());
     test_utils::ops::test_abs!(i8x32, 0x40638a9d09522d1c, V4::new_checked_uncached());
+
+    test_utils::ops::test_splitjoin!(i8x32 => i8x16, 0x475a19e80c2f3977, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i8x32 => i8x16, 0x8b3e6d1fa07c9254, V4::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i8x32, 0x941757bd5cc641a1, V4::new_checked_uncached());
 

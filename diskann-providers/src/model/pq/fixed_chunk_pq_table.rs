@@ -763,6 +763,8 @@ mod fixed_chunk_pq_table_test {
 
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
     use approx::assert_relative_eq;
+    use diskann::error::ErrorContext;
+    use diskann_utils::test_data_root;
     use diskann_vector::{
         PureDistanceFunction,
         distance::{InnerProduct, SquaredL2},
@@ -770,11 +772,7 @@ mod fixed_chunk_pq_table_test {
     use itertools::iproduct;
 
     use super::*;
-    use crate::{
-        common::AlignedBoxWithSlice,
-        model::{NUM_PQ_CENTROIDS, pq::convert_types},
-        utils::{file_exists, load_bin},
-    };
+    use crate::{common::AlignedBoxWithSlice, model::NUM_PQ_CENTROIDS, utils::read_bin_from};
 
     const DIM: usize = 128;
 
@@ -940,12 +938,8 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn load_pivot_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1015,13 +1009,9 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn preprocess_query_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1114,13 +1104,9 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn calculate_distances_tests() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
 
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
@@ -1298,68 +1284,64 @@ mod fixed_chunk_pq_table_test {
         num_pq_chunks: &usize,
         storage_provider: &StorageProvider,
     ) -> ANNResult<LoadPQPivotResult> {
-        if !file_exists(storage_provider, pq_pivots_path) {
-            return Err(ANNError::log_pq_error(
-                "ERROR: PQ k-means pivot file not found.",
-            ));
-        }
+        let mut reader = storage_provider
+            .open_reader(pq_pivots_path)
+            .with_context(|| format!("ERROR: Opening PQ k-means pivot file {}", pq_pivots_path))?;
 
-        let (data, offset_num, offset_dim) =
-            load_bin::<u64, _>(&mut storage_provider.open_reader(pq_pivots_path)?, 0)?;
-
-        let file_offset_data =
-            convert_types(&data, offset_num * offset_dim, |x: u64| x.into_usize());
-
-        if offset_num != 4 {
+        let offsets = read_bin_from::<u64>(&mut reader, 0)?;
+        if offsets.nrows() != 4 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. \
                  Offsets don't contain correct metadata, \
                  # offsets = {}, but expecting 4.",
-                pq_pivots_path, offset_num
+                pq_pivots_path,
+                offsets.nrows()
             )));
         }
+        let file_offset_data = offsets.map(|x| x.into_usize());
 
-        let (data, pq_center_num, dim) = load_bin::<f32, _>(
-            &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[0],
-        )?;
-        let pq_table = data.to_vec();
-        if pq_center_num != NUM_PQ_CENTROIDS {
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
+
+        if pivots.nrows() != NUM_PQ_CENTROIDS {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
-                pq_pivots_path, pq_center_num, NUM_PQ_CENTROIDS
+                pq_pivots_path,
+                pivots.nrows(),
+                NUM_PQ_CENTROIDS
             )));
         }
+        let dim = pivots.ncols();
 
-        let (data, centroid_dim, nc) = load_bin::<f32, _>(
-            &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[1],
-        )?;
-        let centroids = data.to_vec();
-        if centroid_dim != dim || nc != 1 {
+        let centroids = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)])?;
+        if centroids.nrows() != dim || centroids.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_dim = {}, \
                  file_cols = {} but expecting {} entries in 1 dimension.",
-                pq_pivots_path, centroid_dim, nc, dim
+                pq_pivots_path,
+                centroids.nrows(),
+                centroids.ncols(),
+                dim
             )));
         }
 
-        let (data, chunk_offset_num, nc) = load_bin::<u32, _>(
-            &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[2],
-        )?;
-        let chunk_offsets = convert_types(&data, chunk_offset_num * nc, |x: u32| x.into_usize());
-        if chunk_offset_num != num_pq_chunks + 1 || nc != 1 {
+        let chunk_offsets_m = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])?;
+        if chunk_offsets_m.nrows() != num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file at chunk offsets; \
                  file has nr={}, nc={} but expecting nr={} and nc=1.",
-                chunk_offset_num,
-                nc,
+                chunk_offsets_m.nrows(),
+                chunk_offsets_m.ncols(),
                 num_pq_chunks + 1
             )));
         }
+        let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
 
-        Ok((dim, pq_table, centroids, chunk_offsets))
+        Ok((
+            dim,
+            pivots.into_inner().into_vec(),
+            centroids.into_inner().into_vec(),
+            chunk_offsets.into_inner().into_vec(),
+        ))
     }
 
     #[test]

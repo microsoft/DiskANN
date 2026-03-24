@@ -3,17 +3,18 @@
  * Licensed under the MIT license.
  */
 
+use diskann_utils::lazy_format;
 use diskann_vector::{
+    Norm, PureDistanceFunction,
     distance::{InnerProduct, SquaredL2},
     norm::FastL2NormSquared,
-    Norm, PureDistanceFunction,
 };
 use rand::{distr::Distribution, rngs::StdRng};
 use rand_distr::StandardNormal;
-use thiserror::Error;
 
 use super::TransformFailed;
-use diskann_utils::lazy_format;
+
+use crate::test_util::Check;
 
 pub(super) trait Transformer {
     fn input_dim_(&self) -> usize;
@@ -145,101 +146,6 @@ pub(super) fn test_transform(
             &lazy_format!("{}, trial {} of {}", context, trial, num_trials),
         );
     }
-}
-
-fn within_ulp(mut got: f32, expected: f32, ulp: usize) -> bool {
-    if got == expected {
-        true
-    } else if got < expected {
-        for _ in 0..ulp {
-            got = got.next_up();
-            if got >= expected {
-                return true;
-            }
-        }
-        false
-    } else {
-        for _ in 0..ulp {
-            got = got.next_down();
-            if got <= expected {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum Check {
-    Ulp(usize),
-    AbsRel { abs: f32, rel: f32 },
-    Skip,
-}
-
-impl Check {
-    pub(super) fn ulp(ulp: usize) -> Self {
-        Self::Ulp(ulp)
-    }
-
-    pub(super) fn absrel(abs: f32, rel: f32) -> Self {
-        Self::AbsRel { abs, rel }
-    }
-
-    pub(super) fn skip() -> Self {
-        Self::Skip
-    }
-
-    pub(super) fn check(&self, got: f32, expected: f32) -> Result<(), CheckFailed> {
-        match self {
-            Self::Ulp(ulp) => {
-                if within_ulp(got, expected, *ulp) {
-                    Ok(())
-                } else {
-                    Err(CheckFailed::Ulp {
-                        ulp: *ulp,
-                        got,
-                        expected,
-                    })
-                }
-            }
-            Self::AbsRel { abs, rel } => {
-                let abs_got = (got - expected).abs();
-                let rel_got = abs_got / (got.abs().max(expected.abs()));
-
-                if abs_got <= *abs || rel_got <= *rel {
-                    Ok(())
-                } else {
-                    Err(CheckFailed::AbsRel {
-                        abs_limit: *abs,
-                        rel_limit: *rel,
-                        abs_got,
-                        rel_got,
-                        got,
-                        expected,
-                    })
-                }
-            }
-            Self::Skip => Ok(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Error)]
-pub(super) enum CheckFailed {
-    #[error("not within {ulp} ulp - got {got}, expected {expected}")]
-    Ulp { ulp: usize, got: f32, expected: f32 },
-    #[error(
-        "not within {abs_limit}/{rel_limit} - errors {abs_got}/{rel_got} - \
-            got {got}, expected {expected}"
-    )]
-    AbsRel {
-        abs_limit: f32,
-        rel_limit: f32,
-        abs_got: f32,
-        rel_got: f32,
-        got: f32,
-        expected: f32,
-    },
 }
 
 #[derive(Debug, Clone, Copy)]

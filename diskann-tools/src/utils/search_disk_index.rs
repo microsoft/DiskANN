@@ -21,8 +21,9 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::graph::traits::GraphDataType,
     storage::{get_compressed_pq_file, get_pq_pivot_file},
-    utils::{create_thread_pool, load_aligned_bin, save_bin_u32, ParallelIteratorInPool},
+    utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
 };
+use diskann_utils::{io::write_bin, views::MatrixView};
 use diskann_vector::distance::Metric;
 use opentelemetry::global::BoxedSpan;
 #[cfg(feature = "perf_test")]
@@ -389,7 +390,7 @@ where
             _span.set_attribute(KeyValue::new("latency_95", latency_95 as f64));
             _span.set_attribute(KeyValue::new("mean_cpus", mean_cpus));
             _span.set_attribute(KeyValue::new("mean_io_time", mean_io_time));
-            _span.set_attribute(KeyValue::new("mean_ios", mean_ios as f64));
+            _span.set_attribute(KeyValue::new("mean_ios", mean_ios));
             _span.set_attribute(KeyValue::new("mean_comps", mean_comps));
             _span.set_attribute(KeyValue::new("mean_hops", mean_hops));
             _span.set_attribute(KeyValue::new("recall", recall as f64));
@@ -412,12 +413,17 @@ where
             "{}_{}_idx_uint32.bin",
             parameters.result_output_prefix, l_value
         );
-        save_bin_u32(
-            &mut storage_provider.create_for_write(&cur_result_path)?,
+        let view = MatrixView::try_from(
             query_result_ids[test_id].as_slice(),
             query_num,
             parameters.recall_at as usize,
-            0,
+        )
+        .map_err(|e| CMDToolError {
+            details: e.to_string(),
+        })?;
+        write_bin(
+            view,
+            &mut storage_provider.create_for_write(&cur_result_path)?,
         )?;
     }
 

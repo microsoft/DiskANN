@@ -27,7 +27,7 @@
 
 use std::cell::UnsafeCell;
 
-use diskann_quantization::algorithms::kmeans::BlockTranspose;
+use diskann_quantization::multi_vector::BlockTransposed;
 use diskann_vector::DistanceFunction;
 use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
 
@@ -67,13 +67,13 @@ diskann_wide::alias!(m32s = mask_f32x8);
 ///
 /// ```
 /// use experimental_multi_vector_bench::{
-///     Chamfer, QueryTransposedWithTilingApproach, TransposedMultiVector, MultiVector, Standard,
+///     Chamfer, QueryTransposedWithTilingApproach, MultiVector, Standard, transpose_multi_vector,
 /// };
 /// use diskann_vector::DistanceFunction;
 ///
-/// let query = MultiVector::new(Standard::new(16, 128), 0.0f32).unwrap();
-/// let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
-/// let query_transposed = TransposedMultiVector::from(&query);
+/// let query = MultiVector::new(Standard::new(16, 128).unwrap(), 0.0f32).unwrap();
+/// let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
+/// let query_transposed = transpose_multi_vector(&query);
 ///
 /// let chamfer = Chamfer::<QueryTransposedWithTilingApproach>::new();
 /// let distance = chamfer.evaluate_similarity(&query_transposed, &doc);
@@ -134,8 +134,7 @@ impl DistanceFunction<&TransposedMultiVector, &MultiVector>
     for Chamfer<QueryTransposedWithTilingApproach>
 {
     fn evaluate_similarity(&self, query: &TransposedMultiVector, doc: &MultiVector) -> f32 {
-        let query_transposed = query.block_transposed();
-        let num_queries = query.num_vectors();
+        let num_queries = query.nrows();
         let num_docs = doc.num_vectors();
 
         // Use pre-allocated scratch buffer from the approach (resets to f32::MIN)
@@ -145,7 +144,7 @@ impl DistanceFunction<&TransposedMultiVector, &MultiVector>
         for i in (0..num_docs.saturating_sub(1)).step_by(2) {
             // SAFETY: i + 1 < num_docs ensures both indices are valid.
             let (d1, d2) = unsafe { (doc.get_row_unchecked(i), doc.get_row_unchecked(i + 1)) };
-            update_max_similarities_pair(d1, d2, query_transposed, max_similarities);
+            update_max_similarities_pair(d1, d2, query, max_similarities);
         }
 
         // Handle odd remainder document vector
@@ -153,7 +152,7 @@ impl DistanceFunction<&TransposedMultiVector, &MultiVector>
             // SAFETY: num_docs - 1 < num_docs ensures index is valid
             update_max_similarities_single(
                 unsafe { doc.get_row_unchecked(num_docs - 1) },
-                query_transposed,
+                query,
                 max_similarities,
             );
         }
@@ -171,7 +170,7 @@ impl DistanceFunction<&TransposedMultiVector, &MultiVector>
 fn update_max_similarities_pair(
     d1: &[f32],
     d2: &[f32],
-    query: &BlockTranspose<N>,
+    query: &BlockTransposed<f32, N>,
     max_similarities: &mut [f32],
 ) {
     // Process full blocks of 16 query vectors
@@ -214,7 +213,7 @@ fn update_max_similarities_pair(
 fn compute_block_inner_products_pair(
     d1: &[f32],
     d2: &[f32],
-    query: &BlockTranspose<N>,
+    query: &BlockTransposed<f32, N>,
     block: usize,
 ) -> (f32s, f32s, f32s, f32s) {
     debug_assert!(block < query.num_blocks());
@@ -364,7 +363,7 @@ fn update_max_from_simd_pair_masked(
 #[inline(always)]
 fn update_max_similarities_single(
     doc_vec: &[f32],
-    query: &BlockTranspose<N>,
+    query: &BlockTransposed<f32, N>,
     max_similarities: &mut [f32],
 ) {
     // Process full blocks of 16 query vectors
@@ -399,7 +398,7 @@ fn update_max_similarities_single(
 #[inline(always)]
 fn compute_block_inner_products_single(
     doc_vec: &[f32],
-    query: &BlockTranspose<N>,
+    query: &BlockTransposed<f32, N>,
     block: usize,
 ) -> (f32s, f32s) {
     debug_assert!(block < query.num_blocks());

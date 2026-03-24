@@ -324,7 +324,6 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use crate::storage::VirtualStorageProvider;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -440,7 +439,7 @@ mod tests {
     fn test_direct_save_load() {
         type Provider = MemoryQuantVectorProviderAsync;
 
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
         // Save to disk.
@@ -464,7 +463,7 @@ mod tests {
     async fn test_async_save_load() {
         type Provider = MemoryQuantVectorProviderAsync;
 
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
         let prefix = "/data.bin";

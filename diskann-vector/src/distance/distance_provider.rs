@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+#[cfg(target_arch = "aarch64")]
+use diskann_wide::arch::aarch64::Neon;
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 use diskann_wide::{
@@ -12,11 +14,8 @@ use diskann_wide::{
 };
 use half::f16;
 
-use super::{Cosine, CosineNormalized, InnerProduct, SquaredL2};
+use super::{implementations::Specialize, Cosine, CosineNormalized, InnerProduct, SquaredL2};
 use crate::distance::Metric;
-
-#[cfg(target_arch = "x86_64")]
-use super::implementations::Specialize;
 
 /// Return a function pointer-like [`Distance`] to compute the requested metric.
 ///
@@ -277,6 +276,18 @@ mod x86_64 {
     specialize!(@integer, V4, i8, i8, 128, 100);
 }
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64 {
+    use super::*;
+
+    specialize!(Neon, f32, f32, 768, 384, 128, 100);
+    specialize!(Neon, f32, f16, 768, 384, 128, 100);
+    specialize!(Neon, f16, f16, 768, 384, 128, 100);
+
+    specialize!(@integer, Neon, u8, u8, 128);
+    specialize!(@integer, Neon, i8, i8, 128, 100);
+}
+
 /// Specialize a distance function `F` for the dimension `dim` if possible. Otherwise,
 /// return `None`.
 trait TrySpecialize<A, F, T, U>
@@ -289,10 +300,8 @@ where
 }
 
 /// Specialize a distance function for the requested dimensionality.
-#[cfg(target_arch = "x86_64")]
 struct Spec<const N: usize>;
 
-#[cfg(target_arch = "x86_64")]
 impl<A, F, const N: usize, T, U> TrySpecialize<A, F, T, U> for Spec<N>
 where
     A: Architecture,

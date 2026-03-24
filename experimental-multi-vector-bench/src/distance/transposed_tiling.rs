@@ -27,7 +27,7 @@
 //! - Pair processing: 8 accumulators + 4 doc loads + 4 query broadcasts = 16 registers
 //! - Single fallback: 4 accumulators + 8 doc loads + 4 query broadcasts = 16 registers
 
-use diskann_quantization::algorithms::kmeans::BlockTranspose;
+use diskann_quantization::multi_vector::BlockTransposed;
 use diskann_vector::DistanceFunction;
 use diskann_wide::{SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDSelect, SIMDVector};
 
@@ -64,13 +64,13 @@ diskann_wide::alias!(m32s = mask_f32x8);
 ///
 /// ```
 /// use experimental_multi_vector_bench::{
-///     Chamfer, TransposedWithTilingApproach, TransposedMultiVector, MultiVector, Standard,
+///     Chamfer, TransposedWithTilingApproach, MultiVector, Standard, transpose_multi_vector,
 /// };
 /// use diskann_vector::DistanceFunction;
 ///
-/// let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-/// let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
-/// let transposed_doc = TransposedMultiVector::from(&doc);
+/// let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+/// let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
+/// let transposed_doc = transpose_multi_vector(&doc);
 ///
 /// let chamfer = Chamfer::<TransposedWithTilingApproach>::new();
 /// let distance = chamfer.evaluate_similarity(&query, &transposed_doc);
@@ -87,7 +87,6 @@ impl DistanceFunction<&MultiVector, &TransposedMultiVector>
     for Chamfer<TransposedWithTilingApproach>
 {
     fn evaluate_similarity(&self, query: &MultiVector, doc: &TransposedMultiVector) -> f32 {
-        let block_transposed = doc.block_transposed();
         let num_queries = query.num_vectors();
 
         let mut score = 0.0;
@@ -96,17 +95,16 @@ impl DistanceFunction<&MultiVector, &TransposedMultiVector>
         for i in (0..num_queries.saturating_sub(1)).step_by(2) {
             // SAFETY: i + 1 < num_queries ensures both indices are valid.
             let (q1, q2) = unsafe { (query.get_row_unchecked(i), query.get_row_unchecked(i + 1)) };
-            let (max1, max2) = max_inner_product_pair(q1, q2, block_transposed);
+            let (max1, max2) = max_inner_product_pair(q1, q2, doc);
             score += max1 + max2;
         }
 
         // Handle odd remainder query vector
         if !num_queries.is_multiple_of(2) {
             // SAFETY: num_queries - 1 < num_queries ensures index is valid
-            score += max_inner_product_single(
-                unsafe { query.get_row_unchecked(num_queries - 1) },
-                block_transposed,
-            );
+
+            score +=
+                max_inner_product_single(unsafe { query.get_row_unchecked(num_queries - 1) }, doc);
         }
 
         score
@@ -126,12 +124,12 @@ impl DistanceFunction<&MultiVector, &TransposedMultiVector>
 /// - 4 query broadcasts: q1_0, q1_1, q2_0, q2_1
 /// - Total: 16 YMM registers
 #[inline(always)]
-fn max_inner_product_pair(q1: &[f32], q2: &[f32], doc: &BlockTranspose<N>) -> (f32, f32) {
+fn max_inner_product_pair(q1: &[f32], q2: &[f32], doc: &BlockTransposed<f32, N>) -> (f32, f32) {
     #[inline(always)]
     fn process_block_pair(
         q1: &[f32],
         q2: &[f32],
-        doc: &BlockTranspose<N>,
+        doc: &BlockTransposed<f32, N>,
         block: usize,
     ) -> (f32s, f32s, f32s, f32s) {
         debug_assert!(block < doc.num_blocks());
@@ -256,9 +254,13 @@ fn max_inner_product_pair(q1: &[f32], q2: &[f32], doc: &BlockTranspose<N>) -> (f
 /// - 4 query broadcasts: q0, q1, q2, q3
 /// - Total: 16 YMM registers
 #[inline(always)]
-fn max_inner_product_single(query_vec: &[f32], doc: &BlockTranspose<N>) -> f32 {
+fn max_inner_product_single(query_vec: &[f32], doc: &BlockTransposed<f32, N>) -> f32 {
     #[inline(always)]
-    fn process_block(query_vec: &[f32], doc: &BlockTranspose<N>, block: usize) -> (f32s, f32s) {
+    fn process_block(
+        query_vec: &[f32],
+        doc: &BlockTransposed<f32, N>,
+        block: usize,
+    ) -> (f32s, f32s) {
         debug_assert!(block < doc.num_blocks());
 
         // Use 4 accumulator registers to reduce FMA dependency chains

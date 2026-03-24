@@ -21,7 +21,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit signed integer
 /////
 
 macros::x86_define_register!(i32x8, __m256i, BitMask<8, V4>, i32, 8, V4);
@@ -35,11 +35,12 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip_perm32!(i32x8);
 
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Add, add, _mm256_add_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Sub, sub, _mm256_sub_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Mul, mul, _mm256_mullo_epi32, "avx2");
-helpers::unsafe_map_unary_op!(i32x8, SIMDAbs, abs_simd, _mm256_abs_epi32, "sse3");
+helpers::unsafe_map_unary_op!(i32x8, SIMDAbs, abs_simd, _mm256_abs_epi32, "avx2");
 
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitAnd, bitand, _mm256_and_si256, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
@@ -108,7 +109,7 @@ impl SIMDDotProduct<i16x16> for i32x8 {
 impl SIMDDotProduct<u8x32, i8x32> for i32x8 {
     #[inline(always)]
     fn dot_simd(self, left: u8x32, right: i8x32) -> Self {
-        // SAFETY: `_mm512_dpbusd_epi32` requires AVX512_VNNI - implied by V4
+        // SAFETY: `_mm256_dpbusd_epi32` requires AVX512_VNNI + AVX512VL - implied by V4
         let r = unsafe { _mm256_dpbusd_epi32(self.0, left.0, right.0) };
         Self::from_underlying(self.arch(), r)
     }
@@ -161,6 +162,7 @@ mod test_x86_i32 {
 
     test_utils::ops::test_cmp!(i32x8, 0xdc88c2a44d17c78a, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i32x8 => i32x4, 0x475a19e80c2f3977, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i32x8 => i32x4, 0x5a0c7f3e2d194b86, V4::new_checked_uncached());
     test_utils::ops::test_select!(i32x8, 0x568c7fcbf00fb03a, V4::new_checked_uncached());
 
     // Bit ops

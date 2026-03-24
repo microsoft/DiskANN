@@ -8,22 +8,19 @@
 
 use std::{
     io,
-    io::{BufReader, Read, Seek},
+    io::{BufReader, Read},
     mem::size_of,
 };
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use byteorder::{LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
-use diskann_utils::views::Matrix;
+use diskann_utils::{io::Metadata, views::Matrix};
 use tracing::info;
 
 use crate::{
     common::AlignedBoxWithSlice,
-    utils::{
-        DatasetDto, copy_aligned_data,
-        storage_utils::{Metadata, read_metadata},
-    },
+    utils::{DatasetDto, copy_aligned_data},
 };
 
 /// Read metadata of data file.
@@ -32,13 +29,13 @@ pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
     file_name: &str,
 ) -> std::io::Result<Metadata> {
     let mut file = storage_provider.open_reader(file_name)?;
-    read_metadata(&mut file)
+    Metadata::read(&mut file)
 }
 
 /// Read metadata from data content. Use include_bytes! marco to get reference of a byte array.
 pub fn load_metadata_from_bytes(bytes: &[u8]) -> std::io::Result<Metadata> {
     let mut cursor = std::io::Cursor::new(bytes);
-    read_metadata(&mut cursor)
+    Metadata::read(&mut cursor)
 }
 
 /// Read the deleted vertex ids from file.
@@ -112,8 +109,8 @@ pub fn load_aligned_bin<T: Default + Copy + Sized + bytemuck::Pod>(
         file_size = storage_provider.get_length(bin_file)? as usize;
 
         let mut file = storage_provider.open_reader(bin_file)?;
-        let metadata = read_metadata(&mut file)?;
-        (npts, dim) = (metadata.npoints, metadata.ndims);
+        let metadata = Metadata::read(&mut file)?;
+        (npts, dim) = (metadata.npoints(), metadata.ndims());
     }
 
     let rounded_dim = dim.next_multiple_of(8);
@@ -173,32 +170,6 @@ pub fn file_exists<StorageProvider: StorageReadProvider>(
     filename: &str,
 ) -> bool {
     storage_provider.exists(filename)
-}
-
-/// Read data file
-/// # Arguments
-/// * `bin_file` - filename where the data is
-/// * `file_offset` - data offset in file
-/// * `data` - information data
-/// * `npts` - number of points
-/// * `ndims` - point dimension
-pub fn load_bin<T: Copy + bytemuck::Pod, StorageReader: StorageReadProvider>(
-    storage_read_provider: &StorageReader,
-    bin_file: &str,
-    file_offset: usize,
-) -> std::io::Result<(Vec<T>, usize, usize)> {
-    let mut reader = storage_read_provider.open_reader(bin_file)?;
-    reader.seek(std::io::SeekFrom::Start(file_offset as u64))?;
-    let metadata = read_metadata(&mut reader)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
-
-    let size = npts * dim * std::mem::size_of::<T>();
-    let mut buf = vec![0u8; size];
-    reader.read_exact(&mut buf)?;
-
-    let data: &[T] = bytemuck::cast_slice(&buf);
-
-    Ok((data.to_vec(), npts, dim))
 }
 
 /// Read data file
@@ -286,11 +257,10 @@ mod file_util_test {
     use vfs::{FileSystem, MemoryFS, SeekAndWrite};
 
     use super::*;
-    use crate::utils::save_bin_u64;
 
     #[test]
     fn get_file_size_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_get_file_size_test.bin";
 
         storage_provider
@@ -315,14 +285,13 @@ mod file_util_test {
         let result = load_metadata_from_bytes(&data);
         assert!(result.is_ok());
         let metadata = result.unwrap();
-        assert_eq!(metadata.npoints, 200);
-        assert_eq!(metadata.ndims, 128);
+        assert_eq!(metadata.npoints(), 200);
+        assert_eq!(metadata.ndims(), 128);
     }
 
     #[test]
     fn load_metadata_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_load_metadata_test.bin";
         let data = [200, 0, 0, 0, 128, 0, 0, 0]; // 200 and 128 in little endian bytes
         {
@@ -333,8 +302,8 @@ mod file_util_test {
         }
         match load_metadata_from_file(&storage_provider, file_name) {
             Ok(metadata) => {
-                assert!(metadata.npoints == 200);
-                assert!(metadata.ndims == 128);
+                assert!(metadata.npoints() == 200);
+                assert!(metadata.ndims() == 128);
             }
             Err(_e) => {}
         }
@@ -345,8 +314,7 @@ mod file_util_test {
 
     #[test]
     fn load_data_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/test_load_data_test.bin";
         //npoints=2, dim=8, 2 vectors [1.0;8] [2.0;8]
@@ -409,7 +377,7 @@ mod file_util_test {
 
     #[test]
     fn open_file_to_write_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_open_file_to_write_test.bin";
         {
             let mut writer: Box<dyn SeekAndWrite + Send> =
@@ -425,62 +393,8 @@ mod file_util_test {
     }
 
     #[test]
-    fn load_bin_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
-
-        let file_name = "/load_bin_test";
-        let data = vec![0u64, 1u64, 2u64];
-        let num_pts = data.len();
-        let dims = 1;
-        {
-            let mut file_write = storage_provider.create_for_write(file_name).unwrap();
-            let bytes_written = save_bin_u64(&mut file_write, &data, num_pts, dims, 0).unwrap();
-            assert_eq!(bytes_written, 32);
-        }
-
-        let (load_data, load_num_pts, load_dims) =
-            load_bin::<u64, VirtualStorageProvider<MemoryFS>>(&storage_provider, file_name, 0)
-                .unwrap();
-        assert_eq!(load_num_pts, num_pts);
-        assert_eq!(load_dims, dims);
-        assert_eq!(load_data, data);
-        storage_provider
-            .filesystem()
-            .remove_file(file_name)
-            .unwrap();
-    }
-
-    #[test]
-    fn load_bin_offset_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
-
-        let offset: usize = 32;
-        let file_name = "/load_bin_offset_test";
-        let data = vec![0u64, 1u64, 2u64];
-        let num_pts = data.len();
-        let dims = 1;
-        {
-            let mut file_write = storage_provider.create_for_write(file_name).unwrap();
-            let bytes_written =
-                save_bin_u64(&mut file_write, &data, num_pts, dims, offset).unwrap();
-            assert_eq!(bytes_written, 32);
-        }
-
-        let (load_data, load_num_pts, load_dims) =
-            load_bin::<u64, VirtualStorageProvider<MemoryFS>>(&storage_provider, file_name, offset)
-                .unwrap();
-        assert_eq!(load_num_pts, num_pts);
-        assert_eq!(load_dims, dims);
-        assert_eq!(load_data, data);
-        storage_provider
-            .filesystem()
-            .remove_file(file_name)
-            .unwrap();
-    }
-
-    #[test]
     fn load_multivec_bin_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/load_multivec_bin_test";
         let data = vec![0u64, 1u64, 2u64];
@@ -536,7 +450,7 @@ mod file_util_test {
 
     #[test]
     fn load_multivec_bin_zero_vector_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/load_multivec_bin_zero_vector_test";
         let data = vec![0u64, 1u64, 2u64];

@@ -21,7 +21,7 @@
 //! This layout enables efficient SIMD operations by loading 8 document values at once
 //! (f32x8) and computing 16 inner products simultaneously using two SIMD registers.
 
-use diskann_quantization::algorithms::kmeans::BlockTranspose;
+use diskann_quantization::multi_vector::BlockTransposed;
 use diskann_vector::DistanceFunction;
 use diskann_wide::{SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDSelect, SIMDVector};
 
@@ -57,13 +57,13 @@ diskann_wide::alias!(m32s = mask_f32x8);
 ///
 /// ```
 /// use experimental_multi_vector_bench::{
-///     Chamfer, TransposedApproach, TransposedMultiVector, MultiVector, Standard,
+///     Chamfer, TransposedApproach, MultiVector, Standard, transpose_multi_vector,
 /// };
 /// use diskann_vector::DistanceFunction;
 ///
-/// let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-/// let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
-/// let transposed_doc = TransposedMultiVector::from(&doc);
+/// let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+/// let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
+/// let transposed_doc = transpose_multi_vector(&doc);
 ///
 /// let chamfer = Chamfer::<TransposedApproach>::new();
 /// let distance = chamfer.evaluate_similarity(&query, &transposed_doc);
@@ -81,7 +81,7 @@ impl DistanceFunction<&MultiVector, &TransposedMultiVector> for Chamfer<Transpos
         let mut score = 0.0;
         // For each query vector, find max similarity to any document vector
         for query_vec in query.rows() {
-            score += max_inner_product_to_transposed_doc(query_vec, doc.block_transposed());
+            score += max_inner_product_to_transposed_doc(query_vec, doc);
         }
         score
     }
@@ -99,7 +99,7 @@ impl DistanceFunction<&MultiVector, &TransposedMultiVector> for Chamfer<Transpos
 /// 4. Handle partial remainder block with lane masking
 /// 5. Reduce SIMD max to scalar and negate
 #[inline(always)]
-fn max_inner_product_to_transposed_doc(query_vec: &[f32], doc: &BlockTranspose<N>) -> f32 {
+fn max_inner_product_to_transposed_doc(query_vec: &[f32], doc: &BlockTransposed<f32, N>) -> f32 {
     let min_val = f32s::splat(diskann_wide::ARCH, f32::MIN);
     let mut max_similarity = min_val;
 
@@ -140,7 +140,7 @@ fn max_inner_product_to_transposed_doc(query_vec: &[f32], doc: &BlockTranspose<N
 #[inline(always)]
 fn compute_block_inner_products(
     query_vec: &[f32],
-    doc: &BlockTranspose<N>,
+    doc: &BlockTransposed<f32, N>,
     block: usize,
 ) -> (f32s, f32s) {
     debug_assert!(block < doc.num_blocks());

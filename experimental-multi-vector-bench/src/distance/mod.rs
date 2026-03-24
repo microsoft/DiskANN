@@ -33,22 +33,22 @@
 //! ```
 //! use experimental_multi_vector_bench::{
 //!     Chamfer, TransposedWithTilingApproach, QueryTransposedWithTilingApproach,
-//!     MultiVector, TransposedMultiVector, Standard,
+//!     MultiVector, Standard, transpose_multi_vector,
 //! };
 //! use diskann_vector::DistanceFunction;
 //!
 //! // Create multi-vectors
-//! let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-//! let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
+//! let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+//! let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
 //!
 //! // For queries with few tokens: transpose documents
 //! let chamfer = Chamfer::<TransposedWithTilingApproach>::new();
-//! let transposed_doc = TransposedMultiVector::from(&doc);
+//! let transposed_doc = transpose_multi_vector(&doc);
 //! let distance = chamfer.evaluate_similarity(&query, &transposed_doc);
 //!
 //! // For queries with many tokens: transpose query
 //! let chamfer = Chamfer::<QueryTransposedWithTilingApproach>::new();
-//! let transposed_query = TransposedMultiVector::from(&query);
+//! let transposed_query = transpose_multi_vector(&query);
 //! let distance = chamfer.evaluate_similarity(&transposed_query, &doc);
 //! ```
 

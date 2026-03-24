@@ -12,7 +12,7 @@ use diskann_benchmark_runner::utils::{percentiles, MicroSeconds};
 use diskann_vector::DistanceFunction;
 
 use crate::distance::{Chamfer, SgemmScratch};
-use crate::{MultiVector, Standard, TransposedMultiVector};
+use crate::{transpose_multi_vector, MultiVector, Standard, TransposedMultiVector};
 
 use super::input::{MultiVectorOp, Run};
 
@@ -77,7 +77,7 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
 fn generate_random_multivector(rng: &mut StdRng, num_tokens: usize, dim: usize) -> MultiVector {
     use rand::distr::Distribution;
 
-    let mut mat = MultiVector::new(Standard::new(num_tokens, dim), 0.0f32).unwrap();
+    let mut mat = MultiVector::new(Standard::new(num_tokens, dim).unwrap(), 0.0f32).unwrap();
     for i in 0..num_tokens {
         if let Some(row) = mat.get_row_mut(i) {
             for val in row.iter_mut() {
@@ -177,7 +177,7 @@ where
             .map(|_| {
                 let mv =
                     generate_random_multivector(&mut rng, run.num_doc_token.get(), run.dim.get());
-                TransposedMultiVector::from(&mv)
+                transpose_multi_vector(&mv)
             })
             .collect();
 
@@ -243,7 +243,7 @@ where
         // Generate query multi-vector and transpose it
         let query_mv =
             generate_random_multivector(&mut rng, run.num_query_token.get(), run.dim.get());
-        let query = TransposedMultiVector::from(&query_mv);
+        let query = transpose_multi_vector(&query_mv);
 
         // Generate document multi-vectors (row-major)
         let docs: Vec<MultiVector> = (0..run.num_points.get())

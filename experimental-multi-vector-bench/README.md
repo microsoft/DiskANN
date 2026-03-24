@@ -15,7 +15,7 @@ This crate is an **experimental workspace** focused on:
 ## Current Status
 
 - ✅ `MultiVector` type alias for `Mat<Standard<f32>>` (row-major storage from diskann-quantization)
-- ✅ `TransposedMultiVector` type for block-transposed storage (SIMD-optimized)
+- ✅ `TransposedMultiVector` type alias for `BlockTransposed<f32, 16>` (SIMD-optimized block-transposed storage from diskann-quantization)
 - ✅ `Chamfer<Approach>` - Generic distance calculator using Inner Product similarity
 - ✅ `Chamfer<NaiveApproach>` - Scalar baseline implementation
 - ✅ `Chamfer<SimdApproach>` - SIMD-accelerated implementation
@@ -36,7 +36,7 @@ use experimental_multi_vector_bench::{
 use diskann_vector::DistanceFunction;
 
 // Create a multi-vector (3 vectors of dimension 4)
-let mv = MultiVector::new(Standard::new(3, 4), 0.0f32).unwrap();
+let mv = MultiVector::new(Standard::new(3, 4).unwrap(), 0.0f32).unwrap();
 
 // Basic usage with row-major vectors (NaiveApproach or SimdApproach)
 let chamfer = Chamfer::<SimdApproach>::new();
@@ -44,12 +44,12 @@ let distance = chamfer.evaluate_similarity(&query, &document);
 
 // Optimized for few query tokens (≤8): transpose documents
 let chamfer = Chamfer::<TransposedWithTilingApproach>::new();
-let transposed_doc = TransposedMultiVector::from(&document);
+let transposed_doc = transpose_multi_vector(&document);
 let distance = chamfer.evaluate_similarity(&query, &transposed_doc);
 
 // Optimized for many query tokens (≥16): transpose query instead
 let chamfer = Chamfer::<QueryTransposedWithTilingApproach>::new();
-let transposed_query = TransposedMultiVector::from(&query);
+let transposed_query = transpose_multi_vector(&query);
 let distance = chamfer.evaluate_similarity(&transposed_query, &document);
 
 // For large Q×D: use SGEMM

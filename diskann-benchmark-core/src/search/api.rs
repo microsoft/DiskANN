@@ -214,6 +214,10 @@ where
 ///
 /// The returned results will have querywise correspondence with the original queries as
 /// described in the documentation of [`SearchResults`].
+///
+/// # See Also
+///
+/// [`search_all`], [`search_all_with`].
 pub fn search<S>(
     search: Arc<S>,
     parameters: S::Parameters,
@@ -245,10 +249,59 @@ where
 /// Each run will be repeated `R` times where `R` is defined by [`Run::setup`]. Callers are
 /// encouraged to use multiple repetitions to obtain more stable performance metrics. Result
 /// aggregation can summarize the results across a repetition group to reduce memory consumption.
+///
+/// # See Also
+///
+/// [`search`], [`search_all_with`].
 pub fn search_all<S, Itr, A>(
     object: Arc<S>,
     parameters: Itr,
+    aggregator: A,
+) -> anyhow::Result<Vec<A::Output>>
+where
+    S: Search,
+    Itr: IntoIterator<Item = Run<S::Parameters>>,
+    A: Aggregate<S::Parameters, S::Id, S::Output>,
+{
+    search_all_with(
+        object,
+        parameters,
+        aggregator,
+        |_: &mut tokio::runtime::Builder| {},
+    )
+}
+
+/// An extension of [`search`] that allows multiple runs with different parameters with
+/// automatic result aggregation.
+///
+/// The elements of `parameters` will be executed sequentially. The element yielded from `parameters`
+/// is of type [`Run`], which encapsulates both the search parameters and setup information
+/// such as the number of tasks and repetitions. The returned vector will have the same length as
+/// the `parameters` iterator, with each entry corresponding to the aggregated results
+/// for the respective run.
+///
+/// The aggregation behavior is defined by `aggregator` using the [`Aggregate`] trait.
+/// [`Aggregate::aggregate`] will be provided with the raw results of all repetitions of
+/// a single result from `parameters`.
+///
+/// When new [`tokio::runtime::Builder`]s are created, they will be passed to the `on_builder`
+/// callback for customization. Note that these builders will already be initialized with the
+/// number of threads specified by the corresponding [`Run`].
+///
+/// # Notes on Repetitions
+///
+/// Each run will be repeated `R` times where `R` is defined by [`Run::setup`]. Callers are
+/// encouraged to use multiple repetitions to obtain more stable performance metrics. Result
+/// aggregation can summarize the results across a repetition group to reduce memory consumption.
+///
+/// # See Also
+///
+/// [`search_all`], [`search`].
+pub fn search_all_with<S, Itr, A>(
+    object: Arc<S>,
+    parameters: Itr,
     mut aggregator: A,
+    mut on_builder: impl FnMut(&mut tokio::runtime::Builder),
 ) -> anyhow::Result<Vec<A::Output>>
 where
     S: Search,
@@ -257,7 +310,7 @@ where
 {
     let mut output = Vec::new();
     for run in parameters {
-        let runtime = crate::tokio::runtime(run.setup().threads.into())?;
+        let runtime = crate::tokio::runtime_with(run.setup().threads.into(), &mut on_builder)?;
 
         let reps: usize = run.setup().reps.into();
         let raw = (0..reps)
@@ -732,22 +785,49 @@ mod tests {
                 },
             );
 
-            let mut called = 0usize;
-            let aggregator = Aggregator {
-                searcher: searcher.clone(),
-                seed,
-                called: &mut called,
-            };
+            // `search_all`
+            {
+                let mut called = 0usize;
+                let aggregator = Aggregator {
+                    searcher: searcher.clone(),
+                    seed,
+                    called: &mut called,
+                };
 
-            let len = iter.size_hint().0;
+                let len = iter.size_hint().0;
+                let results = search_all(searcher.clone(), iter.clone(), aggregator).unwrap();
 
-            let results = search_all(searcher, iter, aggregator).unwrap();
+                assert_eq!(results.len(), len);
+                assert_eq!(called, len);
 
-            assert_eq!(results.len(), len);
-            assert_eq!(called, len);
+                for (i, r) in results.into_iter().enumerate() {
+                    assert_eq!(r, hash(seed, i), "mismatch for result {}", i);
+                }
+            }
 
-            for (i, r) in results.into_iter().enumerate() {
-                assert_eq!(r, hash(seed, i), "mismatch for result {}", i);
+            // `search_all_with`
+            {
+                let mut called = 0usize;
+                let aggregator = Aggregator {
+                    searcher: searcher.clone(),
+                    seed,
+                    called: &mut called,
+                };
+
+                let len = iter.size_hint().0;
+                let mut builder_calls = 0usize;
+                let results = search_all_with(searcher, iter, aggregator, |_| {
+                    builder_calls += 1;
+                })
+                .unwrap();
+
+                assert_eq!(results.len(), len);
+                assert_eq!(called, len);
+                assert_eq!(builder_calls, len);
+
+                for (i, r) in results.into_iter().enumerate() {
+                    assert_eq!(r, hash(seed, i), "mismatch for result {}", i);
+                }
             }
         }
     }

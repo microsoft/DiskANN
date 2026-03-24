@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Multi-vector matrix types and distance functions.
 //!
@@ -14,6 +16,9 @@
 //! | [`MatRef`] | Immutable borrowed view  |
 //! | [`MatMut`] | Mutable borrowed view |
 //! | [`Repr`] | Trait defining row layout (e.g., [`Standard`]) |
+//! | [`BlockTransposed`] | Owning block-transposed matrix |
+//! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
+//! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
 //! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
@@ -29,7 +34,7 @@
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
 //! // Create an owned matrix (2 vectors, dim 3, initialized to 0.0)
-//! let mut owned = Mat::new(Standard::new(2, 3), 0.0f32).unwrap();
+//! let mut owned = Mat::new(Standard::new(2, 3).unwrap(), 0.0f32).unwrap();
 //! assert_eq!(owned.num_vectors(), 2);
 //!
 //! // Modify via mutable view
@@ -44,10 +49,10 @@
 //!
 //! // Wrap query as QueryMatRef for type-safe asymmetric distance
 //! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 2),
+//!     Standard::new(2, 2).unwrap(),
 //!     &query_data,
 //! ).unwrap().into();
-//! let doc = MatRef::new(Standard::new(2, 2), &doc_data).unwrap();
+//! let doc = MatRef::new(Standard::new(2, 2).unwrap(), &doc_data).unwrap();
 //!
 //! // Chamfer distance (sum of max similarities)
 //! let distance = Chamfer::evaluate(query, doc);
@@ -61,11 +66,13 @@
 //! assert_eq!(scores[1], -1.0);
 //! ```
 
+pub mod block_transposed;
 pub mod distance;
 pub(crate) mod matrix;
 
+pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
 pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
 pub use matrix::{
-    Defaulted, Dense, DenseMut, LayoutError, Mat, MatMut, MatRef, Repr, ReprMut, ReprOwned,
-    SliceError, Standard,
+    Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
+    Repr, ReprMut, ReprOwned, SliceError, Standard,
 };

@@ -8,8 +8,8 @@ use std::arch::x86_64::*;
 
 use super::{
     f16x8_::f16x8, f16x16_::f16x16, f32x8_::f32x8, f32x16_::f32x16, i8x16_::i8x16, i8x32_::i8x32,
-    i8x64_::i8x64, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, u8x16_::u8x16, u8x32_::u8x32,
-    u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16,
+    i8x64_::i8x64, i16x8_::i16x8, i16x16_::i16x16, i16x32_::i16x32, i32x8_::i32x8, u8x16_::u8x16,
+    u8x32_::u8x32, u8x64_::u8x64, u32x8_::u32x8, u32x16_::u32x16,
 };
 use crate::{SIMDCast, SIMDReinterpret, SIMDVector, arch::x86_64::v3, helpers};
 
@@ -77,7 +77,7 @@ helpers::unsafe_map_conversion!(u8x16, i16x16, _mm256_cvtepu8_epi16, "avx2");
 helpers::unsafe_map_conversion!(u8x32, i16x32, _mm512_cvtepu8_epi16, "avx512bw");
 
 // i32 to f32
-helpers::unsafe_map_cast!(i32x8 => (f32, f32x8), _mm256_cvtepi32_ps, "avx2");
+helpers::unsafe_map_cast!(i32x8 => (f32, f32x8), _mm256_cvtepi32_ps, "avx");
 
 helpers::unsafe_map_cast!(i16x16 => (u8, u8x16), _mm256_cvtepi16_epi8, "avx512bw,avx512vl");
 helpers::unsafe_map_cast!(i16x16 => (i8, i8x16), _mm256_cvtepi16_epi8, "avx512bw,avx512vl");
@@ -121,6 +121,18 @@ impl SIMDReinterpret<u32x16> for u8x64 {
 impl SIMDReinterpret<u32x16> for i8x64 {
     fn reinterpret_simd(self) -> u32x16 {
         u32x16(self.0)
+    }
+}
+
+impl SIMDReinterpret<u8x16> for i16x8 {
+    fn reinterpret_simd(self) -> u8x16 {
+        u8x16(self.0)
+    }
+}
+
+impl SIMDReinterpret<i16x8> for u8x16 {
+    fn reinterpret_simd(self) -> i16x8 {
+        i16x8(self.0)
     }
 }
 

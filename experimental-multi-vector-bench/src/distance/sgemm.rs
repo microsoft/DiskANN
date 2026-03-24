@@ -58,8 +58,8 @@ diskann_wide::alias!(f32s = f32x8);
 ///     Chamfer, SgemmApproach, SgemmScratch, MultiVector, Standard,
 /// };
 ///
-/// let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-/// let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
+/// let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+/// let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
 ///
 /// let mut scratch = SgemmScratch::new();
 /// let chamfer = Chamfer::<SgemmApproach>::new();
@@ -129,8 +129,8 @@ impl SgemmScratch {
 ///     Chamfer, SgemmApproach, SgemmScratch, MultiVector, Standard,
 /// };
 ///
-/// let query = MultiVector::new(Standard::new(8, 128), 0.0f32).unwrap();
-/// let doc = MultiVector::new(Standard::new(32, 128), 0.0f32).unwrap();
+/// let query = MultiVector::new(Standard::new(8, 128).unwrap(), 0.0f32).unwrap();
+/// let doc = MultiVector::new(Standard::new(32, 128).unwrap(), 0.0f32).unwrap();
 ///
 /// let chamfer = Chamfer::<SgemmApproach>::new();
 /// let mut scratch = SgemmScratch::new();
@@ -272,7 +272,7 @@ mod tests {
     use crate::Standard;
 
     fn make_multi_vector(data: &[f32], rows: usize, cols: usize) -> MultiVector {
-        let mut mat = MultiVector::new(Standard::new(rows, cols), 0.0f32).unwrap();
+        let mut mat = MultiVector::new(Standard::new(rows, cols).unwrap(), 0.0f32).unwrap();
         for (i, chunk) in data.chunks(cols).enumerate() {
             if let Some(row) = mat.get_row_mut(i) {
                 row.copy_from_slice(chunk);

@@ -5,12 +5,13 @@
 
 use std::{collections::HashMap, fmt::Debug, future::Future};
 
+use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
     },
@@ -21,6 +22,7 @@ use diskann::{
     },
     utils::{IntoUsize, VectorRepr},
 };
+
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
@@ -28,8 +30,8 @@ use crate::model::graph::{
     provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
+            SetElementHelper,
         },
         inmem::DefaultProvider,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -421,6 +423,7 @@ where
         // Sort the full precision distances.
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
         // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
     }
@@ -430,47 +433,7 @@ where
 // Strategies //
 ////////////////
 
-// A layered approach is used for search strategies. The `Internal` version does the heavy
-// lifting in terms of establishing accessors and post processing.
-//
-// However, during post-processing, the `Internal` versions of strategies will not filter
-// out the start points. The publicly exposed types *will* filter out the start points.
-//
-// This layered approach allows algorithms like `InplaceDeleteStrategy` that need to adjust
-// the adjacency list for the start point to reuse the `Internal` strategies.
-
 /// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
-    for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
-    type SearchAccessorError = Panics;
-    type PostProcessor = RemoveDeletedIdsAndCopy;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
-        _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
-}
-
-/// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
 impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
 where
     T: VectorRepr,
@@ -481,7 +444,6 @@ where
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -490,10 +452,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<T, Q, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 // Pruning
@@ -560,13 +528,19 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        *self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        RemoveDeletedIdsAndCopy
     }
 
     async fn get_delete_element<'a>(

@@ -69,12 +69,10 @@ macro_rules! architecture_hook {
     };
 }
 
-/// A utility for specializing distance computatiosn for fixed-length slices.
-#[cfg(any(test, target_arch = "x86_64"))]
+/// A utility for specializing distance computations for fixed-length slices.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
 
-#[cfg(any(test, target_arch = "x86_64"))]
 impl<A, T, L, R, const N: usize, F> diskann_wide::arch::FTarget2<A, T, &[L], &[R]>
     for Specialize<N, F>
 where
@@ -101,7 +99,6 @@ where
 
 // Outline the panic formatting and keep the calling convention the same as
 // the top function. This keeps code generation extremely lightweight.
-#[cfg(any(test, target_arch = "x86_64"))]
 #[inline(never)]
 #[allow(clippy::panic)]
 fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {

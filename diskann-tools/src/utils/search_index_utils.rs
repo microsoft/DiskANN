@@ -6,22 +6,14 @@ use std::{collections::HashSet, fmt, hash::Hash, io::Read, mem::size_of};
 
 use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
-use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::utils::read_metadata;
-use tracing::{error, info};
+use diskann_utils::io::Metadata;
+use tracing::info;
 
 use crate::utils::CMDToolError;
 
 pub struct TruthSet {
     pub index_nodes: Vec<u32>,
-    pub distances: Option<Vec<f32>>,
-    pub index_num_points: usize,
-    pub index_dimension: usize,
-}
-
-pub struct TruthSetWithAssociatedData<Data: GraphDataType> {
-    pub index_nodes: Vec<<Data as GraphDataType>::AssociatedDataType>,
     pub distances: Option<Vec<f32>>,
     pub index_num_points: usize,
     pub index_dimension: usize,
@@ -176,46 +168,20 @@ pub fn calculate_recall<T: Eq + Hash + Copy>(
     Ok(total_recall / num_queries as f64 * (100.0 / recall_bounds.get_k() as f64))
 }
 
-pub fn calculate_range_search_recall(
-    num_queries: u32,
-    groundtruth: &[Vec<u32>],
-    our_results: &[Vec<u32>],
-) -> ANNResult<f64> {
-    let mut total_recall = 0.0;
-    for i in 0..num_queries as usize {
-        let mut gt: HashSet<u32> = HashSet::new();
-        let mut res: HashSet<u32> = HashSet::new();
-
-        for &item in &groundtruth[i] {
-            gt.insert(item);
-        }
-
-        for &item in &our_results[i] {
-            res.insert(item);
-        }
-
-        let mut cur_recall = 0;
-        for &v in &gt {
-            if res.contains(&v) {
-                cur_recall += 1;
-            }
-        }
-
-        if !gt.is_empty() {
-            total_recall += (100.0 * cur_recall as f64) / gt.len() as f64;
-        } else {
-            total_recall += 100.0;
-        }
-    }
-
-    Ok(total_recall / num_queries as f64)
-}
-
 /// Calculates the filtered search recall for a set of queries.
 ///
-/// This function computes the recall percentage for a filtered search scenario, where the recall
-/// is calculated as the percentage of ground truth elements that are present in the retrieved
-/// results, normalized by the maximum of min(k_recall, ground truth size) and retrieved results length.
+/// This function computes the recall percentage for a filtered search scenario, where each
+/// query has an associated set of ground truth IDs and a set of retrieved IDs produced by a
+/// filtered search (for example, a search constrained by metadata or predicates).
+///
+/// For each query, the recall is defined as the number of ground truth elements that appear
+/// in the retrieved results divided by:
+///
+/// * `min(k_recall, ground truth size)` if `k_recall` is less than or equal to the size of the
+///   ground truth set, or
+/// * the length of the retrieved results, whichever is larger.
+///
+/// The function returns the average of this per-query recall value, expressed as a percentage.
 ///
 /// # Arguments
 ///
@@ -223,16 +189,17 @@ pub fn calculate_range_search_recall(
 /// * `gt_dist` - An optional vector of distances for the ground truth elements.
 /// * `groundtruth` - A slice of vectors, where each vector contains the ground truth IDs for a query.
 /// * `our_results` - A slice of vectors, where each vector contains the retrieved IDs for a query.
-/// * `k_recall` - number of top results to consider from ground_truth for recall calculation. Must be greater than 0.
+/// * `k_recall` - Number of top results to consider from `groundtruth` for recall calculation. Must be greater than 0.
 ///
 /// # Returns
 ///
-/// Returns an `ANNResult<f64>` containing the average recall percentage across all queries.
+/// Returns an `ANNResult<f64>` containing the average filtered-search recall percentage across all queries.
 ///
 /// # Assumptions
 ///
 /// * The `groundtruth` and `our_results` slices must have the same length as `num_queries`.
-/// * Each vector in 'groundtruth' must be the same length of the corresponding vector in 'gt_dist', if 'gt_dist' is provided.
+/// * Each vector in `groundtruth` must be the same length as the corresponding vector in `gt_dist`,
+///   if `gt_dist` is provided.
 ///
 /// # Behavior
 ///
@@ -327,38 +294,6 @@ pub fn calculate_filtered_search_recall(
     Ok(total_recall / num_queries as f64)
 }
 
-pub fn get_graph_num_frozen_points(
-    storage_provider: &impl StorageReadProvider,
-    graph_file: &str,
-) -> ANNResult<usize> {
-    let mut file = storage_provider.open_reader(graph_file)?;
-    let mut usize_buffer = [0; size_of::<usize>()];
-    let mut u32_buffer = [0; size_of::<u32>()];
-
-    file.read_exact(&mut usize_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    file.read_exact(&mut usize_buffer)?;
-    let file_frozen_pts = usize::from_le_bytes(usize_buffer);
-
-    Ok(file_frozen_pts)
-}
-
-pub fn get_graph_max_observed_degree(
-    storage_provider: &impl StorageReadProvider,
-    graph_file: &str,
-) -> ANNResult<u32> {
-    let mut file = storage_provider.open_reader(graph_file)?;
-    let mut usize_buffer = [0; size_of::<usize>()];
-    let mut u32_buffer = [0; size_of::<u32>()];
-
-    file.read_exact(&mut usize_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    let max_observed_degree = u32::from_le_bytes(u32_buffer);
-
-    Ok(max_observed_degree)
-}
-
 pub fn load_truthset(
     storage_provider: &impl StorageReadProvider,
     bin_file: &str,
@@ -366,8 +301,8 @@ pub fn load_truthset(
     let actual_file_size = storage_provider.get_length(bin_file)? as usize;
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {npts}, #dims = {dim}... ");
 
@@ -414,49 +349,6 @@ pub fn load_truthset(
     })
 }
 
-pub fn load_truthset_with_associated_data<Data: GraphDataType>(
-    storage_provider: &impl StorageReadProvider,
-    bin_file: &str,
-) -> ANNResult<TruthSetWithAssociatedData<Data>> {
-    let mut file = storage_provider.open_reader(bin_file)?;
-
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
-
-    info!("Metadata: #pts = {}, #dims = {}...", npts, dim);
-
-    let mut associated_data: Vec<Data::AssociatedDataType> =
-        vec![Data::AssociatedDataType::default(); npts * dim];
-
-    for associated_datum in associated_data.iter_mut().take(npts * dim) {
-        let mut associated_data_buf = vec![0u8; size_of::<Data::AssociatedDataType>()];
-        file.read_exact(&mut associated_data_buf)
-            .map_err(ANNError::log_io_error)?;
-
-        match bincode::deserialize::<Data::AssociatedDataType>(&associated_data_buf) {
-            Ok(datum) => {
-                *associated_datum = datum;
-            }
-            Err(_) => {
-                error!("Error deserializing associated data");
-                return Err(ANNError::log_index_error("Error reading associated data"));
-            }
-        }
-    }
-
-    let mut dists: Vec<f32> = vec![0.0; npts * dim];
-    let mut buffer = vec![0; npts * dim * size_of::<f32>()];
-    file.read_exact(&mut buffer)?;
-    dists.clone_from_slice(cast_slice::<u8, f32>(&buffer));
-
-    Ok(TruthSetWithAssociatedData {
-        index_nodes: associated_data,
-        distances: Some(dists),
-        index_num_points: npts,
-        index_dimension: dim,
-    })
-}
-
 // Load the range truthset from the file.
 // The format of the file is as follows:
 // 1. The first 4 bytes are the number of queries.
@@ -469,8 +361,8 @@ pub fn load_range_truthset(
 ) -> ANNResult<RangeSearchTruthSet> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, total_ids) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, total_ids) = metadata.into_dims();
     let mut buffer = [0; size_of::<i32>()];
 
     info!("Metadata: #pts = {}, #totalIds = {}", npts, total_ids);
@@ -706,51 +598,6 @@ mod test_search_index_utils {
     }
 
     #[test]
-    fn test_calculate_range_search_recall() {
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![5, 6],], &[vec![5, 6, 7, 8, 9],]).unwrap(),
-            100.0,
-            "Returned more results than ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1],]).unwrap(),
-            40.0,
-            "Returned less results than ground truth"
-        );
-
-        let groundtruth: Vec<Vec<u32>> = vec![vec![0, 1, 2, 3, 4], vec![5, 6]];
-
-        let our_results: Vec<Vec<u32>> = vec![vec![0, 1], vec![5, 6, 7, 8, 9]];
-
-        assert_eq!(
-            calculate_range_search_recall(2, &groundtruth, &our_results).unwrap(),
-            70.0,
-            "Combination of both cases"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1, 2, 3, 4],])
-                .unwrap(),
-            100.0,
-            "The result matched the ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1, 12, 13, 14],])
-                .unwrap(),
-            40.0,
-            "The result partially matched the ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0; 0],], &[vec![0, 1, 2, 3, 4],]).unwrap(),
-            100.0,
-            "The empty ground truth"
-        );
-    }
-
-    #[test]
     fn test_calculate_filtered_search_recall() {
         let filtered_search_recall =
             calculate_filtered_search_recall(1, None, &[vec![5, 6]], &[vec![5, 6, 7, 8, 9]], 1000)
@@ -758,18 +605,6 @@ mod test_search_index_utils {
         assert_eq!(
             filtered_search_recall, 40.0,
             "Returned more results than ground truth"
-        );
-
-        let range_search_recall =
-            calculate_range_search_recall(1, &[vec![5, 6]], &[vec![5, 6, 7, 8, 9]]).unwrap();
-        assert_eq!(
-            range_search_recall, 100.0,
-            "Returned more results than ground truth"
-        );
-
-        assert_ne!(
-            filtered_search_recall, range_search_recall,
-            "This test case showcases the difference between range and filtered search"
         );
 
         assert_eq!(
@@ -897,5 +732,46 @@ mod test_search_index_utils {
             100.0,
             "Empty ground truth should result in 100% recall"
         );
+    }
+
+    #[test]
+    fn test_recall_bounds_error_display() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let message = format!("{}", error);
+        assert!(message.contains("recall value k"));
+        assert!(message.contains("must be less than or equal to n"));
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k and n must both be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 5 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k must be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 5, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values n must be non-zero");
+    }
+
+    #[test]
+    fn test_recall_bounds_error_conversion() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let cmd_error: CMDToolError = error.into();
+        assert!(!cmd_error.details.is_empty());
+    }
+
+    #[test]
+    fn test_k_recall_at_n_getters() {
+        let recall = KRecallAtN::new(5, 10).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 10);
+    }
+
+    #[test]
+    fn test_k_recall_at_n_equal_values() {
+        let recall = KRecallAtN::new(5, 5).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 5);
     }
 }

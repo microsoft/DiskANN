@@ -34,3 +34,18 @@ impl<P: FileSystem> VirtualAlignedReaderFactory<P> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_virtual_aligned_reader_factory_new() {
+        let fs = Arc::new(VirtualStorageProvider::new_memory());
+        let path = "/test.bin".to_string();
+        let factory = VirtualAlignedReaderFactory::new(path.clone(), fs.clone());
+
+        assert_eq!(factory.file_path, path);
+        assert!(Arc::ptr_eq(&factory.storage_provider, &fs));
+    }
+}
