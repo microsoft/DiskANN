@@ -822,6 +822,10 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     }
 
     fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        // Using `Capacity::Default` means that the constructed working set will act as a
+        // cache and persist up to `capacity` items across uses of the working set.
+        //
+        // This reuse is limited to a single collection of backedges for an insert or multi-insert.
         workingset::map::Builder::new(workingset::map::Capacity::Default).build(capacity)
     }
 }
