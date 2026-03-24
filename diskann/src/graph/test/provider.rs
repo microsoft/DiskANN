@@ -774,7 +774,7 @@ impl From<AccessedInvalidId> for ANNError {
 /// A transient error from the test accessor — the ID exists but the retrieval
 /// temporarily failed. Must be acknowledged or escalated before being dropped.
 ///
-/// Amonst other things, this is used to test the transient error handling of the blanket
+/// Amognst other things, this is used to test the transient error handling of the blanket
 /// implementation of [`workingset::Fill`] for [`workingset::Map`].
 #[derive(Debug)]
 pub struct TransientAccessError {

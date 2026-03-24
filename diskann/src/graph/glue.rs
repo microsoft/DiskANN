@@ -851,13 +851,10 @@ mod tests {
 
     use diskann_vector::PreprocessedDistanceFunction;
     use futures_util::future;
-    use thiserror::Error;
 
     use super::*;
     use crate::{
-        ANNResult,
-        error::{RankedError, ToRanked, TransientError},
-        neighbor,
+        ANNResult, neighbor,
         provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
     };
 
@@ -913,7 +910,6 @@ mod tests {
     struct Retriever<'a> {
         provider: &'a SimpleProvider,
         count: &'a CountGetVector,
-        errors_are_unrecoverable: bool,
     }
 
     impl SearchExt for Retriever<'_> {
@@ -923,16 +919,8 @@ mod tests {
     }
 
     impl<'a> Retriever<'a> {
-        fn new(
-            provider: &'a SimpleProvider,
-            count: &'a CountGetVector,
-            errors_are_unrecoverable: bool,
-        ) -> Self {
-            Self {
-                provider,
-                count,
-                errors_are_unrecoverable,
-            }
+        fn new(provider: &'a SimpleProvider, count: &'a CountGetVector) -> Self {
+            Self { provider, count }
         }
     }
 
@@ -947,7 +935,7 @@ mod tests {
             Self: 'a;
         type ElementRef<'a> = f32;
 
-        type GetError = InvalidVectorId;
+        type GetError = ANNError;
         fn get_element(
             &mut self,
             id: Self::Id,
@@ -958,7 +946,7 @@ mod tests {
                     self.count.count.fetch_add(1, Ordering::Relaxed);
                     Ok(*v)
                 }
-                None => Err(InvalidVectorId::new(self.errors_are_unrecoverable)),
+                None => panic!("invalid id: {}", id),
             };
             async move { result }
         }
@@ -972,71 +960,6 @@ mod tests {
         ) -> impl Future<Output = ANNResult<Self>> + Send {
             neighbors.clear();
             future::ok(self)
-        }
-    }
-
-    #[derive(Debug, Error)]
-    #[error("invalid vector id")]
-    struct InvalidVectorId {
-        unrecoverable: bool,
-        acknowledged: bool,
-    }
-
-    impl InvalidVectorId {
-        fn new(unrecoverable: bool) -> Self {
-            Self {
-                unrecoverable,
-                acknowledged: false,
-            }
-        }
-    }
-
-    impl TransientError<Self> for InvalidVectorId {
-        fn acknowledge<D: std::fmt::Display>(mut self, _why: D) {
-            assert!(!self.unrecoverable);
-            self.acknowledged = true;
-        }
-
-        fn escalate<D: std::fmt::Display>(mut self, _why: D) -> Self {
-            assert!(!self.acknowledged);
-            self.unrecoverable = true;
-            self
-        }
-    }
-
-    impl ToRanked for InvalidVectorId {
-        type Transient = Self;
-        type Error = Self;
-
-        fn to_ranked(self) -> RankedError<Self, Self> {
-            if self.unrecoverable {
-                RankedError::Error(self)
-            } else {
-                RankedError::Transient(self)
-            }
-        }
-
-        fn from_transient(transient: Self) -> Self {
-            transient
-        }
-
-        fn from_error(error: Self) -> Self {
-            error
-        }
-    }
-
-    impl Drop for InvalidVectorId {
-        fn drop(&mut self) {
-            if !self.unrecoverable && !self.acknowledged {
-                panic!("Unacknowledged recoverable error dropped!");
-            }
-        }
-    }
-
-    impl From<InvalidVectorId> for ANNError {
-        fn from(value: InvalidVectorId) -> Self {
-            assert!(value.unrecoverable);
-            ANNError::log_async_error(value)
         }
     }
 
@@ -1059,9 +982,7 @@ mod tests {
 
     // This strategy explicitly does not define `post_process` so we can test the provided
     // implementation.
-    struct Strategy {
-        errors_are_unrecoverable: bool,
-    }
+    struct Strategy;
 
     impl SearchStrategy<SimpleProvider, f32> for Strategy {
         type QueryComputer = QueryComputer;
@@ -1073,11 +994,7 @@ mod tests {
             provider: &'a SimpleProvider,
             context: &'a CountGetVector,
         ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-            Ok(Retriever::new(
-                provider,
-                context,
-                self.errors_are_unrecoverable,
-            ))
+            Ok(Retriever::new(provider, context))
         }
     }
 
@@ -1088,9 +1005,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn test_default_post_process() {
         let ctx = CountGetVector::default();
-        let strategy = Strategy {
-            errors_are_unrecoverable: true,
-        };
+        let strategy = Strategy;
 
         let num_points: usize = 100;
         let provider = SimpleProvider {

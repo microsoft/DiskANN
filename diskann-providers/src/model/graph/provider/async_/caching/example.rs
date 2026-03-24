@@ -201,29 +201,30 @@ impl<'a> cache_provider::AsCacheAccessorFor<'a, debug_provider::FullAccessor<'a>
     }
 }
 
-type FullAccessorState = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 type FullAccessorCache<'a> = CacheAccessor<'a, bf_cache::VecCacher<f32>>;
 
-impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
+impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, WorkingSet>
     for debug_provider::FullAccessor<'a>
 {
     fn cached_fill<'b, Itr>(
         &'b mut self,
         cache: &'b mut FullAccessorCache<'a>,
-        state: &'b mut FullAccessorState,
+        set: &'b mut WorkingSet,
         itr: Itr,
     ) -> impl diskann_utils::future::SendFuture<
         Result<Self::View<'b>, cache_provider::CachingError<Self::Error, CacheAccessError>>,
     >
     where
-        Itr: Iterator<Item = u32> + Send + Sync,
+        Itr: ExactSizeIterator<Item = u32> + Clone + Send + Sync,
     {
         use cache_provider::{CachingError, ElementCache};
         use diskann::provider::{Accessor, CacheableAccessor};
 
         async move {
+            set.prepare(itr.clone());
             for i in itr {
-                match state.entry(i) {
+                match set.entry(i) {
                     workingset::map::Entry::Seeded(_) | workingset::map::Entry::Occupied(_) => {}
                     workingset::map::Entry::Vacant(vacant) => {
                         match cache.get_cached(i).map_err(CachingError::Cache)? {
@@ -242,7 +243,7 @@ impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
                     }
                 }
             }
-            Ok(state.view())
+            Ok(set.view())
         }
     }
 }

@@ -73,10 +73,7 @@ pub mod pq {
     use diskann_utils::{Reborrow, future::AsyncFriendly};
     use diskann_vector::DistanceFunction;
 
-    use crate::model::{
-        graph::provider::async_::common::Unseeded,
-        pq::{self, FixedChunkPQTable},
-    };
+    use crate::model::pq::{self, FixedChunkPQTable};
 
     type InnerMap<F, Q> = workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>>;
 
@@ -158,16 +155,6 @@ pub mod pq {
     {
         fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
             HybridMap::with_capacity_and(capacity, self.clone())
-        }
-    }
-
-    impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>> for Unseeded
-    where
-        F: AsyncFriendly,
-        Q: AsyncFriendly,
-    {
-        fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
-            HybridMap::with_capacity(capacity)
         }
     }
 
