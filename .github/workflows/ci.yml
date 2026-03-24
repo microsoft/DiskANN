@@ -26,6 +26,9 @@ env:
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.92"
 
+  # Intel SDE version used for baseline and AVX-512 emulation jobs.
+  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
+
 defaults:
   run:
     shell: bash
@@ -208,72 +211,90 @@ jobs:
   #         RUSTDOCFLAGS: -Dwarnings
 
 
-  # This is a quick test to ensure that micro-architecture detection and dispatching works.
+  # Test micro-architecture detection and dispatching.
   #
   # The crate `diskann-wide` is the primary driver for this mechanism.
   #
-  # We test by:
+  # Verify that code compiled for the `x86-64` baseline does not accidentally emit
+  # AVX/AVX2 instructions. We compile with `-Ctarget-cpu=x86-64` and run the full
+  # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
+  # Intel SDE configured as a Nehalem CPU.
   #
-  # 1. Compiling the test binaries specifically for the old `x86-64` CPU target to ensure
-  #    the compiler does not emit `x86-64-v3` instructions.
+  # SED will abort if any unrecognised instruction (e.g. AVX) is executed.
   #
-  # 2. We use QEMU to emulate an older CPU. QEMU will abort if an unrecognized instruction
-  #    is hit.
+  # EXCLUDED TESTS
   #
-  # The shell command for running tests is as follows:
-  #
-  # 1. `find ./target/**/deps`: Search for the generated artifacts from the test build.
-  #
-  # 2. `grep -e "dispatch-[a-f0-9]*$"`: Find a binary called `dispatch-a38d0...` that does
-  #    not end in ".d". In other words, the hash goes all the way to the end of the file name.
-  #
-  #    This means it's a test executable and not a library.
-  #
-  # 3. `xargs -n1`: Take the newline delimited executable and call the following command
-  #    once for each argument.
-  #
-  # 4. `qemu-x86_64 -cpu Nehalem`: Run the qemu binary using `Nehalem` as the target CPU.
-  #    This is a very old CPU model that will crash if any AVX/AVX2 instructions are executed.
-  #
-  # TODO: Enable whole test suite to run under QEMU. There are a few tests that need fixing.
-  qemu:
+  # * compile-tests: These don't behave well under SDE.
+  # * pivots::test::run_test_happy_path: The double-whammy of emulated SIMD and emulated
+  #   architecture make this test take too long.
+  baseline:
     needs: basics
-    name: qemu-tests
+    name: sde-baseline-tests
     runs-on: ubuntu-latest
     env:
-      # For this test - we explicitly overwrite the flags in `.cargo/config.toml` because
-      # we want to ensure the `x86-64` target CPU.
+      # Compile for the x86-64 baseline — no AVX, no AVX2.
       RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+      # Run every test binary through SDE emulating a Nehalem CPU.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install QEMU user-mode
-        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
 
-      - name: "QEMU Tests"
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          cargo test --package diskann-wide --locked
-          find ./target -type f -regex ".*/deps/dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
-          find ./target -type f -regex ".*/deps/float16_conversion-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
+
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      - name: "SDE Baseline Tests (Nehalem)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked \
+              --package diskann-wide \
+              --package diskann-vector \
+              --package diskann-quantization \
+              -- --skip compile_tests \
+                 --skip pivots::tests::run_test_happy_path
 
 
   # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
   #
   # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
-  # the V4 backend (avx512f, bw, cd, dq, vl, vnni, bitalg, vpopcntdq, vbmi).
+  # the diskann-wide V4 backend.
   #
   # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
   # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
   # special RUSTFLAGS are needed beyond the defaults.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
   sde:
     needs: basics
     name: sde-avx512-tests
     runs-on: ubuntu-latest
     env:
-      SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
       # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
       # Force diskann-wide tests to require V4 architecture.
@@ -309,10 +330,7 @@ jobs:
       - name: Verify SDE installation
         run: ./intel-sde/sde64 --version
 
-      # Note that the compile-tests do not behave well at all when running under SDE.
-      #
-      # We skip those tests because they don't change for AVX512 anyways.
-      - name: "SDE Tests (Sapphire Rapids)"
+      - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
           cargo test --locked \
