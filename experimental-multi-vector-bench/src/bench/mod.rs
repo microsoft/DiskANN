@@ -19,8 +19,8 @@ use diskann_benchmark_runner::{
 };
 
 use crate::distance::{
-    NaiveApproach, QueryTransposedWithTilingApproach, SgemmApproach, SimdApproach,
-    TransposedApproach, TransposedWithTilingApproach,
+    NaiveApproach, QueryTransposedCacheAwareApproach, QueryTransposedWithTilingApproach,
+    SgemmApproach, SimdApproach, TransposedApproach, TransposedWithTilingApproach,
 };
 
 pub use input::{Approach, MultiVectorInput, MultiVectorOp, Run};
@@ -143,6 +143,17 @@ fn run_benchmark(
                 "Running with Query-Transposed SIMD + Tiling approach...\n"
             )?;
             run_benchmark_with_query_transposed_approach::<QueryTransposedWithTilingApproach>(
+                kernel.input,
+                kernel.input.verify,
+                output,
+            )?
+        }
+        Approach::QueryTransposedCacheAware => {
+            writeln!(
+                output,
+                "Running with Cache-Aware Query-Transposed approach...\n"
+            )?;
+            run_benchmark_with_query_transposed_approach::<QueryTransposedCacheAwareApproach>(
                 kernel.input,
                 kernel.input.verify,
                 output,

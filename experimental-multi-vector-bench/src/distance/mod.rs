@@ -14,8 +14,7 @@
 //! | [`SimdApproach`] | `MultiVector` | `MultiVector` | SIMD inner products |
 //! | [`TransposedApproach`] | `MultiVector` | `TransposedMultiVector` | Block-transposed docs |
 //! | [`TransposedWithTilingApproach`] | `MultiVector` | `TransposedMultiVector` | + Query pair tiling |
-//! | [`QueryTransposedWithTilingApproach`] | `TransposedMultiVector` | `MultiVector` | Transposed query + doc pair tiling |
-//! | [`SgemmApproach`] | `MultiVector` | `MultiVector` | BLAS SGEMM + SIMD row-max |
+//! | [`QueryTransposedWithTilingApproach`] | `TransposedMultiVector` | `MultiVector` | Transposed query + doc pair tiling |/// | [`QueryTransposedCacheAwareApproach`] | `TransposedMultiVector` | `MultiVector` | Cache-aware tiled microkernel |//! | [`SgemmApproach`] | `MultiVector` | `MultiVector` | BLAS SGEMM + SIMD row-max |
 //!
 //! # Choosing an Approach
 //!
@@ -53,6 +52,7 @@
 //! ```
 
 mod naive;
+mod query_transposed_cache_aware;
 mod query_transposed_tiling;
 mod sgemm;
 mod simd;
@@ -60,6 +60,7 @@ mod transposed;
 mod transposed_tiling;
 
 pub use naive::NaiveApproach;
+pub use query_transposed_cache_aware::QueryTransposedCacheAwareApproach;
 pub use query_transposed_tiling::QueryTransposedWithTilingApproach;
 pub use sgemm::{SgemmApproach, SgemmScratch};
 pub use simd::SimdApproach;
@@ -86,6 +87,7 @@ pub use transposed_tiling::TransposedWithTilingApproach;
 ///   - `TransposedApproach`: Block-transposed SIMD for large datasets
 ///   - `TransposedWithTilingApproach`: Block-transposed SIMD with tiling
 ///   - `QueryTransposedWithTilingApproach`: Query-transposed SIMD with tiling and scratch buffer
+///   - `QueryTransposedCacheAwareApproach`: Cache-aware tiled microkernel with L1/L2 budgets
 #[derive(Debug)]
 pub struct Chamfer<Approach> {
     approach: Approach,

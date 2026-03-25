@@ -20,10 +20,10 @@
     "results": [
       {
         "percentiles": {
-          "mean": 384.0,
-          "median": 384.0,
-          "p90": 384,
-          "p99": 384
+          "mean": 64.0,
+          "median": 64.0,
+          "p90": 64,
+          "p99": 64
         },
         "run": {
           "dim": 128,
@@ -58,10 +58,10 @@
     "results": [
       {
         "percentiles": {
-          "mean": 114.0,
-          "median": 114.0,
-          "p90": 114,
-          "p99": 114
+          "mean": 13.0,
+          "median": 13.0,
+          "p90": 13,
+          "p99": 13
         },
         "run": {
           "dim": 128,
@@ -96,10 +96,10 @@
     "results": [
       {
         "percentiles": {
-          "mean": 47.0,
-          "median": 47.0,
-          "p90": 47,
-          "p99": 47
+          "mean": 9.0,
+          "median": 9.0,
+          "p90": 9,
+          "p99": 9
         },
         "run": {
           "dim": 128,
@@ -134,10 +134,10 @@
     "results": [
       {
         "percentiles": {
-          "mean": 75.0,
-          "median": 75.0,
-          "p90": 75,
-          "p99": 75
+          "mean": 7.0,
+          "median": 7.0,
+          "p90": 7,
+          "p99": 7
         },
         "run": {
           "dim": 128,
@@ -172,10 +172,10 @@
     "results": [
       {
         "percentiles": {
-          "mean": 93.0,
-          "median": 93.0,
-          "p90": 93,
-          "p99": 93
+          "mean": 11.0,
+          "median": 11.0,
+          "p90": 11,
+          "p99": 11
         },
         "run": {
           "dim": 128,
@@ -210,10 +210,48 @@
     "results": [
       {
         "percentiles": {
-          "mean": 235.0,
-          "median": 235.0,
-          "p90": 235,
-          "p99": 235
+          "mean": 69.0,
+          "median": 69.0,
+          "p90": 69,
+          "p99": 69
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "query_transposed_cache_aware",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 25.0,
+          "median": 25.0,
+          "p90": 25,
+          "p99": 25
         },
         "run": {
           "dim": 128,

@@ -60,6 +60,16 @@
           { "dim": 128, "num_points": 10, "loops_per_measurement": 1, "num_measurements": 1, "num_query_token": 8, "num_doc_token": 32 }
         ]
       }
+    },
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "query_transposed_cache_aware",
+        "verify": true,
+        "runs": [
+          { "dim": 128, "num_points": 10, "loops_per_measurement": 1, "num_measurements": 1, "num_query_token": 8, "num_doc_token": 32 }
+        ]
+      }
     }
   ]
 }

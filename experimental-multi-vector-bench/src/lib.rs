@@ -87,8 +87,8 @@ pub mod distance;
 mod multi_vector;
 
 pub use distance::{
-    Chamfer, NaiveApproach, QueryTransposedWithTilingApproach, SgemmApproach, SgemmScratch,
-    SimdApproach, TransposedApproach, TransposedWithTilingApproach,
+    Chamfer, NaiveApproach, QueryTransposedCacheAwareApproach, QueryTransposedWithTilingApproach,
+    SgemmApproach, SgemmScratch, SimdApproach, TransposedApproach, TransposedWithTilingApproach,
 };
 pub use multi_vector::{transpose_multi_vector, TransposedMultiVector};
 

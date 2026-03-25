@@ -22,6 +22,7 @@ This crate is an **experimental workspace** focused on:
 - ✅ `Chamfer<TransposedApproach>` - Block-transposed SIMD with transposed documents
 - ✅ `Chamfer<TransposedWithTilingApproach>` - Block-transposed SIMD with query pair tiling
 - ✅ `Chamfer<QueryTransposedWithTilingApproach>` - Transposed query with doc pair tiling
+- ✅ `Chamfer<QueryTransposedCacheAwareApproach>` - Cache-aware tiled microkernel with L1/L2 budgets
 - ✅ `Chamfer<SgemmApproach>` - BLAS SGEMM + SIMD row-max
 - ✅ Implements `diskann_vector::DistanceFunction` trait for ecosystem compatibility
 - ✅ Benchmark utility integrated with diskann-benchmark-runner
@@ -101,13 +102,14 @@ See [examples/bench.json](examples/bench.json) for benchmark configuration forma
 
 ### Benchmark Configuration
 
-The benchmark supports six approaches via the `approach` field:
+The benchmark supports seven approaches via the `approach` field:
 
 - `"naive"` - Scalar baseline
 - `"simd"` - SIMD-accelerated
 - `"transposed_simd"` - Block-transposed SIMD
 - `"transposed_with_tiling"` - Block-transposed SIMD with query pair tiling
 - `"query_transposed_with_tiling"` - Transposed query with doc pair tiling
+- `"query_transposed_cache_aware"` - Cache-aware tiled microkernel with L1/L2 budgets
 - `"sgemm"` - BLAS SGEMM + SIMD row-max
 
 ## Module Structure
@@ -123,6 +125,7 @@ src/
 │   ├── transposed.rs            # Transposed docs (TransposedApproach)
 │   ├── transposed_tiling.rs     # Transposed docs + query tiling (TransposedWithTilingApproach)
 │   ├── query_transposed_tiling.rs # Transposed query + doc tiling (QueryTransposedWithTilingApproach)
+│   ├── query_transposed_cache_aware.rs # Cache-aware tiled microkernel (QueryTransposedCacheAwareApproach)
 │   └── sgemm.rs                 # BLAS SGEMM + row-max (SgemmApproach)
 └── bench/
     ├── mod.rs                   # Benchmark registration and dispatch

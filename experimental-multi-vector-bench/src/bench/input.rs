@@ -22,6 +22,8 @@ pub enum Approach {
     TransposedWithTiling,
     /// Query-transposed SIMD approach with tiling optimization.
     QueryTransposedWithTiling,
+    /// Cache-aware query-transposed approach with L1/L2 tiled microkernel.
+    QueryTransposedCacheAware,
     /// SGEMM-based approach using BLAS matrix multiplication (baseline).
     Sgemm,
 }
@@ -34,6 +36,7 @@ impl std::fmt::Display for Approach {
             Self::TransposedSimd => write!(f, "transposed_simd"),
             Self::TransposedWithTiling => write!(f, "transposed_with_tiling"),
             Self::QueryTransposedWithTiling => write!(f, "query_transposed_with_tiling"),
+            Self::QueryTransposedCacheAware => write!(f, "query_transposed_cache_aware"),
             Self::Sgemm => write!(f, "sgemm"),
         }
     }
