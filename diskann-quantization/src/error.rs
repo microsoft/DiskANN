@@ -433,11 +433,12 @@ mod tests {
     fn inline_error_with_interior_mutability() {
         use std::error::Error;
 
-        let error = InlineError::<16>::new(ErrorWithInteriorMutability(Mutex::new(0)));
+        // Use 64 bytes to accommodate larger mutex sizes on macOS
+        let error = InlineError::<64>::new(ErrorWithInteriorMutability(Mutex::new(0)));
         assert_eq!(
             std::mem::size_of_val(&error),
-            24,
-            "expected 16 bytes for the payload and 8-bytes for the vtable"
+            72,
+            "expected 64 bytes for the payload and 8-bytes for the vtable"
         );
         assert_eq!(error.to_string(), "0");
         let debug = format!("{:?}", error);

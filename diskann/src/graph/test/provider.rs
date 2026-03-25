@@ -16,7 +16,7 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     error::{Infallible, message},
     graph::{AdjacencyList, glue, test::synthetic},
     internal::counter::{Counter, LocalCounter},
@@ -413,6 +413,33 @@ impl Provider {
     /// Return a [`provider::NeighborAccessor`] for this provider.
     pub fn neighbors(&self) -> NeighborAccessor<'_> {
         NeighborAccessor::new(self)
+    }
+
+    /// Return the adjacency lists in `self` as `source -> { destinations ... }` pairs.
+    ///
+    /// If `sort == true` then:
+    ///
+    /// * The returned vector will be ordered with the `source` entry increasing.
+    /// * Each `destination` adjacency list will be sorted by increasing ID.
+    pub fn dump_neighbors(&self, sort: bool) -> Vec<(u32, AdjacencyList<u32>)> {
+        let mut neighbors: Vec<_> = self
+            .terms
+            .iter()
+            .map(|ref_multi| {
+                let mut neighbors = ref_multi.value().neighbors.clone();
+                if sort {
+                    neighbors.sort();
+                }
+                (*ref_multi.key(), neighbors)
+            })
+            .collect();
+
+        if sort {
+            // Unstable sort is fine: `DashMap` ensures the keys are unique.
+            neighbors.sort_unstable_by_key(|(id, _)| *id);
+        }
+
+        neighbors
     }
 }
 
@@ -952,7 +979,6 @@ impl Strategy {
 
 impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Infallible;
     type SearchAccessor<'a> = Accessor<'a>;
 
@@ -963,10 +989,10 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     ) -> Result<Accessor<'a>, Infallible> {
         Ok(Accessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl glue::DefaultPostProcessor<Provider, [f32]> for Strategy {
+    default_post_processor!(glue::CopyIds);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
@@ -1015,7 +1041,9 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
+    type SearchPostProcessor = glue::CopyIds;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -1023,6 +1051,10 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
 
     fn search_strategy(&self) -> Self::SearchStrategy {
         *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     async fn get_delete_element<'a>(

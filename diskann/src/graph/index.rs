@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
@@ -1018,11 +1018,15 @@ where
             // Check if number of unique back edges source is very small. If so, we do kick
             // off the bootstrap routine and add edges from within the batch.
             //
-            // If `work.len() == 1`, then there is nothing to bootstrap since there are no
-            // other edges in the batch.
-            if self.config.intra_batch_candidates().is_none()
-                && backedges.len().div_ceil(8) <= work.len() /* NB: update docs if 8 changes */
-                && work.len() != 1
+            // Bootstrap is skipped when intra-batch candidates cover the full batch (i.e.
+            // `All` or a `Max(n)` that resolves to >= batch size), since every item already
+            // had full visibility of the batch during pruning.
+            //
+            // Setting the max to 1 ensures that if `work.len() == 1` (i.e., there is only
+            // one item in the batch) that we don't trigger bootstrap. It wouldn't do anything.
+            let resolved_candidates = self.config.intra_batch_candidates().get(work.len()).max(1);
+            if resolved_candidates < work.len() && backedges.len().div_ceil(8) <= work.len()
+            /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
                     strategy.prune_strategy(),
@@ -1070,16 +1074,24 @@ where
 
                         let mut prune_scratch = prune::Scratch::new();
                         let mut working_set = HashMap::new();
+                        let mut sorted_buf = Vec::new();
 
                         for (source, adj_list) in itr {
                             // FIXME: Give providers control over the size of the working
                             // set.
                             working_set.clear();
+
+                            // Sort backedges so that add_edge_and_prune produces
+                            // deterministic results regardless of HashMap iteration order.
+                            sorted_buf.clear();
+                            sorted_buf.extend_from_slice(adj_list);
+                            sorted_buf.sort_unstable();
+
                             self_clone
                                 .add_edge_and_prune(
                                     &strategy_clone,
                                     &context_clone,
-                                    adj_list,
+                                    &sorted_buf,
                                     *source,
                                     &mut prune_scratch,
                                     &mut working_set,
@@ -1296,8 +1308,8 @@ where
             // NOTE: We rely on `post_process` to remove deleted items from the results
             // placed into the output.
             let proxy = v.async_lower();
-            let num_results = search_strategy
-                .post_processor()
+            let post_processor = strategy.search_post_processor();
+            let num_results = post_processor
                 .post_process(
                     &mut search_accessor,
                     &*proxy,
@@ -1305,7 +1317,6 @@ where
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
@@ -2139,10 +2150,9 @@ where
     /// let params = Knn::new(10, 100, None)?;
     /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     ///
-    /// // Range search (note: uses () as output buffer, results in Output type)
+    /// // Range search (results written to output buffer)
     /// let params = Range::new(100, 0.5)?;
-    /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
-    /// // result.ids and result.distances contain the matches
+    /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     /// ```
     pub fn search<S, T, O, OB, P>(
         &self,
@@ -2153,11 +2163,35 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB>,
+        P: Search<DP, S, T>,
+        S: glue::DefaultPostProcessor<DP, T, O>,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
-        OB: ?Sized,
     {
-        search_params.search(self, strategy, context, query, output)
+        let processor = strategy.default_post_processor();
+        self.search_with(search_params, strategy, processor, context, query, output)
+    }
+
+    /// Execute a search with an explicit post-processor parameter.
+    pub fn search_with<S, T, O, OB, P, PP>(
+        &self,
+        search_params: P,
+        strategy: &S,
+        processor: PP,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<P::Output>>
+    where
+        P: Search<DP, S, T>,
+        S: glue::SearchStrategy<DP, T>,
+        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        T: ?Sized,
+    {
+        search_params.search(self, strategy, processor, context, query, output)
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.
@@ -2198,7 +2232,7 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: ?Sized,
-        S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
+        S: glue::DefaultSearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
@@ -2233,7 +2267,7 @@ where
         }
 
         let result_count = strategy
-            .post_processor()
+            .default_post_processor()
             .post_process(
                 &mut accessor,
                 query,

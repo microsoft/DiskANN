@@ -18,9 +18,12 @@ use std::{
 use diskann::{
     graph::{
         self,
-        glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{
+            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
+            SearchStrategy,
+        },
         search::Knn,
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
+        search_output_buffer, AdjacencyList, DiskANNIndex,
     },
     neighbor::Neighbor,
     provider::{
@@ -300,7 +303,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
     {
         let provider = accessor.provider;
 
@@ -335,15 +340,8 @@ where
     }
 }
 
-impl<'this, Data, ProviderFactory>
-    SearchStrategy<
-        DiskProvider<Data>,
-        [Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
-    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+impl<'this, Data, ProviderFactory> SearchStrategy<DiskProvider<Data>, [Data::VectorDataType]>
+    for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
@@ -351,7 +349,6 @@ where
     type QueryComputer = DiskQueryComputer;
     type SearchAccessor<'a> = DiskAccessor<'a, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = RerankAndFilter<'this>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -366,8 +363,24 @@ where
             self.scratch_pool,
         )
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
+impl<'this, Data, ProviderFactory>
+    DefaultPostProcessor<
+        DiskProvider<Data>,
+        [Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    type Processor = RerankAndFilter<'this>;
+
+    fn default_post_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }
