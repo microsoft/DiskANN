@@ -231,6 +231,15 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
         self.nrows % GROUP
     }
 
+    /// Total number of logical rows rounded up to the next multiple of `GROUP`.
+    ///
+    /// This is the number of "available" row slots in the backing allocation,
+    /// including zero-padded rows in the last (possibly partial) block.
+    #[inline]
+    pub fn available_rows(&self) -> usize {
+        self.num_blocks() * GROUP
+    }
+
     /// The stride (in elements) between the start of consecutive blocks.
     #[inline]
     fn block_stride(&self) -> usize {
@@ -743,6 +752,15 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         self.data.repr().remainder()
     }
 
+    /// Total number of logical rows rounded up to the next multiple of `GROUP`.
+    ///
+    /// This is the number of "available" row slots in the backing allocation,
+    /// including zero-padded rows in the last (possibly partial) block.
+    #[inline]
+    pub fn available_rows(&self) -> usize {
+        self.data.repr().available_rows()
+    }
+
     /// Return a raw typed pointer to the start of the backing data.
     #[inline]
     pub fn as_ptr(&self) -> *const T {
@@ -870,6 +888,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn available_rows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1017,6 +1036,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn available_rows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1161,6 +1181,33 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     /// Construct a block-transposed matrix by copying data from a [`MatrixView`].
     pub fn from_matrix_view(v: MatrixView<'_, T>) -> Self {
         Self::from_strided(v.into())
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// From<MatRef<Standard<T>>> for BlockTransposed
+// ════════════════════════════════════════════════════════════════════
+
+impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
+    From<MatRef<'_, super::matrix::Standard<T>>> for BlockTransposed<T, GROUP, PACK>
+{
+    /// Convert a row-major [`MatRef`] into a block-transposed matrix.
+    ///
+    /// This copies the data from the dense row-major layout into the
+    /// block-transposed layout suitable for SIMD distance computation.
+    fn from(v: MatRef<'_, super::matrix::Standard<T>>) -> Self {
+        let nrows = v.num_vectors();
+        let ncols = v.vector_dim();
+        // SAFETY: `MatRef<Standard<T>>` stores `nrows * ncols` contiguous `T` elements
+        // starting at the raw pointer returned by `as_raw_ptr()`.
+        let slice =
+            unsafe { std::slice::from_raw_parts(v.as_raw_ptr().cast::<T>(), nrows * ncols) };
+        // The dimensions are guaranteed valid because `MatRef<Standard<T>>` was
+        // constructed from the same `nrows * ncols` layout.
+        #[allow(clippy::expect_used)]
+        let view = MatrixView::try_from(slice, nrows, ncols)
+            .expect("MatRef<Standard<T>> has valid dimensions");
+        Self::from_matrix_view(view)
     }
 }
 

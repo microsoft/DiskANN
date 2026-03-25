@@ -71,7 +71,7 @@ pub mod distance;
 pub(crate) mod matrix;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
+pub use distance::{Chamfer, MaxSim, MaxSimError, QueryBlockTransposedRef, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,

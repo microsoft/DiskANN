@@ -299,7 +299,7 @@ mod tests {
             // No query vectors means sum is 0
             assert_eq!(result, 0.0);
 
-            let result = Chamfer::evaluate(doc.into(), query.deref().reborrow());
+            let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
             assert_eq!(result, 0.0);
         }

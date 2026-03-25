@@ -45,8 +45,10 @@
 //! // scores[1] =  0.0 (query[1] has no good match)
 //! ```
 
+pub mod cache_aware;
 mod max_sim;
 mod simple;
 
+pub use cache_aware::QueryBlockTransposedRef;
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
 pub use simple::QueryMatRef;
