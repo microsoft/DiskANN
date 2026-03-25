@@ -88,6 +88,8 @@ pub use double::u64x4;
 mod macros;
 mod masks;
 
+pub use masks::mask32x4;
+
 // The ordering is `Scalar < Neon`.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub(super) enum LevelInner {

@@ -12,6 +12,10 @@ use crate::graph::{SearchOutputBuffer, search_output_buffer};
 mod queue;
 pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue};
 
+pub fn test_function(x: &mut NeighborPriorityQueue<u32>, n: Neighbor<u32>) {
+    x.insert(n)
+}
+
 #[cfg(feature = "experimental_diversity_search")]
 mod diverse_priority_queue;
 #[cfg(feature = "experimental_diversity_search")]

@@ -3,8 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
+use diskann_wide::{ARCH, SIMDMask, SIMDMinMax, SIMDPartialOrd, SIMDVector, SIMDSelect};
 use std::marker::PhantomData;
+
+use crate::utils::IntoUsize;
 
 use super::Neighbor;
 
@@ -252,55 +254,119 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         diskann_wide::alias!(f32s = f32x8);
-        let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
+        diskann_wide::alias!(u32s = u32x8);
+
+        let arch = ARCH;
+        let target = f32s::splat(ARCH, nbr.distance);
+        let max = u32s::splat(arch, u32::MAX);
+        let step = u32s::splat(arch, 8);
 
         let mut index = 0;
 
-        // Check 16 items at a time
-        while index + 16 <= self.size {
-            let search =
-                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
-            let offset1 = search.ge_simd(target).first();
-            let search = unsafe {
-                f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index + 8))
-            };
-            let offset2 = search.ge_simd(target).first();
+        let mut best = max;
+        let mut indices = u32s::from_array(arch, std::array::from_fn(|i| i as u32));
 
-            match (offset1, offset2) {
-                (Some(offset), _) => return index + offset,
-                (None, Some(offset)) => return index + 8 + offset,
-                _ => (),
+        let ptr = self.distances.as_ptr();
+        let size = self.size;
+
+        let mut offset = 0;
+
+        let stride = u32s::LANES;
+        while offset + 4 * stride <= size {
+            // Weeeeeeee
+            unsafe {
+                let m = f32s::load_simd(arch, ptr.add(offset)).ge_simd(target);
+                best = best.min_simd(m.select(indices, max));
+                indices = indices + step;
+
+                let m = f32s::load_simd(arch, ptr.add(offset + stride)).ge_simd(target);
+                best = best.min_simd(m.select(indices, max));
+                indices = indices + step;
+
+                let m = f32s::load_simd(arch, ptr.add(offset + 2 * stride)).ge_simd(target);
+                best = best.min_simd(m.select(indices, max));
+                indices = indices + step;
+
+                let m = f32s::load_simd(arch, ptr.add(offset + 3 * stride)).ge_simd(target);
+                best = best.min_simd(m.select(indices, max));
+                indices = indices + step;
             }
 
-            index += 16;
-        }
+            offset += 4 * stride;
 
-        // Check the remaining items
-        if index + 8 <= self.size {
-            let search =
-                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
-            let offset = search.ge_simd(target).first();
-            if let Some(offset) = offset {
-                return index + offset;
-            }
-            index += 8;
-        }
-
-        if index < self.size {
-            let search = unsafe {
-                f32s::load_simd_first(
-                    diskann_wide::ARCH,
-                    self.distances.as_ptr().add(index),
-                    self.size - index,
-                )
-            };
-            let offset = search.ge_simd(target).first();
-            if let Some(offset) = offset {
-                return index + offset;
+            let min = horizontal_min(best.to_array());
+            if min != u32::MAX {
+                return min.into_usize();
             }
         }
 
-        self.size
+        // Drain remaining full vectors (0-3 iterations)
+        while offset + 8 <= size {
+            unsafe {
+                let m = f32s::load_simd(arch, ptr.add(offset)).ge_simd(target);
+                best = best.min_simd(m.select(indices, max));
+                indices = indices + step;
+            }
+            offset += 8;
+        }
+
+        // Tail: fewer than 8 remaining
+        if offset < size {
+            unsafe {
+                let mask =
+                    f32s::load_simd_first(arch, ptr.add(offset), size - offset).ge_simd(target);
+                best = best.min_simd(mask.select(indices, max));
+            }
+        }
+
+        let min_idx = horizontal_min(best.to_array()).into_usize();
+        if min_idx >= size { size } else { min_idx }
+
+        // // Check 16 items at a time
+        // while index + 16 <= self.size {
+        //     let search =
+        //         unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+        //     let offset1 = search.ge_simd(target).first();
+        //     let search = unsafe {
+        //         f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index + 8))
+        //     };
+        //     let offset2 = search.ge_simd(target).first();
+
+        //     match (offset1, offset2) {
+        //         (Some(offset), _) => return index + offset,
+        //         (None, Some(offset)) => return index + 8 + offset,
+        //         _ => (),
+        //     }
+
+        //     index += 16;
+        // }
+
+        // // Check the remaining items
+        // if index + 8 <= self.size {
+        //     let search =
+        //         unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+        //     let offset = search.ge_simd(target).first();
+        //     if let Some(offset) = offset {
+        //         return index + offset;
+        //     }
+        //     index += 8;
+        // }
+
+        // if index < self.size {
+        //     let search = unsafe {
+        //         f32s::load_simd_first(
+        //             diskann_wide::ARCH,
+        //             self.distances.as_ptr().add(index),
+        //             self.size - index,
+        //         )
+        //     };
+        //     let offset = search.ge_simd(target).first();
+        //     if let Some(offset) = offset {
+        //         return index + offset;
+        //     }
+        // }
+
+        // self.size
     }
 
     /// Get the neighbor at index - SAFETY: index must be less than size
@@ -496,6 +562,16 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             self.cursor = 0;
         }
     }
+}
+
+fn horizontal_min(a: [u32; 8]) -> u32 {
+    a[0].min(a[1])
+        .min(a[2])
+        .min(a[3])
+        .min(a[4])
+        .min(a[5])
+        .min(a[6])
+        .min(a[7])
 }
 
 impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<I> {

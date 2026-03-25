@@ -16,7 +16,8 @@ use crate::{
     constant::Const,
     helpers,
     traits::{
-        SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector,
+        SIMDMask, SIMDMinMax, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDSelect, SIMDSumTree,
+        SIMDVector,
     },
 };
 
@@ -138,6 +139,20 @@ impl SIMDPartialOrd for u32x8 {
     }
 }
 
+impl SIMDMinMax for u32x8 {
+    #[inline(always)]
+    fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_min_epu32` requires AVX2, which is implied by the V3 architecture.
+        Self(unsafe { _mm256_min_epu32(self.0, rhs.0) })
+    }
+
+    #[inline(always)]
+    fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `_mm256_max_epu32` requires AVX2, which is implied by the V3 architecture.
+        Self(unsafe { _mm256_max_epu32(self.0, rhs.0) })
+    }
+}
+
 impl SIMDSumTree for u32x8 {
     #[inline(always)]
     fn sum_tree(self) -> u32 {
@@ -228,4 +243,7 @@ mod test_x86_u32 {
 
     // Reductions
     test_utils::ops::test_sumtree!(u32x8, 0xd6780b08573e203b, V3::new_checked_uncached());
+
+    // MinMax
+    test_utils::ops::test_minmax!(u32x8, 0xbc62480ada063710, V3::new_checked_uncached());
 }
