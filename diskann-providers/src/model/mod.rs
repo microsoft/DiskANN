@@ -9,9 +9,7 @@ pub mod configuration;
 pub use configuration::IndexConfiguration;
 
 pub mod scratch;
-pub use scratch::{
-    ArcConcurrentBoxedQueue, ConcurrentQueue, FP_VECTOR_MEM_ALIGN, PQScratch, concurrent_queue,
-};
+pub use scratch::{FP_VECTOR_MEM_ALIGN, PQScratch};
 
 pub mod pq;
 pub use pq::{
