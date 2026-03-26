@@ -201,15 +201,13 @@ fn test_post_process_only_passes_matching_candidates_to_inner() {
     // CopyIds simply copies whatever it receives into the output buffer,
     // so the output reflects exactly what FilterResults lets through.
     let count = rt
-        .block_on(
-            FilterResults::new(glue::CopyIds).post_process(
-                &mut doc_accessor,
-                &filter_query,
-                &computer,
-                candidates.into_iter(),
-                &mut output,
-            ),
-        )
+        .block_on(FilterResults::new(glue::CopyIds).post_process(
+            &mut doc_accessor,
+            &filter_query,
+            &computer,
+            candidates.into_iter(),
+            &mut output,
+        ))
         .expect("post_process");
 
     // Only the two red-labeled candidates should have been forwarded

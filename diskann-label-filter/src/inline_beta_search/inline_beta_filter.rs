@@ -127,8 +127,11 @@ pub struct FilterResults<IPP> {
 }
 
 impl<IPP> FilterResults<IPP> {
+    #[cfg(test)]
     pub(crate) fn new(inner_post_processor: IPP) -> Self {
-        Self { inner_post_processor }
+        Self {
+            inner_post_processor,
+        }
     }
 }
 

@@ -38,9 +38,7 @@ fn make_test_provider() -> Provider {
     Provider::new(config)
 }
 
-fn make_doc_provider(
-    provider: Provider,
-) -> DocumentProvider<Provider, RoaringAttributeStore<u32>> {
+fn make_doc_provider(provider: Provider) -> DocumentProvider<Provider, RoaringAttributeStore<u32>> {
     DocumentProvider::new(provider, RoaringAttributeStore::new())
 }
 
