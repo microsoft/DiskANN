@@ -14,7 +14,9 @@ use diskann::{
     provider::BuildQueryComputer,
     utils::{IntoUsize, VectorRepr},
 };
-use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
+use diskann_vector::{
+    DistanceFunction, MathematicalValue, PureDistanceFunction, distance::InnerProduct,
+};
 
 use super::{
     inmem::GetFullPrecision,
@@ -33,7 +35,7 @@ impl std::fmt::Display for DeterminantDiversityError {
         match self {
             Self::InvalidTopK { top_k } => write!(f, "top_k must be > 0, got {top_k}"),
             Self::InvalidEta { eta } => write!(f, "eta must be >= 0.0, got {eta}"),
-            Self::InvalidPower { power } => write!(f, "power must be > 0.0, got {power}"),
+            Self::InvalidPower { power } => write!(f, "power must be >= 0.0, got {power}"),
         }
     }
 }
@@ -63,7 +65,7 @@ impl DeterminantDiversitySearchParams {
             });
         }
 
-        if determinant_diversity_power <= 0.0 || !determinant_diversity_power.is_finite() {
+        if determinant_diversity_power < 0.0 || !determinant_diversity_power.is_finite() {
             return Err(DeterminantDiversityError::InvalidPower {
                 power: determinant_diversity_power,
             });
@@ -97,9 +99,9 @@ where
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
         let result = (|| {
-            let query_f32 = T::as_f32(query).map_err(Into::into)?;
             let full = accessor.as_full_precision();
             let checker = accessor.as_deletion_check();
+            let distance = full.distance();
 
             let mut candidates_with_vectors = Vec::new();
             for candidate in candidates {
@@ -109,12 +111,15 @@ where
 
                 let vector = unsafe { full.get_vector_sync(candidate.id.into_usize()) };
                 let vector_f32 = T::as_f32(vector).map_err(Into::into)?;
+                let full_precision_distance = distance.evaluate_similarity(query, vector);
                 candidates_with_vectors.push((
                     candidate.id,
-                    candidate.distance,
+                    full_precision_distance,
                     vector_f32.to_vec(),
                 ));
             }
+
+            let query_f32 = T::as_f32(query).map_err(Into::into)?;
 
             let reranked = determinant_diversity_post_process(
                 candidates_with_vectors,
@@ -139,6 +144,15 @@ pub fn determinant_diversity_post_process<Id: Copy>(
     determinant_diversity_power: f64,
 ) -> Vec<(Id, f32)> {
     if candidates.is_empty() || query.is_empty() {
+        return Vec::new();
+    }
+
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|(_, _, vector)| vector.len() == query.len())
+        .collect();
+
+    if candidates.is_empty() {
         return Vec::new();
     }
 
@@ -192,8 +206,8 @@ fn post_process_with_eta_f32<Id: Copy>(
     let mut residuals = Vec::with_capacity(n);
     let mut norms_sq = Vec::with_capacity(n);
 
-    for (_, _, v) in &candidates {
-        let similarity = dot_product(v, query);
+    for (_, similarity_to_query, v) in &candidates {
+        let similarity = *similarity_to_query;
         let scale = similarity.max(0.0).powf(power as f32) * inv_sqrt_eta;
         let residual: Vec<f32> = v.iter().map(|&x| x * scale).collect();
         let norm_sq = dot_product(&residual, &residual);
@@ -203,6 +217,7 @@ fn post_process_with_eta_f32<Id: Copy>(
 
     let mut available = vec![true; n];
     let mut selected = Vec::with_capacity(k);
+    let mut projections = vec![0.0f32; n];
 
     for _ in 0..k {
         let best_idx = available
@@ -235,13 +250,12 @@ fn post_process_with_eta_f32<Id: Copy>(
         let inv_norm_sq = 1.0 / best_norm_sq;
         let r_star_copy = residuals[selected_index].clone();
 
-        let mut projections = Vec::with_capacity(n);
         for i in 0..n {
             if !available[i] {
-                projections.push(0.0);
+                projections[i] = 0.0;
             } else {
                 let projection = dot_product(&residuals[i], &r_star_copy) * inv_norm_sq;
-                projections.push(projection);
+                projections[i] = projection;
             }
         }
 
@@ -289,8 +303,8 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
     let mut residuals = Vec::with_capacity(n);
     let mut norms_sq = Vec::with_capacity(n);
 
-    for (_, _, v) in &candidates {
-        let similarity = dot_product(v, query);
+    for (_, similarity_to_query, v) in &candidates {
+        let similarity = *similarity_to_query;
         let scale = similarity.max(0.0).powf(power as f32);
         let residual: Vec<f32> = v.iter().map(|&x| x * scale).collect();
         let norm_sq = dot_product(&residual, &residual);
@@ -300,6 +314,7 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
 
     let mut available = vec![true; n];
     let mut selected = Vec::with_capacity(k);
+    let mut projections = vec![0.0f32; n];
 
     for _ in 0..k {
         let best = available
@@ -331,13 +346,12 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
         let inv_norm_sq_star = 1.0 / best_norm_sq;
         let r_star_copy = residuals[best_index].clone();
 
-        let mut projections = Vec::with_capacity(n);
         for j in 0..n {
             if !available[j] {
-                projections.push(0.0);
+                projections[j] = 0.0;
             } else {
                 let projection = dot_product(&residuals[j], &r_star_copy) * inv_norm_sq_star;
-                projections.push(projection);
+                projections[j] = projection;
             }
         }
 
@@ -378,6 +392,9 @@ mod tests {
     fn test_validation_valid_params() {
         let result = DeterminantDiversitySearchParams::new(10, 0.01, 2.0);
         assert!(result.is_ok());
+
+        let result = DeterminantDiversitySearchParams::new(10, 0.01, 0.0);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -394,10 +411,6 @@ mod tests {
             (
                 DeterminantDiversitySearchParams::new(10, f64::NAN, 2.0),
                 DeterminantDiversityError::InvalidEta { eta: f64::NAN },
-            ),
-            (
-                DeterminantDiversitySearchParams::new(10, 0.01, 0.0),
-                DeterminantDiversityError::InvalidPower { power: 0.0 },
             ),
             (
                 DeterminantDiversitySearchParams::new(10, 0.01, -1.0),
@@ -486,5 +499,17 @@ mod tests {
 
         let result = determinant_diversity_post_process(candidates, &query, 10, 0.01, 2.0);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_determinant_diversity_post_process_dimension_mismatch_is_skipped() {
+        let bad = vec![1.0f32, 0.0];
+        let good = vec![0.0f32, 1.0, 0.0];
+        let candidates = vec![(1u32, 0.5f32, bad), (2u32, 0.3f32, good)];
+        let query = vec![1.0, 1.0, 1.0];
+
+        let result = determinant_diversity_post_process(candidates, &query, 10, 0.01, 2.0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 2);
     }
 }

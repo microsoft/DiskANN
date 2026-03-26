@@ -245,8 +245,8 @@ impl CheckDeserialization for DiskSearchPhase {
                 anyhow::bail!("determinant_diversity_eta must be >= 0.0 and finite, got {eta}");
             }
 
-            if power <= 0.0 || !power.is_finite() {
-                anyhow::bail!("determinant_diversity_power must be > 0.0 and finite, got {power}");
+            if power < 0.0 || !power.is_finite() {
+                anyhow::bail!("determinant_diversity_power must be >= 0.0 and finite, got {power}");
             }
 
             self.determinant_diversity_eta = Some(eta);

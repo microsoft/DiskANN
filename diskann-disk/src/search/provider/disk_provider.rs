@@ -1124,12 +1124,23 @@ where
         } else {
             let knn_search = Knn::new(k, l, beam_width)?;
             if is_determinant_diversity_search {
-                let processor = DeterminantDiversityRerankAndFilter::new(
-                    vector_filter,
-                    k,
-                    determinant_diversity_eta.unwrap_or(0.01),
-                    determinant_diversity_power.unwrap_or(2.0),
-                );
+                let eta = determinant_diversity_eta.unwrap_or(0.01);
+                let power = determinant_diversity_power.unwrap_or(2.0);
+
+                if !eta.is_finite() || eta < 0.0 {
+                    return Err(ANNError::log_index_error(format!(
+                        "determinant_diversity_eta must be finite and >= 0.0, got {eta}"
+                    )));
+                }
+
+                if !power.is_finite() || power < 0.0 {
+                    return Err(ANNError::log_index_error(format!(
+                        "determinant_diversity_power must be finite and >= 0.0, got {power}"
+                    )));
+                }
+
+                let processor =
+                    DeterminantDiversityRerankAndFilter::new(vector_filter, k, eta, power);
 
                 self.runtime.block_on(self.index.search_with(
                     knn_search,

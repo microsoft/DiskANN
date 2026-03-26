@@ -149,18 +149,18 @@ impl CheckDeserialization for TopkSearchPhase {
         }
 
         if let Some(eta) = self.determinant_diversity_eta {
-            if eta < 0.0 {
+            if !eta.is_finite() || eta < 0.0 {
                 return Err(anyhow!(
-                    "determinant_diversity_eta must be >= 0.0, got {}",
+                    "determinant_diversity_eta must be finite and >= 0.0, got {}",
                     eta
                 ));
             }
         }
 
         if let Some(power) = self.determinant_diversity_power {
-            if power <= 0.0 {
+            if !power.is_finite() || power < 0.0 {
                 return Err(anyhow!(
-                    "determinant_diversity_power must be > 0.0, got {}",
+                    "determinant_diversity_power must be finite and >= 0.0, got {}",
                     power
                 ));
             }
@@ -169,6 +169,14 @@ impl CheckDeserialization for TopkSearchPhase {
         if let Some(k) = self.determinant_diversity_results_k {
             if k == 0 {
                 return Err(anyhow!("determinant_diversity_results_k must be > 0"));
+            }
+
+            if self.determinant_diversity_eta.is_none()
+                || self.determinant_diversity_power.is_none()
+            {
+                return Err(anyhow!(
+                    "determinant_diversity_results_k requires determinant_diversity_eta and determinant_diversity_power to both be set"
+                ));
             }
         }
 
