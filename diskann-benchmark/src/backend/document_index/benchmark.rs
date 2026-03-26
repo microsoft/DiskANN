@@ -15,7 +15,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use diskann::{
     graph::{
-        search::Knn, search_output_buffer, DiskANNIndex, SearchOutputBuffer, StartPointStrategy,
+        glue, search::Knn, search_output_buffer, DiskANNIndex, SearchOutputBuffer,
+        StartPointStrategy,
     },
     provider::DefaultContext,
     ANNError, ANNErrorKind,
@@ -429,8 +430,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>:
-        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<'a, [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>
+        + glue::DefaultPostProcessor<DP, FilteredQuery<'a, [T]>, u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -638,8 +639,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>:
-        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>
+        + glue::DefaultPostProcessor<DP, FilteredQuery<'a, [T]>, u32>,
 {
     let searcher = Arc::new(FilteredSearcher {
         index: index.clone(),

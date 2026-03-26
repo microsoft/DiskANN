@@ -74,12 +74,12 @@ where
 impl<DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        FilteredQuery<Q>,
+        FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
     Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q>,
-    Q: AsyncFriendly + Clone,
+    Q: Send + Sync + ?Sized,
 {
     type Processor = FilterResults<Strategy::Processor>;
 

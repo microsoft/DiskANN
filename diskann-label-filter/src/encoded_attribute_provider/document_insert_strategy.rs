@@ -7,7 +7,7 @@
 //! [DiskANNIndex] using a [DocumentProvider].
 
 use diskann::{
-    graph::glue::{self, ExpandBeam, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy},
+    graph::glue::{ExpandBeam, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy},
     provider::{Accessor, BuildQueryComputer, DataProvider, DelegateNeighbor, HasId},
     ANNResult,
 };
@@ -148,7 +148,6 @@ where
     VT: Sync + Send + ?Sized + 'static,
 {
     type QueryComputer = Inner::QueryComputer;
-    type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Inner::SearchAccessorError;
     type SearchAccessor<'a> = DocumentSearchAccessor<Inner::SearchAccessor<'a>>;
 
@@ -161,10 +160,6 @@ where
             .inner
             .search_accessor(provider.inner_provider(), context)?;
         Ok(DocumentSearchAccessor::new(inner_accessor))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        glue::CopyIds
     }
 }
 
