@@ -44,15 +44,11 @@ impl<Inner> DocumentInsertStrategy<Inner> {
 /// Wrapper accessor for Document queries
 pub struct DocumentSearchAccessor<Inner> {
     inner: Inner,
-    // _phantom: PhantomData<fn() -> VT>,
 }
 
 impl<Inner> DocumentSearchAccessor<Inner> {
     pub fn new(inner: Inner) -> Self {
-        Self {
-            inner,
-            // _phantom: PhantomData,
-        }
+        Self { inner }
     }
 }
 
