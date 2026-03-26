@@ -6,7 +6,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
-use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 
 use crate::{backend::index::result::SearchResults, inputs::async_::GraphSearch};
 
@@ -53,34 +52,6 @@ pub(crate) trait Knn<I> {
     ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
-type DeterminantRun =
-    core_search::Run<diskann_benchmark_core::search::graph::determinant_diversity::Parameters>;
-
-pub(crate) fn run_determinant_diversity<I>(
-    runner: &dyn DeterminantDiversityKnn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: SearchSteps<'_>,
-    eta: f64,
-    power: f64,
-    results_k: Option<usize>,
-) -> anyhow::Result<Vec<SearchResults>> {
-    run_search_determinant_diversity(runner, groundtruth, steps, |setup, search_l, search_n| {
-        let base = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
-        let processor =
-            DeterminantDiversitySearchParams::new(results_k.unwrap_or(search_n), eta, power)
-                .map_err(|err| {
-                    anyhow::anyhow!("Invalid determinant-diversity parameters: {err}")
-                })?;
-
-        let search_params =
-            diskann_benchmark_core::search::graph::determinant_diversity::Parameters {
-                inner: base,
-                processor,
-            };
-        Ok(core_search::Run::new(search_params, setup))
-    })
-}
-
 fn run_search<I, F>(
     runner: &dyn Knn<I>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
@@ -111,48 +82,6 @@ where
     }
 
     Ok(all)
-}
-
-fn run_search_determinant_diversity<I, F>(
-    runner: &dyn DeterminantDiversityKnn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: SearchSteps<'_>,
-    builder: F,
-) -> anyhow::Result<Vec<SearchResults>>
-where
-    F: Fn(core_search::Setup, usize, usize) -> anyhow::Result<DeterminantRun>,
-{
-    let mut all = Vec::new();
-
-    for threads in steps.num_tasks.iter() {
-        for run in steps.runs.iter() {
-            let setup = core_search::Setup {
-                threads: *threads,
-                tasks: *threads,
-                reps: steps.reps,
-            };
-
-            let parameters: Vec<_> = run
-                .search_l
-                .iter()
-                .map(|&search_l| builder(setup.clone(), search_l, run.search_n))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
-        }
-    }
-
-    Ok(all)
-}
-
-pub(crate) trait DeterminantDiversityKnn<I> {
-    fn search_all(
-        &self,
-        parameters: Vec<DeterminantRun>,
-        groundtruth: &dyn benchmark_core::recall::Rows<I>,
-        recall_k: usize,
-        recall_n: usize,
-    ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
 ///////////
@@ -211,19 +140,19 @@ where
     }
 }
 
-impl<DP, T, S> DeterminantDiversityKnn<DP::InternalId>
-    for Arc<core_search::graph::determinant_diversity::DeterminantDiversity<DP, T, S>>
+impl<DP, T, S, P> Knn<DP::InternalId>
+    for Arc<core_search::graph::knn::KNNWithPostProcessor<DP, T, S, P>>
 where
     DP: diskann::provider::DataProvider,
-    core_search::graph::determinant_diversity::DeterminantDiversity<DP, T, S>: core_search::Search<
+    core_search::graph::knn::KNNWithPostProcessor<DP, T, S, P>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann_benchmark_core::search::graph::determinant_diversity::Parameters,
+        Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<DeterminantRun>,
+        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -231,16 +160,9 @@ where
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::determinant_diversity::Aggregator::new(
-                groundtruth,
-                recall_k,
-                recall_n,
-            ),
+            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
         )?;
 
-        Ok(results
-            .into_iter()
-            .map(SearchResults::new_determinant_diversity)
-            .collect())
+        Ok(results.into_iter().map(SearchResults::new).collect())
     }
 }

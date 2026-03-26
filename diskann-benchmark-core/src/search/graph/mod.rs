@@ -3,7 +3,6 @@
  * Licensed under the MIT license.
  */
 
-pub mod determinant_diversity;
 pub mod knn;
 pub mod multihop;
 pub mod range;

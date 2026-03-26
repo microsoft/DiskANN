@@ -1029,6 +1029,7 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
@@ -1569,6 +1570,9 @@ mod disk_provider_tests {
                         &mut associated_data,
                         &(|_| true),
                         false,
+                        false,
+                        None,
+                        None,
                     );
 
                 // Calculate the range of the truth_result for this query

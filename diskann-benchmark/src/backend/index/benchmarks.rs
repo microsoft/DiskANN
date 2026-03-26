@@ -381,21 +381,32 @@ where
                 search_phase.determinant_diversity_eta,
                 search_phase.determinant_diversity_power,
             ) {
-                let knn =
-                    benchmark_core::search::graph::determinant_diversity::DeterminantDiversity::new(
+                let processor = DeterminantDiversitySearchParams::new(
+                    search_phase
+                        .determinant_diversity_results_k
+                        .unwrap_or_else(|| {
+                            search_phase
+                                .runs
+                                .iter()
+                                .map(|run| run.search_n)
+                                .max()
+                                .unwrap_or(1)
+                        }),
+                    eta,
+                    power,
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!("Invalid determinant-diversity parameters: {err}")
+                })?;
+
+                let knn = benchmark_core::search::graph::knn::KNNWithPostProcessor::new(
                     index,
                     queries,
                     benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                    benchmark_core::search::graph::Strategy::broadcast(processor),
                 )?;
 
-                search::knn::run_determinant_diversity(
-                    &knn,
-                    &groundtruth,
-                    steps,
-                    eta,
-                    power,
-                    search_phase.determinant_diversity_results_k,
-                )?
+                search::knn::run(&knn, &groundtruth, steps)?
             } else {
                 let knn = benchmark_core::search::graph::KNN::new(
                     index,

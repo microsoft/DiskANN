@@ -41,6 +41,18 @@ where
     strategy: Strategy<S>,
 }
 
+/// A [`KNN`] variant that uses explicit post-processing during search.
+#[derive(Debug)]
+pub struct KNNWithPostProcessor<DP, T, S, P>
+where
+    DP: provider::DataProvider,
+{
+    index: Arc<graph::DiskANNIndex<DP>>,
+    queries: Arc<Matrix<T>>,
+    strategy: Strategy<S>,
+    post_processor: Strategy<P>,
+}
+
 impl<DP, T, S> KNN<DP, T, S>
 where
     DP: provider::DataProvider,
@@ -67,6 +79,39 @@ where
             index,
             queries,
             strategy,
+        }))
+    }
+}
+
+impl<DP, T, S, P> KNNWithPostProcessor<DP, T, S, P>
+where
+    DP: provider::DataProvider,
+{
+    /// Construct a new [`KNNWithPostProcessor`] searcher.
+    ///
+    /// If `strategy` or `post_processor` is one of the container variants of [`Strategy`],
+    /// its length must match the number of rows in `queries`. If this is the case, then the
+    /// strategies/processors will have a querywise correspondence (see [`search::SearchResults`])
+    /// with the query matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the number of elements in `strategy` or `post_processor` is not
+    /// compatible with the number of rows in `queries`.
+    pub fn new(
+        index: Arc<graph::DiskANNIndex<DP>>,
+        queries: Arc<Matrix<T>>,
+        strategy: Strategy<S>,
+        post_processor: Strategy<P>,
+    ) -> anyhow::Result<Arc<Self>> {
+        strategy.length_compatible(queries.nrows())?;
+        post_processor.length_compatible(queries.nrows())?;
+
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            strategy,
+            post_processor,
         }))
     }
 }
@@ -119,6 +164,59 @@ where
             .search(
                 knn_search,
                 self.strategy.get(index)?,
+                &context,
+                self.queries.row(index),
+                buffer,
+            )
+            .await?;
+
+        Ok(Metrics {
+            comparisons: stats.cmps,
+            hops: stats.hops,
+        })
+    }
+}
+
+impl<DP, T, S, P> Search for KNNWithPostProcessor<DP, T, S, P>
+where
+    DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
+    S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
+    T: AsyncFriendly + Clone,
+    P: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, [T], DP::ExternalId>
+        + Clone
+        + Send
+        + Sync
+        + AsyncFriendly,
+{
+    type Id = DP::ExternalId;
+    type Parameters = graph::search::Knn;
+    type Output = Metrics;
+
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
+        search::IdCount::Fixed(parameters.k_value())
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &Self::Parameters,
+        buffer: &mut O,
+        index: usize,
+    ) -> ANNResult<Self::Output>
+    where
+        O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
+    {
+        let context = DP::Context::default();
+        let knn_search = *parameters;
+        let stats = self
+            .index
+            .search_with(
+                knn_search,
+                self.strategy.get(index)?,
+                self.post_processor.get(index)?.clone(),
                 &context,
                 self.queries.row(index),
                 buffer,
