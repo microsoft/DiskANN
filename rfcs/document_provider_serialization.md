@@ -1,36 +1,19 @@
 # RFC: SaveWith and LoadWith for DocumentProvider
 
-**Status**: Draft  
-**Crate(s) affected**: `diskann-label-filter`, `diskann-providers`
-
----
-
-## Table of Contents
-
-1. [Summary](#summary)
-2. [Background](#background)
-3. [Existing Serialization Patterns](#existing-serialization-patterns)
-   - [SaveWith and LoadWith Traits](#savewith-and-loadwith-traits)
-   - [BfTreeProvider](#bftreeprovider)
-   - [DefaultProvider](#defaultprovider)
-   - [DiskProvider](#diskprovider)
-4. [Proposed Design](#proposed-design)
-   - [Crate Dependency](#crate-dependency)
-   - [Attribute Store Serialization Interface](#attribute-store-serialization-interface)
-   - [Label File Format](#label-file-format)
-   - [DocumentProvider SaveWith Implementation](#documentprovider-savewith-implementation)
-   - [DocumentProvider LoadWith Implementation](#documentprovider-loadwith-implementation)
-5. [Open Questions](#open-questions)
-
----
+|                  |                  |
+| ---------------- | ---------------- |
+| **Authors**      | Sampath Rajendra |
+| **Contributors** | Sampath Rajendra |
+| **Created**      | 2026-03-26       |
+| **Updated**      | 2026-03-26       |
 
 ## Summary
 
 This RFC proposes implementing the `SaveWith` and `LoadWith` serialization traits for `DocumentProvider`. `DocumentProvider` wraps an inner `DataProvider` (e.g. `DefaultProvider` or `BfTreeProvider`) and an `AttributeStore` that holds the per-vector label data. Serialization must handle both: delegating to the inner provider's own save/load and persisting the attribute store to a separate binary file.
 
----
+## Motivation
 
-## Background
+### Background
 
 `DocumentProvider` (in `diskann-label-filter`) is a wrapper that combines a `DataProvider` with an `AttributeStore`. It is used when the ANN index must support filtered search: every indexed vector carries a set of typed key–value attributes (e.g. `"category" = "electronics"`, `"price" = 299.99`) and queries can include attribute-based predicates.
 
@@ -47,15 +30,7 @@ The concrete attribute store in use today is `RoaringAttributeStore<IT>`, which 
 - A forward index (`RoaringTreemapSetProvider<IT>`) mapping each node's internal ID to the set of its attribute IDs.
 - An inverted index (`RoaringTreemapSetProvider<u64>`) mapping each attribute ID to the set of node IDs that carry it. The inverted index can be rebuilt from the forward index and so **does not need to be persisted**.
 
-At present, `DocumentProvider` implements `DataProvider`, `SetElement`, and `Delete` but has no serialization support. This RFC proposes filling that gap.
-
----
-
-## Existing Serialization Patterns
-
-### SaveWith and LoadWith Traits
-
-Defined in `diskann-providers::storage`:
+The `SaveWith` and `LoadWith` traits are defined in `diskann-providers::storage`:
 
 ```rust
 pub trait SaveWith<T> {
@@ -78,82 +53,52 @@ pub trait LoadWith<T>: Sized {
 }
 ```
 
-The generic `T` parameter carries the context needed to derive file paths. In practice this is either a file-path prefix `String`, a structured `AsyncIndexMetadata` (wrapping a prefix string), or a tuple thereof.
+The generic `T` parameter carries the context needed to derive file paths — in practice a file-path prefix `String`, a structured `AsyncIndexMetadata` (wrapping a prefix string), or a tuple thereof.
 
-### BfTreeProvider
+Existing serialization patterns for the inner provider types:
 
-| Trait | Auxiliary type | Description |
-|---|---|---|
-| `SaveWith` | `String` | The `String` is the file-path prefix |
-| `LoadWith` | `String` | Same |
+**`BfTreeProvider`** (`SaveWith<String>` / `LoadWith<String>`): writes `_params.json`, `_vectors.bftree`, `_neighbors.bftree`, `_deleted.bin`, and PQ files when applicable.
 
-**Files written on save:**
+**`DefaultProvider`** (`SaveWith<(u32, AsyncIndexMetadata)>` / `LoadWith<AsyncQuantLoadContext>`): writes `{prefix}.data`, compressed vector files, and the raw graph file. The delete store is not persisted and is reconstructed empty on load.
 
-- `{prefix}_params.json` — JSON configuration blob (`SavedParams`): dimension, metric, `max_degree`, BfTree configuration parameters, quantization parameters (if PQ is enabled), and graph hyperparameters.
-- `{prefix}_vectors.bftree` — BfTree snapshot of full-precision vector data (copy of the in-memory BfTree snapshot).
-- `{prefix}_neighbors.bftree` — BfTree snapshot of the graph adjacency lists.
-- `{prefix}_quant.bftree` — BfTree snapshot of quantized vectors *(PQ variant only)*.
-- `{prefix}_pq_pivots.bin` — PQ pivot table and centroids *(PQ variant only)*.
-- `{prefix}_deleted.bin` — Serialized delete bitmap.
+**`DiskProvider`** (`LoadWith<AsyncDiskLoadContext>` only): has no `SaveWith` implementation. Disk-index creation is handled externally by `DiskIndexWriter::create_disk_layout()`, which is not integrated with the `SaveWith`/`LoadWith` trait family.
 
-**On load:**
+### Problem Statement
 
-1. Reads `_params.json` to reconstruct the `BfTree` configs and index parameters.
-2. Opens BfTree snapshots (using `BfTree::new_from_snapshot`) for full vectors, neighbors, and quant vectors.
-3. Loads the PQ pivot table from `_pq_pivots.bin` *(PQ variant only)*.
-4. Loads the delete bitmap from `_deleted.bin`, or creates an empty bitmap if the file does not exist.
+`DocumentProvider` implements `DataProvider`, `SetElement`, and `Delete` but has no serialization support. An index built with `DocumentProvider` cannot be persisted and reloaded; every restart requires rebuilding the index from scratch, including re-encoding all attribute data.
 
-### DefaultProvider
+### Goals
 
-| Trait | Auxiliary type | Description |
-|---|---|---|
-| `SaveWith` | `(u32, AsyncIndexMetadata)` | `u32` is the start-point ID; `AsyncIndexMetadata` wraps the file-path prefix |
-| `SaveWith` | `(u32, u32, DiskGraphOnly)` | Graph-only save for disk-index construction |
-| `LoadWith` | `AsyncQuantLoadContext` | Prefix + frozen-point count + metric + prefetch hints |
+1. Implement `SaveWith<T>` and `LoadWith<T>` for `DocumentProvider`, delegating to the inner provider and the attribute store respectively.
+2. Define a stable binary file format (`{prefix}.labels.bin`) for persisting `RoaringAttributeStore` label data.
+3. Implement `SaveWith<T>` and `LoadWith<T>` directly on `RoaringAttributeStore` without widening the `AttributeStore` trait.
 
-**Files written on save (`(u32, AsyncIndexMetadata)` variant):**
+## Proposal
 
-- `{prefix}.data` — Full-precision vectors in the standard `.bin` format (via `MemoryVectorProviderAsync` / `FastMemoryVectorProviderAsync`).
-- `{prefix}_build_pq_compressed.bin` / `{prefix}_sq_compressed.bin` — Quantized vectors *(if a quant store is present)*.
-- `{prefix}` (raw prefix, no extension) — Graph adjacency list in `.bin` graph format (via `SimpleNeighborProviderAsync::save_direct()`).
-
-> **Note:** The delete store (`TableDeleteProviderAsync`) is **not** persisted; it is reconstructed empty via `LoadWith<usize>`.
-
-**On load (`AsyncQuantLoadContext`):**
-
-1. Loads full-precision vectors from `{prefix}.data`.
-2. Loads quant vectors from the compressed bin file *(if present)*.
-3. Loads the graph from the raw prefix file via `SimpleNeighborProviderAsync::load_direct()`.
-4. Constructs an empty delete store from the point count.
-
-### DiskProvider
-
-`DiskProvider` implements `LoadWith<AsyncDiskLoadContext>` but **has no `SaveWith` implementation**. Disk-index creation is handled externally by `DiskIndexWriter::create_disk_layout()`, which interleaves the vector data, neighbor lists, and associated data into a sector-aligned binary file. The `DiskIndexWriter` is not integrated with the `SaveWith`/`LoadWith` trait family.
-
----
-
-## Proposed Design
+The `diskann-label-filter` crate takes a new dependency on `diskann-providers` (for the `SaveWith`/`LoadWith` trait definitions and the `StorageReadProvider`/`StorageWriteProvider` abstractions).
 
 ### Attribute Store Serialization Interface
 
-Rather than extending the `AttributeStore` trait (which would impose serialization concerns on all implementations), we propose adding `SaveWith<T>` and `LoadWith<T>` directly on `RoaringAttributeStore` for the relevant auxiliary types. The attribute store is responsible for extracting whatever path information it needs from `T`.
+Rather than extending the `AttributeStore` trait (which would impose serialization concerns on all implementations), `SaveWith<T>` and `LoadWith<T>` are added directly on `RoaringAttributeStore` for the relevant auxiliary types. The attribute store is responsible for extracting whatever path information it needs from `T`.
 
-The `DocumentProvider` impls will then require the attribute store bound:
+The `DocumentProvider` impls require the attribute store bound:
 
 ```rust
 impl<DP, AS, T> SaveWith<T> for DocumentProvider<DP, AS>
 where
-    DP: SaveWith<T>,
-    AS: SaveWith<T, Ok = (), Error = ANNError>,
-    ...
+    DP: DataProvider + SaveWith<T, Error = ANNError>,
+    AS: AttributeStore<DP::InternalId> + SaveWith<T, Ok = (), Error = ANNError> + AsyncFriendly,
+    ANNError: From<DP::Error>,
+{ ... }
 ```
 
 ```rust
 impl<DP, AS, T> LoadWith<T> for DocumentProvider<DP, AS>
 where
-    DP: LoadWith<T>,
-    AS: LoadWith<T, Error = ANNError>,
-    ...
+    DP: DataProvider + LoadWith<T, Error = ANNError>,
+    AS: AttributeStore<DP::InternalId> + LoadWith<T, Error = ANNError> + AsyncFriendly,
+    ANNError: From<DP::Error>,
+{ ... }
 ```
 
 This is deliberately narrow: concrete implementations are only required for `RoaringAttributeStore` for now, keeping the door open for future implementations.
@@ -285,12 +230,28 @@ The `RoaringAttributeStore::load_with` implementation must:
 3. Seek to `forward_index_offset` and decode the forward index, inserting into the `RoaringTreemapSetProvider`.
 4. Rebuild the inverted index from the forward index (iterate node → attribute-IDs, invert to attribute-ID → nodes).
 
----
+## Trade-offs
 
-## Open Questions
+### Keeping serialization off the `AttributeStore` trait
 
-### DiskProvider Compatibility
+Adding `SaveWith`/`LoadWith` directly to `RoaringAttributeStore` rather than to the `AttributeStore` trait avoids imposing a serialization requirement on every future `AttributeStore` implementation. The cost is that `DocumentProvider<DP, AS>` can only be saved or loaded when `AS` satisfies the respective bound — callers using a hypothetical `AS` that does not implement `SaveWith` would need to handle serialization manually or outside of this trait pair.
 
-`DiskProvider` uses `DiskIndexWriter::create_disk_layout()` for serialization rather than the `SaveWith` trait. There is therefore no `SaveWith` implementation through which label data could be co-written. Consequently, `DocumentProvider<DiskProvider<_>, AS>` would only support `LoadWith`, not `SaveWith`.
+### DiskProvider compatibility
 
-For `LoadWith` to work, the label file must have been written separately (e.g. by calling `attribute_store.save_with(...)` directly during the disk-index build pipeline before creating the disk layout). `DiskIndexWriter` would need to be extended or wrapped to also write the label file at `{prefix}.labels.bin` as part of `create_disk_layout` or a new `create_disk_layout_with_labels` variant.
+`DiskProvider` has no `SaveWith` implementation; disk-index creation is handled by `DiskIndexWriter::create_disk_layout()`, which is not integrated with the `SaveWith`/`LoadWith` trait family. Consequently, `DocumentProvider<DiskProvider<_>, AS>` supports `LoadWith` only.
+
+For `LoadWith` to work, the label file (`{prefix}.labels.bin`) must have been written separately — e.g. by calling `attribute_store.save_with(...)` directly during the disk-index build pipeline before the disk layout is finalized. The alternative of integrating label-file writing into `DiskIndexWriter` is deferred to future work (see below).
+
+## Benchmark Results
+
+Not applicable for this RFC.
+
+## Future Work
+
+- [ ] Extend `DiskIndexWriter` (or introduce a `create_disk_layout_with_labels` variant) to co-write `{prefix}.labels.bin` during disk-index construction, enabling a full `SaveWith`/`LoadWith` round-trip for `DocumentProvider<DiskProvider<_>, AS>`.
+- [ ] If `VectorId` is ever generalised beyond `u32`, update the `node_internal_id` field width and introduce a file format version field.
+
+## References
+
+1. [`diskann-providers` — `SaveWith` / `LoadWith` trait definitions](../diskann-providers/src/)
+2. [`diskann-label-filter` — `DocumentProvider`, `RoaringAttributeStore`](../diskann-label-filter/src/)
