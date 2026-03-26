@@ -53,6 +53,10 @@ pub mod tests {
     #[cfg(test)]
     pub mod common;
     #[cfg(test)]
+    pub mod document_insert_strategy_test;
+    #[cfg(test)]
+    pub mod inline_beta_filter_test;
+    #[cfg(test)]
     pub mod roaring_attribute_store_test;
 }
 
