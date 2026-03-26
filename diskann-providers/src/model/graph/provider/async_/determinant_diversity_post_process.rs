@@ -116,13 +116,8 @@ where
                 ));
             }
 
-            let borrowed: Vec<(u32, f32, &[f32])> = candidates_with_vectors
-                .iter()
-                .map(|(id, distance, vector)| (*id, *distance, vector.as_slice()))
-                .collect();
-
             let reranked = determinant_diversity_post_process(
-                borrowed,
+                candidates_with_vectors,
                 &query_f32[..],
                 self.top_k,
                 self.determinant_diversity_eta,
@@ -137,7 +132,7 @@ where
 }
 
 pub fn determinant_diversity_post_process<Id: Copy>(
-    candidates: Vec<(Id, f32, &[f32])>,
+    candidates: Vec<(Id, f32, Vec<f32>)>,
     query: &[f32],
     k: usize,
     determinant_diversity_eta: f64,
@@ -152,30 +147,20 @@ pub fn determinant_diversity_post_process<Id: Copy>(
         return Vec::new();
     }
 
-    let candidates_f32: Vec<(Id, f32, Vec<f32>)> = candidates
-        .into_iter()
-        .map(|(id, dist, v)| (id, dist, v.to_vec()))
-        .collect();
-
-    if candidates_f32[0].2.is_empty() {
+    if candidates[0].2.is_empty() {
         return Vec::new();
     }
 
     if determinant_diversity_eta > 0.0 {
         post_process_with_eta_f32(
-            candidates_f32,
+            candidates,
             query,
             k,
             determinant_diversity_eta,
             determinant_diversity_power,
         )
     } else {
-        post_process_greedy_orthogonalization_f32(
-            candidates_f32,
-            query,
-            k,
-            determinant_diversity_power,
-        )
+        post_process_greedy_orthogonalization_f32(candidates, query, k, determinant_diversity_power)
     }
 }
 
@@ -396,57 +381,67 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_zero_top_k() {
-        let result = DeterminantDiversitySearchParams::new(0, 0.01, 2.0);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidTopK { top_k: 0 })
-        ));
-    }
+    fn test_validation_invalid_params() {
+        let test_cases = [
+            (
+                DeterminantDiversitySearchParams::new(0, 0.01, 2.0),
+                DeterminantDiversityError::InvalidTopK { top_k: 0 },
+            ),
+            (
+                DeterminantDiversitySearchParams::new(10, -0.01, 2.0),
+                DeterminantDiversityError::InvalidEta { eta: -0.01 },
+            ),
+            (
+                DeterminantDiversitySearchParams::new(10, f64::NAN, 2.0),
+                DeterminantDiversityError::InvalidEta { eta: f64::NAN },
+            ),
+            (
+                DeterminantDiversitySearchParams::new(10, 0.01, 0.0),
+                DeterminantDiversityError::InvalidPower { power: 0.0 },
+            ),
+            (
+                DeterminantDiversitySearchParams::new(10, 0.01, -1.0),
+                DeterminantDiversityError::InvalidPower { power: -1.0 },
+            ),
+            (
+                DeterminantDiversitySearchParams::new(10, 0.01, f64::INFINITY),
+                DeterminantDiversityError::InvalidPower {
+                    power: f64::INFINITY,
+                },
+            ),
+        ];
 
-    #[test]
-    fn test_validation_negative_eta() {
-        let result = DeterminantDiversitySearchParams::new(10, -0.01, 2.0);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidEta { .. })
-        ));
-    }
-
-    #[test]
-    fn test_validation_zero_power() {
-        let result = DeterminantDiversitySearchParams::new(10, 0.01, 0.0);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidPower { .. })
-        ));
-    }
-
-    #[test]
-    fn test_validation_negative_power() {
-        let result = DeterminantDiversitySearchParams::new(10, 0.01, -1.0);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidPower { .. })
-        ));
-    }
-
-    #[test]
-    fn test_validation_nan_eta() {
-        let result = DeterminantDiversitySearchParams::new(10, f64::NAN, 2.0);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidEta { .. })
-        ));
-    }
-
-    #[test]
-    fn test_validation_infinity_power() {
-        let result = DeterminantDiversitySearchParams::new(10, 0.01, f64::INFINITY);
-        assert!(matches!(
-            result,
-            Err(DeterminantDiversityError::InvalidPower { .. })
-        ));
+        for (result, expected) in test_cases {
+            match (result, expected) {
+                (
+                    Err(DeterminantDiversityError::InvalidTopK { top_k: actual }),
+                    DeterminantDiversityError::InvalidTopK { top_k: expected },
+                ) => assert_eq!(actual, expected),
+                (
+                    Err(DeterminantDiversityError::InvalidEta { eta: actual }),
+                    DeterminantDiversityError::InvalidEta { eta: expected },
+                ) => {
+                    if expected.is_nan() {
+                        assert!(actual.is_nan());
+                    } else {
+                        assert_eq!(actual, expected);
+                    }
+                }
+                (
+                    Err(DeterminantDiversityError::InvalidPower { power: actual }),
+                    DeterminantDiversityError::InvalidPower { power: expected },
+                ) => {
+                    if expected.is_infinite() {
+                        assert!(actual.is_infinite());
+                    } else {
+                        assert_eq!(actual, expected);
+                    }
+                }
+                (other, expected) => {
+                    panic!("Unexpected result {:?} for expected {:?}", other, expected)
+                }
+            }
+        }
     }
 
     #[test]
@@ -454,11 +449,7 @@ mod tests {
         let v1 = vec![1.0f32, 0.0, 0.0];
         let v2 = vec![0.0f32, 1.0, 0.0];
         let v3 = vec![0.0f32, 0.0, 1.0];
-        let candidates = vec![
-            (1u32, 0.5f32, v1.as_slice()),
-            (2u32, 0.3f32, v2.as_slice()),
-            (3u32, 0.7f32, v3.as_slice()),
-        ];
+        let candidates = vec![(1u32, 0.5f32, v1), (2u32, 0.3f32, v2), (3u32, 0.7f32, v3)];
         let query = vec![1.0, 1.0, 1.0];
 
         let result = determinant_diversity_post_process(candidates, &query, 3, 0.01, 2.0);
@@ -470,11 +461,7 @@ mod tests {
         let v1 = vec![1.0f32, 0.0, 0.0];
         let v2 = vec![0.99f32, 0.1, 0.0];
         let v3 = vec![0.0f32, 1.0, 0.0];
-        let candidates = vec![
-            (1u32, 0.5f32, v1.as_slice()),
-            (2u32, 0.3f32, v2.as_slice()),
-            (3u32, 0.4f32, v3.as_slice()),
-        ];
+        let candidates = vec![(1u32, 0.5f32, v1), (2u32, 0.3f32, v2), (3u32, 0.4f32, v3)];
         let query = vec![1.0, 1.0, 0.0];
 
         let result = determinant_diversity_post_process(candidates, &query, 2, 0.0, 1.0);
@@ -483,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_determinant_diversity_post_process_empty() {
-        let candidates: Vec<(u32, f32, &[f32])> = vec![];
+        let candidates: Vec<(u32, f32, Vec<f32>)> = vec![];
         let query = vec![1.0, 1.0, 1.0];
 
         let result = determinant_diversity_post_process(candidates, &query, 3, 0.01, 2.0);
@@ -494,7 +481,7 @@ mod tests {
     fn test_determinant_diversity_post_process_k_larger_than_candidates() {
         let v1 = vec![1.0f32, 0.0, 0.0];
         let v2 = vec![0.0f32, 1.0, 0.0];
-        let candidates = vec![(1u32, 0.5f32, v1.as_slice()), (2u32, 0.3f32, v2.as_slice())];
+        let candidates = vec![(1u32, 0.5f32, v1), (2u32, 0.3f32, v2)];
         let query = vec![1.0, 1.0, 1.0];
 
         let result = determinant_diversity_post_process(candidates, &query, 10, 0.01, 2.0);

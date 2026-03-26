@@ -424,13 +424,12 @@ where
             associated_data.insert(id, *data);
         }
 
-        let borrowed: Vec<(u32, f32, &[f32])> = candidate_vectors
-            .iter()
-            .map(|(id, distance, vector)| (*id, *distance, vector.as_slice()))
-            .collect();
-
         let reranked = determinant_diversity_post_process(
-            borrowed, &query_f32, self.top_k, self.eta, self.power,
+            candidate_vectors,
+            &query_f32,
+            self.top_k,
+            self.eta,
+            self.power,
         );
 
         Ok(
