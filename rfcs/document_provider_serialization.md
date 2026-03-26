@@ -9,7 +9,7 @@
 
 ## Summary
 
-This RFC proposes implementing the `SaveWith` and `LoadWith` serialization traits for `DocumentProvider`. `DocumentProvider` wraps an inner `DataProvider` (e.g. `DefaultProvider` or `BfTreeProvider`) and an `AttributeStore` that holds the per-vector label data. Serialization must handle both: delegating to the inner provider's own save/load and persisting the attribute store to a separate binary file.
+This RFC addresses the use case of saving and loading of label information along with the index information that is already saved and loaded by the `DataProvider`. The RFC proposes to do this by implementing the `SaveWith` and `LoadWith` serialization traits for `DocumentProvider`. `DocumentProvider` wraps an inner `DataProvider` (e.g. `DefaultProvider` or `BfTreeProvider`) and an `AttributeStore` that holds the per-vector label data. Serialization must handle both: delegating to the inner provider's own save/load and persisting the attribute store to a separate binary file.
 
 ## Motivation
 
