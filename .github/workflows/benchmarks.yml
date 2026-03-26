@@ -27,10 +27,8 @@ on:
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
-  # Use unique group per run for A/A testing (allows parallel runs).
-  # For production, change back to: github.event.pull_request.number || github.sha
-  group: ${{ github.workflow }}-${{ github.run_id }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -91,7 +89,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
-          pip install numpy scipy
+          pip install csvtomd numpy scipy
 
       # Download the public Wikipedia-100K dataset via big-ann-benchmarks
       # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
@@ -215,7 +213,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
-          pip install numpy scipy
+          pip install csvtomd numpy scipy
 
       # Download the public OpenAI ArXiv 100K dataset via big-ann-benchmarks
       # Dataset: 100K OpenAI embeddings of ArXiv papers (1536-dim, float32, euclidean distance)

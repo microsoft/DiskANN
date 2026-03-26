@@ -13,11 +13,11 @@
                     "distance": "squared_l2",
                     "dim": 1536,
                     "max_degree": 59,
-                    "l_build": 64,
+                    "l_build": 80,
                     "num_threads": 4,
                     "build_ram_limit_gb": 4.0,
-                    "num_pq_chunks": 192,
-                    "quantization_type": "FP",
+                    "num_pq_chunks": 384,
+                    "quantization_type": "SQ_1_2.0",
                     "save_path": "openai_100k_benchmark_index"
                 },
                 "search_phase": {
