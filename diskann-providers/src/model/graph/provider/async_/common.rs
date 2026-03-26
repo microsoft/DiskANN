@@ -416,10 +416,6 @@ impl Hybrid {
     }
 }
 
-/// Internal variant of above strategy types to avoid start point filtering.
-#[derive(Debug)]
-pub struct Internal<T>(pub T);
-
 #[cfg(test)]
 pub struct TestCallCount {
     count: std::sync::atomic::AtomicUsize,
