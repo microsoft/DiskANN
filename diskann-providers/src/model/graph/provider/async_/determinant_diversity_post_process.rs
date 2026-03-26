@@ -242,21 +242,21 @@ fn post_process_with_eta_f32<Id: Copy>(
             break;
         }
 
-        let norm_factor = 1.0 / (1.0 + norms_sq[selected_index]).sqrt();
-        let q_scaled: Vec<f32> = residuals[selected_index]
-            .iter()
-            .map(|&x| x * norm_factor)
-            .collect();
+        let best_norm_sq = norms_sq[selected_index];
+        if best_norm_sq <= 0.0 {
+            continue;
+        }
+
+        let inv_norm_sq = 1.0 / best_norm_sq;
+        let r_star_copy = residuals[selected_index].clone();
 
         let mut projections = Vec::with_capacity(n);
         for i in 0..n {
             if !available[i] {
                 projections.push(0.0);
             } else {
-                let alpha = dot_product(&residuals[selected_index], &residuals[i])
-                    * norm_factor
-                    * norm_factor;
-                projections.push(alpha);
+                let projection = dot_product(&residuals[i], &r_star_copy) * inv_norm_sq;
+                projections.push(projection);
             }
         }
 
@@ -265,12 +265,12 @@ fn post_process_with_eta_f32<Id: Copy>(
                 continue;
             }
 
-            let alpha = projections[i];
-            for (residual, &q_value) in residuals[i].iter_mut().zip(q_scaled.iter()) {
-                *residual -= alpha * q_value;
+            let projection = projections[i];
+            for (residual, &star) in residuals[i].iter_mut().zip(r_star_copy.iter()) {
+                *residual -= projection * star;
             }
 
-            norms_sq[i] = (norms_sq[i] - alpha * alpha).max(0.0);
+            norms_sq[i] = (norms_sq[i] - projection * projection * best_norm_sq).max(0.0);
         }
     }
 
