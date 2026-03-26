@@ -112,8 +112,8 @@ impl App {
             // List the available benchmarks.
             Commands::Benchmarks {} => {
                 writeln!(output, "Registered Benchmarks:")?;
-                for (name, method) in benchmarks.methods() {
-                    writeln!(output, "    {}: {}", name, method.signatures()[0])?;
+                for (name, description) in benchmarks.names() {
+                    writeln!(output, "    {}: {}", name, description)?;
                 }
             }
             Commands::Skeleton => {
@@ -130,22 +130,9 @@ impl App {
                 let run = Jobs::load(input_file, inputs)?;
                 // Check if we have a match for each benchmark.
                 for job in run.jobs().iter() {
-                    if !benchmarks.has_match(job) {
+                    const MAX_METHODS: usize = 3;
+                    if let Err(mismatches) = benchmarks.debug(job, MAX_METHODS) {
                         let repr = serde_json::to_string_pretty(&job.serialize()?)?;
-
-                        const MAX_METHODS: usize = 3;
-                        let mismatches = match benchmarks.debug(job, MAX_METHODS) {
-                            // Debug should return `Err` if there is not a match.
-                            // Returning `Ok(())` here indicates an internal error with the
-                            // dispatcher.
-                            Ok(()) => {
-                                return Err(anyhow::Error::msg(format!(
-                                    "experienced internal error while debugging:\n{}",
-                                    repr
-                                )))
-                            }
-                            Err(m) => m,
-                        };
 
                         writeln!(
                             output,

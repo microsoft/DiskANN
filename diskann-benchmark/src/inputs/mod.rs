@@ -19,19 +19,6 @@ pub(crate) fn register_inputs(
     Ok(())
 }
 
-/// A helper type for implementing `diskann_benchmark_runner::Input` for benchmark types.
-pub(crate) struct Input<T> {
-    _type: std::marker::PhantomData<T>,
-}
-
-impl<T> Input<T> {
-    pub(crate) fn new() -> Self {
-        Self {
-            _type: std::marker::PhantomData,
-        }
-    }
-}
-
 /// Construct an example input of type `Self`.
 pub(crate) trait Example {
     fn example() -> Self;
@@ -39,20 +26,19 @@ pub(crate) trait Example {
 
 macro_rules! as_input {
     ($T:ty) => {
-        impl diskann_benchmark_runner::Input for $crate::inputs::Input<$T> {
-            fn tag(&self) -> &'static str {
+        impl diskann_benchmark_runner::Input for $T {
+            fn tag() -> &'static str {
                 <$T>::tag()
             }
 
             fn try_deserialize(
-                &self,
                 serialized: &serde_json::Value,
                 checker: &mut diskann_benchmark_runner::Checker,
             ) -> anyhow::Result<diskann_benchmark_runner::Any> {
                 checker.any(<$T as serde::Deserialize>::deserialize(serialized)?)
             }
 
-            fn example(&self) -> anyhow::Result<serde_json::Value> {
+            fn example() -> anyhow::Result<serde_json::Value> {
                 Ok(serde_json::to_value(
                     <$T as $crate::inputs::Example>::example(),
                 )?)
