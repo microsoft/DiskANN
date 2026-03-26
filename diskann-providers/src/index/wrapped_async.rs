@@ -58,7 +58,7 @@ where
     /// Construct a synchronous `DiskANNIndex` with its own `tokio::runtime::Runtime`.
     ///
     /// A default configured multi-threaded runtime will be created and used behind the scenes. To use
-    /// a specific Toktio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
+    /// a specific Tokio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
     pub fn new_with_multi_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
         let (rt, handle) = create_multi_thread_runtime();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
@@ -66,8 +66,8 @@ where
 
     /// Construct a synchronous `DiskANNIndex` with its own `tokio::runtime::Runtime`.
     ///
-    /// A default configured runtime that uses the curren thread will be created and used behind the scenes. To use
-    /// a specific Toktio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
+    /// A default configured runtime that uses the current thread will be created and used behind the scenes. To use
+    /// a specific Tokio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
     pub fn new_with_current_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
         let (rt, handle) = create_current_thread_runtime();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
@@ -313,7 +313,6 @@ where
             .block_on(self.inner.consolidate_vector(strategy, context, vector_id))
     }
 
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn search<S, T, O, OB>(
         &self,
         strategy: &S,
@@ -542,7 +541,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(stats.result_count >= top_k as u32);
+        assert_eq!(stats.result_count, top_k as u32);
         // The query is itself in the dataset, so the nearest neighbor must be at distance 0.
         assert_eq!(ids[0], 0);
         assert_eq!(distances[0], 0.0);
