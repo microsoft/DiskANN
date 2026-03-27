@@ -178,7 +178,7 @@ DATA_THRESHOLDS = {
         "latency_95": [10, 'LT', ""],
         "mean_latency": [10, 'LT', ""],
         "mean_io_time": [10, 'LT', ""],
-        "mean_cpus": [10, 'LT', ""],
+        "mean_cpus": [15, 'LT', ""],  # wider threshold — CPU time is noisy on shared runners
         "qps": [10, 'GT', 6.5],
         "mean_ios": [1, 'LT', 2410],
         "mean_comps": [1, 'LT', 33200],
@@ -189,7 +189,7 @@ DATA_THRESHOLDS = {
         "latency_95": [10, 'LT', ""],
         "mean_latency": [10, 'LT', ""],
         "mean_io_time": [10, 'LT', ""],
-        "mean_cpus": [10, 'LT', ""],
+        "mean_cpus": [15, 'LT', ""],  # wider threshold — CPU time is noisy on shared runners
         "qps": [10, 'GT', ""],
         "mean_ios": [10, 'LT', ""],
         "mean_comps": [10, 'LT', ""],
@@ -200,7 +200,7 @@ DATA_THRESHOLDS = {
         "latency_95": [10, 'LT', ""],
         "mean_latency": [10, 'LT', ""],
         "mean_io_time": [10, 'LT', ""],
-        "mean_cpus": [10, 'LT', ""],
+        "mean_cpus": [15, 'LT', ""],  # wider threshold — CPU time is noisy on shared runners
         "qps": [10, 'GT', ""],
         "mean_ios": [10, 'LT', ""],
         "mean_comps": [10, 'LT', ""],
