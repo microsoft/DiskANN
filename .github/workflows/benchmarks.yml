@@ -128,18 +128,10 @@ jobs:
       - name: Convert results to Markdown
         working-directory: diskann_rust
         run: |
-          python3 -c "
-          import csv, os
-          rows = list(csv.reader(open('target/tmp/wikipedia-100K_change.csv')))
-          if len(rows) < 2:
-              print('No data'); exit(0)
-          header = rows[0]
-          sep = ['---'] * len(header)
-          md = '\n'.join(' | '.join(r) for r in [header, sep] + rows[1:])
-          open('target/tmp/wikipedia-100K_change.md', 'w').write(md + '\n')
-          "
-          echo '### Benchmark Results: Wikipedia-100K Dataset' >> "$GITHUB_STEP_SUMMARY"
-          cat target/tmp/wikipedia-100K_change.md >> "$GITHUB_STEP_SUMMARY"
+          python .github/scripts/csv_to_markdown.py \
+            --csv target/tmp/wikipedia-100K_change.csv \
+            --md target/tmp/wikipedia-100K_change.md \
+            --title 'Benchmark Results: Wikipedia-100K Dataset'
 
       - name: Validate benchmark results
         working-directory: diskann_rust
@@ -244,18 +236,10 @@ jobs:
       - name: Convert results to Markdown
         working-directory: diskann_rust
         run: |
-          python3 -c "
-          import csv, os
-          rows = list(csv.reader(open('target/tmp/openai-100K_change.csv')))
-          if len(rows) < 2:
-              print('No data'); exit(0)
-          header = rows[0]
-          sep = ['---'] * len(header)
-          md = '\n'.join(' | '.join(r) for r in [header, sep] + rows[1:])
-          open('target/tmp/openai-100K_change.md', 'w').write(md + '\n')
-          "
-          echo '### Benchmark Results: OpenAI ArXiv 100K Dataset' >> "$GITHUB_STEP_SUMMARY"
-          cat target/tmp/openai-100K_change.md >> "$GITHUB_STEP_SUMMARY"
+          python .github/scripts/csv_to_markdown.py \
+            --csv target/tmp/openai-100K_change.csv \
+            --md target/tmp/openai-100K_change.md \
+            --title 'Benchmark Results: OpenAI ArXiv 100K Dataset'
 
       - name: Validate benchmark results
         working-directory: diskann_rust
