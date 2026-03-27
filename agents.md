@@ -66,6 +66,19 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 ---
 
+## Dependencies
+
+### Internal
+
+- Tier 1 and Tier 2 crates may be added as dependencies of any internal crate
+- `diskann` may be added as a dependency of any equal or higher tier internal crate except those below
+- Do not add Tier 3 crates as dependencies of these Tier 4 crates:
+  - `diskann-benchmark-runner`
+  - `diskann-benchmark-core` (`diskann` is allowed)
+  - `diskann-benchmark-simd`
+
+---
+
 ## Testing
 
 ### Test Execution
@@ -95,9 +108,54 @@ DiskANN uses a baseline caching system for regression detection. See [`diskann/R
 - [`diskann/src/test/cache.rs`](diskann/src/test/cache.rs) — core baseline caching APIs
 - [`diskann/src/test/cmp.rs`](diskann/src/test/cmp.rs) — `VerboseEq` and related helpers for better test error messages
 
+### AVX-512, Aarch64, and multi-platform
+
+When touching architecture-specific intrinsics, run cross-platform validation per `diskann-wide/README.md`:
+
+* Testing AVX-512 code on non-AVX-512 capable x86-64 machines.
+* Testing Aarch64 code on x86-64 machines.
+* Testing code compiled for and running on the `x86-64` CPU (no AVX2) does not execute unsupported instructions.
+
 ---
 
 ## Code Quality & Linting
+
+### Error Handling
+
+There are three regimes of error handling and the strategy to use depends on the regime.
+
+#### Low-Level
+
+Low-level crates should use bespoke, precise, non-allocating error types. Use `thiserror` for boilerplate. Chain with `std::error::Error::source`.
+
+`diskann::ANNError` is not a suitable low-level error type.
+
+#### Mid-Level (diskann algorithms)
+
+Use `diskann::ANNError` and its context machinery. This type:
+
+* Has a small size and `Drop` implementation, so is efficient in function ABIs.
+* Records stack trace of its first creation under `RUST_BACKTRACE=1`.
+* Precisely records line numbers of creation.
+* Has a context layering machinery to add additional information as an error is passed up the stack.
+
+When converting to `ANNError`, use `#[track_caller]` for better source reporting.
+
+Traits with associated error types should consider constraining with `diskann::error::ToRanked` instead of `Into<ANNError>` if non-critical errors should be supported.
+`diskann::ANNError` should be used only for unrecoverable errors.
+
+#### High Level (tooling)
+
+At this level `anyhow::Error` is an appropriate type to use.
+
+#### Do Not
+
+Do not use a single crate-level error enum. Problems:
+
+* Provides no documentation on how an individual function could fail
+* Encourages **worse** error messages than bespoke types
+* Generate large structs that blow up the stack
+* Have branch-heavy `Drop` implementations which bloat code
 
 ### Formatting
 
@@ -142,9 +200,13 @@ CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 - Format and clippy checks
 - Tests on multiple platforms (Linux, Windows)
 - Code coverage
-- Architecture compatibility (QEMU)
+- Architecture compatibility (SDE)
 
 ### Test Patterns
+
+**DO**:
+- Look for existing setup/execution infrastructure
+- Factor out common patterns
 
 **DON'T**:
 - Add tests for derived traits (Clone, Debug, PartialEq)
