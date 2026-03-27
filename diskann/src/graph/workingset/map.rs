@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! The default implementation of a [workingset](super).
+//! The default implementation of a [Working Set](super).
 //!
 //! This is meant to work out of the box with enough knobs to cover common cases.
 //! Supported workflows include:
@@ -1009,6 +1009,7 @@ mod tests {
     }
 
     /// The `TestProjection` ensures that we can apply an arbitrary transformation on the
+    /// `Map`, `View`, and `Overlay` types.
     #[derive(Debug, Clone, Copy)]
     struct TestProjection;
 
@@ -1356,9 +1357,19 @@ mod tests {
     #[test]
     fn overlay_is_cheap_to_clone() {
         let (_batch, overlay) = test_overlay();
+
+        let base = overlay.get(&10).unwrap();
+        assert_eq!(base, &[1.0, 2.0]);
+
         let cloned = overlay.clone();
         // Both see the same data.
-        assert_eq!(cloned.get(&10).unwrap(), &[1.0, 2.0]);
+        let from_cloned = cloned.get(&10).unwrap();
+        assert_eq!(from_cloned, &[1.0, 2.0]);
+        assert_eq!(
+            from_cloned.as_ptr(),
+            base.as_ptr(),
+            "underlying data should be the exact same"
+        );
     }
 
     #[test]

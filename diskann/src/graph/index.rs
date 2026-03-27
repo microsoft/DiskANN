@@ -328,7 +328,6 @@ where
             let insert_retry = self.config.experimental_insert_retry();
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-            // N.B.: Working set needs to be outlived by `accessor`.
             let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
@@ -1740,7 +1739,7 @@ where
             let computer = accessor.build_distance_computer().into_ann_result()?;
 
             // This is the total union of elements that we consider for neighbors.
-            // It's possible there is some repition, but implementations of `Fill` should
+            // It's possible there is some repitition, but implementations of `Fill` should
             // already properly handle that.
             let view = accessor
                 .fill(
