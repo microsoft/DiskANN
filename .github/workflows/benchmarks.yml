@@ -91,21 +91,16 @@ jobs:
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
           pip install csvtomd numpy scipy
 
-      # Download the public Wikipedia-100K dataset via big-ann-benchmarks
+      # Download pre-packaged Wikipedia-100K dataset from GitHub Release
       # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
-      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Clone big-ann-benchmarks
-        run: git clone --depth 1 https://github.com/harsha-simhadri/big-ann-benchmarks.git
-
       - name: Download wikipedia-100K dataset
-        working-directory: big-ann-benchmarks
-        run: python create_dataset.py --dataset wikipedia-100K
-
-      - name: Copy dataset to benchmark directories
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          cp -r big-ann-benchmarks/data/wikipedia_cohere diskann_rust/target/tmp/
-          cp -r big-ann-benchmarks/data/wikipedia_cohere baseline/target/tmp/
+          gh release download benchmark-data-v1 --repo ${{ github.repository }} --pattern 'wikipedia-100K.tar.gz' --dir .
+          tar xzf wikipedia-100K.tar.gz -C diskann_rust/target/tmp/
+          cp -r diskann_rust/target/tmp/wikipedia_cohere baseline/target/tmp/
 
       - name: Run baseline benchmark
         working-directory: baseline
@@ -214,21 +209,16 @@ jobs:
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
           pip install csvtomd numpy scipy
 
-      # Download the public OpenAI ArXiv 100K dataset via big-ann-benchmarks
+      # Download pre-packaged OpenAI ArXiv 100K dataset from GitHub Release
       # Dataset: 100K OpenAI embeddings of ArXiv papers (1536-dim, float32, euclidean distance)
-      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Clone big-ann-benchmarks
-        run: git clone --depth 1 https://github.com/harsha-simhadri/big-ann-benchmarks.git
-
       - name: Download openai-100K dataset
-        working-directory: big-ann-benchmarks
-        run: python create_dataset.py --dataset openai-100K
-
-      - name: Copy dataset to benchmark directories
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          cp -r big-ann-benchmarks/data/OpenAIArXiv diskann_rust/target/tmp/
-          cp -r big-ann-benchmarks/data/OpenAIArXiv baseline/target/tmp/
+          gh release download benchmark-data-v1 --repo ${{ github.repository }} --pattern 'openai-100K.tar.gz' --dir .
+          tar xzf openai-100K.tar.gz -C diskann_rust/target/tmp/
+          cp -r diskann_rust/target/tmp/OpenAIArXiv baseline/target/tmp/
 
       - name: Run baseline benchmark
         working-directory: baseline
