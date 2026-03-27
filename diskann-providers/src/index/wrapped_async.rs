@@ -24,9 +24,11 @@ use diskann::{
 
 use crate::storage::{LoadWith, StorageReadProvider};
 
+/// Synchronous wrapper around [`graph::DiskANNIndex`] that owns or borrows a tokio runtime.
 pub struct DiskANNIndex<DP: DataProvider> {
     /// The underlying async DiskANNIndex.
     pub inner: Arc<graph::DiskANNIndex<DP>>,
+    /// Keeps the runtime alive when `Self` owns it; `None` when using an external handle.
     _runtime: Option<tokio::runtime::Runtime>,
     handle: tokio::runtime::Handle,
 }
@@ -55,19 +57,21 @@ impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
 {
-    /// Construct a synchronous `DiskANNIndex` with its own `tokio::runtime::Runtime`.
+    /// Construct a synchronous `DiskANNIndex` with its own multi-threaded `tokio::runtime::Runtime`.
     ///
-    /// A default configured multi-threaded runtime will be created and used behind the scenes. To use
-    /// a specific Tokio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
+    /// A default multi-threaded runtime will be created and owned by `Self`. For a single-threaded
+    /// runtime use [`new_with_current_thread_runtime`](Self::new_with_current_thread_runtime), or
+    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle).
     pub fn new_with_multi_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
         let (rt, handle) = create_multi_thread_runtime();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
     }
 
-    /// Construct a synchronous `DiskANNIndex` with its own `tokio::runtime::Runtime`.
+    /// Construct a synchronous `DiskANNIndex` with its own single-threaded `tokio::runtime::Runtime`.
     ///
-    /// A default configured runtime that uses the current thread will be created and used behind the scenes. To use
-    /// a specific Tokio runtime, use `DiskANNIndex::new_with_multi_thread_runtime()` or `DiskANNIndex::new_with_handle()`.
+    /// A default current-thread runtime will be created and owned by `Self`. For a multi-threaded
+    /// runtime use [`new_with_multi_thread_runtime`](Self::new_with_multi_thread_runtime), or
+    /// to supply an external runtime handle use [`new_with_handle`](Self::new_with_handle).
     pub fn new_with_current_thread_runtime(config: graph::Config, data_provider: DP) -> Self {
         let (rt, handle) = create_current_thread_runtime();
         Self::new_internal(config, data_provider, Some(rt), handle, Some(ONE))
@@ -76,6 +80,8 @@ where
     /// Construct a synchronous `DiskANNIndex` that uses a provided `tokio::runtime::Handle`.
     ///
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
+    /// `thread_hint` is forwarded to [`graph::DiskANNIndex::new`] to size internal thread pools;
+    /// pass `None` to let it choose a default.
     pub fn new_with_handle(
         config: graph::Config,
         data_provider: DP,
@@ -123,8 +129,10 @@ where
     /// Load a prebuilt index from storage with its own multi-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`graph::DiskANNIndex::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
     /// A default multi-threaded runtime is created and owned by `Self`.
+    /// For a single-threaded runtime use [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime),
+    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
     pub fn load_with_multi_thread_runtime<T, P>(provider: &P, auxiliary: &T) -> ANNResult<Self>
     where
         graph::DiskANNIndex<DP>: LoadWith<T, Error = ANNError>,
@@ -142,8 +150,10 @@ where
     /// Load a prebuilt index from storage with its own single-threaded `tokio::runtime::Runtime`.
     ///
     /// This is the synchronous equivalent of
-    /// [`graph::DiskANNIndex::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
     /// A default current-thread runtime is created and owned by `Self`.
+    /// For a multi-threaded runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime),
+    /// or to supply an external runtime handle use [`load_with_handle`](Self::load_with_handle).
     pub fn load_with_current_thread_runtime<T, P>(provider: &P, auxiliary: &T) -> ANNResult<Self>
     where
         graph::DiskANNIndex<DP>: LoadWith<T, Error = ANNError>,
@@ -161,9 +171,10 @@ where
     /// Load a prebuilt index from storage using a provided `tokio::runtime::Handle`.
     ///
     /// This is the synchronous equivalent of
-    /// [`graph::DiskANNIndex::load_with`](crate::storage::LoadWith::load_with).
+    /// [`LoadWith::load_with`](crate::storage::LoadWith::load_with).
     /// The `tokio::runtime::Runtime` is owned externally and we just keep a `Handle` to it.
-    /// The thread hint is derived from the auxiliary data (e.g. `IndexConfiguration::num_threads`).
+    /// For an owned runtime use [`load_with_multi_thread_runtime`](Self::load_with_multi_thread_runtime)
+    /// or [`load_with_current_thread_runtime`](Self::load_with_current_thread_runtime).
     pub fn load_with_handle<T, P>(
         provider: &P,
         auxiliary: &T,
