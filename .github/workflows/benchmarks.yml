@@ -124,7 +124,6 @@ jobs:
             --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
 
       - name: Generate diff stats (baseline vs target)
-        continue-on-error: true
         run: |
           python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
             --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
@@ -246,7 +245,6 @@ jobs:
             --output-file target/tmp/openai-100K_benchmark_crate_target.json
 
       - name: Generate diff stats (baseline vs target)
-        continue-on-error: true
         run: |
           python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
             --baseline baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
@@ -292,52 +290,3 @@ jobs:
             diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json
             baseline/target/tmp/openai-100K_benchmark_crate_baseline.json
           retention-days: 30
-
-  # NOTE: IAI micro-benchmarks are temporarily disabled
-  # due to callgrind not running with Rust version `ms-1.86.0`.
-  # Uncomment when ready to enable:
-  #
-  # micro-benchmark-iai:
-  #   name: Micro Benchmark - IAI
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 120
-  #
-  #   steps:
-  #     - name: Checkout current branch
-  #       uses: actions/checkout@v4
-  #       with:
-  #         path: diskann_rust
-  #
-  #     - name: Checkout baseline (${{ inputs.baseline_ref }})
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ inputs.baseline_ref }}
-  #         path: baseline
-  #
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@master
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
-  #
-  #     - name: Install valgrind and iai-callgrind-runner
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y valgrind
-  #         cargo install --version 0.14.0 iai-callgrind-runner
-  #
-  #     - name: Run baseline IAI benchmarks
-  #       working-directory: baseline
-  #       run: |
-  #         cargo bench --bench bench_main_iai
-  #         cargo bench --bench bench_main_vector_iai
-  #
-  #     - name: Copy IAI baseline files
-  #       run: |
-  #         mkdir -p diskann_rust/target
-  #         cp -R baseline/target/iai diskann_rust/target/
-  #
-  #     - name: Run current branch IAI benchmarks
-  #       working-directory: diskann_rust
-  #       run: |
-  #         cargo bench --bench bench_main_iai
-  #         cargo bench --bench bench_main_vector_iai
