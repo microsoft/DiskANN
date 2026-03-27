@@ -113,7 +113,15 @@ impl App {
             Commands::Benchmarks {} => {
                 writeln!(output, "Registered Benchmarks:")?;
                 for (name, description) in benchmarks.names() {
-                    writeln!(output, "    {}: {}", name, description)?;
+                    let mut lines = description.lines();
+                    if let Some(first) = lines.next() {
+                        writeln!(output, "    {}: {}", name, first)?;
+                        for line in lines {
+                            writeln!(output, "        {}", line)?;
+                        }
+                    } else {
+                        writeln!(output, "    {}: <no description>", name)?;
+                    }
                 }
             }
             Commands::Skeleton => {
@@ -152,7 +160,7 @@ impl App {
                         writeln!(output)?;
 
                         return Err(anyhow::Error::msg(
-                            "could not find find a benchmark for all inputs",
+                            "could not find a benchmark for all inputs",
                         ));
                     }
                 }

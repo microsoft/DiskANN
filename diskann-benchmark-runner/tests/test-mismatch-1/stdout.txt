@@ -12,4 +12,4 @@ Closest matches:
     2. "type-bench-i8": expected "int8" but found "float16"
     3. "exact-type-bench-f32-1000": expected "float32" but found "float16"
 
-could not find find a benchmark for all inputs
+could not find a benchmark for all inputs

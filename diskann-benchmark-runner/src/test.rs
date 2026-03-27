@@ -140,7 +140,7 @@ where
 
     fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
         // Try to match based on data type.
-        // Add a small penalty to `ExactTypeBench` can be more specific if it hits.
+        // Add a small penalty so `ExactTypeBench` can be more specific if it hits.
         Type::<T>::try_match(&input.data_type).map(|m| MatchScore(m.0 + 10))
     }
 

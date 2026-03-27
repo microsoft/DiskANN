@@ -32,7 +32,7 @@ impl Inputs {
         self.inputs.get(tag).map(|v| input::Registered(&**v))
     }
 
-    /// Register `input` in the registry.
+    /// Register the [`Input`] `T` in the registry.
     ///
     /// Returns an error if any other input with the same [`Input::tag()`] has been registered
     /// while leaving the underlying registry unchanged.
