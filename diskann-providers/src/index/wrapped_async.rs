@@ -427,7 +427,7 @@ mod tests {
     use std::sync::Arc;
 
     use diskann::{
-        graph::{self, config, search_output_buffer},
+        graph::{self, search_output_buffer},
         provider::DefaultContext,
         utils::ONE,
     };
@@ -511,14 +511,7 @@ mod tests {
             train_data.nrows(),
             ONE,
             1,
-            config::Builder::new(
-                30,
-                config::MaxDegree::default_slack(),
-                20,
-                Metric::L2.into(),
-            )
-            .build()
-            .unwrap(),
+            build_config,
         );
 
         type TestProvider = inmem::FullPrecisionProvider<
