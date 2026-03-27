@@ -162,20 +162,28 @@ DATA_THRESHOLDS = {
         "total_duration_seconds": [10, 'LT', ""],
     },
     "index-build statistics": {
-        "total_time": [10, 'LT', ""],
+        # Calibrated from 5 GitHub runner runs (10 observations):
+        #   Wikipedia: 35.9–37.2s, OpenAI: 23.0–76.4s (SQ_1_2.0 variance)
+        # Contract: worst × 1.5 to absorb shared-runner variance
+        "total_time": [10, 'LT', 115],
         "total_comparisons": [1, 'LT', ""],
         "search_hops": [1, 'LT', ""]
     },
     "search-with-L=2000-bw=4": {
+        # Calibrated from 5 GitHub runner runs (10 observations):
+        #   QPS: 9.56–9.75 (both datasets)
+        #   Recall: wiki 99.87%, oai 99.67–99.91%
+        #   mean_ios: ~2007 (deterministic)
+        #   mean_comps: wiki ~27609, oai 21618–24733
         "latency_95": [10, 'LT', ""],
         "mean_latency": [10, 'LT', ""],
         "mean_io_time": [10, 'LT', ""],
         "mean_cpus": [10, 'LT', ""],
-        "qps": [10, 'GT', ""],
-        "mean_ios": [1, 'LT', ""],
-        "mean_comps": [1, 'LT', ""],
+        "qps": [10, 'GT', 6.5],
+        "mean_ios": [1, 'LT', 2410],
+        "mean_comps": [1, 'LT', 33200],
         "mean_hops": [1, 'LT', ""],
-        "recall": [1, 'GT', ""]
+        "recall": [1, 'GT', 98.0]
     },
     "search-with-L=100-bw=4": {
         "latency_95": [10, 'LT', ""],
