@@ -1,4 +1,6 @@
 #pragma once
+
+#include <cstdint>
 #include "windows_customizations.h"
 #include <cstring>
 
