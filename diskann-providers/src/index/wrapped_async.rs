@@ -14,7 +14,7 @@ use diskann::{
             PruneStrategy, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
-        search::Knn,
+        search::{self, Knn, MultihopSearch},
         search_output_buffer,
     },
     neighbor::Neighbor,
@@ -278,6 +278,26 @@ where
         self.handle.block_on(
             self.inner
                 .start_paged_search_with_init_ids(strategy, context, query, l_value, init_ids),
+        )
+    }
+
+    pub fn multihop_search<'q, S, T, O, OB>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        search_params: MultihopSearch<'q, DP::InternalId>,
+        output: &mut OB,
+    ) -> ANNResult<SearchStats>
+    where
+        T: Sync + ?Sized,
+        S: SearchStrategy<DP, T, O>,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
+    {
+        self.handle.block_on(
+            self.inner
+                .search(search_params, strategy, context, query, output),
         )
     }
 
