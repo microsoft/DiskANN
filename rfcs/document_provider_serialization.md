@@ -53,7 +53,7 @@ pub trait LoadWith<T>: Sized {
 }
 ```
 
-The generic `T` parameter carries the context needed to derive file paths — in practice a file-path prefix `String`, a structured `AsyncIndexMetadata` (wrapping a prefix string), or a tuple thereof.
+The generic `T` parameter carries the context needed to derive file paths — examples are a file-path prefix `String`, a structured `AsyncIndexMetadata` (wrapping a prefix string).
 
 Existing serialization patterns for the inner provider types:
 
@@ -70,7 +70,7 @@ Existing serialization patterns for the inner provider types:
 ### Goals
 
 1. Implement `SaveWith<T>` and `LoadWith<T>` for `DocumentProvider`, delegating to the inner provider and the attribute store respectively.
-2. Define a stable binary file format (`{prefix}.labels.bin`) for persisting `RoaringAttributeStore` label data.
+2. Define a binary file format (`{prefix}.labels.bin`) for persisting `RoaringAttributeStore` label data.
 3. Implement `SaveWith<T>` and `LoadWith<T>` directly on `RoaringAttributeStore` without widening the `AttributeStore` trait.
 
 ## Proposal
@@ -101,18 +101,19 @@ where
 { ... }
 ```
 
-This is deliberately narrow: concrete implementations are only required for `RoaringAttributeStore` for now, keeping the door open for future implementations.
-
 ### Label File Format
 
 The label data is persisted to a single binary file at `{prefix}.labels.bin`. `RoaringAttributeStore` is responsible for deriving the path from the auxiliary type `T` passed to its `SaveWith<T>` / `LoadWith<T>` implementation. The format uses little-endian byte order throughout and is designed for straightforward sequential writes and reads.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
-│  Header (16 bytes)                                                 │
-│  [u64: num_attribute_entries]                                       │
+│  Header (17 bytes)                                                 │
+│  [u64: num_attribute_entries]                                      │
 │  [u64: forward_index_offset]  (byte offset from file start to      │
 │                                Section 2)                          │
+│  [u8: vector_id_type_tag]                                          │
+│      0 = u32                                                       │
+│      1 = u64                                                       │
 ├────────────────────────────────────────────────────────────────────┤
 │  Section 1: Attribute Dictionary                                   │
 │  Repeated `num_attribute_entries` times:                           │
@@ -137,7 +138,7 @@ The label data is persisted to a single binary file at `{prefix}.labels.bin`. `R
 │  [u64: num_nodes_with_labels]                                      │
 │  Repeated `num_nodes_with_labels` times:                           │
 │                                                                    │
-│  [u32: node_internal_id]                                           │
+│  [N bytes: node_internal_id (width per vector_id_type_tag)]        │
 │  [u32: num_attribute_ids_for_this_node]                            │
 │  [u64 * num_attribute_ids: attribute IDs (sorted ascending)]       │
 └────────────────────────────────────────────────────────────────────┘
@@ -146,7 +147,6 @@ The label data is persisted to a single binary file at `{prefix}.labels.bin`. `R
 **Notes:**
 
 - The inverted index is **not persisted**; it is rebuilt from the forward index during `load_with`.
-- `node_internal_id` is currently `u32` (matching `VectorId = u32` throughout the system). If the type is generalised in the future, this field and the file format version must be updated.
 - The attribute dictionary is written first so that a reader can build the reverse mapping (`u64` ID → `Attribute`) before scanning the forward index.
 
 ### DocumentProvider SaveWith Implementation
@@ -242,14 +242,17 @@ Adding `SaveWith`/`LoadWith` directly to `RoaringAttributeStore` rather than to 
 
 For `LoadWith` to work, the label file (`{prefix}.labels.bin`) must have been written separately — e.g. by calling `attribute_store.save_with(...)` directly during the disk-index build pipeline before the disk layout is finalized. The alternative of integrating label-file writing into `DiskIndexWriter` is deferred to future work (see below).
 
+### Save format
+
+The save format could have been JSON. This would help with readability and debuggability but at the cost of more storage space and perhaps longer load times.
+
 ## Benchmark Results
 
-Not applicable for this RFC.
+TODO
 
 ## Future Work
 
 - [ ] Extend `DiskIndexWriter` (or introduce a `create_disk_layout_with_labels` variant) to co-write `{prefix}.labels.bin` during disk-index construction, enabling a full `SaveWith`/`LoadWith` round-trip for `DocumentProvider<DiskProvider<_>, AS>`.
-- [ ] If `VectorId` is ever generalised beyond `u32`, update the `node_internal_id` field width and introduce a file format version field.
 
 ## References
 
