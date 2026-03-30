@@ -97,6 +97,9 @@ pub struct PiPNNConfig {
     /// Alpha (occlusion factor) for final RobustPrune. Same as DiskANN's `alpha` parameter.
     /// Higher values yield sparser graphs. Default: 1.2 (matches DiskANN default).
     pub alpha: f32,
+    /// Number of threads to use. 0 means use all available cores.
+    #[serde(default)]
+    pub num_threads: usize,
 }
 
 impl PiPNNConfig {
@@ -180,6 +183,7 @@ impl Default for PiPNNConfig {
             metric: Metric::L2,
             final_prune: false,
             alpha: 1.2,
+            num_threads: 0,
         }
     }
 }

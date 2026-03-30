@@ -456,6 +456,25 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     config: &PiPNNConfig,
     qdata: Option<crate::quantize::QuantizedData>,
 ) -> PiPNNResult<PiPNNGraph> {
+    // Respect num_threads: install a scoped rayon pool so all par_iter() calls
+    // within this build use the configured thread count instead of all cores.
+    if config.num_threads > 0 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(config.num_threads)
+            .build()
+            .map_err(|e| PiPNNError::Config(format!("Failed to create thread pool: {}", e)))?;
+        return pool.install(|| build_internal_impl(data, npoints, ndims, config, qdata));
+    }
+    build_internal_impl(data, npoints, ndims, config, qdata)
+}
+
+fn build_internal_impl<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    npoints: usize,
+    ndims: usize,
+    config: &PiPNNConfig,
+    qdata: Option<crate::quantize::QuantizedData>,
+) -> PiPNNResult<PiPNNGraph> {
     let t_total = Instant::now();
 
     // Compute medoid once upfront.
@@ -629,7 +648,7 @@ fn final_prune<T: VectorRepr + Send + Sync>(
         .par_iter()
         .enumerate()
         .map(|(i, neighbors)| {
-            if neighbors.len() <= max_degree {
+            if neighbors.is_empty() {
                 return neighbors.clone();
             }
 
@@ -651,7 +670,9 @@ fn final_prune<T: VectorRepr + Send + Sync>(
                 a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            // Greedy diversity-aware selection.
+            // Greedy diversity-aware selection (paper's Algorithm 2).
+            // Apply to ALL nodes for diversity, not just over-degree ones.
+            // No backfill: paper's RobustPrune can produce fewer than R edges.
             let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
 
             let mut point_sel = vec![0.0f32; ndims];
@@ -670,19 +691,6 @@ fn final_prune<T: VectorRepr + Send + Sync>(
 
                 if !is_pruned {
                     selected.push(cand_id);
-                }
-            }
-
-            // Fill remaining from sorted list.
-            if selected.len() < max_degree {
-                let selected_set: std::collections::HashSet<u32> = selected.iter().copied().collect();
-                for &(cand_id, _) in &candidates {
-                    if selected.len() >= max_degree {
-                        break;
-                    }
-                    if !selected_set.contains(&cand_id) {
-                        selected.push(cand_id);
-                    }
                 }
             }
 

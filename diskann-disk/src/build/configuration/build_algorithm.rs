@@ -82,6 +82,7 @@ impl BuildAlgorithm {
         max_degree: usize,
         metric: diskann_vector::distance::Metric,
         alpha: f32,
+        num_threads: usize,
     ) -> Option<diskann_pipnn::PiPNNConfig> {
         match self {
             BuildAlgorithm::PiPNN {
@@ -100,6 +101,7 @@ impl BuildAlgorithm {
                 metric,
                 final_prune: *final_prune,
                 alpha,
+                num_threads,
             }),
             _ => None,
         }
@@ -261,7 +263,7 @@ mod tests {
     #[cfg(feature = "pipnn")]
     fn test_to_pipnn_config_vamana_returns_none() {
         let algo = BuildAlgorithm::Vamana;
-        assert!(algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2).is_none());
+        assert!(algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2, 16).is_none());
     }
 
     #[test]
@@ -272,7 +274,7 @@ mod tests {
             leaf_k: 5, replicas: 1, l_max: 128, num_hash_planes: 12,
             final_prune: true,
         };
-        let config = algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2);
+        let config = algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2, 16);
         assert!(config.is_some());
         let config = config.unwrap();
         assert_eq!(config.c_max, 512);
