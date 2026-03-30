@@ -36,19 +36,6 @@ pub struct PartitionConfig {
     pub metric: diskann_vector::distance::Metric,
 }
 
-/// Compute squared L2 distance between two f32 slices using manual loop
-/// (auto-vectorized by the compiler).
-#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
-#[inline]
-fn l2_distance_inline(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    let mut sum = 0.0f32;
-    for i in 0..a.len() {
-        let d = unsafe { *a.get_unchecked(i) - *b.get_unchecked(i) };
-        sum += d * d;
-    }
-    sum
-}
 
 /// Quantized version of partition_assign using Hamming distance on 1-bit data.
 /// Pre-extracts leader u64 data for cache locality.
@@ -668,7 +655,13 @@ fn partition_quantized_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
+    use diskann_vector::distance::Metric;
+    use rand::{Rng, SeedableRng};
+
+    fn gen_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        (0..npoints * ndims).map(|_| rng.random_range(-1.0f32..1.0f32)).collect()
+    }
 
     #[test]
     fn test_partition_small_dataset() {
@@ -1033,6 +1026,72 @@ mod tests {
             for &idx in &leaf.indices {
                 assert!(idx < npoints, "index {} out of range", idx);
             }
+        }
+    }
+
+    #[test]
+    fn test_partition_cosine_normalized() {
+        // Pre-normalized vectors on the unit circle.
+        let npoints = 200;
+        let ndims = 8;
+        let mut data = gen_data(npoints, ndims, 42);
+        for i in 0..npoints {
+            let row = &mut data[i * ndims..(i + 1) * ndims];
+            let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 { for v in row.iter_mut() { *v /= norm; } }
+        }
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 64, c_min: 16, p_samp: 0.1,
+            fanout: vec![4], metric: Metric::CosineNormalized,
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty());
+        let total: usize = leaves.iter().map(|l| l.indices.len()).sum();
+        // With fanout=4, total assignments > npoints due to overlap.
+        assert!(total >= npoints);
+        for leaf in &leaves {
+            assert!(leaf.indices.len() <= config.c_max);
+        }
+    }
+
+    #[test]
+    fn test_partition_cosine_unnormalized() {
+        // Vectors with varying norms — cosine should normalize internally.
+        let npoints = 100;
+        let ndims = 4;
+        let data = gen_data(npoints, ndims, 99);
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 32, c_min: 8, p_samp: 0.1,
+            fanout: vec![3], metric: Metric::Cosine,
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty());
+        for leaf in &leaves {
+            assert!(leaf.indices.len() <= config.c_max);
+        }
+    }
+
+    #[test]
+    fn test_partition_zero_norm_vectors() {
+        // Mix of zero-norm and normal vectors — should not panic.
+        let mut data = gen_data(50, 4, 42);
+        // Set first 5 vectors to all zeros.
+        for v in data[..20].iter_mut() { *v = 0.0; }
+        let indices: Vec<usize> = (0..50).collect();
+        let config = PartitionConfig {
+            c_max: 16, c_min: 4, p_samp: 0.2,
+            fanout: vec![2], metric: Metric::Cosine,
+        };
+        let leaves = parallel_partition(&data, 4, &indices, &config, 42);
+        assert!(!leaves.is_empty());
+        // Zero-norm vectors should appear in at least one leaf.
+        let all_indices: std::collections::HashSet<usize> = leaves.iter()
+            .flat_map(|l| l.indices.iter().copied())
+            .collect();
+        for i in 0..5 {
+            assert!(all_indices.contains(&i), "zero-norm point {} missing from all leaves", i);
         }
     }
 }
