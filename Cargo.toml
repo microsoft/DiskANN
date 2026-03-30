@@ -26,6 +26,8 @@ members = [
     "vectorset",
     # PiPNN
     "diskann-pipnn",
+    # Internal tests
+    "internal-tests",
 ]
 
 default-members = [
