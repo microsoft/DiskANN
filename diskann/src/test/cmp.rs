@@ -5,7 +5,7 @@
 
 use thiserror::Error;
 
-use crate::{ANNError, ANNResult};
+use crate::{ANNError, ANNResult, graph::AdjacencyList};
 
 /// A variation of [`PartialEq`] that provides diagnostics if two values are not equal.
 ///
@@ -192,7 +192,7 @@ impl std::fmt::Display for Index {
     }
 }
 
-impl<T> VerboseEq for Vec<T>
+impl<T> VerboseEq for [T]
 where
     T: VerboseEq,
 {
@@ -213,6 +213,26 @@ where
                     total: self.len(),
                 })
             })
+    }
+}
+
+impl<T> VerboseEq for Vec<T>
+where
+    T: VerboseEq,
+{
+    #[inline(never)]
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        self.as_slice().verbose_eq(other)
+    }
+}
+
+impl<T> VerboseEq for AdjacencyList<T>
+where
+    T: VerboseEq,
+{
+    #[inline(never)]
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        (**self).verbose_eq(&**other)
     }
 }
 

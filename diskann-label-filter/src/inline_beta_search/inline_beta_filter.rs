@@ -9,7 +9,6 @@ use diskann::neighbor::Neighbor;
 use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
 use diskann::ANNError;
-use diskann_utils::future::AsyncFriendly;
 use diskann_vector::PreprocessedDistanceFunction;
 use roaring::RoaringTreemap;
 
@@ -28,13 +27,15 @@ pub struct InlineBetaStrategy<Strategy> {
     inner: Strategy,
 }
 
-impl<DP, Strategy, Q>
-    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
-    for InlineBetaStrategy<Strategy>
+impl<'q, DP, Strategy, Q>
+    SearchStrategy<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        &'q FilteredQuery<Q>,
+    > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, Q>,
-    Q: AsyncFriendly + Clone,
+    Strategy: SearchStrategy<DP, &'q Q>,
+    Q: Send + Sync,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
@@ -63,15 +64,15 @@ where
 
 /// [`DefaultPostProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
 /// the inner strategy's default processor with [`FilterResults`].
-impl<DP, Strategy, Q>
+impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        FilteredQuery<Q>,
+        &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q>,
-    Q: AsyncFriendly + Clone,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
+    Q: Send + Sync,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -139,20 +140,20 @@ pub struct FilterResults<IPP> {
     inner_post_processor: IPP,
 }
 
-impl<Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, FilteredQuery<Q>>
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<Q>,
-    Q: Clone + AsyncFriendly,
-    IPP: SearchPostProcess<IA, Q> + Send + Sync,
+    IA: BuildQueryComputer<&'q Q>,
+    Q: Send + Sync,
+    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &FilteredQuery<Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q>>::QueryComputer>,
+        query: &'q FilteredQuery<Q>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>

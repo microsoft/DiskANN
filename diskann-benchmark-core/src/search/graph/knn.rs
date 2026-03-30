@@ -88,7 +88,7 @@ pub struct Metrics {
 impl<DP, T, S> Search for KNN<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;

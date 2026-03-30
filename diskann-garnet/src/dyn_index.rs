@@ -88,9 +88,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         let query = bytemuck::cast_slice::<u8, T>(data);
         if let Some((labels, beta)) = filter {
             let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), beta);
-            self.search(&beta_filter, context, query, params, output)
+            self.search(*params, &beta_filter, context, query, output)
         } else {
-            self.search(&FullPrecision, context, query, params, output)
+            self.search(*params, &FullPrecision, context, query, output)
         }
     }
 
