@@ -24,6 +24,11 @@ pub(crate) trait Example {
     fn example() -> Self;
 }
 
+// NOTE: The input registration and dispatching isn't prefect. It uses a pattern (like
+// the use of `'static` on the benchmark types) as a byproduct of older ways of doing
+// benchmark selection.
+//
+// In the future, these can be migrated to reduce this legacy cruft.
 macro_rules! as_input {
     ($T:ty) => {
         impl diskann_benchmark_runner::Input for $T {
