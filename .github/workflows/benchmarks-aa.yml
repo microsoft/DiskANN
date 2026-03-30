@@ -100,27 +100,13 @@ jobs:
             run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
             --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
 
-      - name: Generate diff stats (baseline vs target)
-        run: |
-          python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
-            --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
-            --branch diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json \
-            --out diskann_rust/target/tmp/wikipedia-100K_change.csv
-
-      - name: Convert results to Markdown
-        working-directory: diskann_rust
-        run: |
-          python .github/scripts/csv_to_markdown.py \
-            --csv target/tmp/wikipedia-100K_change.csv \
-            --md target/tmp/wikipedia-100K_change.md \
-            --title 'A/A Results: Wikipedia-100K Dataset'
-
       - name: Validate benchmark results
-        working-directory: diskann_rust
         run: |
-          python .github/scripts/benchmark_result_parse.py \
+          python diskann_rust/.github/scripts/benchmark_validate.py \
             --mode aa \
-            --file target/tmp/wikipedia-100K_change.csv
+            --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
+            --target diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json \
+            --title 'A/A Results: Wikipedia-100K Dataset'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -132,8 +118,6 @@ jobs:
         with:
           name: aa-results-wikipedia-100K
           path: |
-            diskann_rust/target/tmp/wikipedia-100K_change.csv
-            diskann_rust/target/tmp/wikipedia-100K_change.md
             diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json
             baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json
           retention-days: 30
@@ -206,27 +190,13 @@ jobs:
             run --input-file diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
             --output-file target/tmp/openai-100K_benchmark_crate_target.json
 
-      - name: Generate diff stats (baseline vs target)
-        run: |
-          python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
-            --baseline baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
-            --branch diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json \
-            --out diskann_rust/target/tmp/openai-100K_change.csv
-
-      - name: Convert results to Markdown
-        working-directory: diskann_rust
-        run: |
-          python .github/scripts/csv_to_markdown.py \
-            --csv target/tmp/openai-100K_change.csv \
-            --md target/tmp/openai-100K_change.md \
-            --title 'A/A Results: OpenAI ArXiv 100K Dataset'
-
       - name: Validate benchmark results
-        working-directory: diskann_rust
         run: |
-          python .github/scripts/benchmark_result_parse.py \
+          python diskann_rust/.github/scripts/benchmark_validate.py \
             --mode aa \
-            --file target/tmp/openai-100K_change.csv
+            --baseline baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
+            --target diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json \
+            --title 'A/A Results: OpenAI ArXiv 100K Dataset'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -238,8 +208,6 @@ jobs:
         with:
           name: aa-results-openai-100K
           path: |
-            diskann_rust/target/tmp/openai-100K_change.csv
-            diskann_rust/target/tmp/openai-100K_change.md
             diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json
             baseline/target/tmp/openai-100K_benchmark_crate_baseline.json
           retention-days: 30
