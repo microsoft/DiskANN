@@ -743,6 +743,16 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         self.data.repr().remainder()
     }
 
+    /// Total number of rows in the backing allocation, including padding rows
+    /// added to fill the last block up to `GROUP`.
+    ///
+    /// This equals `num_blocks() * GROUP`, which is `nrows()` rounded up to the
+    /// next multiple of `GROUP`.
+    #[inline]
+    pub fn available_rows(&self) -> usize {
+        self.num_blocks() * GROUP
+    }
+
     /// Return a raw typed pointer to the start of the backing data.
     #[inline]
     pub fn as_ptr(&self) -> *const T {
@@ -870,6 +880,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn available_rows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1017,6 +1028,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn available_rows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);

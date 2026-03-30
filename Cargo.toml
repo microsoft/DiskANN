@@ -24,6 +24,8 @@ members = [
     "diskann-benchmark",
     "diskann-tools",
     "vectorset",
+    # Experimental
+    "experimental-multi-vector-bench",
 ]
 
 default-members = [
@@ -64,6 +66,8 @@ diskann-label-filter = { path = "diskann-label-filter", version = "0.49.1" }
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.49.1" }
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.49.1" }
 diskann-tools = { path = "diskann-tools", version = "0.49.1" }
+# Experimental
+experimental-multi-vector-bench = { path = "experimental-multi-vector-bench", version = "0.49.1" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"

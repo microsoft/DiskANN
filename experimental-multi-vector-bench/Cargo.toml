@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+[package]
+name = "experimental-multi-vector-bench"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Experimental multi-vector benchmarking support for DiskANN"
+documentation.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "multivec-bench"
+path = "src/bin/multivec_bench.rs"
+
+[dependencies]
+diskann-linalg.workspace = true
+diskann-utils.workspace = true
+diskann-quantization.workspace = true
+diskann-vector.workspace = true
+diskann-wide.workspace = true
+
+# Benchmark dependencies
+anyhow.workspace = true
+diskann-benchmark-runner.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
