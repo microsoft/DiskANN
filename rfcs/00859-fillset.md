@@ -1,12 +1,12 @@
 # Untangling the FillSet Knot
 
 
-| | |
-|---|---|
-| **Authors** | Mark Hildebrand |
-| **Contributors** | Coffee |
-| **Created** | YYYY-MM-DD |
-| **Updated** | YYYY-MM-DD |
+|                  |                      |
+|------------------|----------------------|
+| **Authors**      | Mark Hildebrand      |
+| **Contributors** | Coffee/AI Overloards |
+| **Created**      | 2026-03-30           |
+| **Updated**      | 2026-03-30           |
 
 ## Summary
 
