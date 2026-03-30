@@ -378,7 +378,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
 
     // For clusters at deep recursion levels or only marginally over c_max,
     // force-split is cheaper than doing another full GEMM + assignment.
-    if level >= MAX_DEPTH || (level >= 2 && n <= config.c_max * 3) {
+    if level >= MAX_DEPTH {
         return force_split(indices, config.c_max);
     }
 
@@ -388,9 +388,10 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         1
     };
 
-    // Sample leaders.
+    // Sample leaders. Hardcap at 1000 per the paper to prevent expensive GEMM at large N.
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
         .max(2)
+        .min(1000)
         .min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
@@ -452,9 +453,10 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
         3
     };
 
-    // Sample leaders.
+    // Sample leaders. Hardcap at 1000 per the paper.
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
         .max(2)
+        .min(1000)
         .min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
@@ -535,7 +537,7 @@ pub fn parallel_partition_quantized(
     let fanout = if !config.fanout.is_empty() { config.fanout[0] } else { 3 };
 
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
-        .max(2).min(n);
+        .max(2).min(1000).min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
@@ -617,12 +619,12 @@ fn partition_quantized_recursive(
 ) -> Vec<Leaf> {
     let n = indices.len();
     if n <= config.c_max { return vec![Leaf { indices: indices.to_vec() }]; }
-    if level >= MAX_DEPTH || (level >= 2 && n <= config.c_max * 3) {
+    if level >= MAX_DEPTH {
         return force_split(indices, config.c_max);
     }
 
     let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(n);
+    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(1000).min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 

@@ -235,14 +235,14 @@ impl HashPruneReservoir {
             let pos = self.entries
                 .binary_search_by_key(&hash, |e| e.hash)
                 .unwrap_or_else(|e| e);
+            // Fix: shift farthest_idx when inserting before it, since entries shift right.
+            if pos <= self.farthest_idx && !self.entries.is_empty() {
+                self.farthest_idx += 1;
+            }
             self.entries.insert(pos, ReservoirEntry { neighbor, distance: dist_bf16, hash });
-            if dist_bf16 > self.farthest_dist {
+            if dist_bf16 >= self.farthest_dist {
                 self.farthest_dist = dist_bf16;
-                // Position may have shifted
-                self.update_farthest();
-            } else if self.entries.len() == 1 {
-                self.farthest_dist = dist_bf16;
-                self.farthest_idx = 0;
+                self.farthest_idx = pos;
             }
             return true;
         }
