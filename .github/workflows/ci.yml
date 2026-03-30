@@ -342,14 +342,7 @@ jobs:
   test-workspace:
     needs: basics
     name: test workspace
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - ubuntu-24.04-arm
-          - macos-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
 
     steps:
       - uses: actions/checkout@v4
