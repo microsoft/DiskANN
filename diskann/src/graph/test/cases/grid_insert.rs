@@ -35,7 +35,7 @@ use crate::{
         get_or_save_test_results,
         tokio::current_thread_runtime,
     },
-    utils::{IntoUsize, async_tools::VectorIdBoxSlice},
+    utils::IntoUsize,
 };
 
 use super::{DUMP_GRAPH_STATE, grid_search::GridSearch};
@@ -109,13 +109,23 @@ fn build_index(
 ///
 /// Importantly, `batchsize` is distinct from any index configuration and just controls
 /// the chunking of `data`.
+///
+/// The parameter `working_set_reuse` controls whether or not the
+/// [`crate::graph::workingset::Map`] used by the test provider can be reused across
+/// multiple fills. Enabling this for multi-threaded tests results in non-deterministic
+/// `get_vector` calls since the pattern of reuse depends on the order items are received
+/// from the dynamic load balancer.
+///
+/// To that end, baseline tests should set this to `false` while ensuring that setting this
+/// to `true` (A) builds the same graph and (B) results in fewer `get_vector` calls.
 fn run_build(
     index: &Arc<DiskANNIndex<test_provider::Provider>>,
     data: MatrixView<'_, f32>,
     batchsize: Option<NonZeroUsize>,
+    working_set_reuse: bool,
     runtime: &tokio::runtime::Runtime,
 ) -> test_provider::Context {
-    let strategy = test_provider::Strategy::new();
+    let strategy = test_provider::Strategy::with_options(working_set_reuse);
     let context = test_provider::Context::new();
 
     match batchsize {
@@ -127,21 +137,20 @@ fn run_build(
             }
         }
         Some(batchsize) => {
-            for (batch, batch_data) in data.window_iter(batchsize.get()).enumerate() {
-                let start = batch * batchsize.get();
-                let vectors: Box<[VectorIdBoxSlice<u32, f32>]> = batch_data
-                    .row_iter()
-                    .enumerate()
-                    .map(|(i, row)| VectorIdBoxSlice::new((start + i) as u32, row.into()))
-                    .collect();
-
+            let mut start = 0;
+            while start < data.nrows() {
+                let stop = (start + batchsize.get()).min(data.nrows());
+                let batch = Arc::new(data.subview(start..stop).unwrap().to_owned());
                 runtime
-                    .block_on(
-                        index.multi_insert::<test_provider::Strategy, _>(
-                            strategy, &context, vectors,
-                        ),
-                    )
+                    .block_on(index.multi_insert::<test_provider::Strategy, _>(
+                        strategy,
+                        &context,
+                        batch,
+                        (start..stop).map(|i| i as u32).collect(),
+                    ))
                     .unwrap();
+
+                start = stop;
             }
         }
     }
@@ -344,7 +353,7 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
     );
 
     // Build the index.
-    let insert_context = run_build(&index, grid_data.as_view(), batchsize, &rt);
+    let insert_context = run_build(&index, grid_data.as_view(), batchsize, false, &rt);
 
     let insert_metrics = index.provider().metrics();
     index.provider().is_consistent().unwrap();
@@ -383,6 +392,29 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
     let name = parent.push(baseline_name(grid, size, batchsize, intra_batch_candidates));
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
+
+    // Now that we have checked the baseline - ensure that if we rebuild with
+    // `working_set_reuse` enabled that the graph remains the same and the number of
+    // `get_vector` calls decreases.
+    let reuse_index = build_index(
+        empty_provider(grid, size),
+        intra_batch_candidates,
+        max_minibatch_par,
+    );
+
+    // Build the index - enabling `working_set_reuse`.
+    let _ = run_build(&reuse_index, grid_data.as_view(), batchsize, true, &rt);
+    assert_eq_verbose!(
+        index.provider().dump_neighbors(true),
+        reuse_index.provider().dump_neighbors(true),
+    );
+
+    assert!(
+        reuse_index.provider().metrics().get_vector <= index.provider().metrics().get_vector,
+        "with reuse: {}, without reuse: {}",
+        reuse_index.provider().metrics().get_vector,
+        index.provider().metrics().get_vector,
+    );
 }
 
 /// Verify that multi-insert produces the same results regardless of runtime thread count.
@@ -405,7 +437,13 @@ fn _assert_thread_invariant(
         intra_batch_candidates,
         max_minibatch_par,
     );
-    run_build(&index_st, grid_data.as_view(), Some(batchsize), &rt_st);
+    run_build(
+        &index_st,
+        grid_data.as_view(),
+        Some(batchsize),
+        false,
+        &rt_st,
+    );
     let metrics_st = index_st.provider().metrics();
 
     // Build with multi-threaded runtime (2 worker threads).
@@ -419,7 +457,13 @@ fn _assert_thread_invariant(
         intra_batch_candidates,
         max_minibatch_par,
     );
-    run_build(&index_mt, grid_data.as_view(), Some(batchsize), &rt_mt);
+    run_build(
+        &index_mt,
+        grid_data.as_view(),
+        Some(batchsize),
+        false,
+        &rt_mt,
+    );
     let metrics_mt = index_mt.provider().metrics();
 
     // Metrics must match exactly.

@@ -55,6 +55,7 @@ where
     type ExternalId = DP::ExternalId;
     type InternalId = DP::InternalId;
     type Error = DP::Error;
+    type Guard = DP::Guard;
 
     fn to_internal_id(
         &self,
@@ -75,18 +76,17 @@ where
 
 impl<'a, VT, DP, AS> SetElement<Document<'a, VT>> for DocumentProvider<DP, AS>
 where
-    DP: DataProvider + Delete + SetElement<VT>,
+    DP: DataProvider + Delete + SetElement<&'a VT>,
     AS: AttributeStore<DP::InternalId> + AsyncFriendly,
     VT: Sync + Send,
 {
     type SetError = ANNError;
-    type Guard = <DP as SetElement<VT>>::Guard;
 
     async fn set_element(
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &Document<'_, VT>,
+        element: Document<'a, VT>,
     ) -> Result<Self::Guard, Self::SetError> {
         let guard = self
             .inner_provider

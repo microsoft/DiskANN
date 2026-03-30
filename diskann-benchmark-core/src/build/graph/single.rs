@@ -59,8 +59,8 @@ where
 
 impl<DP, T, S> Build for SingleInsert<DP, T, S>
 where
-    DP: provider::DataProvider<Context: Default> + provider::SetElement<[T]>,
-    S: glue::InsertStrategy<DP, [T]> + Clone + AsyncFriendly,
+    DP: provider::DataProvider<Context: Default> + for<'a> provider::SetElement<&'a [T]>,
+    S: for<'a> glue::InsertStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Output = ();

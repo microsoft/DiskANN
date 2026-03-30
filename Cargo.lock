@@ -773,6 +773,7 @@ dependencies = [
  "diskann",
  "diskann-providers",
  "diskann-quantization",
+ "diskann-utils",
  "diskann-vector",
  "foldhash 0.2.0",
  "thiserror 2.0.17",

@@ -10,16 +10,15 @@ use diskann::{
     graph::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
-            self, AsElement, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchStrategy,
+            Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
-        index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
-        search::Knn,
+        index::{DegreeStats, PagedSearchState, PartitionedNeighbors, SearchState},
         search_output_buffer,
     },
     neighbor::Neighbor,
     provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
-    utils::{ONE, async_tools::VectorIdBoxSlice},
+    utils::ONE,
 };
 
 use crate::storage::{LoadWith, StorageReadProvider};
@@ -197,33 +196,32 @@ where
         strategy: S,
         context: &DP::Context,
         id: &DP::ExternalId,
-        vector: &T,
+        vector: T,
     ) -> ANNResult<()>
     where
         S: InsertStrategy<DP, T>,
-        T: Sync + ?Sized,
         DP: SetElement<T>,
+        T: Copy + Send,
     {
         self.handle
             .block_on(self.inner.insert(strategy, context, id, vector))
     }
 
-    pub fn multi_insert<S, T>(
+    pub fn multi_insert<S, B>(
         &self,
         strategy: S,
         context: &DP::Context,
-        vector_id_pairs: Box<[VectorIdBoxSlice<DP::ExternalId, T>]>,
+        vectors: Arc<B>,
+        ids: Arc<[DP::ExternalId]>,
     ) -> ANNResult<()>
     where
         Self: 'static,
-        T: Send + Sync + 'static,
-        S: InsertStrategy<DP, [T]> + Clone + Send + Sync,
-        DP: SetElement<[T]>,
-        S::PruneStrategy: Clone,
-        for<'a> glue::aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
+        S: MultiInsertStrategy<DP, B>,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
     {
         self.handle
-            .block_on(self.inner.multi_insert(strategy, context, vector_id_pairs))
+            .block_on(self.inner.multi_insert(strategy, context, vectors, ids))
     }
 
     pub fn is_any_neighbor_deleted<NA>(
@@ -276,10 +274,7 @@ where
         inplace_delete_method: InplaceDeleteMethod,
     ) -> ANNResult<()>
     where
-        S: InplaceDeleteStrategy<DP>
-            + for<'a> SearchStrategy<DP, S::DeleteElement<'a>>
-            + Sync
-            + Clone,
+        S: InplaceDeleteStrategy<DP> + Sync + Clone,
         DP: Delete,
     {
         self.handle.block_on(self.inner.inplace_delete(
@@ -324,24 +319,23 @@ where
             .block_on(self.inner.consolidate_vector(strategy, context, vector_id))
     }
 
-    pub fn search<S, T, O, OB>(
+    pub fn search<S, T, O, OB, P>(
         &self,
+        search_params: P,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
-        search_params: &Knn,
+        query: T,
         output: &mut OB,
-    ) -> ANNResult<SearchStats>
+    ) -> ANNResult<P::Output>
     where
-        T: Sync + ?Sized,
+        P: graph::search::Search<DP, S, T>,
         S: DefaultSearchStrategy<DP, T, O>,
         O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
-        let knn_search = *search_params;
         self.handle.block_on(
             self.inner
-                .search(knn_search, strategy, context, query, output),
+                .search(search_params, strategy, context, query, output),
         )
     }
 
@@ -350,12 +344,12 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
-    ) -> ANNResult<SearchState<DP::InternalId, (S, S::QueryComputer)>>
+    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
     where
-        S: SearchStrategy<DP, T>,
-        T: Sync + ?Sized,
+        S: SearchStrategy<DP, T> + 'static,
+        T: Copy + Send,
     {
         self.handle.block_on(
             self.inner
@@ -368,13 +362,13 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
         init_ids: Option<&[DP::InternalId]>,
-    ) -> ANNResult<SearchState<DP::InternalId, (S, S::QueryComputer)>>
+    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
     where
-        S: SearchStrategy<DP, T>,
-        T: Sync + ?Sized,
+        S: SearchStrategy<DP, T> + 'static,
+        T: Copy + Send,
     {
         self.handle.block_on(
             self.inner
@@ -391,7 +385,6 @@ where
     ) -> ANNResult<usize>
     where
         S: SearchStrategy<DP, T>,
-        T: Send + Sync + ?Sized,
     {
         self.handle.block_on(self.inner.next_search_results(
             context,
@@ -534,15 +527,9 @@ mod tests {
         let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
         let query = train_data.row(0);
-        let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
         let stats = loaded
-            .search(
-                &FullPrecision,
-                &DefaultContext,
-                query,
-                &search_params,
-                &mut output,
-            )
+            .search(kind, &FullPrecision, &DefaultContext, query, &mut output)
             .unwrap();
 
         assert_eq!(stats.result_count, top_k as u32);
