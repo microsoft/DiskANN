@@ -93,12 +93,13 @@ jobs:
 
       # Download pre-packaged Wikipedia-100K dataset from GitHub Release
       # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
+      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
       - name: Download wikipedia-100K dataset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          gh release download benchmark-data-v1 --repo ${{ github.repository }} --pattern 'wikipedia-100K.tar.gz' --dir .
+          gh release download v1 --repo YuanyuanTian-hh/diskann-benchmark-data --pattern 'wikipedia-100K.tar.gz' --dir .
           tar xzf wikipedia-100K.tar.gz -C diskann_rust/target/tmp/
           cp -r diskann_rust/target/tmp/wikipedia_cohere baseline/target/tmp/
 
@@ -203,12 +204,13 @@ jobs:
 
       # Download pre-packaged OpenAI ArXiv 100K dataset from GitHub Release
       # Dataset: 100K OpenAI embeddings of ArXiv papers (1536-dim, float32, euclidean distance)
+      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
       - name: Download openai-100K dataset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          gh release download benchmark-data-v1 --repo ${{ github.repository }} --pattern 'openai-100K.tar.gz' --dir .
+          gh release download v1 --repo YuanyuanTian-hh/diskann-benchmark-data --pattern 'openai-100K.tar.gz' --dir .
           tar xzf openai-100K.tar.gz -C diskann_rust/target/tmp/
           cp -r diskann_rust/target/tmp/OpenAIArXiv baseline/target/tmp/
 
