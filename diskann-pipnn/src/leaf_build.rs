@@ -224,27 +224,10 @@ fn build_leaf_with_buffers<T: VectorRepr>(
         }
     };
 
-    // Extract k-NN edges.
     let local_edges = extract_knn(dist_matrix, n, k);
-
-    // Create bi-directed edges using reused seen buffer.
     let seen = &mut bufs.seen[..n * n];
     seen.fill(false);
-
-    let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
-
-    for &(src, dst, dist) in &local_edges {
-        if !seen[src * n + dst] {
-            seen[src * n + dst] = true;
-            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
-        }
-        if !seen[dst * n + src] {
-            seen[dst * n + src] = true;
-            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
-        }
-    }
-
-    global_edges
+    make_bidirected_edges(&local_edges, dist_matrix, n, indices, seen)
 }
 
 /// Build a leaf using 1-bit quantized vectors with Hamming distance.
@@ -265,22 +248,32 @@ pub fn build_leaf_quantized(
         let mut seen = cell.borrow_mut();
         seen.resize(n * n, false);
         seen.fill(false);
-
-        let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
-
-        for &(src, dst, dist) in &local_edges {
-            if !seen[src * n + dst] {
-                seen[src * n + dst] = true;
-                global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
-            }
-            if !seen[dst * n + src] {
-                seen[dst * n + src] = true;
-                global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
-            }
-        }
-
-        global_edges
+        make_bidirected_edges(&local_edges, &dist_matrix, n, indices, &mut seen)
     })
+}
+
+/// Convert k-NN edges to bi-directed global edges, deduplicating via a seen buffer.
+/// For symmetric metrics, dist(a,b) == dist(b,a) but we use the matrix lookup
+/// for the reverse edge to stay correct for any future asymmetric metric.
+fn make_bidirected_edges(
+    local_edges: &[(usize, usize, f32)],
+    dist_matrix: &[f32],
+    n: usize,
+    indices: &[usize],
+    seen: &mut [bool],
+) -> Vec<Edge> {
+    let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
+    for &(src, dst, dist) in local_edges {
+        if !seen[src * n + dst] {
+            seen[src * n + dst] = true;
+            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
+        }
+        if !seen[dst * n + src] {
+            seen[dst * n + src] = true;
+            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
+        }
+    }
+    global_edges
 }
 
 /// Brute-force search the dataset using L2 distance.
@@ -629,5 +622,95 @@ mod tests {
                 edge.src, edge.dst, edge.dst, edge.src
             );
         }
+    }
+
+    #[test]
+    fn test_build_leaf_cosine_unnormalized() {
+        // Cosine (unnormalized) path: distance = 1 - dot(a,b)/(|a|*|b|).
+        // Vectors with different norms but same direction should have distance ~0.
+        let data = vec![
+            1.0, 0.0, // point 0: unit x
+            3.0, 0.0, // point 1: 3x in same direction
+            0.0, 1.0, // point 2: unit y (orthogonal)
+            1.0, 1.0, // point 3: 45 degrees
+        ];
+        let indices = vec![0, 1, 2, 3];
+        let edges = build_leaf(&data, 2, &indices, 2, Metric::Cosine);
+
+        assert!(!edges.is_empty());
+        // Points 0 and 1 are co-linear — cosine distance should be ~0.
+        let e01 = edges.iter().find(|e| e.src == 0 && e.dst == 1);
+        assert!(e01.is_some(), "co-linear points should be neighbors");
+        assert!(e01.unwrap().distance < 0.01, "cosine dist between co-linear should be ~0, got {}", e01.unwrap().distance);
+    }
+
+    #[test]
+    fn test_build_leaf_inner_product() {
+        // InnerProduct: distance = -dot(a,b). Lower (more negative) = closer.
+        let data = vec![
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0, // dot with self = 2, dot with (1,0) = 1
+        ];
+        let indices = vec![0, 1, 2];
+        let edges = build_leaf(&data, 2, &indices, 1, Metric::InnerProduct);
+        assert!(!edges.is_empty());
+    }
+
+    #[test]
+    fn test_build_leaf_large_k_clamped() {
+        // k=1000 on 5 points should produce all-pairs edges (clamped to n-1=4).
+        let data = vec![0.0f32; 5 * 4];
+        let indices = vec![0, 1, 2, 3, 4];
+        let edges = build_leaf(&data, 4, &indices, 1000, Metric::L2);
+        let edge_set: std::collections::HashSet<(usize, usize)> =
+            edges.iter().map(|e| (e.src, e.dst)).collect();
+        // All pairs should exist.
+        for i in 0..5 {
+            for j in 0..5 {
+                if i != j {
+                    assert!(edge_set.contains(&(i, j)), "all-pairs edge ({}, {}) missing", i, j);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_leaf_distances_nonnegative() {
+        // All distance metrics should produce non-negative distances.
+        let data = vec![
+            -1.5, 2.3, 0.1,
+            0.7, -0.4, 1.9,
+            1.0, 1.0, 1.0,
+        ];
+        let indices = vec![0, 1, 2];
+        for metric in [Metric::L2, Metric::Cosine, Metric::CosineNormalized] {
+            let edges = build_leaf(&data, 3, &indices, 2, metric);
+            for e in &edges {
+                assert!(e.distance >= 0.0, "{:?}: negative distance {} for ({},{})", metric, e.distance, e.src, e.dst);
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_knn_k_zero() {
+        let dist = vec![f32::MAX, 1.0, 1.0, f32::MAX];
+        let edges = extract_knn(&dist, 2, 0);
+        assert!(edges.is_empty(), "k=0 should return no edges");
+    }
+
+    #[test]
+    fn test_build_leaf_buffer_reuse_different_sizes() {
+        // First call with large leaf, second with small — buffers should handle both.
+        let data_large = vec![1.0f32; 20 * 4];
+        let indices_large: Vec<usize> = (0..20).collect();
+        let edges1 = build_leaf(&data_large, 4, &indices_large, 2, Metric::L2);
+        assert!(!edges1.is_empty());
+
+        // Second call with smaller leaf on same thread — should reuse thread-local buffers.
+        let data_small = vec![1.0f32; 4 * 4];
+        let indices_small: Vec<usize> = (0..4).collect();
+        let edges2 = build_leaf(&data_small, 4, &indices_small, 2, Metric::L2);
+        assert!(!edges2.is_empty(), "small leaf after large should work with reused buffers");
     }
 }

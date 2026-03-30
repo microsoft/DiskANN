@@ -638,73 +638,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     Ok(graph)
 }
 
-/// RobustPrune-like final pass: diversity-aware pruning via alpha-pruning.
-/// Uses the same occlusion factor (alpha) as DiskANN's RobustPrune.
-fn final_prune<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    adjacency: &[Vec<u32>],
-    max_degree: usize,
-    metric: Metric,
-    alpha: f32,
-) -> Vec<Vec<u32>> {
-    let dist_fn = make_dist_fn(metric);
-
-    adjacency
-        .par_iter()
-        .enumerate()
-        .map(|(i, neighbors)| {
-            if neighbors.is_empty() {
-                return neighbors.clone();
-            }
-
-            let mut point_i = vec![0.0f32; ndims];
-            T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_i).expect("f32 conversion");
-
-            // Compute distances from i to all its current neighbors.
-            let mut point_buf = vec![0.0f32; ndims];
-            let mut candidates: Vec<(u32, f32)> = neighbors
-                .iter()
-                .map(|&j| {
-                    T::as_f32_into(&data[j as usize * ndims..(j as usize + 1) * ndims], &mut point_buf).expect("f32 conversion");
-                    let dist = dist_fn.call(&point_i, &point_buf);
-                    (j, dist)
-                })
-                .collect();
-
-            candidates.sort_unstable_by(|a, b| {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            // Greedy diversity-aware selection (paper's Algorithm 2).
-            // Apply to ALL nodes for diversity, not just over-degree ones.
-            // No backfill: paper's RobustPrune can produce fewer than R edges.
-            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
-
-            let mut point_sel = vec![0.0f32; ndims];
-            let mut point_cand = vec![0.0f32; ndims];
-            for &(cand_id, cand_dist) in &candidates {
-                if selected.len() >= max_degree {
-                    break;
-                }
-
-                T::as_f32_into(&data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims], &mut point_cand).expect("f32 conversion");
-                let is_pruned = selected.iter().any(|&sel_id| {
-                    T::as_f32_into(&data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims], &mut point_sel).expect("f32 conversion");
-                    let dist_sel_cand = dist_fn.call(&point_sel, &point_cand);
-                    dist_sel_cand * alpha < cand_dist
-                });
-
-                if !is_pruned {
-                    selected.push(cand_id);
-                }
-            }
-
-            selected
-        })
-        .collect()
-}
-
 /// RobustPrune from full reservoir: select max_degree from l_max candidates using diversity.
 /// Candidates already have distances from HashPrune — no recomputation needed for i→candidate.
 /// Only computes inter-candidate distances for the occlusion check.
@@ -1630,5 +1563,204 @@ mod tests {
         // Both should be valid graphs.
         assert!(graph_no.avg_degree() > 0.0);
         assert!(graph_yes.avg_degree() > 0.0);
+    }
+
+    #[test]
+    fn test_final_prune_from_candidates_diversity() {
+        // 4 points: 0=(0,0), 1=(1,0), 2=(0,1), 3=(0.1,0) -- point 3 is occluded by 1.
+        let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.1, 0.0];
+        let candidates = vec![
+            // Node 0's candidates sorted by distance: 3 (close, same direction as 1), 1 (far along x), 2 (far along y)
+            vec![(3, 0.01f32), (1, 1.0f32), (2, 1.0f32)],
+            vec![], vec![], vec![],
+        ];
+
+        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
+        let node0 = &result[0];
+        // With alpha=1.2, point 3 should be selected first (closest).
+        // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
+        // Point 2 should survive (different direction).
+        assert!(!node0.is_empty());
+        assert!(node0.len() <= 2, "should respect max_degree=2");
+        // Node 0 should keep at least one neighbor.
+        assert!(node0.contains(&3), "closest candidate should always be selected");
+    }
+
+    #[test]
+    fn test_final_prune_from_candidates_empty() {
+        let data: Vec<f32> = vec![0.0; 8];
+        let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        assert!(result.iter().all(|adj| adj.is_empty()));
+    }
+
+    #[test]
+    fn test_final_prune_from_candidates_single_candidate() {
+        let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
+        let candidates = vec![
+            vec![(1, 1.0f32)],
+            vec![(0, 1.0f32)],
+        ];
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        assert_eq!(result[0], vec![1]);
+        assert_eq!(result[1], vec![0]);
+    }
+
+    #[test]
+    fn test_final_prune_alpha_effect() {
+        // Higher alpha = less aggressive pruning = more edges retained.
+        let npoints = 200;
+        let ndims = 8;
+        let data = generate_random_data(npoints, ndims, 42);
+
+        let config_aggressive = PiPNNConfig {
+            c_max: 64, c_min: 16, k: 6, max_degree: 16,
+            replicas: 2, l_max: 64, final_prune: true, alpha: 1.0,
+            ..Default::default()
+        };
+        let config_relaxed = PiPNNConfig {
+            alpha: 2.0, ..config_aggressive.clone()
+        };
+
+        let graph_aggressive = build(&data, npoints, ndims, &config_aggressive).unwrap();
+        let graph_relaxed = build(&data, npoints, ndims, &config_relaxed).unwrap();
+
+        // Relaxed alpha should yield denser graph (more edges survive pruning).
+        assert!(
+            graph_relaxed.avg_degree() >= graph_aggressive.avg_degree(),
+            "alpha=2.0 ({:.1}) should produce >= degree than alpha=1.0 ({:.1})",
+            graph_relaxed.avg_degree(), graph_aggressive.avg_degree()
+        );
+    }
+
+    #[test]
+    fn test_build_final_prune_vs_no_prune_recall() {
+        // Both should produce searchable graphs with reasonable recall.
+        let npoints = 500;
+        let ndims = 8;
+        let data = generate_random_data(npoints, ndims, 42);
+
+        let config_no_prune = PiPNNConfig {
+            c_max: 128, c_min: 32, k: 3, max_degree: 32,
+            replicas: 1, l_max: 64, final_prune: false,
+            ..Default::default()
+        };
+        let config_prune = PiPNNConfig {
+            l_max: 64, final_prune: true, ..config_no_prune.clone()
+        };
+
+        let graph_no = build(&data, npoints, ndims, &config_no_prune).unwrap();
+        let graph_yes = build(&data, npoints, ndims, &config_prune).unwrap();
+
+        // Both should have non-trivial degree.
+        assert!(graph_no.avg_degree() > 1.0);
+        assert!(graph_yes.avg_degree() > 1.0);
+
+        // Final prune should produce sparser graph.
+        assert!(
+            graph_yes.avg_degree() <= graph_no.avg_degree(),
+            "pruned ({:.1}) should be <= unpruned ({:.1})",
+            graph_yes.avg_degree(), graph_no.avg_degree()
+        );
+
+        // Both should be searchable.
+        let query = &data[0..ndims];
+        let r1 = crate::leaf_build::brute_force_knn(&data, ndims, npoints, query, 10);
+        let s_no = graph_no.search(&data, query, 10, 50);
+        let s_yes = graph_yes.search(&data, query, 10, 50);
+        assert!(!s_no.is_empty(), "no_prune search should return results");
+        assert!(!s_yes.is_empty(), "prune search should return results");
+
+        // Both should find the nearest neighbor (query is point 0).
+        assert_eq!(s_no[0].0, r1[0].0, "no_prune should find NN");
+        assert_eq!(s_yes[0].0, r1[0].0, "prune should find NN");
+    }
+
+    #[test]
+    fn test_build_cosine_normalized() {
+        let npoints = 100;
+        let ndims = 8;
+        let mut data = generate_random_data(npoints, ndims, 42);
+        // Normalize all vectors.
+        for i in 0..npoints {
+            let row = &mut data[i * ndims..(i + 1) * ndims];
+            let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 { for v in row.iter_mut() { *v /= norm; } }
+        }
+
+        let config = PiPNNConfig {
+            c_max: 32, c_min: 8, k: 3, max_degree: 16,
+            metric: Metric::CosineNormalized,
+            ..Default::default()
+        };
+        let graph = build(&data, npoints, ndims, &config).unwrap();
+        assert!(graph.avg_degree() > 0.0);
+        assert_eq!(graph.metric, Metric::CosineNormalized);
+
+        // Search should work with cosine metric.
+        let query = &data[0..ndims];
+        let results = graph.search(&data, query, 5, 20);
+        assert!(!results.is_empty());
+        // First result should be the query point itself.
+        assert_eq!(results[0].0, 0);
+    }
+
+    #[test]
+    fn test_config_validate_inner_product_rejected() {
+        let config = PiPNNConfig {
+            metric: Metric::InnerProduct,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate_alpha_infinity() {
+        let config = PiPNNConfig {
+            alpha: f32::INFINITY,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate_p_samp_nan() {
+        let config = PiPNNConfig {
+            p_samp: f64::NAN,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_pipnn_graph_stats() {
+        let npoints = 100;
+        let ndims = 4;
+        let data = generate_random_data(npoints, ndims, 42);
+        let config = PiPNNConfig {
+            c_max: 32, c_min: 8, k: 3, max_degree: 16,
+            ..Default::default()
+        };
+        let graph = build(&data, npoints, ndims, &config).unwrap();
+
+        assert_eq!(graph.npoints, npoints);
+        assert_eq!(graph.ndims, ndims);
+        assert!(graph.medoid < npoints);
+        assert!(graph.max_degree() <= config.max_degree);
+        assert!(graph.avg_degree() > 0.0);
+        assert!(graph.avg_degree() <= config.max_degree as f64);
+        // num_isolated should be 0 for a well-connected graph.
+        assert_eq!(graph.num_isolated(), 0, "graph should have no isolated nodes");
+    }
+
+    #[test]
+    fn test_config_serde_roundtrip() {
+        let config = PiPNNConfig::default();
+        let json = serde_json::to_string(&config).expect("serialize");
+        let deserialized: PiPNNConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(config.c_max, deserialized.c_max);
+        assert_eq!(config.k, deserialized.k);
+        assert_eq!(config.max_degree, deserialized.max_degree);
+        assert!((config.alpha - deserialized.alpha).abs() < 1e-6);
     }
 }

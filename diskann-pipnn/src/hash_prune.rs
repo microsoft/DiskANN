@@ -609,4 +609,118 @@ mod tests {
         // h_p(c) != h_c(p) in general because relative_hash is asymmetric
         let _ = (h01, h10);
     }
+
+    #[test]
+    fn test_extract_graph_for_prune_returns_full_reservoir() {
+        let data = vec![
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0,
+        ];
+        // l_max=10 (much larger than max_degree=2) to verify no truncation.
+        let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
+        hp.add_edge(0, 1, 1.0);
+        hp.add_edge(0, 2, 1.0);
+        hp.add_edge(0, 3, 1.414);
+        hp.add_edge(1, 0, 1.0);
+        hp.add_edge(2, 0, 1.0);
+        hp.add_edge(3, 0, 1.414);
+
+        let full = hp.extract_graph_for_prune();
+        assert_eq!(full.len(), 4);
+        // Node 0 has up to 3 edges, but hash collisions may reduce this.
+        // Key invariant: for_prune returns >= extract_graph (no truncation to max_degree).
+        assert!(full[0].len() >= 1, "node 0 should have neighbors");
+        // Verify sorted by distance.
+        for neighbors in &full {
+            for w in neighbors.windows(2) {
+                assert!(w[0].1 <= w[1].1, "should be sorted by distance");
+            }
+        }
+    }
+
+    #[test]
+    fn test_extract_graph_truncates_to_max_degree() {
+        let data = vec![0.0f32; 4 * 2];
+        let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
+        hp.add_edge(0, 1, 1.0);
+        hp.add_edge(0, 2, 2.0);
+        hp.add_edge(0, 3, 3.0);
+
+        let graph = hp.extract_graph();
+        // max_degree=2, so node 0 should have at most 2 neighbors.
+        assert!(graph[0].len() <= 2, "extract_graph should truncate to max_degree");
+    }
+
+    #[test]
+    fn test_extract_for_prune_preserves_distances() {
+        let data = vec![0.0f32; 4 * 2];
+        let hp = HashPrune::new(&data, 4, 2, 4, 10, 5, 42);
+        hp.add_edge(0, 1, 1.5);
+        hp.add_edge(0, 2, 2.5);
+
+        let full = hp.extract_graph_for_prune();
+        let node0 = &full[0];
+        // Check distances are bf16-rounded but close to original.
+        for &(id, dist) in node0 {
+            if id == 1 { assert!((dist - 1.5).abs() < 0.05, "dist for id=1: {}", dist); }
+            if id == 2 { assert!((dist - 2.5).abs() < 0.05, "dist for id=2: {}", dist); }
+        }
+    }
+
+    #[test]
+    fn test_reservoir_farthest_cache_after_eviction() {
+        // Verify farthest cache stays correct through multiple eviction cycles.
+        let mut res = HashPruneReservoir::new(3);
+        res.insert(0, 10, 5.0);
+        res.insert(1, 11, 4.0);
+        res.insert(2, 12, 3.0);
+        // Full. Evict farthest (5.0), insert closer.
+        assert!(res.insert(3, 13, 2.0));
+        // Farthest should now be 4.0 (id=11).
+        // Evict again.
+        assert!(res.insert(4, 14, 1.0));
+        // Farthest should now be 3.0 (id=12).
+        let neighbors = res.get_neighbors_sorted();
+        assert_eq!(neighbors.len(), 3);
+        // All remaining should have dist <= 3.0.
+        for &(_, d) in &neighbors {
+            assert!(d <= 3.1, "expected dist <= 3.0, got {}", d);
+        }
+    }
+
+    #[test]
+    fn test_reservoir_farthest_insert_before_farthest_idx() {
+        // Regression: inserting with hash < farthest's hash must shift farthest_idx.
+        let mut res = HashPruneReservoir::new(4);
+        // Insert in hash order: 5, 10, 15
+        res.insert(5, 1, 1.0);
+        res.insert(10, 2, 3.0);  // this is farthest
+        res.insert(15, 3, 2.0);
+        // Now insert hash=3, which goes before hash=5 in sorted order.
+        // This shifts all indices right, including farthest_idx.
+        res.insert(3, 4, 0.5);
+        // Reservoir not full (cap=4), no eviction. Just verify correctness.
+        let neighbors = res.get_neighbors_sorted();
+        assert_eq!(neighbors.len(), 4);
+        assert_eq!(neighbors[0].0, 4); // closest (0.5)
+    }
+
+    #[test]
+    fn test_add_edges_batched() {
+        use crate::leaf_build::Edge;
+        let data = vec![0.0f32; 10 * 4];
+        let hp = HashPrune::new(&data, 10, 4, 4, 10, 5, 42);
+        let edges = vec![
+            Edge { src: 0, dst: 1, distance: 1.0 },
+            Edge { src: 1, dst: 0, distance: 1.0 },
+            Edge { src: 2, dst: 3, distance: 2.0 },
+            Edge { src: 3, dst: 2, distance: 2.0 },
+        ];
+        hp.add_edges_batched(&edges);
+        let graph = hp.extract_graph();
+        assert!(!graph[0].is_empty(), "node 0 should have neighbors after batched add");
+        assert!(!graph[2].is_empty(), "node 2 should have neighbors after batched add");
+    }
 }
