@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc, time::Instant};
 
 use diskann::{
     error::DiskANNError::StartPointComputeError,
@@ -110,6 +110,103 @@ where
     }
 }
 
+/// Build using PiPNN instead of Vamana.
+///
+/// Has the same `BF` signature as `single_or_multi_insert` for drop-in use in `run_build`.
+pub(super) fn pipnn_insert<U, V, D, T, S>(
+    index: Arc<DiskANNIndex<diskann_providers::model::graph::provider::async_::inmem::DefaultProvider<U, V, D>>>,
+    _strategy: S,
+    data: Arc<Matrix<T>>,
+    input: &IndexBuild,
+    mut output: &mut dyn Output,
+) -> anyhow::Result<BuildStats>
+where
+    T: diskann::utils::VectorRepr + Send + Sync + bytemuck::Pod,
+    U: AsyncFriendly + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
+    V: AsyncFriendly + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
+    D: AsyncFriendly,
+{
+    use std::io::Write;
+
+    let pipnn_cfg = input
+        .pipnn
+        .as_ref()
+        .expect("pipnn_insert called without PiPNN config");
+    let config = pipnn_cfg.to_pipnn_config(input);
+
+    let npoints = data.nrows();
+    let ndims = data.ncols();
+
+    writeln!(output, "PiPNN build: {} points x {} dims", npoints, ndims)?;
+
+    // Step 1: Store all data vectors into the provider so search can read them.
+    let t_store = Instant::now();
+    {
+        use diskann::provider::SetElement;
+        let provider = &index.data_provider;
+        let ctx = &DefaultContext;
+        let rt = diskann_benchmark_core::tokio::runtime(input.num_threads)?;
+        rt.block_on(async {
+            for i in 0..npoints {
+                let id = i as u32;
+                let row: &[T] = data.row(i);
+                SetElement::<[T]>::set_element(provider, ctx, &id, row)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("set_element failed for id {}: {}", i, e))?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
+    }
+    let store_secs = t_store.elapsed().as_secs_f64();
+    writeln!(output, "  Vector store:  {:.3}s", store_secs)?;
+
+    // Step 2: Run PiPNN build on the raw flat data.
+    let flat_data = data.as_slice();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(input.num_threads)
+        .build()?;
+    let graph = pool.install(|| {
+        diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &config)
+    })?;
+
+    writeln!(output, "{}", graph.build_stats)?;
+    writeln!(
+        output,
+        "  Avg degree: {:.1}, Max degree: {}, Isolated: {}",
+        graph.avg_degree(),
+        graph.max_degree(),
+        graph.num_isolated(),
+    )?;
+
+    // Step 3: Transfer adjacency lists into the index.
+    let t_transfer = Instant::now();
+    {
+        let provider = index.provider();
+        let neighbors = provider.neighbors();
+        for (i, adj) in graph.adjacency.iter().enumerate() {
+            neighbors.set_neighbors_sync(i, adj)?;
+        }
+        // The frozen start point lives at index `npoints` (after data points).
+        // Search begins there, so it needs edges. Copy the PiPNN medoid's edges.
+        let medoid_adj = graph.adjacency[graph.medoid].clone();
+        neighbors.set_neighbors_sync(npoints, &medoid_adj)?;
+    }
+    let transfer_secs = t_transfer.elapsed().as_secs_f64();
+    writeln!(output, "  Edge transfer: {:.3}s (medoid={})", transfer_secs, graph.medoid)?;
+
+    let total_secs = graph.build_stats.total_secs + store_secs + transfer_secs;
+    writeln!(output, "  Total (incl. store + transfer): {:.3}s\n", total_secs)?;
+
+    let total_us = MicroSeconds::from(std::time::Duration::from_secs_f64(total_secs));
+    let per_vec = MicroSeconds::from(std::time::Duration::from_secs_f64(total_secs / npoints as f64));
+    Ok(BuildStats {
+        kind: BuildKind::PiPNN,
+        total_time: total_us,
+        vectors_inserted: npoints,
+        insert_latencies: percentiles::compute_percentiles(&mut vec![per_vec; 1])?,
+    })
+}
+
 #[cfg(any(feature = "scalar-quantization", feature = "spherical-quantization"))]
 pub(super) fn only_single_insert<DP, T, S>(
     index: Arc<DiskANNIndex<DP>>,
@@ -158,6 +255,7 @@ where
 pub(super) enum BuildKind {
     SingleInsert,
     MultiInsert,
+    PiPNN,
 }
 
 impl std::fmt::Display for BuildKind {
@@ -165,6 +263,7 @@ impl std::fmt::Display for BuildKind {
         match self {
             Self::SingleInsert => write!(f, "single insert"),
             Self::MultiInsert => write!(f, "multi insert"),
+            Self::PiPNN => write!(f, "PiPNN"),
         }
     }
 }

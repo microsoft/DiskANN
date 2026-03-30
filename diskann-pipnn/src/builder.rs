@@ -579,22 +579,28 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         leaf_build::release_thread_buffers();
     });
 
-    // Extract final graph from HashPrune.
+    // Extract graph and optionally apply diversity-aware final prune.
     let t3 = Instant::now();
-    let adjacency = hash_prune.extract_graph();
-    let extract_secs = t3.elapsed().as_secs_f64();
-    tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete");
-    trim_heap();
+    let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
+        // Extract full reservoir (l_max candidates with distances) for RobustPrune.
+        let candidates = hash_prune.extract_graph_for_prune();
+        let extract_secs = t3.elapsed().as_secs_f64();
+        tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete (full reservoir)");
+        trim_heap();
 
-    // Optional final prune pass.
-    let t4 = Instant::now();
-    let adjacency = if config.final_prune {
-        tracing::info!("Applying final prune");
-        final_prune(data, ndims, &adjacency, config.max_degree, config.metric, config.alpha)
+        let t4 = Instant::now();
+        tracing::info!("Applying final prune (selecting {} from {} candidates)", config.max_degree, config.l_max);
+        let adj = final_prune_from_candidates(data, ndims, &candidates, config.max_degree, config.metric, config.alpha);
+        let final_prune_secs = t4.elapsed().as_secs_f64();
+        (adj, extract_secs, final_prune_secs)
     } else {
-        adjacency
+        // No prune: truncate to max_degree by distance (original path).
+        let adj = hash_prune.extract_graph();
+        let extract_secs = t3.elapsed().as_secs_f64();
+        tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete");
+        trim_heap();
+        (adj, extract_secs, 0.0)
     };
-    let final_prune_secs = t4.elapsed().as_secs_f64();
 
     let total_secs = t_total.elapsed().as_secs_f64();
 
@@ -678,6 +684,53 @@ fn final_prune<T: VectorRepr + Send + Sync>(
             let mut point_sel = vec![0.0f32; ndims];
             let mut point_cand = vec![0.0f32; ndims];
             for &(cand_id, cand_dist) in &candidates {
+                if selected.len() >= max_degree {
+                    break;
+                }
+
+                T::as_f32_into(&data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims], &mut point_cand).expect("f32 conversion");
+                let is_pruned = selected.iter().any(|&sel_id| {
+                    T::as_f32_into(&data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims], &mut point_sel).expect("f32 conversion");
+                    let dist_sel_cand = dist_fn.call(&point_sel, &point_cand);
+                    dist_sel_cand * alpha < cand_dist
+                });
+
+                if !is_pruned {
+                    selected.push(cand_id);
+                }
+            }
+
+            selected
+        })
+        .collect()
+}
+
+/// RobustPrune from full reservoir: select max_degree from l_max candidates using diversity.
+/// Candidates already have distances from HashPrune — no recomputation needed for i→candidate.
+/// Only computes inter-candidate distances for the occlusion check.
+fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    candidates_per_node: &[Vec<(u32, f32)>],
+    max_degree: usize,
+    metric: Metric,
+    alpha: f32,
+) -> Vec<Vec<u32>> {
+    let dist_fn = make_dist_fn(metric);
+
+    candidates_per_node
+        .par_iter()
+        .map(|candidates| {
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+
+            // Candidates are already sorted by distance from get_neighbors_sorted().
+            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+
+            let mut point_sel = vec![0.0f32; ndims];
+            let mut point_cand = vec![0.0f32; ndims];
+            for &(cand_id, cand_dist) in candidates {
                 if selected.len() >= max_degree {
                     break;
                 }

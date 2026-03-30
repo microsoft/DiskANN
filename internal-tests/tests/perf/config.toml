@@ -1,0 +1,160 @@
+result_path = ""
+
+# ── Datasets ───────────────────────────────────────────────────────────────
+
+[[dataset]]
+name = "enron-fp16"
+vector_count = 1087932
+vector_dimensions = 384
+vector_dimension_type = "Fp16"
+data = "enron_fp16.bin"
+query = "enron_query_fp16.bin"
+gt = "enron_gt.bin"
+num_pq_chunks = 192
+[dataset.data_type.Local]
+base_path = "../datasets"
+
+[[dataset]]
+name = "sift-1m"
+vector_count = 1000000
+vector_dimensions = 128
+vector_dimension_type = "Float"
+data = "sift1M_base.fbin"
+query = "sift1M_query.fbin"
+gt = "sift1M_groundtruth.bin"
+num_pq_chunks = 32
+[dataset.data_type.Local]
+base_path = "../datasets"
+
+# ── Scenarios ──────────────────────────────────────────────────────────────
+
+# --- Enron FP: Vamana vs PiPNN (fine-tuned) ---
+
+[[scenario]]
+name = "vamana_enron_fp"
+dataset = "enron-fp16"
+num_of_pq_chunks = 192
+build_ram_limit = 16.0
+use_opq = false
+beam_width = 4
+search_list = [2000]
+r_max_degree = 64
+l_build = 64
+fail_if_recall_below = 93
+recall_at = 1000
+thread_build = 16
+thread_search = 16
+is_flat_search = false
+quantization_type = "FP"
+distance = "CosineNormalized"
+[scenario.build_algorithm]
+algorithm = "Vamana"
+
+[[scenario]]
+name = "pipnn_enron_fp_prune"
+dataset = "enron-fp16"
+num_of_pq_chunks = 192
+build_ram_limit = 16.0
+use_opq = false
+beam_width = 4
+search_list = [2000]
+r_max_degree = 64
+l_build = 64
+fail_if_recall_below = 88
+recall_at = 1000
+thread_build = 16
+thread_search = 16
+is_flat_search = false
+quantization_type = "FP"
+distance = "CosineNormalized"
+[scenario.build_algorithm]
+algorithm = "PiPNN"
+c_max = 512
+c_min = 128
+p_samp = 0.001
+fanout = [8, 3]
+leaf_k = 2
+replicas = 1
+l_max = 128
+num_hash_planes = 14
+final_prune = true
+
+[[scenario]]
+name = "pipnn_enron_fp_noprune"
+dataset = "enron-fp16"
+num_of_pq_chunks = 192
+build_ram_limit = 16.0
+use_opq = false
+beam_width = 4
+search_list = [2000]
+r_max_degree = 64
+l_build = 64
+fail_if_recall_below = 89
+recall_at = 1000
+thread_build = 16
+thread_search = 16
+is_flat_search = false
+quantization_type = "FP"
+distance = "CosineNormalized"
+[scenario.build_algorithm]
+algorithm = "PiPNN"
+c_max = 512
+c_min = 128
+p_samp = 0.001
+fanout = [8, 3]
+leaf_k = 2
+replicas = 1
+l_max = 64
+num_hash_planes = 14
+final_prune = false
+
+# --- SIFT 1M: Vamana vs PiPNN ---
+
+[[scenario]]
+name = "vamana_sift_1m"
+dataset = "sift-1m"
+num_of_pq_chunks = 32
+build_ram_limit = 16.0
+use_opq = false
+beam_width = 4
+search_list = [100, 200]
+r_max_degree = 64
+l_build = 64
+fail_if_recall_below = 95
+recall_at = 10
+thread_build = 16
+thread_search = 16
+is_flat_search = false
+quantization_type = "FP"
+distance = "L2"
+[scenario.build_algorithm]
+algorithm = "Vamana"
+
+[[scenario]]
+name = "pipnn_sift_1m"
+dataset = "sift-1m"
+num_of_pq_chunks = 32
+build_ram_limit = 16.0
+use_opq = false
+beam_width = 4
+search_list = [100, 200]
+r_max_degree = 64
+l_build = 64
+fail_if_recall_below = 95
+recall_at = 10
+thread_build = 16
+thread_search = 16
+is_flat_search = false
+quantization_type = "FP"
+distance = "L2"
+[scenario.build_algorithm]
+algorithm = "PiPNN"
+c_max = 512
+c_min = 128
+p_samp = 0.001
+fanout = [8, 3]
+leaf_k = 2
+replicas = 1
+l_max = 64
+num_hash_planes = 14
+final_prune = false

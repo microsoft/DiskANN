@@ -386,6 +386,20 @@ impl HashPrune {
             .collect()
     }
 
+    /// Extract the full reservoir (up to l_max) with distances for final_prune.
+    /// Returns (neighbor_id, distance) pairs sorted by distance.
+    /// Final_prune selects max_degree from this larger candidate pool using diversity.
+    pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
+        drop(self.sketches);
+        self.reservoirs
+            .into_par_iter()
+            .map(|mutex| {
+                let res = mutex.into_inner();
+                res.get_neighbors_sorted()
+            })
+            .collect()
+    }
+
     /// Get the number of points.
     pub fn num_points(&self) -> usize {
         self.reservoirs.len()
