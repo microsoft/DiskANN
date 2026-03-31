@@ -392,13 +392,12 @@ where
         // Build the PiPNN graph, using pre-trained SQ if available.
         let graph = match &self.build_quantizer {
             BuildQuantizer::Scalar1Bit(with_bits) => {
-                // SQ path needs f32 data for quantize_1bit.
-                let (npoints, ndims, data) = load_data_as_f32::<Data::VectorDataType, _>(
+                // Load data in native type (f16/f32) — no f32 conversion needed.
+                // build_with_sq converts T→f32 per-vector streaming during quantization.
+                let (npoints, ndims, data) = load_data_typed::<Data::VectorDataType, _>(
                     &data_path,
                     self.storage_provider,
                 )?;
-                // Use the DiskANN-trained ScalarQuantizer for 1-bit quantization.
-                // This ensures identical quantization between Vamana and PiPNN builds.
                 let sq = with_bits.quantizer();
                 let scale = sq.scale();
                 let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
@@ -406,8 +405,8 @@ where
                     shift: sq.shift().to_vec(),
                     inverse_scale,
                 };
-                info!("Using pre-trained SQ quantizer for PiPNN 1-bit build");
-                builder::build_with_sq(data, npoints, ndims, &config, &sq_params)
+                info!("Using pre-trained SQ quantizer for PiPNN 1-bit build (native type)");
+                builder::build_with_sq(&data, npoints, ndims, &config, &sq_params)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
             _ => {

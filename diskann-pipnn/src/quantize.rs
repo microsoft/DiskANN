@@ -35,8 +35,8 @@ pub struct QuantizedData {
 /// # Arguments
 /// * `shift` - Per-dimension shift from ScalarQuantizer (length = ndims)
 /// * `inverse_scale` - 1.0 / scale from ScalarQuantizer
-pub fn quantize_1bit(
-    data: &[f32],
+pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
+    data: &[T],
     npoints: usize,
     ndims: usize,
     shift: &[f32],
@@ -58,17 +58,27 @@ pub fn quantize_1bit(
         Vec::from_raw_parts(ptr, len, cap)
     };
 
-    // Parallel quantization.
+    // Parallel quantization: convert T→f32 per-vector streaming (no full f32 copy).
     bits.par_chunks_mut(bytes_per_vec)
         .enumerate()
         .for_each(|(i, out)| {
-            let vec = &data[i * ndims..(i + 1) * ndims];
-            for d in 0..ndims {
-                let code = ((vec[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
-                if code > 0 {
-                    out[d / 8] |= 1 << (d % 8);
-                }
+            let src = &data[i * ndims..(i + 1) * ndims];
+            // Thread-local f32 buffer for T→f32 conversion (reused across vectors).
+            thread_local! {
+                static F32_BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
             }
+            F32_BUF.with(|cell| {
+                let mut buf = cell.borrow_mut();
+                if buf.len() < ndims { buf.resize(ndims, 0.0); }
+                let f32_vec = &mut buf[..ndims];
+                T::as_f32_into(src, f32_vec).expect("f32 conversion");
+                for d in 0..ndims {
+                    let code = ((f32_vec[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
+                    if code > 0 {
+                        out[d / 8] |= 1 << (d % 8);
+                    }
+                }
+            });
         });
 
     QuantizedData {
