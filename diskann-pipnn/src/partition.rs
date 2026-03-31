@@ -132,19 +132,9 @@ fn partition_assign_quantized(
 /// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
 /// extract top-k assignments without materializing the full N x L distance matrix.
 /// Peak memory: stripe * L * 4 bytes (~64MB) instead of N * L * 4 bytes.
+/// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
+/// extract top-k assignments without materializing the full N x L distance matrix.
 fn partition_assign<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    points: &[usize],
-    leaders: &[usize],
-    fanout: usize,
-    metric: diskann_vector::distance::Metric,
-) -> Vec<Vec<usize>> {
-    partition_assign_impl(data, ndims, points, leaders, fanout, metric)
-}
-
-/// Core implementation: fused GEMM + distance + top-k assignment in parallel stripes.
-fn partition_assign_impl<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
     points: &[usize],
@@ -568,7 +558,7 @@ pub fn parallel_partition_quantized(
     let assign_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
-    let mut clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
         .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
         .collect();
@@ -634,7 +624,7 @@ fn partition_quantized_recursive(
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
-    let mut clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
         .map(|lc| lc.into_iter().map(|li| indices[li]).collect())
         .collect();

@@ -9,6 +9,12 @@
 //! then packs vectors into compact bit arrays for fast Hamming distance.
 
 use rayon::prelude::*;
+use std::cell::RefCell;
+
+thread_local! {
+    /// Reusable f32 buffer for T→f32 conversion during parallel quantization.
+    static QUANT_F32_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+}
 
 /// Result of 1-bit quantization.
 pub struct QuantizedData {
@@ -63,11 +69,7 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
         .enumerate()
         .for_each(|(i, out)| {
             let src = &data[i * ndims..(i + 1) * ndims];
-            // Thread-local f32 buffer for T→f32 conversion (reused across vectors).
-            thread_local! {
-                static F32_BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
-            }
-            F32_BUF.with(|cell| {
+            QUANT_F32_BUF.with(|cell| {
                 let mut buf = cell.borrow_mut();
                 if buf.len() < ndims { buf.resize(ndims, 0.0); }
                 let f32_vec = &mut buf[..ndims];

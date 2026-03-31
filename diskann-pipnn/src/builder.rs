@@ -24,19 +24,6 @@ use crate::leaf_build;
 use crate::partition::{self, PartitionConfig};
 use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
 
-/// Ask glibc to return freed pages to the OS.
-/// Without this, RSS stays inflated after large temporary allocations
-/// (e.g. partition GEMM buffers) even though the memory is freed.
-#[cfg(target_os = "linux")]
-fn trim_heap() {
-    unsafe {
-        extern "C" { fn malloc_trim(pad: usize) -> i32; }
-        malloc_trim(0);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn trim_heap() {}
 
 
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
@@ -264,11 +251,6 @@ impl PiPNNGraph {
 /// matching DiskANN's `find_medoid_with_sampling` behavior. The centroid
 /// is a geometric center, so L2 is the natural metric regardless of the
 /// build distance metric.
-/// Public wrapper for find_medoid, used by diskann-disk's build pipeline.
-pub fn find_medoid_public<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
-    find_medoid(data, npoints, ndims)
-}
-
 fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
     let dist_fn = make_dist_fn(Metric::L2);
 
@@ -302,8 +284,8 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
 
 /// Build a PiPNN index from typed vector data.
 ///
-/// Keeps data in its native type T and converts to f32 on-the-fly at each access point.
-/// For f16 data this saves ~793 MB peak RSS compared to upfront conversion.
+/// Keeps data in its native type T and converts to f32 on-the-fly at each access point,
+/// avoiding a full f32 copy of the dataset.
 /// `data` is a flat slice of `T` in row-major order: npoints x ndims.
 pub fn build_typed<T: VectorRepr + Send + Sync>(
     data: &[T],
@@ -450,13 +432,11 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
     build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
 }
 
-/// SQ build path: f32 data already dropped, using pre-computed sketches.
-/// Saves ~1.6 GB peak memory by not holding f32 alongside HashPrune reservoirs.
 /// Build a PiPNN index from pre-quantized data + pre-computed medoid.
 ///
 /// Lowest-memory entry point for SQ builds: the caller quantizes and computes
 /// medoid, then drops native data before calling this. Only the 1-bit quantized
-/// data (~48 MB for 1M×384d) needs to be in memory during the graph build.
+/// data needs to be in memory during the graph build.
 pub fn build_from_quantized(
     qdata: crate::quantize::QuantizedData,
     npoints: usize,
@@ -557,7 +537,6 @@ fn build_internal_sq_impl(
     let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
         let candidates = hash_prune.extract_graph_for_prune();
         let extract_secs = t3.elapsed().as_secs_f64();
-        trim_heap();
         // final_prune needs f32 data which we don't have — fall back to no-prune.
         // (final_prune_from_candidates requires T: VectorRepr for distance recomputation)
         tracing::warn!("final_prune=true with SQ build: pruning skipped (no f32 data)");
@@ -568,7 +547,6 @@ fn build_internal_sq_impl(
     } else {
         let adj = hash_prune.extract_graph();
         let extract_secs = t3.elapsed().as_secs_f64();
-        trim_heap();
         (adj, extract_secs, 0.0)
     };
 
@@ -670,9 +648,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             total_pts = total_pts,
             "Partition complete"
         );
-        // Return freed partition GEMM buffers to the OS so they don't inflate
-        // peak RSS during the subsequent leaf build + reservoir filling phase.
-        trim_heap();
+        // Hint to return freed partition GEMM buffers to the OS.
         tracing::debug!(
             small_leaves = small_leaves,
             med_leaves = med_leaves,
@@ -721,7 +697,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let candidates = hash_prune.extract_graph_for_prune();
         let extract_secs = t3.elapsed().as_secs_f64();
         tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete (full reservoir)");
-        trim_heap();
 
         let t4 = Instant::now();
         tracing::info!("Applying final prune (selecting {} from {} candidates)", config.max_degree, config.l_max);
@@ -733,7 +708,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let adj = hash_prune.extract_graph();
         let extract_secs = t3.elapsed().as_secs_f64();
         tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete");
-        trim_heap();
         (adj, extract_secs, 0.0)
     };
 
@@ -761,7 +735,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
     // Return all freed memory (reservoirs, sketches, partition buffers, leaf buffers)
     // to the OS before handing off to the disk layout phase.
-    trim_heap();
 
     tracing::info!(
         avg_degree = graph.avg_degree(),

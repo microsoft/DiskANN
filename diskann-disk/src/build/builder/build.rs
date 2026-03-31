@@ -667,31 +667,6 @@ where
     }
 }
 
-#[cfg(feature = "pipnn")]
-fn load_data_as_f32<T, SP>(
-    data_path: &str,
-    storage_provider: &SP,
-) -> ANNResult<(usize, usize, Vec<f32>)>
-where
-    T: VectorRepr,
-    SP: StorageReadProvider,
-{
-    let matrix = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
-    let npoints = matrix.nrows();
-    let ndims = matrix.ncols();
-
-    // Convert to f32
-    let mut f32_data = vec![0.0f32; npoints * ndims];
-    for i in 0..npoints {
-        let src = matrix.row(i);
-        let dst = &mut f32_data[i * ndims..(i + 1) * ndims];
-        T::as_f32_into(src, dst)
-            .map_err(|e| ANNError::log_index_error(format!("Data conversion error: {}", e)))?;
-    }
-
-    Ok((npoints, ndims, f32_data))
-}
-
 /// Load data in its native type T without converting to f32.
 #[cfg(feature = "pipnn")]
 fn load_data_typed<T, SP>(
