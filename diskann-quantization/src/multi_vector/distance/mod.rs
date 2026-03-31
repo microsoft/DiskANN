@@ -49,4 +49,4 @@ mod max_sim;
 mod simple;
 
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use simple::{QueryMatRef, test_function};
+pub use simple::{test_function, QueryMatRef};

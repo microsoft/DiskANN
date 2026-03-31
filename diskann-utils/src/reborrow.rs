@@ -348,14 +348,12 @@ where
     }
 }
 
-impl<'a, T> Lower<'a, T> for Place<T>
-{
+impl<'a, T> Lower<'a, T> for Place<T> {
     type Proxy = &'a T;
     fn lower(&'a self) -> Self::Proxy {
         &self.0
     }
 }
-
 
 /// A container that reborrows by cloning the contained value.
 ///

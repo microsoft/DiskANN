@@ -102,10 +102,7 @@ impl SimpleKernel {
     }
 }
 
-pub fn test_function(
-    x: MatRef<'_, Standard<f32>>,
-    y: MatRef<'_, Standard<f32>>,
-) -> f32 {
+pub fn test_function(x: MatRef<'_, Standard<f32>>, y: MatRef<'_, Standard<f32>>) -> f32 {
     Chamfer::evaluate(x, y)
 }
 

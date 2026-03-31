@@ -457,7 +457,9 @@ where
 {
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
         let mut new = Mat::new(*v.repr(), Defaulted).unwrap();
-        new.rows_mut().zip(v.rows()).for_each(|(dst, src)| dst.copy_from_slice(src));
+        new.rows_mut()
+            .zip(v.rows())
+            .for_each(|(dst, src)| dst.copy_from_slice(src));
         new
     }
 }

@@ -4,10 +4,10 @@
  */
 
 pub(crate) mod async_;
-pub(crate) mod multi;
 pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
+pub(crate) mod multi;
 pub(crate) mod save_and_load;
 
 pub(crate) fn register_inputs(

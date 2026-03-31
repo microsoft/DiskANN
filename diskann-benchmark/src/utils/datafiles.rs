@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::{BufReader, Read}, path::Path};
+use std::{
+    io::{BufReader, Read},
+    path::Path,
+};
 
 use anyhow::Context;
 use bit_set::BitSet;
@@ -219,26 +222,22 @@ where
 
     // Read remaining 3 bytes of K
     let mut k_rest = [0u8; 3];
-    reader
-        .read_exact(&mut k_rest)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::UnexpectedEof => MultiVectorLoadError::UnexpectedEof {
-                context: "K header",
-            },
-            _ => MultiVectorLoadError::Io(e),
-        })?;
+    reader.read_exact(&mut k_rest).map_err(|e| match e.kind() {
+        std::io::ErrorKind::UnexpectedEof => MultiVectorLoadError::UnexpectedEof {
+            context: "K header",
+        },
+        _ => MultiVectorLoadError::Io(e),
+    })?;
     let k = u32::from_le_bytes([first_byte[0], k_rest[0], k_rest[1], k_rest[2]]);
 
     // Read D (dimension)
     let mut d_buf = [0u8; 4];
-    reader
-        .read_exact(&mut d_buf)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::UnexpectedEof => MultiVectorLoadError::UnexpectedEof {
-                context: "D header",
-            },
-            _ => MultiVectorLoadError::Io(e),
-        })?;
+    reader.read_exact(&mut d_buf).map_err(|e| match e.kind() {
+        std::io::ErrorKind::UnexpectedEof => MultiVectorLoadError::UnexpectedEof {
+            context: "D header",
+        },
+        _ => MultiVectorLoadError::Io(e),
+    })?;
     let d = u32::from_le_bytes(d_buf);
 
     // Validate header
@@ -268,8 +267,8 @@ where
     })?;
 
     // Return a view over the buffer
-    let mat_ref = MatRef::new(Standard::new(k, d), buffer.as_slice())
-        .expect("buffer size matches k * d");
+    let mat_ref =
+        MatRef::new(Standard::new(k, d), buffer.as_slice()).expect("buffer size matches k * d");
     Ok(Some(mat_ref))
 }
 
@@ -322,7 +321,9 @@ where
 /// - `MultiVectorLoadError::DimensionMismatch`: D values differ between multi-vectors
 /// - `MultiVectorLoadError::UnexpectedEof`: File ends mid-record
 /// - `MultiVectorLoadError::InvalidHeader`: K or D is zero
-pub fn load_multi_vectors<T>(path: impl AsRef<Path>) -> Result<Vec<Mat<Standard<T>>>, MultiVectorLoadError>
+pub fn load_multi_vectors<T>(
+    path: impl AsRef<Path>,
+) -> Result<Vec<Mat<Standard<T>>>, MultiVectorLoadError>
 where
     T: Copy + Default + From<f16>,
 {
@@ -495,4 +496,3 @@ mod multi_vector_tests {
         ));
     }
 }
-

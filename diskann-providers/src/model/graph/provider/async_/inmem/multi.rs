@@ -7,7 +7,7 @@ use std::sync::RwLock;
 
 use bytemuck::Pod;
 use diskann::{
-    ANNResult, ANNError,
+    ANNError, ANNResult,
     graph::{self, glue},
     provider,
     utils::{IntoUsize, VectorRepr},
@@ -17,7 +17,8 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{PureDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
-    SimpleNeighborProviderAsync, common, inmem, postprocess::{self, DeletionCheck},
+    SimpleNeighborProviderAsync, common, inmem,
+    postprocess::{self, DeletionCheck},
 };
 
 type MultiVec<T> = Mat<Standard<T>>;
@@ -56,10 +57,7 @@ where
         _prefetch_lookahead: Option<usize>,
     ) -> Self::Target {
         assert_eq!(metric, METRIC, "Only inner-product is supported");
-        Store::new(
-            max_points,
-            self.dim,
-        )
+        Store::new(max_points, self.dim)
     }
 }
 
@@ -78,7 +76,7 @@ impl<T> Store<T>
 where
     T: Pod,
 {
-    fn new(max_points: usize,dim: usize) -> Self {
+    fn new(max_points: usize, dim: usize) -> Self {
         Self {
             guards: (0..max_points).map(|_| RwLock::new(())).collect(),
             pooled: common::AlignedMemoryVectorStore::with_capacity(max_points, dim),
@@ -307,7 +305,6 @@ impl MeanPool for f32 {
     }
 }
 
-
 ///////////////
 // Reranking //
 ///////////////
@@ -510,6 +507,13 @@ where
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
         let id = id.into_usize();
-        Ok(diskann_utils::reborrow::Place(provider.base_vectors.multi[id].read().unwrap().as_ref().unwrap().clone()))
+        Ok(diskann_utils::reborrow::Place(
+            provider.base_vectors.multi[id]
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .clone(),
+        ))
     }
 }

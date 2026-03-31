@@ -8,11 +8,13 @@ use std::num::NonZeroUsize;
 use serde::{Deserialize, Serialize};
 
 use diskann::graph::{config, StartPointStrategy};
-use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker};
+use diskann_benchmark_runner::{
+    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
+};
 use diskann_providers::model::graph::provider::async_::inmem::DefaultProviderParameters;
 
 use super::async_::{StartPointStrategyRef, TopkSearchPhase};
-use crate::inputs::{as_input, Input, Example};
+use crate::inputs::{as_input, Example, Input};
 
 const METRIC: diskann_vector::distance::Metric = diskann_vector::distance::Metric::InnerProduct;
 
@@ -49,10 +51,8 @@ impl Build {
             self.l_build,
             (METRIC).into(),
             |b| {
-                b
-                    .alpha(self.alpha)
-                    .backedge_ratio(self.backedge_ratio);
-            }
+                b.alpha(self.alpha).backedge_ratio(self.backedge_ratio);
+            },
         )
     }
 

@@ -6,7 +6,10 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use diskann::{ANNResult, graph::{self, glue, DiskANNIndex}, provider};
+use diskann::{
+    graph::{self, glue, DiskANNIndex},
+    provider, ANNResult,
+};
 use diskann_benchmark_core::{self as benchmark_core, build::ids::ToId};
 use diskann_benchmark_runner::{
     self as runner,
@@ -91,7 +94,11 @@ impl<'a> DispatchRule<&'a Any> for MultiVectorBuild<'a> {
     }
 
     fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>) -> std::fmt::Result {
-        Any::description::<inputs::multi::BuildAndSearch, Self>(f, from, inputs::multi::BuildAndSearch::tag())
+        Any::description::<inputs::multi::BuildAndSearch, Self>(
+            f,
+            from,
+            inputs::multi::BuildAndSearch::tag(),
+        )
     }
 }
 
@@ -128,13 +135,12 @@ fn run(
         &input.search.runs,
     );
 
-    let summaries = knn::run(
-        &searcher,
-        &gt,
-        steps,
-    )?;
+    let summaries = knn::run(&searcher, &gt, steps)?;
 
-    let results: Vec<_> = summaries.into_iter().map(|r| SearchResults::from(r)).collect();
+    let results: Vec<_> = summaries
+        .into_iter()
+        .map(|r| SearchResults::from(r))
+        .collect();
     writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
 
     Ok(())
@@ -147,8 +153,7 @@ fn run(
 fn build(
     input: &inputs::multi::Build,
     output: &mut dyn runner::Output,
-) -> anyhow::Result<Arc<DiskANNIndex<inmem::multi::Provider<f32>>>>
-{
+) -> anyhow::Result<Arc<DiskANNIndex<inmem::multi::Provider<f32>>>> {
     let data = datafiles::load_multi_vectors::<f32>(&input.data)?;
 
     let dim = data.first().unwrap().vector_dim();
@@ -158,12 +163,13 @@ fn build(
         inmem::multi::Precursor::<f32>::new(dim),
         inmem_common::NoStore,
         inmem_common::NoDeletes,
-    ).unwrap();
+    )
+    .unwrap();
 
     let index = Arc::new(graph::DiskANNIndex::new(
         input.as_config().build()?,
         provider,
-        None
+        None,
     ));
 
     let builder = Insert::new(
@@ -176,10 +182,7 @@ fn build(
     let rt = benchmark_core::tokio::runtime(input.num_threads.get())?;
     let _ = benchmark_core::build::build_tracked(
         builder,
-        benchmark_core::build::Parallelism::dynamic(
-            diskann::utils::ONE,
-            input.num_threads,
-        ),
+        benchmark_core::build::Parallelism::dynamic(diskann::utils::ONE, input.num_threads),
         &rt,
         Some(&super::build::ProgressMeter::new(output)),
     )?;
@@ -414,7 +417,8 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> benchmark_core::search::Aggregate<graph::SearchParams, I, SearchMetrics> for Aggregator<'_, I>
+impl<I> benchmark_core::search::Aggregate<graph::SearchParams, I, SearchMetrics>
+    for Aggregator<'_, I>
 where
     I: benchmark_core::recall::RecallCompatible,
 {
@@ -466,8 +470,16 @@ where
                 (cmps + o.comparisons as u64, hops + o.hops as u64, n + 1)
             });
 
-        let mean_cmps = if count > 0 { total_cmps as f64 / count as f64 } else { 0.0 };
-        let mean_hops = if count > 0 { total_hops as f64 / count as f64 } else { 0.0 };
+        let mean_cmps = if count > 0 {
+            total_cmps as f64 / count as f64
+        } else {
+            0.0
+        };
+        let mean_hops = if count > 0 {
+            total_hops as f64 / count as f64
+        } else {
+            0.0
+        };
 
         Ok(Summary {
             setup: run.setup().clone(),
@@ -549,4 +561,3 @@ impl From<Summary> for SearchResults {
         }
     }
 }
-

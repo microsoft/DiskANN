@@ -17,9 +17,9 @@ use diskann_benchmark_runner::{
     utils::MicroSeconds,
     Any,
 };
-use diskann_quantization::multi_vector::{distance::Chamfer, Mat, Standard};
-use diskann_vector::{PureDistanceFunction, distance::InnerProduct};
 use diskann_providers::model::graph::provider::async_::inmem;
+use diskann_quantization::multi_vector::{distance::Chamfer, Mat, Standard};
+use diskann_vector::{distance::InnerProduct, PureDistanceFunction};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Serialize;
@@ -29,12 +29,13 @@ use crate::{inputs, utils::datafiles};
 const NAME: &str = "exhaustive-multi-vector";
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register::<MultiExhaustive<'static>>(NAME, |object, _checkpoint, output| {
-        match object.run(output) {
+    benchmarks.register::<MultiExhaustive<'static>>(
+        NAME,
+        |object, _checkpoint, output| match object.run(output) {
             Ok(v) => Ok(serde_json::to_value(v)?),
             Err(err) => Err(err),
-        }
-    });
+        },
+    );
 }
 
 macro_rules! write_field {
@@ -74,21 +75,15 @@ impl<'a> MultiExhaustive<'a> {
 
         let k = input.num_nearest_neighbors;
         if k > num_data {
-            anyhow::bail!(
-                "K ({}) exceeds number of data points ({})",
-                k,
-                num_data
-            );
+            anyhow::bail!("K ({}) exceeds number of data points ({})", k, num_data);
         }
 
         let threadpool = rayon::ThreadPoolBuilder::new()
             .num_threads(input.num_threads.get())
             .build()?;
 
-        let progress = ProgressBar::with_draw_target(
-            Some(num_queries as u64),
-            output.draw_target(),
-        );
+        let progress =
+            ProgressBar::with_draw_target(Some(num_queries as u64), output.draw_target());
         progress.set_style(ProgressStyle::with_template(
             "Exhaustive search [{elapsed_precise}] {wide_bar} {percent}%",
         )?);
@@ -113,7 +108,8 @@ impl<'a> MultiExhaustive<'a> {
                         .collect();
 
                     // Sort by distance (ascending - lower is more similar)
-                    distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    distances
+                        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
                     progress.inc(1);
 
@@ -223,10 +219,7 @@ impl<'a> DispatchRule<&'a Any> for MultiExhaustive<'a> {
         from.convert::<inputs::multi::ExhaustiveSearch, Self>()
     }
 
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        from: Option<&&'a Any>,
-    ) -> std::fmt::Result {
+    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>) -> std::fmt::Result {
         Any::description::<inputs::multi::ExhaustiveSearch, Self>(
             f,
             from,
