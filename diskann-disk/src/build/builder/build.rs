@@ -209,6 +209,13 @@ where
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
+        // PiPNN is fully synchronous (rayon-only, no async). Run it outside tokio
+        // to avoid the async future capturing all build state (~1.6 GB overhead).
+        #[cfg(feature = "pipnn")]
+        if let BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+            return self.build_sync_pipnn();
+        }
+
         let runtime = create_runtime(self.index_configuration.num_threads)?;
         runtime.block_on(async {
             match self.build_internal().await {
@@ -334,10 +341,12 @@ where
     }
 
     async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
-        // Check for PiPNN algorithm
+        // PiPNN is handled by build_sync_pipnn() — should not reach here.
         #[cfg(feature = "pipnn")]
         if let BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
-            return self.build_pipnn_index().await;
+            return Err(ANNError::log_index_error(
+                "PiPNN should use build_sync_pipnn(), not the async path",
+            ));
         }
 
         #[cfg(not(feature = "pipnn"))]
@@ -363,8 +372,58 @@ where
         }
     }
 
+    /// Fully synchronous PiPNN build: PQ compression + PiPNN graph + disk layout.
+    /// Runs without tokio runtime, avoiding the ~1.6 GB async future overhead.
     #[cfg(feature = "pipnn")]
-    async fn build_pipnn_index(&mut self) -> ANNResult<()> {
+    fn build_sync_pipnn(&mut self) -> ANNResult<()> {
+        let mut logger = PerfLogger::new_disk_index_build_logger();
+        let pool = create_thread_pool(self.index_configuration.num_threads)?;
+
+        info!(
+            "Starting PiPNN build (sync): R={} L={} T={}",
+            self.index_configuration.config.pruned_degree(),
+            self.index_configuration.config.l_build(),
+            self.index_configuration.num_threads
+        );
+
+        // PQ compression (sync — generate_compressed_data has no .await calls).
+        let t_pq = std::time::Instant::now();
+        {
+            let runtime = create_runtime(self.index_configuration.num_threads)?;
+            runtime.block_on(self.generate_compressed_data(&pool))?;
+        }
+        // Runtime dropped here — frees tokio's future state before PiPNN starts.
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
+        let pq_secs = t_pq.elapsed().as_secs_f64();
+
+        // PiPNN graph build (pure rayon, no tokio).
+        let t_index = std::time::Instant::now();
+        self.build_pipnn_index_sync()?;
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        let index_secs = t_index.elapsed().as_secs_f64();
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" { fn malloc_trim(pad: usize) -> i32; }
+            malloc_trim(0);
+        }
+
+        let t_layout = std::time::Instant::now();
+        self.create_disk_layout()?;
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
+        let layout_secs = t_layout.elapsed().as_secs_f64();
+
+        println!("Disk Index Build Phases");
+        println!("  PQ compression: {:.3}s", pq_secs);
+        println!("  Graph build:    {:.3}s", index_secs);
+        println!("  Disk layout:    {:.3}s", layout_secs);
+
+        Ok(())
+    }
+
+    /// PiPNN graph construction — sync version of build_pipnn_index.
+    #[cfg(feature = "pipnn")]
+    fn build_pipnn_index_sync(&mut self) -> ANNResult<()> {
         use diskann_pipnn::builder;
 
         let config = self.disk_build_param.build_algorithm()
