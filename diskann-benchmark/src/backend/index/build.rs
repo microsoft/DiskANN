@@ -218,7 +218,7 @@ where
         kind: BuildKind::PiPNN,
         total_time: total_us,
         vectors_inserted: npoints,
-        insert_latencies: percentiles::compute_percentiles(&mut vec![per_vec; 1])?,
+        insert_latencies: percentiles::compute_percentiles(&mut [per_vec; 1])?,
     })
 }
 

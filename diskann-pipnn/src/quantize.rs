@@ -13,7 +13,7 @@ use std::cell::RefCell;
 
 thread_local! {
     /// Reusable f32 buffer for T→f32 conversion during parallel quantization.
-    static QUANT_F32_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+    static QUANT_F32_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Result of 1-bit quantization.
@@ -49,7 +49,7 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
     inverse_scale: f32,
 ) -> QuantizedData {
     // Round up to a multiple of 8 bytes (64 bits) so that get_u64() is always aligned.
-    let bytes_per_vec = ((ndims + 63) / 64) * 8;
+    let bytes_per_vec = ndims.div_ceil(64) * 8;
     let total_bytes = npoints * bytes_per_vec;
     // Allocate as Vec<u64> for guaranteed u64 alignment, then reinterpret as Vec<u8>.
     let u64s_total = total_bytes / 8;
@@ -68,6 +68,9 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
     };
 
     // Parallel quantization: convert T→f32 per-vector streaming (no full f32 copy).
+    // Allow: callers (e.g. `build_from_quantized`, `build_typed`) wrap this in
+    // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
+    #[allow(clippy::disallowed_methods)]
     bits.par_chunks_mut(bytes_per_vec)
         .enumerate()
         .for_each(|(i, out)| {
@@ -135,6 +138,8 @@ impl QuantizedData {
             self.npoints
         );
         let start = i * self.bytes_per_vec;
+        // SAFETY: The debug_assert above guarantees i < npoints, so
+        // start..start+bytes_per_vec is within the allocated bits buffer.
         unsafe { self.bits.get_unchecked(start..start + self.bytes_per_vec) }
     }
 
@@ -167,6 +172,8 @@ impl QuantizedData {
     pub fn hamming_u64(a: &[u64], b: &[u64]) -> u32 {
         let mut dist = 0u32;
         for i in 0..a.len() {
+            // SAFETY: i is in 0..a.len(), so get_unchecked(i) is in bounds for a.
+            // Caller must ensure b.len() >= a.len() (both are u64s_per_vec).
             unsafe {
                 dist += (*a.get_unchecked(i) ^ *b.get_unchecked(i)).count_ones();
             }
@@ -182,6 +189,9 @@ impl QuantizedData {
         let b64 = b.as_ptr() as *const u64;
         let mut dist = 0u32;
         for i in 0..chunks {
+            // SAFETY: i < chunks = a.len()/8, so a64.add(i) reads within the
+            // bounds of slice a (and likewise for b, which has the same length).
+            // read_unaligned handles potentially unaligned u64 reads.
             unsafe {
                 let va = std::ptr::read_unaligned(a64.add(i));
                 let vb = std::ptr::read_unaligned(b64.add(i));
@@ -214,19 +224,25 @@ impl QuantizedData {
 
         // Flat loop with inlined Hamming — avoids function call + slice bounds overhead.
         for i in 0..n {
+            // SAFETY: i < n and local has n*u64s elements, so i*u64s is in bounds.
             let a_base = unsafe { local_ptr.add(i * u64s) };
             for j in (i + 1)..n {
+                // SAFETY: j < n and local has n*u64s elements, so j*u64s is in bounds.
                 let b_base = unsafe { local_ptr.add(j * u64s) };
 
                 // Inline Hamming: XOR + popcount over u64s.
                 let mut h = 0u32;
                 for k in 0..u64s {
+                    // SAFETY: a_base and b_base point to runs of u64s elements
+                    // within local, so a_base.add(k) and b_base.add(k) are in bounds.
                     unsafe {
                         h += (*a_base.add(k) ^ *b_base.add(k)).count_ones();
                     }
                 }
 
                 let d = h as f32;
+                // SAFETY: i < n and j < n, so i*n+j and j*n+i are both < n*n,
+                // which is the allocated size of dist.
                 unsafe {
                     *dist_ptr.add(i * n + j) = d;
                     *dist_ptr.add(j * n + i) = d;
@@ -545,13 +561,11 @@ mod tests {
         let indices = vec![0, 1];
         let dist = qd.compute_distance_matrix(&indices);
         assert_eq!(
-            dist[0 * 2 + 1],
-            0.0,
+            dist[1], 0.0,
             "two identical quantized vectors should have Hamming distance 0"
         );
         assert_eq!(
-            dist[1 * 2 + 0],
-            0.0,
+            dist[2], 0.0,
             "symmetric: two identical quantized vectors should have Hamming distance 0"
         );
     }

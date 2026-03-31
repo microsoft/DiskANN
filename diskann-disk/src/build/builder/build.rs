@@ -26,8 +26,8 @@ use diskann_providers::{
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, RayonThreadPool, VectorDataIterator,
-        MAX_MEDOID_SAMPLE_SIZE,
+        create_thread_pool, find_medoid_with_sampling, ParallelIteratorInPool, RayonThreadPool,
+        VectorDataIterator, MAX_MEDOID_SAMPLE_SIZE,
     },
 };
 use diskann_utils::io::{read_bin, write_bin};
@@ -471,11 +471,13 @@ where
                 let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
 
                 let t_q = std::time::Instant::now();
+                let pool = create_thread_pool(self.index_configuration.num_threads)?;
                 let (qdata, medoid) = chunked_quantize_and_medoid::<Data::VectorDataType, _>(
                     &data_path,
                     self.storage_provider,
                     sq.shift(),
                     inverse_scale,
+                    &pool,
                 )?;
                 let npoints = qdata.npoints();
                 let ndims = qdata.ndims();
@@ -708,6 +710,7 @@ fn chunked_quantize_and_medoid<T, SP>(
     storage_provider: &SP,
     shift: &[f32],
     inverse_scale: f32,
+    pool: &RayonThreadPool,
 ) -> ANNResult<(diskann_pipnn::quantize::QuantizedData, usize)>
 where
     T: VectorRepr,
@@ -725,7 +728,7 @@ where
     let ndims = metadata.ndims();
 
     // Pre-allocate quantized output (u64-aligned).
-    let bytes_per_vec = ((ndims + 63) / 64) * 8;
+    let bytes_per_vec = ndims.div_ceil(64) * 8;
     let total_bytes = npoints * bytes_per_vec;
     let u64s_total = total_bytes / 8;
     let mut bits_u64 = vec![0u64; u64s_total];
@@ -756,10 +759,10 @@ where
         bits_chunk
             .par_chunks_mut(bytes_per_vec)
             .enumerate()
-            .for_each(|(i, out)| {
+            .for_each_in_pool(pool, |(i, out)| {
                 let src = &chunk_slice[i * ndims..(i + 1) * ndims];
                 thread_local! {
-                    static BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
+                    static BUF: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
                 }
                 BUF.with(|cell| {
                     let mut buf = cell.borrow_mut();
@@ -797,8 +800,8 @@ where
 
     // Medoid: find point closest to centroid. Re-read from disk (OS page cache hit).
     let inv_n = 1.0 / npoints as f32;
-    for d in 0..ndims {
-        centroid[d] *= inv_n;
+    for c in centroid.iter_mut() {
+        *c *= inv_n;
     }
 
     reader

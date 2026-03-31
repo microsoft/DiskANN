@@ -65,7 +65,7 @@ mod tests {
         let b = vec![5.0, 6.0, 7.0, 8.0];
         let mut c = vec![0.0f32; 4];
         sgemm_abt(&a, 2, 2, &b, 2, &mut c);
-        let expected = vec![17.0, 23.0, 39.0, 53.0];
+        let expected = [17.0, 23.0, 39.0, 53.0];
         for i in 0..4 {
             assert!(
                 (c[i] - expected[i]).abs() < 1e-5,
@@ -101,7 +101,7 @@ mod tests {
         let b = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0];
         let mut c = vec![0.0f32; 8];
         sgemm_abt(&a, 2, 3, &b, 4, &mut c);
-        let expected = vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+        let expected = [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
         for i in 0..8 {
             assert!(
                 (c[i] - expected[i]).abs() < 1e-6,
@@ -120,8 +120,8 @@ mod tests {
         let b = vec![1.0f32; n * k];
         let mut c = vec![0.0f32; m * n];
         sgemm_abt(&a, m, k, &b, n, &mut c);
-        for i in 0..(m * n) {
-            assert!((c[i] - k as f32).abs() < 1e-3, "large mismatch at {}", i);
+        for (i, val) in c.iter().enumerate() {
+            assert!((*val - k as f32).abs() < 1e-3, "large mismatch at {}", i);
         }
     }
 
@@ -134,8 +134,8 @@ mod tests {
         let b = vec![0.0f32; n * k];
         let mut c = vec![99.0f32; m * n];
         sgemm_abt(&a, m, k, &b, n, &mut c);
-        for i in 0..(m * n) {
-            assert!(c[i].abs() < 1e-6, "zeros mismatch at {}", i);
+        for (i, val) in c.iter().enumerate() {
+            assert!(val.abs() < 1e-6, "zeros mismatch at {}", i);
         }
     }
 
@@ -145,7 +145,7 @@ mod tests {
         let b = vec![5.0, 6.0, 7.0, 8.0];
         let mut c = vec![0.0f32; 4];
         sgemm_abt(&a, 2, 2, &b, 2, &mut c);
-        let expected = vec![-17.0, -23.0, -39.0, -53.0];
+        let expected = [-17.0, -23.0, -39.0, -53.0];
         for i in 0..4 {
             assert!(
                 (c[i] - expected[i]).abs() < 1e-5,

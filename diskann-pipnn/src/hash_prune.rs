@@ -55,13 +55,16 @@ impl LshSketches {
         // For tall-thin output (npoints x 12), this is faster than GEMM.
         let mut sketches = vec![0.0f32; npoints * num_planes];
 
+        // Allow: callers (`build_internal`, `build_internal_sq`) wrap this in
+        // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
+        #[allow(clippy::disallowed_methods)]
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
             .for_each(|(i, sketch_row)| {
                 // Thread-local buffer for T -> f32 conversion.
                 thread_local! {
-                    static SKETCH_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+                    static SKETCH_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
                 }
                 SKETCH_BUF.with(|cell| {
                     let mut buf = cell.borrow_mut();
@@ -72,6 +75,9 @@ impl LshSketches {
                         let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
                         let mut dot = 0.0f32;
                         for d in 0..ndims {
+                            // SAFETY: `d` is in 0..ndims, buf.len() == ndims (from resize above),
+                            // and plane.len() == ndims (sliced from hyperplanes). Both accesses
+                            // are within bounds.
                             unsafe {
                                 dot += *buf.get_unchecked(d) * *plane.get_unchecked(d);
                             }
@@ -106,6 +112,9 @@ impl LshSketches {
 
         let mut sketches = vec![0.0f32; npoints * num_planes];
 
+        // Allow: callers (`build_internal`, `build_internal_sq`) wrap this in
+        // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
+        #[allow(clippy::disallowed_methods)]
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
@@ -117,6 +126,8 @@ impl LshSketches {
                     // Iterate set bits: for each byte, check each bit.
                     for d in 0..ndims {
                         if bits[d / 8] & (1 << (d % 8)) != 0 {
+                            // SAFETY: `d` is in 0..ndims and plane.len() == ndims
+                            // (sliced from hyperplanes), so the access is within bounds.
                             unsafe {
                                 dot += *plane.get_unchecked(d);
                             }
@@ -419,6 +430,8 @@ impl HashPrune {
     }
 
     /// Add a batch of edges in parallel. Each edge is (point_idx, neighbor_idx, distance).
+    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
+    #[allow(clippy::disallowed_methods)]
     pub fn add_edges_parallel(&self, edges: &[(usize, usize, f32)]) {
         edges.par_iter().for_each(|&(p, c, dist)| {
             self.add_edge(p, c, dist);
@@ -453,6 +466,8 @@ impl HashPrune {
     /// Consumes self so that reservoirs and sketches are freed as extraction proceeds,
     /// rather than staying alive until the caller drops HashPrune.
     /// Each reservoir is dropped immediately after its neighbors are extracted.
+    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
+    #[allow(clippy::disallowed_methods)]
     pub fn extract_graph(self) -> Vec<Vec<u32>> {
         let max_degree = self.max_degree;
         // Drop sketches first (~50 MB for 1M points × 12 planes).
@@ -471,6 +486,8 @@ impl HashPrune {
     /// Extract the full reservoir (up to l_max) with distances for final_prune.
     /// Returns (neighbor_id, distance) pairs sorted by distance.
     /// Final_prune selects max_degree from this larger candidate pool using diversity.
+    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
+    #[allow(clippy::disallowed_methods)]
     pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
         drop(self.sketches);
         self.reservoirs
@@ -629,6 +646,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn test_hash_prune_parallel_safety() {
         use rayon::prelude::*;
         let data = vec![0.0f32; 100 * 4];
@@ -709,7 +727,7 @@ mod tests {
         assert_eq!(full.len(), 4);
         // Node 0 has up to 3 edges, but hash collisions may reduce this.
         // Key invariant: for_prune returns >= extract_graph (no truncation to max_degree).
-        assert!(full[0].len() >= 1, "node 0 should have neighbors");
+        assert!(!full[0].is_empty(), "node 0 should have neighbors");
         // Verify sorted by distance.
         for neighbors in &full {
             for w in neighbors.windows(2) {
