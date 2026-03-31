@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{checker::Checker, registry, Any, Input};
+use crate::{checker::Checker, input, registry, Any};
 
 #[derive(Debug)]
 pub(crate) struct Jobs {
@@ -96,7 +96,7 @@ impl Unprocessed {
         Self { tag, content }
     }
 
-    pub(crate) fn format_input(example: &dyn Input) -> anyhow::Result<Self> {
+    pub(crate) fn format_input(example: input::Registered<'_>) -> anyhow::Result<Self> {
         let tag = example.tag().to_string();
         Ok(Self {
             tag,

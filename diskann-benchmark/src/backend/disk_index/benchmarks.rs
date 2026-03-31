@@ -8,10 +8,10 @@ use std::io::Write;
 
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
-    dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+    dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     utils::datatype::{DataType, Type},
-    Any, Checkpoint,
+    Benchmark, Checkpoint,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -82,39 +82,26 @@ where
     }
 }
 
-impl<T> dispatcher::Map for DiskIndex<'static, T>
+impl<T> Benchmark for DiskIndex<'static, T>
 where
-    T: 'static,
-{
-    type Type<'a> = DiskIndex<'a, T>;
-}
-
-/// Dispatch to Disk Index operations.
-impl<'a, T> DispatchRule<&'a DiskIndexOperation> for DiskIndex<'a, T>
-where
+    T: VectorRepr + 'static,
     Type<T>: DispatchRule<DataType>,
-    T: VectorRepr,
 {
-    type Error = std::convert::Infallible;
+    type Input = DiskIndexOperation;
+    type Output = DiskIndexStats;
 
-    // Matching simply requires that we match the inner type.
-    fn try_match(from: &&'a DiskIndexOperation) -> Result<MatchScore, FailureScore> {
-        match &from.source {
+    fn try_match(input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
+        match &input.source {
             DiskIndexSource::Load(load) => Type::<T>::try_match(&load.data_type),
             DiskIndexSource::Build(build) => Type::<T>::try_match(&build.data_type),
         }
     }
 
-    fn convert(from: &'a DiskIndexOperation) -> Result<Self, Self::Error> {
-        Ok(Self::new(from))
-    }
-
     fn description(
         f: &mut std::fmt::Formatter<'_>,
-        from: Option<&&'a DiskIndexOperation>,
+        input: Option<&DiskIndexOperation>,
     ) -> std::fmt::Result {
-        // At this level, we only care about the data type, so return that description.
-        match from {
+        match input {
             Some(arg) => match &arg.source {
                 DiskIndexSource::Load(load) => Type::<T>::description(f, Some(&load.data_type)),
                 DiskIndexSource::Build(build) => Type::<T>::description(f, Some(&build.data_type)),
@@ -122,26 +109,13 @@ where
             None => Type::<T>::description(f, None::<&DataType>),
         }
     }
-}
 
-/// Central Dispatch
-impl<'a, T> DispatchRule<&'a Any> for DiskIndex<'a, T>
-where
-    Type<T>: DispatchRule<DataType>,
-    T: VectorRepr,
-{
-    type Error = anyhow::Error;
-
-    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-        from.try_match::<DiskIndexOperation, Self>()
-    }
-
-    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-        from.convert::<DiskIndexOperation, Self>()
-    }
-
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>) -> std::fmt::Result {
-        Any::description::<DiskIndexOperation, Self>(f, from, DiskIndexOperation::tag())
+    fn run(
+        input: &DiskIndexOperation,
+        checkpoint: Checkpoint<'_>,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<DiskIndexStats> {
+        DiskIndex::<T>::new(input).run(checkpoint, output)
     }
 }
 
@@ -149,18 +123,9 @@ where
 // Benchmark Registration //
 ////////////////////////////
 
-macro_rules! register_disk_index {
-    ($registry:ident, $name:literal, $t:ty) => {
-        $registry.register::<DiskIndex<'static, $t>>($name, |object, checkpoint, output| {
-            let res = object.run(checkpoint, output)?;
-            Ok(serde_json::to_value(res)?)
-        });
-    };
-}
-
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    register_disk_index!(benchmarks, "disk-index-f32", f32);
-    register_disk_index!(benchmarks, "disk-index-f16", f16);
-    register_disk_index!(benchmarks, "disk-index-u8", u8);
-    register_disk_index!(benchmarks, "disk-index-i8", i8);
+    benchmarks.register::<DiskIndex<'static, f32>>("disk-index-f32");
+    benchmarks.register::<DiskIndex<'static, f16>>("disk-index-f16");
+    benchmarks.register::<DiskIndex<'static, u8>>("disk-index-u8");
+    benchmarks.register::<DiskIndex<'static, i8>>("disk-index-i8");
 }

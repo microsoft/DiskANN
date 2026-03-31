@@ -14,36 +14,12 @@ crate::utils::stub_impl!(
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     const NAME: &str = "async-spherical-quantization";
 
-    // Spherical - requires feature "spherical-quantization"
     #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
+    {
+        benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME);
+        benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME);
+        benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME);
+    }
 
     // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
@@ -60,9 +36,9 @@ mod imp {
     use diskann_benchmark_core as benchmark_core;
     use diskann_benchmark_runner::{
         describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+        dispatcher::{DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
-        Any, Checkpoint, Output,
+        Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
         index::diskann_async::{self},
@@ -99,100 +75,6 @@ mod imp {
     impl<'a, const NBITS: usize> SphericalQ<'a, NBITS> {
         pub(super) fn new(input: &'a SphericalQuantBuild) -> Self {
             Self { input }
-        }
-    }
-
-    impl<const NBITS: usize> dispatcher::Map for SphericalQ<'static, NBITS> {
-        type Type<'a> = SphericalQ<'a, NBITS>;
-    }
-
-    impl<'a, const NBITS: usize> DispatchRule<&'a SphericalQuantBuild> for SphericalQ<'a, NBITS> {
-        type Error = std::convert::Infallible;
-
-        fn try_match(from: &&'a SphericalQuantBuild) -> Result<MatchScore, FailureScore> {
-            // If this is multi-insert, return a very-close failure.
-            let mut failure_score: Option<u32> = None;
-            if from.build.multi_insert.is_some() {
-                failure_score = Some(1);
-            }
-
-            // Ensure the data type is compatible (float32).
-            if let Err(FailureScore(_)) = datatype::Type::<f32>::try_match(&from.build.data_type) {
-                *failure_score.get_or_insert(0) += 1;
-            }
-
-            // Match the number of bits.
-            let num_bits = from.num_bits.get();
-            if num_bits != NBITS {
-                *failure_score.get_or_insert(0) +=
-                    NBITS.abs_diff(num_bits).try_into().unwrap_or(u32::MAX);
-            }
-
-            match failure_score {
-                None => Ok(MatchScore(0)),
-                Some(score) => Err(FailureScore(score)),
-            }
-        }
-
-        fn convert(from: &'a SphericalQuantBuild) -> Result<Self, Self::Error> {
-            assert_eq!(from.num_bits.get(), NBITS);
-            Ok(Self::new(from))
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a SphericalQuantBuild>,
-        ) -> std::fmt::Result {
-            match from {
-                None => {
-                    describeln!(
-                        f,
-                        "- Index Build and Search using {}-bit spherical quantization",
-                        NBITS
-                    )?;
-                    describeln!(f, "- Requires `float32` data")?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                    describeln!(f, "- Does not support multi-insert")?;
-                }
-                Some(input) => {
-                    let num_bits = input.num_bits.get();
-                    if num_bits != NBITS {
-                        describeln!(f, "- Expected {} bits, got {}", NBITS, num_bits)?;
-                    }
-
-                    if input.build.multi_insert.is_some() {
-                        describeln!(f, "- Spherical Quantization does not support multi-insert")?;
-                    }
-
-                    if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
-                        describeln!(
-                            f,
-                            "- Only `float32` data type is supported. Instead, got {}",
-                            input.build.data_type
-                        )?;
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    impl<'a, const NBITS: usize> DispatchRule<&'a Any> for SphericalQ<'a, NBITS> {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<SphericalQuantBuild, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<SphericalQuantBuild, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<SphericalQuantBuild, Self>(f, from, SphericalQuantBuild::tag())
         }
     }
 
@@ -244,6 +126,89 @@ mod imp {
 
     macro_rules! build_and_search {
         ($N:literal) => {
+            impl Benchmark for SphericalQ<'static, $N> {
+                type Input = SphericalQuantBuild;
+                type Output = SphericalBuildResult;
+
+                fn try_match(input: &SphericalQuantBuild) -> Result<MatchScore, FailureScore> {
+                    let mut failure_score: Option<u32> = None;
+                    if input.build.multi_insert.is_some() {
+                        failure_score = Some(1);
+                    }
+
+                    if let Err(FailureScore(_)) =
+                        datatype::Type::<f32>::try_match(&input.build.data_type)
+                    {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
+                    let num_bits = input.num_bits.get();
+                    if num_bits != $N {
+                        *failure_score.get_or_insert(0) += ($N as usize)
+                            .abs_diff(num_bits)
+                            .try_into()
+                            .unwrap_or(u32::MAX);
+                    }
+
+                    match failure_score {
+                        None => Ok(MatchScore(0)),
+                        Some(score) => Err(FailureScore(score)),
+                    }
+                }
+
+                fn description(
+                    f: &mut std::fmt::Formatter<'_>,
+                    input: Option<&SphericalQuantBuild>,
+                ) -> std::fmt::Result {
+                    match input {
+                        None => {
+                            describeln!(
+                                f,
+                                "- Index Build and Search using {}-bit spherical quantization",
+                                $N
+                            )?;
+                            describeln!(f, "- Requires `float32` data")?;
+                            describeln!(
+                                f,
+                                "- Implements `squared_l2` or `inner_product` distance",
+                            )?;
+                            describeln!(f, "- Does not support multi-insert")?;
+                        }
+                        Some(input) => {
+                            let num_bits = input.num_bits.get();
+                            if num_bits != $N {
+                                describeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
+                            }
+
+                            if input.build.multi_insert.is_some() {
+                                describeln!(
+                                    f,
+                                    "- Spherical Quantization does not support multi-insert"
+                                )?;
+                            }
+
+                            if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
+                                describeln!(
+                                    f,
+                                    "- Only `float32` data type is supported. Instead, got {}",
+                                    input.build.data_type
+                                )?;
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+
+                fn run(
+                    input: &SphericalQuantBuild,
+                    checkpoint: Checkpoint<'_>,
+                    output: &mut dyn Output,
+                ) -> anyhow::Result<SphericalBuildResult> {
+                    let sq = SphericalQ::<$N>::new(input);
+                    BuildAndSearch::run(sq, checkpoint, output)
+                }
+            }
+
             impl<'a> BuildAndSearch<'a> for SphericalQ<'a, $N> {
                 type Data = SphericalBuildResult;
                 fn run(

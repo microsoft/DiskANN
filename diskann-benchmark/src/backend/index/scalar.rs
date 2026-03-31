@@ -13,56 +13,18 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     {
         use half::f16;
 
-        use crate::backend::index::benchmarks::register;
-
         // f32
-        register!(
-            benchmarks,
-            "async-sq-8-bit-f32",
-            imp::ScalarQuantized<'static, 8, f32>
-        );
-        register!(
-            benchmarks,
-            "async-sq-4-bit-f32",
-            imp::ScalarQuantized<'static, 4, f32>
-        );
-        register!(
-            benchmarks,
-            "async-sq-2-bit-f32",
-            imp::ScalarQuantized<'static, 2, f32>
-        );
-        register!(
-            benchmarks,
-            "async-sq-1-bit-f32",
-            imp::ScalarQuantized<'static, 1, f32>
-        );
+        benchmarks.register::<imp::ScalarQuantized<'static, 8, f32>>("async-sq-8-bit-f32");
+        benchmarks.register::<imp::ScalarQuantized<'static, 4, f32>>("async-sq-4-bit-f32");
+        benchmarks.register::<imp::ScalarQuantized<'static, 2, f32>>("async-sq-2-bit-f32");
+        benchmarks.register::<imp::ScalarQuantized<'static, 1, f32>>("async-sq-1-bit-f32");
         // f16
-        register!(
-            benchmarks,
-            "async-sq-8-bit-f16",
-            imp::ScalarQuantized<'static, 8, f16>
-        );
-        register!(
-            benchmarks,
-            "async-sq-4-bit-f16",
-            imp::ScalarQuantized<'static, 4, f16>
-        );
-        register!(
-            benchmarks,
-            "async-sq-2-bit-f16",
-            imp::ScalarQuantized<'static, 2, f16>
-        );
-        register!(
-            benchmarks,
-            "async-sq-1-bit-f16",
-            imp::ScalarQuantized<'static, 1, f16>
-        );
+        benchmarks.register::<imp::ScalarQuantized<'static, 8, f16>>("async-sq-8-bit-f16");
+        benchmarks.register::<imp::ScalarQuantized<'static, 4, f16>>("async-sq-4-bit-f16");
+        benchmarks.register::<imp::ScalarQuantized<'static, 2, f16>>("async-sq-2-bit-f16");
+        benchmarks.register::<imp::ScalarQuantized<'static, 1, f16>>("async-sq-1-bit-f16");
         // i8
-        register!(
-            benchmarks,
-            "async-sq-1-bit-i8",
-            imp::ScalarQuantized<'static, 1, i8>
-        );
+        benchmarks.register::<imp::ScalarQuantized<'static, 1, i8>>("async-sq-1-bit-i8");
     }
 
     // Stub implementation
@@ -77,9 +39,9 @@ mod imp {
     use anyhow::Context;
     use diskann_benchmark_runner::{
         describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+        dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
-        Any, Checkpoint, Output,
+        Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
         index::diskann_async::{self},
@@ -117,138 +79,109 @@ mod imp {
         }
     }
 
-    impl<const NBITS: usize, T> dispatcher::Map for ScalarQuantized<'static, NBITS, T>
-    where
-        T: 'static,
-    {
-        type Type<'a> = ScalarQuantized<'a, NBITS, T>;
-    }
+    macro_rules! impl_sq_build {
+        ($N:literal, $T: ty) => {
+            impl Benchmark for ScalarQuantized<'static, $N, $T> {
+                type Input = IndexSQOperation;
+                type Output = QuantBuildResult;
 
-    impl<'a, const NBITS: usize, T> DispatchRule<&'a IndexSQOperation> for ScalarQuantized<'a, NBITS, T>
-    where
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
-    {
-        type Error = std::convert::Infallible;
-
-        fn try_match(from: &&'a IndexSQOperation) -> Result<MatchScore, FailureScore> {
-            // If this is multi-insert, return a very-close failure.
-            let mut failure_score: Option<u32> = None;
-            match from.index_operation.source {
-                IndexSource::Load(_) => {}
-                IndexSource::Build(ref build) => {
-                    // If the build is not compatible, return a failure score.
-                    if build.multi_insert.is_some() {
-                        failure_score = Some(1);
-                    }
-                }
-            }
-
-            // make sure the data type is correct
-            if let Err(FailureScore(_)) = FullPrecision::<'a, T>::try_match(&&from.index_operation)
-            {
-                *failure_score.get_or_insert(0) += 1;
-            }
-
-            // Make sure the number of bits is correct.
-            if from.num_bits != NBITS {
-                *failure_score.get_or_insert(0) += 10 + NBITS.abs_diff(from.num_bits) as u32;
-            }
-
-            match failure_score {
-                None => Ok(MatchScore(0)),
-                Some(score) => Err(FailureScore(score)),
-            }
-        }
-
-        fn convert(from: &'a IndexSQOperation) -> Result<Self, Self::Error> {
-            Ok(Self::new(from))
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a IndexSQOperation>,
-        ) -> std::fmt::Result {
-            match from {
-                None => {
-                    describeln!(
-                        f,
-                        "- Index Build and Search using {} scalar quantized bits",
-                        NBITS
-                    )?;
-                    describeln!(
-                        f,
-                        "- Requires `{}` data",
-                        dispatcher::Description::<datatype::DataType, datatype::Type<T>>::new(),
-                    )?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                    describeln!(f, "- Does not support multi-insert")?;
-                }
-                Some(input) => {
-                    if input.num_bits != NBITS {
-                        describeln!(
-                            f,
-                            "- Expected {} bits, instead got {}",
-                            NBITS,
-                            input.num_bits
-                        )?;
-                    }
-
-                    let mut check_match = |data_type: &datatype::DataType| {
-                        if datatype::Type::<T>::try_match(data_type).is_err() {
-                            describeln!(
-                                f,
-                                "- Only `{}` data type is supported. Instead, got {}",
-                                dispatcher::Description::<datatype::DataType, datatype::Type<T>>::new(),
-                                data_type
-                            ).unwrap();
-                        }
-                    };
-
-                    match &input.index_operation.source {
-                        IndexSource::Load(load) => {
-                            check_match(&load.data_type);
-                        }
-                        IndexSource::Build(build) => {
-                            check_match(&build.data_type);
-
+                fn try_match(input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
+                    let mut failure_score: Option<u32> = None;
+                    match input.index_operation.source {
+                        IndexSource::Load(_) => {}
+                        IndexSource::Build(ref build) => {
                             if build.multi_insert.is_some() {
-                                describeln!(
-                                    f,
-                                    "- Scalar Quantization does not support multi-insert"
-                                )?;
+                                failure_score = Some(1);
                             }
                         }
                     }
+
+                    if <FullPrecision<'static, $T> as Benchmark>::try_match(&input.index_operation)
+                        .is_err()
+                    {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
+                    if input.num_bits != $N {
+                        *failure_score.get_or_insert(0) += 10 + ($N as usize).abs_diff(input.num_bits) as u32;
+                    }
+
+                    match failure_score {
+                        None => Ok(MatchScore(0)),
+                        Some(score) => Err(FailureScore(score)),
+                    }
+                }
+
+                fn description(
+                    f: &mut std::fmt::Formatter<'_>,
+                    input: Option<&IndexSQOperation>,
+                ) -> std::fmt::Result {
+                    match input {
+                        None => {
+                            describeln!(
+                                f,
+                                "- Index Build and Search using {} scalar quantized bits",
+                                $N
+                            )?;
+                            describeln!(
+                                f,
+                                "- Requires `{}` data",
+                                Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                            )?;
+                            describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                            describeln!(f, "- Does not support multi-insert")?;
+                        }
+                        Some(input) => {
+                            if input.num_bits != $N {
+                                describeln!(
+                                    f,
+                                    "- Expected {} bits, instead got {}",
+                                    $N,
+                                    input.num_bits
+                                )?;
+                            }
+
+                            let mut check_match = |data_type: &datatype::DataType| {
+                                if datatype::Type::<$T>::try_match(data_type).is_err() {
+                                    describeln!(
+                                        f,
+                                        "- Only `{}` data type is supported. Instead, got {}",
+                                        Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                        data_type
+                                    ).unwrap();
+                                }
+                            };
+
+                            match &input.index_operation.source {
+                                IndexSource::Load(load) => {
+                                    check_match(&load.data_type);
+                                }
+                                IndexSource::Build(build) => {
+                                    check_match(&build.data_type);
+
+                                    if build.multi_insert.is_some() {
+                                        describeln!(
+                                            f,
+                                            "- Scalar Quantization does not support multi-insert"
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+
+                fn run(
+                    input: &IndexSQOperation,
+                    checkpoint: Checkpoint<'_>,
+                    output: &mut dyn Output,
+                ) -> anyhow::Result<QuantBuildResult> {
+                    let sq = ScalarQuantized::<$N, $T>::new(input);
+                    BuildAndSearch::run(sq, checkpoint, output)
                 }
             }
-            Ok(())
-        }
-    }
 
-    impl<'a, const NBITS: usize, T> DispatchRule<&'a Any> for ScalarQuantized<'a, NBITS, T>
-    where
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
-    {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<IndexSQOperation, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<IndexSQOperation, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<IndexSQOperation, Self>(f, from, IndexSQOperation::tag())
-        }
-    }
-
-    macro_rules! impl_sq_build {
-        ($N:literal, $T: ty) => {
             impl<'a> BuildAndSearch<'a> for ScalarQuantized<'a, $N, $T> {
                 type Data = QuantBuildResult;
                 fn run(
