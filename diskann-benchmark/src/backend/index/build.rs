@@ -148,17 +148,14 @@ where
     // Step 1: Store all data vectors into the provider so search can read them.
     let t_store = Instant::now();
     {
-        use diskann::provider::SetElement;
         let provider = &index.data_provider;
-        let ctx = &DefaultContext;
         let rt = diskann_benchmark_core::tokio::runtime(input.num_threads)?;
         rt.block_on(async {
             for i in 0..npoints {
                 let id = i as u32;
                 let row: &[T] = data.row(i);
-                SetElement::<[T]>::set_element(provider, ctx, &id, row)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("set_element failed for id {}: {}", i, e))?;
+                provider.base_vectors.set_element(&id, row)?;
+                provider.aux_vectors.set_element(&id, row)?;
             }
             Ok::<(), anyhow::Error>(())
         })?;
