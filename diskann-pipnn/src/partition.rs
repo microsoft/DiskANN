@@ -307,8 +307,8 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
 }
 
 /// Merge undersized quantized clusters into the nearest large cluster by Hamming distance.
-/// Uses the first point of each small cluster as a representative and computes
-/// Hamming distance to the first point of each large cluster (cheap proxy for centroid).
+/// Uses average Hamming distance from all small cluster points to each large cluster's
+/// representative (first point) to find the nearest merge target.
 fn merge_small_quantized(
     qdata: &crate::quantize::QuantizedData,
     mut clusters: Vec<Vec<usize>>,
@@ -330,13 +330,16 @@ fn merge_small_quantized(
         return large;
     }
     for small in smalls {
-        let rep = qdata.get_u64(small[0]);
+        // Average Hamming distance from all small cluster points to each large cluster rep.
         let nearest = large
             .iter()
             .enumerate()
             .map(|(i, c)| {
-                let d = crate::quantize::QuantizedData::hamming_u64(rep, qdata.get_u64(c[0]));
-                (i, d)
+                let large_rep = qdata.get_u64(c[0]);
+                let total_dist: u32 = small.iter()
+                    .map(|&idx| crate::quantize::QuantizedData::hamming_u64(qdata.get_u64(idx), large_rep))
+                    .sum();
+                (i, total_dist)
             })
             .min_by_key(|&(_, d)| d)
             .map(|(i, _)| i)
@@ -395,15 +398,17 @@ fn merge_small_into_nearest<T: VectorRepr>(
         })
         .collect();
 
-    // For each small cluster, find nearest large cluster by L2 distance
-    // from the small cluster's representative point to each large centroid.
+    // For each small cluster, compute its centroid and find nearest large cluster.
+    let mut point_buf = vec![0.0f32; ndims];
     for small in smalls {
         let mut rep_buf = vec![0.0f32; ndims];
-        T::as_f32_into(
-            &data[small[0] * ndims..(small[0] + 1) * ndims],
-            &mut rep_buf,
-        )
-        .expect("f32 conversion");
+        let inv = 1.0 / small.len() as f32;
+        for &idx in &small {
+            T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
+                .expect("f32 conversion");
+            for d in 0..ndims { rep_buf[d] += point_buf[d]; }
+        }
+        for d in 0..ndims { rep_buf[d] *= inv; }
         let nearest = centroids
             .iter()
             .enumerate()
