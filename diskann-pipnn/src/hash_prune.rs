@@ -81,6 +81,45 @@ impl LshSketches {
         }
     }
 
+    /// Create LSH sketches from 1-bit quantized data.
+    ///
+    /// Computes dot(1bit_vec, hyperplane) = sum of hyperplane[d] where bit d is set.
+    /// No f16/f32 data needed — works directly on the QuantizedData bit vectors.
+    pub fn new_from_quantized(
+        qdata: &crate::quantize::QuantizedData,
+        npoints: usize,
+        ndims: usize,
+        num_planes: usize,
+        seed: u64,
+    ) -> Self {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let hyperplanes: Vec<f32> = (0..num_planes * ndims)
+            .map(|_| StandardNormal.sample(&mut rng))
+            .collect();
+
+        let mut sketches = vec![0.0f32; npoints * num_planes];
+
+        sketches
+            .par_chunks_mut(num_planes)
+            .enumerate()
+            .for_each(|(i, sketch_row)| {
+                let bits = qdata.get(i);
+                for j in 0..num_planes {
+                    let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
+                    let mut dot = 0.0f32;
+                    // Iterate set bits: for each byte, check each bit.
+                    for d in 0..ndims {
+                        if bits[d / 8] & (1 << (d % 8)) != 0 {
+                            unsafe { dot += *plane.get_unchecked(d); }
+                        }
+                    }
+                    sketch_row[j] = dot;
+                }
+            });
+
+        Self { num_planes, sketches, npoints }
+    }
+
     /// Compute the hash of candidate c relative to point p.
     ///
     /// h_p(c) = concat of sign bits of (Sketch(c) - Sketch(p))
