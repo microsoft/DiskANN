@@ -17,6 +17,9 @@
 name: Publish diskannpy to PyPI
 
 on:
+  # TODO: Remove this push trigger before merging to main
+  push:
+    branches: ["user/tianyuanyuan/add-wheel"]
   workflow_dispatch:
     inputs:
       publish:
