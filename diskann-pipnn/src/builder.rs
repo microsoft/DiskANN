@@ -11,7 +11,7 @@
 //! 3. For each leaf b_i in B (in parallel):
 //!    edges <- Pick(b_i)  // GEMM + bi-directed k-NN
 //!    G.Prune_And_Add_Edges(edges)  // stream to HashPrune
-//! 4. Optional: final RobustPrune on each node
+//! 4. Optional: final diversity prune on each node
 //! 5. return G
 
 use std::time::Instant;
@@ -766,7 +766,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     // Extract graph and optionally apply diversity-aware final prune.
     let t3 = Instant::now();
     let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
-        // Extract full reservoir (l_max candidates with distances) for RobustPrune.
+        // Extract full reservoir (l_max candidates with distances) for diversity prune.
         let candidates = hash_prune.extract_graph_for_prune();
         let extract_secs = t3.elapsed().as_secs_f64();
         tracing::info!(
@@ -833,7 +833,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     Ok(graph)
 }
 
-/// RobustPrune from full reservoir: select max_degree from l_max candidates using diversity.
+/// Diversity prune from full reservoir: select max_degree from l_max candidates using diversity.
 /// Candidates already have distances from HashPrune — no recomputation needed for i→candidate.
 /// Only computes inter-candidate distances for the occlusion check.
 // Called from within `build_internal_impl` which already runs inside a dedicated rayon

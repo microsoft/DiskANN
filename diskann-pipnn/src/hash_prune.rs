@@ -7,7 +7,7 @@
 //!
 //! Uses random hyperplanes to hash candidate neighbors relative to each point.
 //! Maintains a reservoir of l_max entries per point, keyed by hash bucket.
-//! This is history-independent (order of insertion does not matter).
+//! Effectively order-independent: the hash-keyed eviction makes results stable regardless of insertion order, up to bf16 distance quantization ties (which are rare in practice).
 
 use std::cell::RefCell;
 

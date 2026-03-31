@@ -94,9 +94,9 @@ pub struct PiPNNConfig {
     /// Distance metric.
     #[serde(with = "metric_serde")]
     pub metric: Metric,
-    /// Whether to apply a final RobustPrune pass.
+    /// Whether to apply a final diversity-prune pass (occlusion-based, similar to RobustPrune).
     pub final_prune: bool,
-    /// Alpha (occlusion factor) for final RobustPrune. Same as DiskANN's `alpha` parameter.
+    /// Alpha (occlusion factor) for final diversity prune. Same as DiskANN's `alpha` parameter.
     /// Higher values yield sparser graphs. Default: 1.2 (matches DiskANN default).
     pub alpha: f32,
     /// Number of threads to use. 0 means use all available cores.
