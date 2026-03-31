@@ -58,13 +58,15 @@ fn partition_assign_quantized(
 
     let mut assignments = vec![0u32; np * num_assign];
 
-    const STRIPE: usize = 32_768;
+    // Adaptive stripe: limit per-stripe memory to ~16 MB, matching the FP path.
+    let stripe: usize = ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
+        .clamp(256, 32_768);
     assignments
-        .par_chunks_mut(STRIPE * num_assign)
+        .par_chunks_mut(stripe * num_assign)
         .enumerate()
         .for_each(|(stripe_idx, assign_chunk)| {
-            let start = stripe_idx * STRIPE;
-            let end = (start + STRIPE).min(np);
+            let start = stripe_idx * stripe;
+            let end = (start + stripe).min(np);
             let sn = end - start;
 
             // Pre-extract point data for this stripe.
@@ -277,6 +279,39 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
             indices: chunk.to_vec(),
         })
         .collect()
+}
+
+/// Merge undersized quantized clusters into the nearest large cluster by Hamming distance.
+/// Uses the first point of each small cluster as a representative and computes
+/// Hamming distance to the first point of each large cluster (cheap proxy for centroid).
+fn merge_small_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    mut clusters: Vec<Vec<usize>>,
+    c_min: usize,
+) -> Vec<Vec<usize>> {
+    let mut large: Vec<Vec<usize>> = Vec::new();
+    let mut smalls: Vec<Vec<usize>> = Vec::new();
+    for c in clusters.drain(..) {
+        if c.len() < c_min && !c.is_empty() { smalls.push(c); }
+        else if !c.is_empty() { large.push(c); }
+    }
+    if smalls.is_empty() || large.is_empty() {
+        if large.is_empty() { return smalls; }
+        return large;
+    }
+    for small in smalls {
+        let rep = qdata.get_u64(small[0]);
+        let nearest = large.iter().enumerate()
+            .map(|(i, c)| {
+                let d = crate::quantize::QuantizedData::hamming_u64(rep, qdata.get_u64(c[0]));
+                (i, d)
+            })
+            .min_by_key(|&(_, d)| d)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        large[nearest].extend(small);
+    }
+    large
 }
 
 /// Merge undersized clusters into the nearest large cluster by centroid distance.
@@ -547,25 +582,8 @@ pub fn parallel_partition_quantized(
         "top-level partition assign (quantized)"
     );
 
-    // Merge undersized clusters.
-    let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut small_clusters: Vec<Vec<usize>> = Vec::new();
-    for cluster in clusters.drain(..) {
-        if cluster.len() < config.c_min && !cluster.is_empty() {
-            small_clusters.push(cluster);
-        } else if !cluster.is_empty() {
-            merged_clusters.push(cluster);
-        }
-    }
-    if !small_clusters.is_empty() && !merged_clusters.is_empty() {
-        for small in small_clusters {
-            let min_idx = merged_clusters.iter().enumerate()
-                .min_by_key(|(_, c)| c.len()).map(|(i, _)| i).unwrap_or(0);
-            merged_clusters[min_idx].extend(small);
-        }
-    } else if merged_clusters.is_empty() {
-        merged_clusters = small_clusters;
-    }
+    // Merge undersized clusters into nearest large cluster by Hamming distance.
+    let merged_clusters = merge_small_quantized(qdata, clusters, config.c_min);
 
     let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
     tracing::debug!(
@@ -621,19 +639,8 @@ fn partition_quantized_recursive(
         .map(|lc| lc.into_iter().map(|li| indices[li]).collect())
         .collect();
 
-    // Merge small clusters.
-    let mut merged: Vec<Vec<usize>> = Vec::new();
-    let mut smalls: Vec<Vec<usize>> = Vec::new();
-    for c in clusters.drain(..) {
-        if c.len() < config.c_min && !c.is_empty() { smalls.push(c); }
-        else if !c.is_empty() { merged.push(c); }
-    }
-    if !smalls.is_empty() && !merged.is_empty() {
-        for s in smalls {
-            let mi = merged.iter().enumerate().min_by_key(|(_, c)| c.len()).map(|(i,_)| i).unwrap_or(0);
-            merged[mi].extend(s);
-        }
-    } else if merged.is_empty() { merged = smalls; }
+    // Merge undersized clusters into nearest large cluster by Hamming distance.
+    let merged = merge_small_quantized(qdata, clusters, config.c_min);
 
     if merged.len() == 1 && merged[0].len() > config.c_max {
         return force_split(&merged[0], config.c_max);
