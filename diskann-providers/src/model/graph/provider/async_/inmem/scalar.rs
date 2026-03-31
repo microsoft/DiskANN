@@ -7,10 +7,13 @@ use std::{future::Future, sync::Mutex};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
-    ANNError, ANNResult,
-    graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+    ANNError, ANNResult, default_post_processor,
+    graph::{
+        glue::{
+            self, DefaultPostProcessor, ExpandBeam, FilterStartPoints, InsertStrategy, Pipeline,
+            PruneStrategy, SearchExt, SearchStrategy,
+        },
+        workingset,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -32,7 +35,7 @@ use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{DefaultProvider, GetFullPrecision, Rerank};
+use super::{DefaultProvider, GetFullPrecision, PassThrough, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::{
@@ -420,28 +423,22 @@ where
     }
 }
 
-impl<'a, const NBITS: usize, V, D, Ctx> Accessor for QuantAccessor<'a, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx> Accessor for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = CVRef<'a, NBITS>;
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `CVRef` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = CVRef<'a, NBITS>
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = CVRef<'b, NBITS>;
+    type ElementRef<'a> = CVRef<'a, NBITS>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
@@ -526,7 +523,7 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx, T> BuildQueryComputer<[T]>
+impl<const NBITS: usize, V, D, Ctx, T> BuildQueryComputer<&[T]>
     for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
@@ -551,7 +548,7 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -601,7 +598,7 @@ where
 /// the quantized store. This allows reranking using original vectors after
 /// approximate search, so the post-processing step includes a [`Rerank`] stage.
 impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    SearchStrategy<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -612,7 +609,6 @@ where
     type QueryComputer = QueryComputer<NBITS>;
     type SearchAccessor<'a> = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, Rerank>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -621,17 +617,25 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<const NBITS: usize, D, Ctx, T>
+    DefaultPostProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+{
+    default_post_processor!(Pipeline<FilterStartPoints, Rerank>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
 /// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
 impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    SearchStrategy<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -642,7 +646,6 @@ where
     type QueryComputer = QueryComputer<NBITS>;
     type SearchAccessor<'a> = QuantAccessor<'a, NBITS, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -651,10 +654,18 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<const NBITS: usize, D, Ctx, T>
+    DefaultPostProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+{
+    default_post_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<const NBITS: usize, V, D, Ctx> PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>
@@ -669,6 +680,11 @@ where
     type DistanceComputer = DistanceComputer;
     type PruneAccessor<'a> = QuantAccessor<'a, NBITS, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = PassThrough;
+
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        PassThrough
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -679,17 +695,55 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> FillSet for QuantAccessor<'_, NBITS, V, D, Ctx>
+// Pass-through fill — returns `&Self` which directly accesses the underlying provider.
+impl<const NBITS: usize, V, D, Ctx> workingset::Fill<PassThrough>
+    for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
 {
+    type Error = std::convert::Infallible;
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
+    }
+}
+
+// Pass-through view — reads scalar-quantized vectors directly from the provider.
+impl<const NBITS: usize, V, D, Ctx> workingset::View<u32> for &QuantAccessor<'_, NBITS, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+{
+    type ElementRef<'a> = CVRef<'a, NBITS>;
+    type Element<'a>
+        = CVRef<'a, NBITS>
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
+        self.provider.aux_vectors.get_vector(id.into_usize()).ok()
+    }
 }
 
 impl<const NBITS: usize, V, D, Ctx, T>
-    InsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    InsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -699,12 +753,49 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
     DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
-    Quantized: SearchStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, [T]>,
+    Quantized: for<'a> SearchStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
 {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<const NBITS: usize, V, D, Ctx, B>
+    glue::MultiInsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, B> for Quantized
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, WorkingSet = PassThrough>
+        + for<'a> InsertStrategy<
+            DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type WorkingSet = PassThrough;
+    type Seed = PassThrough;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        _ctx: &Ctx,
+        _batch: &std::sync::Arc<B>,
+        _ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(PassThrough))
     }
 }
 
@@ -833,7 +924,6 @@ mod tests {
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -989,7 +1079,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_with_and_load_with() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let store = make_store(Metric::InnerProduct);
 
         // Save to our memory provider

@@ -60,6 +60,10 @@ impl Architecture for Scalar {
     arch::maskdef!();
     arch::typedef!();
 
+    fn level() -> arch::Level {
+        arch::Level::scalar()
+    }
+
     fn run<F, R>(self, f: F) -> R
     where
         F: Target<Self, R>,
@@ -129,7 +133,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
 
@@ -143,7 +147,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
 
@@ -159,7 +163,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
 }
@@ -189,5 +193,7 @@ mod tests {
         // Execute this at run time so code-coverage counts it.
         let arch = Scalar::new();
         assert_eq!(arch, ARCH);
+
+        assert_eq!(Scalar::level(), arch::Level::scalar());
     }
 }

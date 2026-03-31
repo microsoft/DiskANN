@@ -5,7 +5,7 @@
 
 //! # AVX-512 Support
 //!
-//! Access to AVX-512 instrinsics is provided by the [`V4`] backend.
+//! Access to AVX-512 intrinsics is provided by the [`V4`] backend.
 //!
 //! This backend corresponds to the features required for the [`V3`] architecture in addition
 //! to:
@@ -17,13 +17,15 @@
 //! * `avx512vl`
 //! * `avx512dq`
 //! * `avx512vnni`
-//! * `avx512bitalg` (upcoming - pending CI resources)
-//! * `avx512vpopcntdq` (upcoming - pending CI resources)
+//! * `avx512bitalg`
+//! * `avx512vpopcntdq`
+//! * `avx512vbmi`
 //!
-//! Note that the requirement of `avx512vnni`, `avx512bitalg`, and `avx512vpopcntdq` extend
-//! beyond the traditional requirements of `x86-64-v4`. These are included to assist with
-//! quantized distance functions and to avoid adding an additional backend solely for these
-//! features.
+//! Note that the requirement of `avx512vnni`, `avx512bitalg`, `avx512vpopcntdq`, and
+//! `avx512vbmi` extend beyond the traditional requirements of `x86-64-v4`. These are
+//! included to assist with quantized distance functions and to avoid adding an additional
+//! backend solely for these features. These extensions are available on Ice Lake Server+
+//! and AMD Zen4+.
 //!
 //! ## Miri Support
 //!
@@ -34,7 +36,7 @@
 //! However, Miri is a great tool for assisting with writing kernels when it comes to
 //! validating bounds-checking. The [`V4`] supports running under Miri with a few caveats.
 //! First, when using `#[cfg(miri)]`, the type aliases such as [`f32x4`] will be mapped
-//! to emulated variants (i.e., [Emulated<f32, 4, V4>`). Use of the standard SIMD functions
+//! to emulated variants (i.e., [`crate::Emulated<f32, 4, V4>`]). Use of the standard SIMD functions
 //! like arithmetic, loading, storing, etc. will execute as expected, enabling Miri assisted
 //! bounds checking for loads and stores.
 //!
@@ -55,7 +57,7 @@
 //! these are aliased to `Emulated` instead of the native intrinsic types.
 //!
 //! This means that regardless of Miri, the native intrinsic types are still defined and
-//! useable. They are just not mapped via `V4 as Architecture`. Thus, when working in the
+//! usable. They are just not mapped via `V4 as Architecture`. Thus, when working in the
 //! submodules like `f32x8_` that reference types like `f32x4`, make sure that the symbol
 //! `f32x4` is imported via `f32x4_::f32x4` to ensure compilation when using Miri.
 //!
@@ -169,6 +171,7 @@ mod conversion;
 /// * `avx512vnni`
 /// * `avx512bitalg`
 /// * `avx512vpopcntdq`
+/// * `avx512vbmi`
 ///
 /// Overall, the implications and requirements of `V4` are those of [`V3`] plus:
 ///
@@ -178,15 +181,16 @@ mod conversion;
 /// * `avx512vl`
 /// * `avx512dq`
 /// * `avx512vnni`
-/// * `avx512bitalg` (upcoming - pending CI resources)
-/// * `avx512vpopcntdq` (upcoming - pending CI resources)
+/// * `avx512bitalg`
+/// * `avx512vpopcntdq`
+/// * `avx512vbmi`
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct V4(Hidden);
 
 impl arch::Sealed for V4 {}
 
-// `miri` does not have the ability to dynamically determing micro-architecture. Thus, to
+// `miri` does not have the ability to dynamically determine micro-architecture. Thus, to
 // run V4 kernels under `Miri` without compiling the whole application of `x86-64-v4`, we
 // drop the `target_features`.
 //
@@ -199,7 +203,7 @@ macro_rules! v4_features {
         #[cfg_attr(
             not(miri),
             target_feature(
-                enable = "avx2,avx,bmi1,bmi2,f16c,fma,lzcnt,movbe,xsave,avx512f,avx512bw,avx512cd,avx512vl,avx512dq,avx512vnni"
+                enable = "avx2,avx,bmi1,bmi2,f16c,fma,lzcnt,movbe,xsave,avx512f,avx512bw,avx512cd,avx512vl,avx512dq,avx512vnni,avx512bitalg,avx512vpopcntdq,avx512vbmi"
             )
         )]
         $($args)*
@@ -239,7 +243,7 @@ impl V4 {
 
     /// Retarget for a more conservative architecture.
     pub fn retarget(self) -> V3 {
-        // SAFETY: `V4` is a superset of `V3` - so an instance of `V4` asserts the present.
+        // SAFETY: `V4` is a superset of `V3` - so an instance of `V4` asserts the presence of `V3`.
         unsafe { V3::new() }
     }
 
@@ -260,7 +264,7 @@ impl V4 {
                 // just check if the user specified level would have instantiated it.
                 if unsafe { Self::new_checked_with(super::test_arch_number()) }.is_some() {
                     panic!(
-                        "V4 architecture was requested but is not compatible on the current hardare"
+                        "V4 architecture was requested but is not compatible on the current hardware"
                     );
                 } else {
                     None
@@ -285,7 +289,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_with<F, R>(self, f: F) -> R
         where
             F: Target<Self, R>,
@@ -297,7 +301,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         #[inline]
         pub(super) unsafe fn run_with_inline<F, R>(self, f: F) -> R
         where
@@ -310,7 +314,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_with_1<F, T0, R>(self, f: F, x0: T0) -> R
         where
             F: Target1<Self, R, T0>,
@@ -322,7 +326,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         #[inline]
         pub(super) unsafe fn run_with_1_inline<F, T0, R>(self, f: F, x0: T0) -> R
         where
@@ -335,7 +339,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_with_2<F, T0, T1, R>(self, f: F, x0: T0, x1: T1) -> R
         where
             F: Target2<Self, R, T0, T1>,
@@ -347,7 +351,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         #[inline]
         pub(super) unsafe fn run_with_2_inline<F, T0, T1, R>(self, f: F, x0: T0, x1: T1) -> R
         where
@@ -360,7 +364,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_with_3<F, T0, T1, T2, R>(self, f: F, x0: T0, x1: T1, x2: T2) -> R
         where
             F: Target3<Self, R, T0, T1, T2>,
@@ -372,7 +376,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         #[inline]
         pub(super) unsafe fn run_with_3_inline<F, T0, T1, T2, R>(
             self,
@@ -391,7 +395,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_function_with_1<F, T0, R>(self, x0: T0::Of<'_>) -> R
         where
             T0: AddLifetime,
@@ -404,7 +408,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_function_with_2<F, T0, T1, R>(
             self,
             x0: T0::Of<'_>,
@@ -422,7 +426,7 @@ impl V4 {
     v4_features! {
         // # Safety
         //
-        // The current machine must have all the documented features required for V3.
+        // The current machine must have all the documented features required for V4.
         pub(super) unsafe fn run_function_with_3<F, T0, T1, T2, R>(
             self,
             x0: T0::Of<'_>,
@@ -444,12 +448,16 @@ impl Architecture for V4 {
     arch::maskdef!();
     arch::typedef!();
 
+    fn level() -> arch::Level {
+        arch::Level::v4()
+    }
+
     #[inline(always)]
     fn run<F, R>(self, f: F) -> R
     where
         F: Target<Self, R>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { Self::run_with(self, f) }
     }
@@ -459,7 +467,7 @@ impl Architecture for V4 {
     where
         F: Target<Self, R>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { Self::run_with_inline(self, f) }
     }
@@ -469,7 +477,7 @@ impl Architecture for V4 {
     where
         F: Target1<Self, R, T0>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_1(f, x0) }
     }
@@ -479,7 +487,7 @@ impl Architecture for V4 {
     where
         F: Target1<Self, R, T0>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_1_inline(f, x0) }
     }
@@ -489,7 +497,7 @@ impl Architecture for V4 {
     where
         F: Target2<Self, R, T0, T1>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_2(f, x0, x1) }
     }
@@ -499,7 +507,7 @@ impl Architecture for V4 {
     where
         F: Target2<Self, R, T0, T1>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_2_inline(f, x0, x1) }
     }
@@ -509,7 +517,7 @@ impl Architecture for V4 {
     where
         F: Target3<Self, R, T0, T1, T2>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_3(f, x0, x1, x2) }
     }
@@ -519,7 +527,7 @@ impl Architecture for V4 {
     where
         F: Target3<Self, R, T0, T1, T2>,
     {
-        // SAFETY: The existence of `self` implies that we are V3 compatible and therefore
+        // SAFETY: The existence of `self` implies that we are V4 compatible and therefore
         // have all the required features.
         unsafe { self.run_with_3_inline(f, x0, x1, x2) }
     }
@@ -531,9 +539,9 @@ impl Architecture for V4 {
     {
         let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
 
@@ -546,9 +554,9 @@ impl Architecture for V4 {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
             Self::run_function_with_2::<F, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
 
@@ -562,9 +570,9 @@ impl Architecture for V4 {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
             Self::run_function_with_3::<F, _, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V4` architecture. Additionally, since `V4` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
 }

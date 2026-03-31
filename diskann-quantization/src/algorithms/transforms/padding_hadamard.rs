@@ -8,16 +8,16 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use rand::{
-    distr::{Distribution, StandardUniform},
     Rng,
+    distr::{Distribution, StandardUniform},
 };
 use thiserror::Error;
 
 #[cfg(feature = "flatbuffers")]
 use super::utils::{bool_to_sign, sign_to_bool};
 use super::{
-    utils::{check_dims, is_sign, subsample_indices, TransformFailed},
     TargetDim,
+    utils::{TransformFailed, check_dims, is_sign, subsample_indices},
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
@@ -103,11 +103,7 @@ where
         let signs = Poly::from_iter(
             (0..dim.get()).map(|_| {
                 let sign: bool = StandardUniform {}.sample(rng);
-                if sign {
-                    0x8000_0000
-                } else {
-                    0
-                }
+                if sign { 0x8000_0000 } else { 0 }
             }),
             allocator.clone(),
         )?;
@@ -366,14 +362,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(miri))]
+    use crate::algorithms::transforms::{Transform, TransformKind, test_utils};
+    #[cfg(not(miri))]
     use diskann_utils::lazy_format;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
-    use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformKind},
-        alloc::GlobalAllocator,
-    };
+    use crate::{alloc::GlobalAllocator, test_util::Check};
 
     // Since we use a slightly non-obvious strategy for applying the +/-1 permutation, we
     // test its behavior explicitly.
@@ -441,11 +437,13 @@ mod tests {
         assert_eq!(output[15], 0.0f32);
     }
 
+    #[cfg(not(miri))]
     test_utils::delegate_transformer!(PaddingHadamard<GlobalAllocator>);
 
     // This tests the natural hadamard transform where the output dimension is upgraded
     // to the next power of 2.
     #[test]
+    #[cfg(not(miri))]
     fn test_padding_hadamard() {
         // Inner product computations are more susceptible to floating point error.
         // Instead of using ULP here, we fall back to using absolute and relative error.
@@ -453,9 +451,9 @@ mod tests {
         // These error bounds are for when we set the output dimenion to a power of 2 that
         // is higher than input dimension.
         let natural_errors = test_utils::ErrorSetup {
-            norm: test_utils::Check::ulp(4),
-            l2: test_utils::Check::ulp(4),
-            ip: test_utils::Check::absrel(5.0e-6, 2e-4),
+            norm: Check::ulp(4),
+            l2: Check::ulp(4),
+            ip: Check::absrel(5.0e-6, 2e-4),
         };
 
         // NOTE: Subsampling introduces high variance in the norm and L2, so our error
@@ -464,9 +462,9 @@ mod tests {
         // Subsampling results in poor preservation of inner products, so we skip it
         // altogether.
         let subsampled_errors = test_utils::ErrorSetup {
-            norm: test_utils::Check::absrel(0.0, 1e-1),
-            l2: test_utils::Check::absrel(0.0, 1e-1),
-            ip: test_utils::Check::skip(),
+            norm: Check::absrel(0.0, 1e-1),
+            l2: Check::absrel(0.0, 1e-1),
+            ip: Check::skip(),
         };
 
         let target_dim = |v| TargetDim::Override(NonZeroUsize::new(v).unwrap());

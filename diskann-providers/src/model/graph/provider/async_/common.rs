@@ -212,6 +212,14 @@ pub enum PrefetchCacheLineLevel {
 // Common data structure and traits for async providers //
 //////////////////////////////////////////////////////////
 
+/// A ZST for [`MultiInsertStrategy::seed`](diskann::graph::glue::MultiInsertStrategy::Seed)
+/// indicating no use of the input batch.
+///
+/// Inmem providers typically don't use a working set at all, instead passing through accesses
+/// directly to the underlying provider. As such, no seeding is needed.
+#[derive(Debug, Clone, Copy)]
+pub struct Unseeded;
+
 /// A helper trait to set element in the Async index.
 pub trait SetElementHelper<T> {
     /// Set an element in the index.
@@ -417,10 +425,6 @@ impl Hybrid {
         }
     }
 }
-
-/// Internal variant of above strategy types to avoid start point filtering.
-#[derive(Debug)]
-pub struct Internal<T>(pub T);
 
 #[cfg(test)]
 #[derive(Debug)]

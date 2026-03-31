@@ -196,7 +196,6 @@ mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::utils::vecid_from_usize;
     use diskann_vector::distance::Metric;
-    use vfs::MemoryFS;
 
     use super::*;
     use crate::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
@@ -290,7 +289,7 @@ mod tests {
     #[test]
     fn test_direct_save_load() {
         type Provider = MemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
         // Save to disk.
@@ -313,7 +312,7 @@ mod tests {
     async fn test_async_save() {
         type Provider = MemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
 
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
 
         let provider = create_test_provider();
 

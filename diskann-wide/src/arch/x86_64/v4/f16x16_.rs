@@ -25,7 +25,7 @@ use crate::{
 /////////////////////
 
 macros::x86_define_register!(f16x16, __m256i, BitMask<16, V4>, f16, 16, V4);
-macros::x86_define_default!(f16x16, _mm256_setzero_si256, "sse2");
+macros::x86_define_default!(f16x16, _mm256_setzero_si256, "avx");
 macros::x86_retarget!(f16x16 => v3::f16x16);
 macros::x86_splitjoin!(
     f16x16,
@@ -33,6 +33,12 @@ macros::x86_splitjoin!(
     _mm256_extracti128_si256,
     _mm256_set_m128i,
     "avx2"
+);
+macros::x86_zipunzip_crosslane!(
+    f16x16,
+    _mm256_permutexvar_epi16,
+    _mm256_setr_epi16(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15),
+    _mm256_setr_epi16(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15)
 );
 
 impl X86Splat for f16x16 {
@@ -77,7 +83,7 @@ impl X86LoadStore for f16x16 {
     unsafe fn store_simd_masked_logical(self, ptr: *mut f16, mask: Self::Mask) {
         // SAFETY: Pointer access guaranteed by caller.
         //
-        // `_mm256_maskz_loadu_epi16` requires AVX512BW + AVX512VL - implied by V4.
+        // `_mm256_mask_storeu_epi16` requires AVX512BW + AVX512VL - implied by V4.
         unsafe { _mm256_mask_storeu_epi16(ptr.cast(), mask.0, self.0) }
     }
 }
@@ -117,4 +123,5 @@ mod test_x86_f16 {
     }
 
     test_utils::ops::test_splitjoin!(f16x16 => f16x8, 0xa4d00a4d04293967, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(f16x16 => f16x8, 0x17c9e5a3f2804b6d, V4::new_checked_uncached());
 }

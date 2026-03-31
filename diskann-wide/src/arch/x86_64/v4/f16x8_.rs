@@ -69,7 +69,7 @@ impl X86LoadStore for f16x8 {
     unsafe fn store_simd_masked_logical(self, ptr: *mut f16, mask: Self::Mask) {
         // SAFETY: Pointer access guaranteed by caller.
         //
-        // `_mm_maskz_loadu_epi16` requires AVX512BW + AVX512VL - implied by V4.
+        // `_mm_mask_storeu_epi16` requires AVX512BW + AVX512VL - implied by V4.
         unsafe { _mm_mask_storeu_epi16(ptr.cast(), mask.0, self.0) }
     }
 }

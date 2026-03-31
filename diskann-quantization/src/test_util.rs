@@ -3,9 +3,10 @@
  * Licensed under the MIT license.
  */
 
+#[cfg(not(miri))]
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use diskann_utils::views::Matrix;
@@ -14,8 +15,11 @@ use rand::{
     rngs::StdRng,
     seq::SliceRandom,
 };
+use thiserror::Error;
 
-use crate::alloc::{AllocatorCore, AllocatorError, GlobalAllocator};
+#[cfg(not(miri))]
+use crate::alloc::GlobalAllocator;
+use crate::alloc::{AllocatorCore, AllocatorError};
 
 /// An allocator that always fails.
 #[derive(Debug, Clone, Copy)]
@@ -36,11 +40,13 @@ unsafe impl AllocatorCore for AlwaysFails {
 /// An allocator that can only perform a limited number of allocations.
 ///
 /// Used to test interfaces for allocation reliability.
+#[cfg(not(miri))]
 #[derive(Debug, Clone)]
 pub(crate) struct LimitedAllocator {
     remaining: Arc<AtomicUsize>,
 }
 
+#[cfg(not(miri))]
 impl LimitedAllocator {
     pub(crate) fn new(allocations: usize) -> Self {
         Self {
@@ -49,6 +55,7 @@ impl LimitedAllocator {
     }
 }
 
+#[cfg(not(miri))]
 /// SAFETY: This either forwards to the global allocator, or failed.
 unsafe impl AllocatorCore for LimitedAllocator {
     fn allocate(
@@ -77,7 +84,8 @@ unsafe impl AllocatorCore for LimitedAllocator {
     }
 
     unsafe fn deallocate(&self, ptr: std::ptr::NonNull<[u8]>, layout: std::alloc::Layout) {
-        (GlobalAllocator).deallocate(ptr, layout)
+        // SAFETY: Inherited from caller.
+        unsafe { (GlobalAllocator).deallocate(ptr, layout) }
     }
 }
 
@@ -189,5 +197,125 @@ pub(crate) fn create_test_problem(nrows: usize, ncols: usize, rng: &mut StdRng) 
         means: means.into_iter().map(|i| i as f64).collect(),
         variances,
         mean_norm,
+    }
+}
+
+/// A utility to help check fuzzy numerical bounds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Check {
+    /// Assert two floating point numbers are within a set number of ULPs oeachother.
+    Ulp(usize),
+
+    /// Assert two floating point numbers `x` and `y` satisfy:
+    /// ```text
+    /// | x - y | <= abs OR | x - y | / max(|x|, |y|) <= rel
+    /// ```
+    AbsRel { abs: f32, rel: f32 },
+
+    /// Skip the check entirely.
+    #[cfg(not(miri))]
+    Skip,
+}
+
+impl Check {
+    pub(crate) const fn ulp(ulp: usize) -> Self {
+        Self::Ulp(ulp)
+    }
+
+    pub(crate) const fn absrel(abs: f32, rel: f32) -> Self {
+        Self::AbsRel { abs, rel }
+    }
+
+    #[cfg(not(miri))]
+    pub(crate) const fn skip() -> Self {
+        Self::Skip
+    }
+
+    /// Return `Ok` if the two arguments satisfy the check.
+    ///
+    /// Otherwise, return an error with a suitably formed `Display` implementation to provide
+    /// a useful diagnostic.
+    pub(crate) fn check(&self, got: f32, expected: f32) -> Result<(), CheckFailed> {
+        match self {
+            Self::Ulp(ulp) => {
+                if within_ulp(got, expected, *ulp) {
+                    Ok(())
+                } else {
+                    Err(CheckFailed::Ulp {
+                        ulp: *ulp,
+                        got,
+                        expected,
+                    })
+                }
+            }
+            Self::AbsRel { abs, rel } => {
+                let abs_got = (got - expected).abs();
+                let max_magnitude = got.abs().max(expected.abs());
+
+                // When both values are zero (or very near), the relative error
+                // is undefined. Fall back to the absolute check only.
+                let (rel_ok, rel_got) = if max_magnitude == 0.0 {
+                    (false, f32::INFINITY)
+                } else {
+                    let rel_got = abs_got / max_magnitude;
+                    (rel_got <= *rel, rel_got)
+                };
+
+                if abs_got <= *abs || rel_ok {
+                    Ok(())
+                } else {
+                    Err(CheckFailed::AbsRel {
+                        abs_limit: *abs,
+                        rel_limit: *rel,
+                        abs_got,
+                        rel_got,
+                        got,
+                        expected,
+                    })
+                }
+            }
+            #[cfg(not(miri))]
+            Self::Skip => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Error)]
+pub(crate) enum CheckFailed {
+    #[error("not within {ulp} ulp - got {got}, expected {expected}")]
+    Ulp { ulp: usize, got: f32, expected: f32 },
+    #[error(
+        "not within {abs_limit}/{rel_limit} - errors {abs_got}/{rel_got} - \
+            got {got}, expected {expected}"
+    )]
+    AbsRel {
+        abs_limit: f32,
+        rel_limit: f32,
+        abs_got: f32,
+        rel_got: f32,
+        got: f32,
+        expected: f32,
+    },
+}
+
+fn within_ulp(mut got: f32, expected: f32, ulp: usize) -> bool {
+    if got == expected {
+        true
+    } else if got < expected {
+        for _ in 0..ulp {
+            got = got.next_up();
+            if got >= expected {
+                return true;
+            }
+        }
+        false
+    } else {
+        for _ in 0..ulp {
+            got = got.next_down();
+            if got <= expected {
+                return true;
+            }
+        }
+        false
     }
 }

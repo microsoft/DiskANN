@@ -5,7 +5,7 @@
 
 use thiserror::Error;
 
-use crate::{ANNError, ANNResult};
+use crate::{ANNError, ANNResult, graph::AdjacencyList};
 
 /// A variation of [`PartialEq`] that provides diagnostics if two values are not equal.
 ///
@@ -120,10 +120,10 @@ impl std::fmt::Display for Field {
 
 /// Error implementation for leaf type mismatch.
 #[derive(Debug, Error)]
-#[error("LHS {} is not equal to RHS {}", self.0, self.1)]
+#[error("LHS {:?} is not equal to RHS {:?}", self.0, self.1)]
 struct NotEq<T>(T, T)
 where
-    T: std::fmt::Display;
+    T: std::fmt::Debug;
 
 macro_rules! impl_via_partial_eq {
     ($T:ty) => {
@@ -192,7 +192,7 @@ impl std::fmt::Display for Index {
     }
 }
 
-impl<T> VerboseEq for Vec<T>
+impl<T> VerboseEq for [T]
 where
     T: VerboseEq,
 {
@@ -213,6 +213,39 @@ where
                     total: self.len(),
                 })
             })
+    }
+}
+
+impl<T> VerboseEq for Vec<T>
+where
+    T: VerboseEq,
+{
+    #[inline(never)]
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        self.as_slice().verbose_eq(other)
+    }
+}
+
+impl<T> VerboseEq for AdjacencyList<T>
+where
+    T: VerboseEq,
+{
+    #[inline(never)]
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        (**self).verbose_eq(&**other)
+    }
+}
+
+impl<T> VerboseEq for Option<T>
+where
+    T: VerboseEq + std::fmt::Debug + Clone + Send + Sync + 'static,
+{
+    fn verbose_eq(&self, other: &Self) -> ANNResult<()> {
+        match (self, other) {
+            (Some(lhs), Some(rhs)) => lhs.verbose_eq(rhs),
+            (None, None) => Ok(()),
+            _ => Err(ANNError::opaque(NotEq(self.clone(), other.clone()))),
+        }
     }
 }
 
@@ -410,7 +443,7 @@ mod tests {
 
             let msg = lhs.verbose_eq(&rhs1).unwrap_err().to_string();
             assert_message_contains!(msg, "field \"string\"");
-            assert_message_contains!(msg, "LHS hello is not equal to RHS world");
+            assert_message_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
 
             let msg = lhs.verbose_eq(&rhs2).unwrap_err().to_string();
             assert_message_contains!(msg, "field \"value\"");
@@ -432,7 +465,7 @@ mod tests {
             let msg = lhs.verbose_eq(&rhs_1).unwrap_err().to_string();
             assert_message_contains!(msg, "field \"a\"");
             assert_message_contains!(msg, "field \"string\"");
-            assert_message_contains!(msg, "LHS hello is not equal to RHS world");
+            assert_message_contains!(msg, "LHS \"hello\" is not equal to RHS \"world\"");
 
             let msg = lhs.verbose_eq(&rhs_2).unwrap_err().to_string();
             assert_message_contains!(msg, "field \"a\"");

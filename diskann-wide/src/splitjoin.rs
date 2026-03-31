@@ -19,7 +19,7 @@ pub trait SplitJoin {
 }
 
 /// Representation of the low and high halves associated with an implementation of
-/// [`SplitJoin`].
+/// [`SplitJoin`] or [`crate::ZipUnzip`].
 #[derive(Debug, Clone, Copy)]
 pub struct LoHi<T> {
     /// The first half of a split entity.
@@ -42,7 +42,15 @@ impl<T> LoHi<T> {
         U::join(self)
     }
 
-    /// Return a new [`LoHi`] with the function `f` applied to the pairwise members of
+    /// Zip-interleave the `lo` and `hi` halves into a full-width vector.
+    pub fn zip<U>(self) -> U
+    where
+        U: crate::traits::ZipUnzip<Halved = T>,
+    {
+        U::zip(self)
+    }
+
+    /// Return a new [`LoHi`] with the function `f` applied to the pairwise members
     /// of `self` and `x`.
     ///
     /// If it does not panic, `f` will be invoked exactly twice, first on `lo`, then on `hi`.

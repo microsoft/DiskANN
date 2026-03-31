@@ -14,10 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTFLAGS: -Dwarnings
+  # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
+  #
+  # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
+  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
+  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
+  # of `diskann-quantization` requires additional setup and so must not be included by default.
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.92"
+
+  # Intel SDE version used for baseline and AVX-512 emulation jobs.
+  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
 
 defaults:
   run:
@@ -32,8 +42,10 @@ jobs:
     name: basic checks
     runs-on: ubuntu-latest
     needs:
-      - clippy
       - fmt
+      - clippy-default-features
+      - clippy-features
+      - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
     steps:
@@ -45,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: rustfmt
@@ -58,20 +70,129 @@ jobs:
             exit 1
           fi
 
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
+  clippy-default-features:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+
+      fail-fast: false
+    name: clippy-default-features (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # Run clippy on workspace
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --workspace --all-targets --no-deps
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  clippy-features:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+      fail-fast: false
+    name: clippy-features (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --no-deps \
+            --features ${{ env.DISKANN_FEATURES }} \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
+
+  clippy-no-default-features:
+    name: clippy (no default features)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy - select crates (no default features)
+        run: |
+          set -euxo pipefail
+          crates=(
+            # Core crates
+            diskann
+            diskann-providers
+            diskann-disk
+            diskann-quantization
+            diskann-utils
+            # Benchmark/tools crates
+            diskann-benchmark-core
+            diskann-benchmark-runner
+            diskann-benchmark
+            diskann-tools
+          )
+          for crate in "${crates[@]}"; do
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --profile ci \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
+          done
+
+  codeql:
+    name: CodeQL security analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --locked --profile ci
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -80,7 +201,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
+  #       uses: dtolnay/rust-toolchain@master
   #       with:
   #         toolchain: ${{ env.rust_stable }}
   #     - uses: Swatinem/rust-cache@v2
@@ -88,6 +209,135 @@ jobs:
   #       run: cargo doc --workspace --no-deps --document-private-items
   #       env:
   #         RUSTDOCFLAGS: -Dwarnings
+
+
+  # Test micro-architecture detection and dispatching.
+  #
+  # The crate `diskann-wide` is the primary driver for this mechanism.
+  #
+  # Verify that code compiled for the `x86-64` baseline does not accidentally emit
+  # AVX/AVX2 instructions. We compile with `-Ctarget-cpu=x86-64` and run the full
+  # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
+  # Intel SDE configured as a Nehalem CPU.
+  #
+  # SDE will abort if any unrecognised instruction (e.g. AVX) is executed.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
+  # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
+  #   architecture make this test take too long.
+  baseline:
+    needs: basics
+    name: sde-baseline-tests
+    runs-on: ubuntu-latest
+    env:
+      # Compile for the x86-64 baseline — no AVX, no AVX2.
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+      # Run every test binary through SDE emulating a Nehalem CPU.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
+
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
+
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      - name: "SDE Baseline Tests (Nehalem)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+              --package diskann-wide \
+              --package diskann-vector \
+              --package diskann-quantization \
+              -- --skip compile_tests \
+                 --skip pivots::tests::run_test_happy_path
+
+
+  # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
+  #
+  # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
+  # the diskann-wide V4 backend.
+  #
+  # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
+  # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
+  # special RUSTFLAGS are needed beyond the defaults.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
+  sde:
+    needs: basics
+    name: sde-avx512-tests
+    runs-on: ubuntu-latest
+    env:
+      # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
+      # Force diskann-wide tests to require V4 architecture.
+      WIDE_TEST_MIN_ARCH: "x86-64-v4"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
+
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
+
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      - name: "SDE Tests (AVX-512)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+            --package diskann-wide \
+            --package diskann-vector \
+            --package diskann-quantization \
+            -- --skip compile_tests
 
   test-workspace:
     needs: basics
@@ -98,6 +348,8 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +357,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -119,18 +371,19 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci
-          cargo test --doc --workspace --profile ci
+          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
-    name: test workspace
+    name: test workspace (all features)
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -138,7 +391,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -152,16 +405,18 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci \
-            --features \
-              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
+          cargo nextest run --locked --workspace \
+            --cargo-profile ci \
+            --config "$RUST_CONFIG" \
+            --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --doc --workspace --profile ci
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
     name: code coverage
     runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -169,7 +424,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: llvm-tools-preview
@@ -188,40 +443,63 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --cargo-profile ci \
+          cargo llvm-cov nextest --locked --cargo-profile ci \
+            --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
+
+      - name: Generate miri code coverage
+        env:
+          RUSTFLAGS: "--cfg=miri"
+        run: |
+          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
+            --package diskann-quantization \
+            --lcov --output-path lcov_miri.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: true
+          flags: unittests
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  # miri:
-  #   needs: basics
-  #   name: miri-test
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         lfs: true
+      - name: Upload miri coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov_miri.info
+          fail_ci_if_error: true
+          flags: miri
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  #     - name: Install Rust nightly with miri
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: nightly
-  #         components: miri
+  miri:
+    needs: basics
+    name: miri-test
+    # This step is slow, so it only runs after a PR merge to avoid slowing down pre-merge checks.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
 
-  #     - name: Install cargo-nextest
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-nextest
+      - name: Install Rust nightly with miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: miri
 
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: miri
-  #       run: cargo +nightly miri nextest run --package diskann-quantization
-  #       env:
-  #         MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: miri
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

@@ -12,12 +12,9 @@ use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
-    utils::{
-        load_metadata_from_file, write_metadata, AsThreadPool, BridgeErr, ParallelIteratorInPool,
-        Timer,
-    },
+    utils::{load_metadata_from_file, AsThreadPool, BridgeErr, ParallelIteratorInPool, Timer},
 };
-use diskann_utils::views::{self};
+use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
 
@@ -115,7 +112,7 @@ where
         let timer = Timer::new();
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
-        let (num_points, dim) = (metadata.npoints, metadata.ndims);
+        let (num_points, dim) = metadata.into_dims();
 
         self.validate_params(num_points, storage_provider)?;
 
@@ -135,8 +132,8 @@ where
             storage_provider.open_writer(compressed_path)?
         } else {
             let mut sp = storage_provider.create_for_write(compressed_path)?;
-            // write meatadata to header
-            write_metadata(&mut sp, num_points, self.quantizer.compressed_bytes())?;
+            // write metadata to header
+            Metadata::new(num_points, self.quantizer.compressed_bytes())?.write(&mut sp)?;
             sp
         };
 
@@ -279,11 +276,13 @@ mod generator_tests {
 
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::utils::{
-        create_thread_pool_for_test, read_metadata, save_bin_f32, save_bytes,
+    use diskann_providers::utils::{create_thread_pool_for_test, save_bytes};
+    use diskann_utils::{
+        io::{write_bin, Metadata},
+        views::MatrixView,
     };
     use rstest::rstest;
-    use vfs::{FileSystem, MemoryFS, OverlayFS};
+    use vfs::{FileSystem, MemoryFS};
 
     use super::*;
     use crate::build::chunking::continuation::{
@@ -373,22 +372,22 @@ mod generator_tests {
         dim: usize,
         offset: usize,
         output_dim: u32,
-    ) -> ANNResult<(VirtualStorageProvider<OverlayFS>, String, String)> {
-        let fs = OverlayFS::new(&[MemoryFS::default().into()]);
-        fs.create_dir("/test_data")
+    ) -> ANNResult<(VirtualStorageProvider<MemoryFS>, String, String)> {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/test_data")
             .expect("Could not create test directory");
-        let storage_provider = VirtualStorageProvider::new(fs);
 
         let data_path = "/test_data/test_data.bin".to_string();
         let compressed_path = "/test_data/test_compressed.bin".to_string();
 
         // Setup test data
-        let _ = save_bin_f32(
+        let data = create_test_data(num_points, dim);
+        let view = MatrixView::try_from(data.as_slice(), num_points, dim).unwrap();
+        write_bin(
+            view,
             &mut storage_provider.create_for_write(data_path.as_str())?,
-            &create_test_data(num_points, dim),
-            num_points,
-            dim,
-            0,
         )?;
 
         if offset > 0 {
@@ -411,10 +410,10 @@ mod generator_tests {
         Ok((storage_provider, data_path, compressed_path))
     }
 
-    fn create_and_call_generator(
+    fn create_and_call_generator<F: vfs::FileSystem>(
         offset: usize,
         compressed_path: String,
-        storage_provider: &VirtualStorageProvider<OverlayFS>,
+        storage_provider: &VirtualStorageProvider<F>,
         data_path: String,
         output_dim: u32,
         chunking_config: &ChunkingConfig,
@@ -482,13 +481,13 @@ mod generator_tests {
 
         let mut r = storage_provider.open_reader(compressed_path.as_str())?;
         let mut reader = BufReader::new(&mut r);
-        let metadata = read_metadata(&mut reader)?;
+        let metadata = Metadata::read(&mut reader)?;
 
         let data: Vec<u8> = read_exact_into(&mut reader, expected_size)?;
 
         // Check header
-        assert_eq!(metadata.ndims as u32, output_dim);
-        assert_eq!(metadata.npoints, num_points);
+        assert_eq!(metadata.ndims_u32(), output_dim);
+        assert_eq!(metadata.npoints(), num_points);
 
         // Check compressed data content
         data.chunks_exact(output_dim as usize)
@@ -541,14 +540,14 @@ mod generator_tests {
 
         let mut r = storage_provider.open_reader(compressed_path.as_str())?;
         let mut reader = BufReader::new(&mut r);
-        let metadata = read_metadata(&mut reader)?;
+        let metadata = Metadata::read(&mut reader)?;
 
         let data: Vec<u8> =
             read_exact_into(&mut reader, expected_size - 2 * std::mem::size_of::<i32>())?;
 
         // Check header
-        assert_eq!(metadata.ndims as u32, output_dim);
-        assert_eq!(metadata.npoints, num_points);
+        assert_eq!(metadata.ndims_u32(), output_dim);
+        assert_eq!(metadata.npoints(), num_points);
 
         // Check compressed data content
         data.chunks_exact(output_dim as usize)

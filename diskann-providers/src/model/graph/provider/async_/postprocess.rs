@@ -40,14 +40,13 @@ pub struct RemoveDeletedIdsAndCopy;
 impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
 where
     A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck,
-    T: ?Sized,
 {
     type Error = std::convert::Infallible;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        _query: &T,
+        _query: T,
         _computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,

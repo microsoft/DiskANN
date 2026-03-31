@@ -70,7 +70,6 @@ pub struct Unwrap;
 /// Delegate post-processing to the inner strategy's post-processing routine.
 impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
 where
-    T: ?Sized,
     A: BuildQueryComputer<T>,
 {
     type Error<NextError>
@@ -84,7 +83,7 @@ where
         &self,
         next: &Next,
         accessor: &mut BetaAccessor<A>,
-        query: &T,
+        query: T,
         computer: &BetaComputer<A::QueryComputer, A::Id>,
         candidates: I,
         output: &mut B,
@@ -114,7 +113,6 @@ where
 /// distance accordingly.
 impl<Provider, Strategy, T, I> SearchStrategy<Provider, T> for BetaFilter<Strategy, I>
 where
-    T: ?Sized,
     I: VectorId,
     Provider: DataProvider<InternalId = I>,
     Strategy: SearchStrategy<Provider, T>,
@@ -141,13 +139,22 @@ where
             beta: self.beta,
         })
     }
+}
 
-    /// Forward the post-processing error from the inner strategy.
-    type PostProcessor = glue::Pipeline<Unwrap, Strategy::PostProcessor>;
+/// [`DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
+/// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
+impl<Provider, Strategy, T, I, O> glue::DefaultPostProcessor<Provider, T, O>
+    for BetaFilter<Strategy, I>
+where
+    I: VectorId,
+    O: Send,
+    Provider: DataProvider<InternalId = I>,
+    Strategy: glue::DefaultPostProcessor<Provider, T, O>,
+{
+    type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
-    /// Delegate post-processing to the inner strategy's post-processing routine.
-    fn post_processor(&self) -> Self::PostProcessor {
-        glue::Pipeline::new(Unwrap, self.strategy.post_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
 
@@ -171,39 +178,6 @@ impl<I, E> Pair<I, E> {
 /// `Reborrow` is implemented in terms of a full `Reborrow` of `E` while leaving the id
 /// untouched.
 impl<'a, I, E> Reborrow<'a> for Pair<I, E>
-where
-    E: Reborrow<'a>,
-    I: Copy,
-{
-    type Target = Pair<I, E::Target>;
-    fn reborrow(&'a self) -> Self::Target {
-        Pair {
-            id: self.id,
-            element: self.element.reborrow(),
-        }
-    }
-}
-
-/// The extended version of `Pair`.
-#[derive(Debug, Clone)]
-pub struct ExtendedPair<I, E> {
-    id: I,
-    element: E,
-}
-
-impl<I, E, T> From<Pair<I, E>> for ExtendedPair<I, T>
-where
-    E: Into<T>,
-{
-    fn from(pair: Pair<I, E>) -> Self {
-        Self {
-            id: pair.id,
-            element: pair.element.into(),
-        }
-    }
-}
-
-impl<'a, I, E> Reborrow<'a> for ExtendedPair<I, E>
 where
     E: Reborrow<'a>,
     I: Copy,
@@ -257,7 +231,6 @@ impl<Inner> Accessor for BetaAccessor<Inner>
 where
     Inner: Accessor,
 {
-    type Extended = ExtendedPair<Self::Id, Inner::Extended>;
     /// Modify `Element` to retain the vector ID.
     type Element<'a>
         = Pair<Self::Id, Inner::Element<'a>>
@@ -307,7 +280,6 @@ where
 impl<Inner, T> BuildQueryComputer<T> for BetaAccessor<Inner>
 where
     Inner: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     /// Use a [`BetaComputer`] to apply filtering.
     type QueryComputer = BetaComputer<Inner::QueryComputer, Self::Id>;
@@ -316,7 +288,7 @@ where
 
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.inner
             .build_query_computer(from)
@@ -324,12 +296,7 @@ where
     }
 }
 
-impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner>
-where
-    Inner: BuildQueryComputer<T> + AsNeighbor,
-    T: ?Sized,
-{
-}
+impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + AsNeighbor {}
 
 /// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
 pub struct BetaComputer<Inner, I: VectorId> {
@@ -388,7 +355,7 @@ mod tests {
         ANNError, ANNResult, always_escalate,
         graph::AdjacencyList,
         graph::glue::CopyIds,
-        provider::{DefaultContext, NeighborAccessor},
+        provider::{DefaultContext, NeighborAccessor, NoopGuard},
     };
     use futures_util::future;
     use thiserror::Error;
@@ -401,6 +368,7 @@ mod tests {
         type Context = DefaultContext;
         type InternalId = u32;
         type ExternalId = u64;
+        type Guard = NoopGuard<u32>;
 
         type Error = ANNError;
 
@@ -465,7 +433,6 @@ mod tests {
     always_escalate!(NotAllowed);
 
     impl Accessor for Doubler {
-        type Extended = u64;
         type Element<'a>
             = u64
         where
@@ -523,9 +490,9 @@ mod tests {
 
         fn build_query_computer(
             &self,
-            from: &u64,
+            from: u64,
         ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-            Ok(AddingComputer(*from))
+            Ok(AddingComputer(from))
         }
     }
 
@@ -537,7 +504,6 @@ mod tests {
     impl SearchStrategy<SimpleProvider, u64> for SimpleStrategy {
         type SearchAccessor<'a> = Doubler;
         type QueryComputer = AddingComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
 
         fn search_accessor<'a>(
@@ -547,10 +513,10 @@ mod tests {
         ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
             Ok(Doubler::default())
         }
+    }
 
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
-        }
+    impl glue::DefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
+        diskann::default_post_processor!(CopyIds);
     }
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.
@@ -625,7 +591,7 @@ mod tests {
 
         // Computation.
         let query = 10;
-        let computer = accessor.build_query_computer(&query).unwrap();
+        let computer = accessor.build_query_computer(query).unwrap();
 
         assert_eq!(
             computer.evaluate_similarity(accessor.get_element(10).await.unwrap()),
@@ -639,16 +605,6 @@ mod tests {
             computer.evaluate_similarity(accessor.get_element(12).await.unwrap()),
             beta * ((12 * 2 + query) as f32)
         );
-
-        // Extended + computation.
-        {
-            type Extended = ExtendedPair<u32, u64>;
-            let v: Extended = accessor.get_element(10).await.unwrap().into();
-            assert_eq!(
-                computer.evaluate_similarity(v.reborrow()),
-                (10 * 2 + query) as f32
-            );
-        }
 
         // Test dummy implementation of `get_neighbors` for code coverage.
         let mut neighbors = AdjacencyList::new();

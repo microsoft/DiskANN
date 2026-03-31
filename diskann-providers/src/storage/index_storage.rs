@@ -222,12 +222,8 @@ mod tests {
         provider::{Accessor, SetElement},
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{
-        Reborrow,
-        views::{Matrix, MatrixView},
-    };
+    use diskann_utils::{Reborrow, test_data_root, views::MatrixView};
     use diskann_vector::distance::Metric;
-    use vfs::MemoryFS;
 
     use super::*;
     use crate::{
@@ -237,7 +233,7 @@ mod tests {
             common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
             inmem::{self},
         },
-        utils::{create_rnd_from_seed_in_tests, file_util},
+        utils::create_rnd_from_seed_in_tests,
     };
 
     async fn build_index<DP, S>(
@@ -245,9 +241,9 @@ mod tests {
         strategy: S,
         data: MatrixView<'_, f32>,
     ) where
-        DP: DataProvider<ExternalId = u32> + SetElement<[f32]>,
+        DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,
-        S: InsertStrategy<DP, [f32]> + Clone,
+        S: for<'a> InsertStrategy<DP, &'a [f32]> + Clone,
     {
         let ctx = &DP::Context::default();
         for (i, v) in data.row_iter().enumerate() {
@@ -269,15 +265,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_load() {
         let save_path = "/index";
-        let file_path = "/test_data/sift/siftsmall_learn_256pts.fbin";
+        let file_path = "/sift/siftsmall_learn_256pts.fbin";
         let train_data = {
-            let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .to_path_buf();
-            let storage = VirtualStorageProvider::new_overlay(workspace_root);
-            let (train_data, npoints, dim) = file_util::load_bin(&storage, file_path, 0).unwrap();
-            Matrix::<f32>::try_from(train_data.into(), npoints, dim).unwrap()
+            let storage = VirtualStorageProvider::new_overlay(test_data_root());
+            let mut reader = storage.open_reader(file_path).unwrap();
+            diskann_utils::io::read_bin::<f32>(&mut reader).unwrap()
         };
 
         let pq_bytes = 8;
@@ -322,7 +314,7 @@ mod tests {
         }
 
         // Save the resulting index.
-        let provider = VirtualStorageProvider::new(MemoryFS::new());
+        let provider = VirtualStorageProvider::new_memory();
         index
             .save_with(&provider, &AsyncIndexMetadata::new(save_path.to_string()))
             .await

@@ -84,49 +84,49 @@ macro_rules! register_streaming {
 pub(super) use register;
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    // // Full Precision
-    // register!(
-    //     benchmarks,
-    //     "async-full-precision-f32",
-    //     FullPrecision<'static, f32>
-    // );
-    // register!(
-    //     benchmarks,
-    //     "async-full-precision-f16",
-    //     FullPrecision<'static, f16>
-    // );
-    // register!(
-    //     benchmarks,
-    //     "async-full-precision-u8",
-    //     FullPrecision<'static, u8>
-    // );
-    // register!(
-    //     benchmarks,
-    //     "async-full-precision-i8",
-    //     FullPrecision<'static, i8>
-    // );
+    // Full Precision
+    register!(
+        benchmarks,
+        "async-full-precision-f32",
+        FullPrecision<'static, f32>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-f16",
+        FullPrecision<'static, f16>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-u8",
+        FullPrecision<'static, u8>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-i8",
+        FullPrecision<'static, i8>
+    );
 
-    // // Dynamic Full Precision
-    // register_streaming!(
-    //     benchmarks,
-    //     "async-dynamic-full-precision-f32",
-    //     DynamicFullPrecision<'static, f32>
-    // );
-    // register_streaming!(
-    //     benchmarks,
-    //     "async-dynamic-full-precision-f16",
-    //     DynamicFullPrecision<'static, f16>
-    // );
-    // register_streaming!(
-    //     benchmarks,
-    //     "async-dynamic-full-precision-u8",
-    //     DynamicFullPrecision<'static, u8>
-    // );
-    // register_streaming!(
-    //     benchmarks,
-    //     "async-dynamic-full-precision-i8",
-    //     DynamicFullPrecision<'static, i8>
-    // );
+    // Dynamic Full Precision
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-f32",
+        DynamicFullPrecision<'static, f32>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-f16",
+        DynamicFullPrecision<'static, f16>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-u8",
+        DynamicFullPrecision<'static, u8>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-i8",
+        DynamicFullPrecision<'static, i8>
+    );
 
     product::register_benchmarks(benchmarks);
     scalar::register_benchmarks(benchmarks);
@@ -316,10 +316,10 @@ pub(super) fn run_build<T, BF, CF, B, DP>(
 ) -> anyhow::Result<(Index<DP>, BuildStats)>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + provider::SetElement<[T]>,
+        + for<'a> provider::SetElement<&'a [T]>,
     CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: glue::SearchStrategy<DP, [T]> + Clone + Send + Sync,
+    B: for<'a> glue::SearchStrategy<DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -348,9 +348,9 @@ pub(super) fn run_search_outer<T, S, DP>(
 ) -> anyhow::Result<BuildResult>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + provider::SetElement<[T]>,
+        + for<'a> provider::SetElement<&'a [T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: glue::SearchStrategy<DP, [T]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {

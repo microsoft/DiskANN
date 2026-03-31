@@ -35,7 +35,7 @@ macros::x86_define_default!(i16x8, _mm_setzero_si128, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::Add, add, _mm_add_epi16, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::Sub, sub, _mm_sub_epi16, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::Mul, mul, _mm_mullo_epi16, "sse2");
-helpers::unsafe_map_unary_op!(i16x8, SIMDAbs, abs_simd, _mm_abs_epi16, "sse3");
+helpers::unsafe_map_unary_op!(i16x8, SIMDAbs, abs_simd, _mm_abs_epi16, "ssse3");
 
 helpers::unsafe_map_binary_op!(i16x8, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
 helpers::unsafe_map_binary_op!(i16x8, std::ops::BitOr, bitor, _mm_or_si128, "sse2");

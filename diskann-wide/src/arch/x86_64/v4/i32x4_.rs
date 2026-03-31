@@ -20,7 +20,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit signed integer
 /////
 
 macros::x86_define_register!(i32x4, __m128i, BitMask<4, V4>, i32, 4, V4);
@@ -31,7 +31,7 @@ macros::x86_retarget!(i32x4 => v3::i32x4);
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Add, add, _mm_add_epi32, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Sub, sub, _mm_sub_epi32, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::Mul, mul, _mm_mullo_epi32, "sse4.1");
-helpers::unsafe_map_unary_op!(i32x4, SIMDAbs, abs_simd, _mm_abs_epi32, "sse3");
+helpers::unsafe_map_unary_op!(i32x4, SIMDAbs, abs_simd, _mm_abs_epi32, "ssse3");
 
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitAnd, bitand, _mm_and_si128, "sse2");
 helpers::unsafe_map_binary_op!(i32x4, std::ops::BitOr, bitor, _mm_or_si128, "sse2");

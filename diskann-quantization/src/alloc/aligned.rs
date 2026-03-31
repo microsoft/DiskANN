@@ -60,7 +60,11 @@ unsafe impl AllocatorCore for AlignedAllocator {
         let layout = layout
             .align_to(self.alignment())
             .expect("invalid layout provided");
-        GlobalAllocator.deallocate(ptr, layout)
+
+        // SAFETY: If the caller upheld the safety contract of `deallocate`, then this
+        // pointer is safe to deallocate and the layout is compatible with the layout
+        // created with `allocate`.
+        unsafe { GlobalAllocator.deallocate(ptr, layout) }
     }
 }
 

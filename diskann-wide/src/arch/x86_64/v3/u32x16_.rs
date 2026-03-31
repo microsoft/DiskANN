@@ -8,7 +8,7 @@ use super::u32x8;
 use crate::doubled;
 
 /////////////////////
-// 32-bit floating //
+// 32-bit unsigned //
 /////////////////////
 
 doubled::double_vector!(u32, 16, u32x8);

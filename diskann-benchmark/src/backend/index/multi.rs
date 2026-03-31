@@ -19,7 +19,7 @@ use diskann_benchmark_runner::{
     Any,
 };
 use diskann_providers::model::graph::provider::async_::{common as inmem_common, inmem};
-use diskann_quantization::multi_vector::{Mat, Standard};
+use diskann_quantization::multi_vector::{Mat, MatRef, Standard};
 use diskann_utils::future::AsyncFriendly;
 
 use crate::{
@@ -191,6 +191,7 @@ fn build(
 }
 
 type MultiVec<T> = Mat<Standard<T>>;
+type MultiVecRef<'a, T> = MatRef<'a, Standard<T>>;
 
 #[derive(Debug)]
 pub struct Insert<DP, T, S>
@@ -229,8 +230,8 @@ where
 
 impl<DP, T, S> benchmark_core::build::Build for Insert<DP, T, S>
 where
-    DP: provider::DataProvider<Context: Default> + provider::SetElement<MultiVec<T>>,
-    S: glue::InsertStrategy<DP, MultiVec<T>> + Clone + AsyncFriendly,
+    DP: provider::DataProvider<Context: Default> + for<'a> provider::SetElement<MultiVecRef<'a, T>>,
+    S: for<'a> glue::InsertStrategy<DP, MultiVecRef<'a, T>> + Clone + AsyncFriendly,
     T: AsyncFriendly + Copy,
 {
     type Output = ();
@@ -247,7 +248,7 @@ where
                     self.strategy.clone(),
                     &context,
                     &self.to_id.to_id(i)?,
-                    &self.data[i],
+                    self.data[i].as_view(),
                 )
                 .await?;
         }
@@ -317,11 +318,13 @@ pub struct SearchMetrics {
 impl<DP, T, S> benchmark_core::search::Search for MultiKNN<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: benchmark_core::search::Id>,
-    S: glue::SearchStrategy<DP, MultiVec<T>, DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<DP, MultiVecRef<'a, T>, DP::ExternalId>
+        + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Copy,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::SearchParams;
+    type Parameters = graph::search::Knn;
     type Output = SearchMetrics;
 
     fn num_queries(&self) -> usize {
@@ -329,14 +332,12 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> benchmark_core::search::IdCount {
-        benchmark_core::search::IdCount::Fixed(
-            std::num::NonZeroUsize::new(parameters.k_value).unwrap_or(diskann::utils::ONE),
-        )
+        benchmark_core::search::IdCount::Fixed(parameters.k_value())
     }
 
     async fn search<O>(
         &self,
-        parameters: &Self::Parameters,
+        kind: &Self::Parameters,
         buffer: &mut O,
         index: usize,
     ) -> ANNResult<Self::Output>
@@ -347,10 +348,10 @@ where
         let stats = self
             .index
             .search(
+                *kind,
                 self.strategy.get(index)?,
                 &context,
-                &self.queries[index],
-                parameters,
+                self.queries[index].as_view(),
                 buffer,
             )
             .await?;
@@ -369,8 +370,8 @@ pub struct Summary {
     /// The [`benchmark_core::search::Setup`] used for the batch of runs.
     pub setup: benchmark_core::search::Setup,
 
-    /// The [`graph::SearchParams`] used for the batch of runs.
-    pub parameters: graph::SearchParams,
+    /// The [`graph::search::KNN`] used for the batch of runs.
+    pub parameters: graph::search::Knn,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -417,7 +418,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> benchmark_core::search::Aggregate<graph::SearchParams, I, SearchMetrics>
+impl<I> benchmark_core::search::Aggregate<graph::search::Knn, I, SearchMetrics>
     for Aggregator<'_, I>
 where
     I: benchmark_core::recall::RecallCompatible,
@@ -426,7 +427,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: benchmark_core::search::Run<graph::SearchParams>,
+        run: benchmark_core::search::Run<graph::search::Knn>,
         mut results: Vec<benchmark_core::search::SearchResults<I, SearchMetrics>>,
     ) -> anyhow::Result<Summary> {
         let recall = match results.first() {
@@ -504,14 +505,14 @@ where
     DP: provider::DataProvider<ExternalId: benchmark_core::recall::RecallCompatible>,
     MultiKNN<DP, T, S>: benchmark_core::search::Search<
         Id = DP::ExternalId,
-        Parameters = graph::SearchParams,
+        Parameters = graph::search::Knn,
         Output = SearchMetrics,
     >,
     T: Copy,
 {
     fn search_all(
         &self,
-        parameters: Vec<benchmark_core::search::Run<graph::SearchParams>>,
+        parameters: Vec<benchmark_core::search::Run<graph::search::Knn>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::ExternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -548,8 +549,8 @@ impl From<Summary> for SearchResults {
 
         Self {
             num_tasks: setup.tasks.into(),
-            search_n: parameters.k_value,
-            search_l: parameters.l_value,
+            search_n: parameters.k_value().get(),
+            search_l: parameters.l_value().get(),
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,

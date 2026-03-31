@@ -46,7 +46,6 @@ impl crate::SplitJoin for f32x16 {
 
     #[inline(always)]
     fn join(lohi: crate::LoHi<Self::Halved>) -> Self {
-        // SAFETY: Required by instantiator.
         let v = Self::default(lohi.lo.arch()).to_underlying();
 
         // SAFETY: `_mm512_insertf32x8` requires `AVX512DQ` - implied by V4.
@@ -55,14 +54,15 @@ impl crate::SplitJoin for f32x16 {
     }
 }
 
-helpers::unsafe_map_binary_op!(f32x16, std::ops::Add, add, _mm512_add_ps, "avx");
-helpers::unsafe_map_binary_op!(f32x16, std::ops::Sub, sub, _mm512_sub_ps, "avx");
-helpers::unsafe_map_binary_op!(f32x16, std::ops::Mul, mul, _mm512_mul_ps, "avx");
+helpers::unsafe_map_binary_op!(f32x16, std::ops::Add, add, _mm512_add_ps, "avx512f");
+helpers::unsafe_map_binary_op!(f32x16, std::ops::Sub, sub, _mm512_sub_ps, "avx512f");
+helpers::unsafe_map_binary_op!(f32x16, std::ops::Mul, mul, _mm512_mul_ps, "avx512f");
 
 impl f32x16 {
     #[inline(always)]
     fn is_nan(self) -> BitMask<16, V4> {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
             self.arch(),
             // SAFETY: `_mm512_cmp_ps_mask` requires AVX512F, which is implied by the

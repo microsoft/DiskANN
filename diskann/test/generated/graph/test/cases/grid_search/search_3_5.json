@@ -1,6 +1,6 @@
 {
-  "file": "diskann/src/graph/test/cases/grid.rs",
-  "test": "graph/test/cases/grid/search_3_5",
+  "file": "diskann/src/graph/test/cases/grid_search.rs",
+  "test": "graph/test/cases/grid_search/search_3_5",
   "payload": [
     {
       "beam_width": 1,

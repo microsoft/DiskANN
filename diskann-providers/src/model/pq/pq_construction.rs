@@ -21,7 +21,10 @@ use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
 };
-use diskann_utils::views::{MatrixView, MutMatrixView};
+use diskann_utils::{
+    io::Metadata,
+    views::{MatrixView, MutMatrixView},
+};
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
 use tracing::info;
@@ -32,7 +35,7 @@ use crate::{
     storage::PQStorage,
     utils::{
         AsThreadPool, BridgeErr, ParallelIteratorInPool, RandomProvider, Timer,
-        create_rnd_provider_from_seed, k_means_clustering, read_metadata, run_lloyds,
+        create_rnd_provider_from_seed, k_means_clustering, run_lloyds,
     },
 };
 
@@ -702,8 +705,7 @@ where
         storage_provider.create_for_write(pq_storage.get_compressed_data_path())?
     };
 
-    let metadata = read_metadata(uncompressed_data_reader)?;
-    let (num_points, dim) = (metadata.npoints, metadata.ndims);
+    let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
     let mut full_pivot_data: Vec<f32>;
     let centroid: Vec<f32>;
@@ -1007,17 +1009,18 @@ mod pq_test {
     use crate::storage::VirtualStorageProvider;
     use approx::assert_relative_eq;
     use diskann::utils::IntoUsize;
+    use diskann_utils::test_data_root;
     use rand_distr::{Distribution, Uniform};
     use rstest::rstest;
-    use vfs::{MemoryFS, OverlayFS};
+    use vfs::OverlayFS;
 
     use super::*;
     use crate::{
         model::{
             FixedChunkPQTable,
-            pq::{METADATA_SIZE, convert_types, debug},
+            pq::{METADATA_SIZE, debug},
         },
-        utils::{ParallelIteratorInPool, create_thread_pool_for_test, load_bin},
+        utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
     };
 
     #[test]
@@ -1035,8 +1038,7 @@ mod pq_test {
 
     #[test]
     fn generate_pq_pivots_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
-        type ReaderType = <VirtualStorageProvider<MemoryFS> as StorageReadProvider>::Reader;
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let pivot_file_name = "/generate_pq_pivots_test3.bin";
         let compressed_file_name = "/compressed2.bin";
@@ -1046,6 +1048,7 @@ mod pq_test {
             compressed_file_name,
             Some(pq_training_file_name),
         );
+
         let mut train_data: Vec<f32> = vec![
             1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 2.0f32, 2.0f32, 2.0f32,
             2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32,
@@ -1063,57 +1066,40 @@ mod pq_test {
         )
         .unwrap();
 
-        let (data, nr, nc) = load_bin::<u64, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
-        let file_offset_data = convert_types(&data, nr * nc, |x: u64| x.into_usize());
-        assert_eq!(file_offset_data[0], METADATA_SIZE);
-        assert_eq!(nr, 4);
-        assert_eq!(nc, 1);
+        let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
+        let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
+        let file_offset_data = offsets.map(|x| x.into_usize());
+        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
+        assert_eq!(offsets.nrows(), 4);
+        assert_eq!(offsets.ncols(), 1);
 
-        let (data, nr, nc) = load_bin::<f32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[0],
-        )
-        .unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
 
-        let full_pivot_data = data.to_vec();
-        assert_eq!(full_pivot_data.len(), 16);
-        assert_eq!(nr, 2);
-        assert_eq!(nc, 8);
+        assert_eq!(pivots.as_slice().len(), 16);
+        assert_eq!(pivots.nrows(), 2);
+        assert_eq!(pivots.ncols(), 8);
 
-        let (data, nr, nc) = load_bin::<f32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[1],
-        )
-        .unwrap();
-        let centroid = data.to_vec();
+        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
         assert_eq!(
-            centroid[0],
+            centroid[(0, 0)],
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
-        assert_eq!(nr, 8);
-        assert_eq!(nc, 1);
+        assert_eq!(centroid.nrows(), 8);
+        assert_eq!(centroid.ncols(), 1);
 
-        let (data, nr, nc) = load_bin::<u32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[2],
-        )
-        .unwrap();
-        let chunk_offsets = convert_types(&data, nr * nc, |x: u32| x.into_usize());
-        assert_eq!(chunk_offsets[0], 0);
-        assert_eq!(chunk_offsets[1], 4);
-        assert_eq!(chunk_offsets[2], 8);
-        assert_eq!(nr, 3);
-        assert_eq!(nc, 1);
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+            .unwrap()
+            .map(|x| x.into_usize());
+        assert_eq!(chunk_offsets[(0, 0)], 0);
+        assert_eq!(chunk_offsets[(1, 0)], 4);
+        assert_eq!(chunk_offsets[(2, 0)], 8);
+        assert_eq!(chunk_offsets.nrows(), 3);
+        assert_eq!(chunk_offsets.ncols(), 1);
     }
 
     #[test]
     fn generate_optimized_pq_pivots_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
-        type ReaderType = <VirtualStorageProvider<MemoryFS> as StorageReadProvider>::Reader;
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let pivot_file_name = "/generate_pq_pivots_test3.bin";
         let compressed_file_name = "/compressed2.bin";
@@ -1123,6 +1109,7 @@ mod pq_test {
             compressed_file_name,
             Some(pq_training_file_name),
         );
+
         let mut train_data: Vec<f32> = vec![
             1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 2.0f32, 2.0f32, 2.0f32,
             2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32,
@@ -1140,51 +1127,35 @@ mod pq_test {
         )
         .unwrap();
 
-        let (data, nr, nc) = load_bin::<u64, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
-        let file_offset_data = convert_types(&data, nr * nc, |x: u64| x.into_usize());
-        assert_eq!(file_offset_data[0], METADATA_SIZE);
-        assert_eq!(nr, 4);
-        assert_eq!(nc, 1);
+        let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
+        let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
+        let file_offset_data = offsets.map(|x| x.into_usize());
+        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
+        assert_eq!(offsets.nrows(), 4);
+        assert_eq!(offsets.ncols(), 1);
 
-        let (data, nr, nc) = load_bin::<f32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[0],
-        )
-        .unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
 
-        let full_pivot_data = data.to_vec();
-        assert_eq!(full_pivot_data.len(), 16);
-        assert_eq!(nr, 2);
-        assert_eq!(nc, 8);
+        assert_eq!(pivots.as_slice().len(), 16);
+        assert_eq!(pivots.nrows(), 2);
+        assert_eq!(pivots.ncols(), 8);
 
-        let (data, nr, nc) = load_bin::<f32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[1],
-        )
-        .unwrap();
-        let centroid = data.to_vec();
+        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
         assert_eq!(
-            centroid[0],
+            centroid[(0, 0)],
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
-        assert_eq!(nr, 8);
-        assert_eq!(nc, 1);
+        assert_eq!(centroid.nrows(), 8);
+        assert_eq!(centroid.ncols(), 1);
 
-        let (data, nr, nc) = load_bin::<u32, ReaderType>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data[2],
-        )
-        .unwrap();
-        let chunk_offsets = convert_types(&data, nr * nc, |x: u32| x.into_usize());
-        assert_eq!(chunk_offsets[0], 0);
-        assert_eq!(chunk_offsets[1], 4);
-        assert_eq!(chunk_offsets[2], 8);
-        assert_eq!(nr, 3);
-        assert_eq!(nc, 1);
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+            .unwrap()
+            .map(|x| x.into_usize());
+        assert_eq!(chunk_offsets[(0, 0)], 0);
+        assert_eq!(chunk_offsets[(1, 0)], 4);
+        assert_eq!(chunk_offsets[(2, 0)], 8);
+        assert_eq!(chunk_offsets.nrows(), 3);
+        assert_eq!(chunk_offsets.ncols(), 1);
     }
 
     #[rstest]
@@ -1235,7 +1206,7 @@ mod pq_test {
     fn read_pivot_metadata_existing_test() {
         // no real data except pivot data.
         const DATA_FILE: &str = "/test/test/fake.bin";
-        const PQ_PIVOT_PATH: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        const PQ_PIVOT_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         const PQ_COMPRESSED_PATH: &str = "/test/test/fake.bin";
 
         let mut train_data = vec![0.0; 10 * 5];
@@ -1244,11 +1215,7 @@ mod pq_test {
         let num_centers = 256;
         let num_pq_chunks = dim - 1;
         let max_k_means_reps = 10;
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let pool = create_thread_pool_for_test();
         let result = generate_pq_pivots(
@@ -1274,8 +1241,7 @@ mod pq_test {
 
     #[test]
     fn generate_pq_data_from_pivots_test() {
-        let file_system = MemoryFS::new(); // Assuming you have a FileSystem struct
-        let storage_provider = VirtualStorageProvider::new(file_system);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let data_file = "/generate_pq_data_from_pivots_test_data.bin";
         //npoints=5, dim=8, 5 vectors [1.0;8] [2.0;8] [2.1;8] [2.2;8] [100.0;8]
         let mut train_data: Vec<f32> = vec![
@@ -1321,17 +1287,17 @@ mod pq_test {
             &pool,
         )
         .unwrap();
-        let (data, nr, nc) = load_bin::<u8, _>(
+        let compressed = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)
                 .unwrap(),
             0,
         )
         .unwrap();
-        assert_eq!(nr, 5);
-        assert_eq!(nc, 2);
-        assert_eq!(data[0], data[2]);
-        assert_ne!(data[0], data[8]);
+        assert_eq!(compressed.nrows(), 5);
+        assert_eq!(compressed.ncols(), 2);
+        assert_eq!(compressed[(0, 0)], compressed[(1, 0)]);
+        assert_ne!(compressed[(0, 0)], compressed[(4, 0)]);
 
         storage_provider.delete(data_file).unwrap();
         storage_provider.delete(pq_pivots_path).unwrap();
@@ -1428,13 +1394,9 @@ mod pq_test {
         #[case] num_pq_chunks: usize,
     ) {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let mut pq_storage: PQStorage =
@@ -1514,14 +1476,13 @@ mod pq_test {
             });
 
         // use pq generated by original function as the gt
-        let (original_pq_data, _nr, _nc) =
-            load_bin::<u8, <VirtualStorageProvider<OverlayFS> as StorageReadProvider>::Reader>(
-                &mut storage_provider
-                    .open_reader(pq_compressed_vectors_path)
-                    .unwrap(),
-                0,
-            )
-            .unwrap();
+        let original_pq_data = read_bin_from::<u8>(
+            &mut storage_provider
+                .open_reader(pq_compressed_vectors_path)
+                .unwrap(),
+            0,
+        )
+        .unwrap();
 
         let membuf_view =
             MatrixView::try_from(membuf_pq_data.as_slice(), num_train, num_pq_chunks).unwrap();
@@ -1679,16 +1640,11 @@ mod pq_test {
     #[test]
     fn pq_end_to_end_validation_with_codebook_test() {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
-        type ReaderType = <VirtualStorageProvider<OverlayFS> as StorageReadProvider>::Reader;
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
-        let pq_pivots_path = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
-        let ground_truth_path = "/test_data/sift/siftsmall_learn_pq_compressed.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
+        let pq_pivots_path = "/sift/siftsmall_learn_pq_pivots.bin";
+        let ground_truth_path = "/sift/siftsmall_learn_pq_compressed.bin";
         let pq_compressed_vectors_path = "/validation.bin";
         let mut pq_storage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
@@ -1706,23 +1662,19 @@ mod pq_test {
         )
         .expect("Failed to generate quantized data");
 
-        let (data, nr, nc) = load_bin::<u8, ReaderType>(
+        let data = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)
                 .unwrap(),
             0,
         )
         .unwrap();
-        let (gt_data, gt_nr, gt_nc) = load_bin::<u8, ReaderType>(
+        let gt_data = read_bin_from::<u8>(
             &mut storage_provider.open_reader(ground_truth_path).unwrap(),
             0,
         )
         .unwrap();
-        assert_eq!(nr, gt_nr);
-        assert_eq!(nc, gt_nc);
-        for i in 0..data.len() {
-            assert_eq!(data[i], gt_data[i]);
-        }
+        assert_eq!(data, gt_data);
     }
 
     #[test]
@@ -1785,13 +1737,9 @@ mod pq_test {
         #[case] num_pq_chunks: usize,
     ) {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let pq_storage: PQStorage =

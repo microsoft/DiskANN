@@ -1,0 +1,149 @@
+{
+  "file": "diskann/src/graph/test/cases/grid_insert.rs",
+  "test": "graph/test/cases/grid_insert/insert_3_5_batch_25/ibc_all",
+  "payload": {
+    "context_metrics": {
+      "clones": 25,
+      "spawns": 25
+    },
+    "description": "After inserting 125 points (batch (chunks of 25), ibc=all) into a 3D grid of size 5.",
+    "grid_dims": 3,
+    "grid_size": 5,
+    "insert_metrics": {
+      "append_neighbors": 132,
+      "get_neighbors": 6608,
+      "get_vector": 12757,
+      "set_neighbors": 127,
+      "set_vector": 125
+    },
+    "num_inserted": 125,
+    "searches": [
+      {
+        "beam_width": 1,
+        "comparisons": 52,
+        "description": "After inserting 125 points (batch (chunks of 25), ibc=all) into a 3D grid of size 5. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
+        "grid_dims": 3,
+        "grid_size": 5,
+        "hops": 20,
+        "metrics": {
+          "append_neighbors": 132,
+          "get_neighbors": 6628,
+          "get_vector": 12809,
+          "set_neighbors": 127,
+          "set_vector": 125
+        },
+        "num_results": 10,
+        "query": [
+          -1.0,
+          -1.0,
+          -1.0
+        ],
+        "results": [
+          [
+            0,
+            3.0
+          ],
+          [
+            5,
+            6.0
+          ],
+          [
+            25,
+            6.0
+          ],
+          [
+            1,
+            6.0
+          ],
+          [
+            26,
+            9.0
+          ],
+          [
+            30,
+            9.0
+          ],
+          [
+            6,
+            9.0
+          ],
+          [
+            2,
+            11.0
+          ],
+          [
+            10,
+            11.0
+          ],
+          [
+            50,
+            11.0
+          ]
+        ]
+      },
+      {
+        "beam_width": 1,
+        "comparisons": 21,
+        "description": "After inserting 125 points (batch (chunks of 25), ibc=all) into a 3D grid of size 5. Search with query of all `size`. The start point should appear as it is not filtered by default.",
+        "grid_dims": 3,
+        "grid_size": 5,
+        "hops": 11,
+        "metrics": {
+          "append_neighbors": 132,
+          "get_neighbors": 6639,
+          "get_vector": 12830,
+          "set_neighbors": 127,
+          "set_vector": 125
+        },
+        "num_results": 10,
+        "query": [
+          5.0,
+          5.0,
+          5.0
+        ],
+        "results": [
+          [
+            4294967295,
+            0.0
+          ],
+          [
+            124,
+            3.0
+          ],
+          [
+            123,
+            6.0
+          ],
+          [
+            119,
+            6.0
+          ],
+          [
+            99,
+            6.0
+          ],
+          [
+            94,
+            9.0
+          ],
+          [
+            98,
+            9.0
+          ],
+          [
+            118,
+            9.0
+          ],
+          [
+            74,
+            11.0
+          ],
+          [
+            114,
+            11.0
+          ]
+        ]
+      }
+    ]
+  }
+}

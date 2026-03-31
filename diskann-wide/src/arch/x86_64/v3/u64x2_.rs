@@ -100,14 +100,14 @@ impl X86LoadStore for u64x2 {
 impl SIMDPartialEq for u64x2 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi64` requires SSE4.1, implied by V3.
         let m = unsafe { _mm_cmpeq_epi64(self.0, other.0) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_xor_si128` requires SSE2 and `_mm_cmpeq_epi64` requires SSE4.1, implied by V3.
         let m = unsafe { _mm_xor_si128(_mm_cmpeq_epi64(self.0, other.0), __m128i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
     }

@@ -112,8 +112,8 @@
 //! inhereted properly, even if these functions are not inlined.
 
 use diskann_utils::{Reborrow, ReborrowMut};
-use diskann_vector::{norm::FastL2NormSquared, Norm};
-use diskann_wide::{arch::Target2, Architecture};
+use diskann_vector::{Norm, norm::FastL2NormSquared};
+use diskann_wide::{Architecture, arch::Target2};
 use half::f16;
 use thiserror::Error;
 
@@ -501,11 +501,11 @@ where
     A: Architecture,
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a> Target2<
-        A,
-        distances::MathematicalResult<u32>,
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'a, NBITS, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<u32>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+        >,
 {
     // NOTE: `Target2<_, _, _, _>` is used instead of `Architecture::run2` to ensure that
     // the kernel is inlined into this callsize.
@@ -574,11 +574,11 @@ where
     A: Architecture,
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a> Target2<
-        A,
-        distances::MathematicalResult<u32>,
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'a, NBITS, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<u32>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -603,11 +603,11 @@ where
     Unsigned: Representation<D>,
     Perm: PermutationStrategy<Q>,
     for<'a> InnerProduct: Target2<
-        A,
-        distances::MathematicalResult<u32>,
-        BitSlice<'a, Q, Unsigned, Perm>,
-        BitSlice<'a, D, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<u32>,
+            BitSlice<'a, Q, Unsigned, Perm>,
+            BitSlice<'a, D, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -647,11 +647,11 @@ where
     A: Architecture,
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a> Target2<
-        A,
-        distances::MathematicalResult<f32>,
-        &'a [f32],
-        BitSlice<'a, NBITS, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<f32>,
+            &'a [f32],
+            BitSlice<'a, NBITS, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -734,11 +734,11 @@ where
     A: Architecture,
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a> Target2<
-        A,
-        distances::MathematicalResult<u32>,
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'a, NBITS, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<u32>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -767,11 +767,11 @@ where
     Unsigned: Representation<D>,
     Perm: PermutationStrategy<Q>,
     for<'a> InnerProduct: Target2<
-        A,
-        distances::MathematicalResult<u32>,
-        BitSlice<'a, Q, Unsigned, Perm>,
-        BitSlice<'a, D, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<u32>,
+            BitSlice<'a, Q, Unsigned, Perm>,
+            BitSlice<'a, D, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -812,11 +812,11 @@ where
     A: Architecture,
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a> Target2<
-        A,
-        distances::MathematicalResult<f32>,
-        &'a [f32],
-        BitSlice<'a, NBITS, Unsigned>,
-    >,
+            A,
+            distances::MathematicalResult<f32>,
+            &'a [f32],
+            BitSlice<'a, NBITS, Unsigned>,
+        >,
 {
     #[inline(always)]
     fn run(
@@ -898,13 +898,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, Reborrow};
-    use diskann_vector::{distance::Metric, norm::FastL2Norm, PureDistanceFunction};
+    use diskann_utils::{Reborrow, lazy_format};
+    use diskann_vector::{PureDistanceFunction, distance::Metric, norm::FastL2Norm};
     use diskann_wide::ARCH;
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
     use rand_distr::StandardNormal;
 
@@ -1355,41 +1355,41 @@ mod tests {
         Unsigned: Representation<D>,
         Perm: PermutationStrategy<Q>,
         for<'a> CompensatedIP: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
         for<'a> CompensatedSquaredL2: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
         for<'a> CompensatedCosine: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
         for<'a> CompensatedIP: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
         for<'a> CompensatedSquaredL2: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
         for<'a> CompensatedCosine: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            QueryRef<'a, Q, Perm>,
-            DataRef<'a, D>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                QueryRef<'a, Q, Perm>,
+                DataRef<'a, D>,
+            >,
     {
         // The center
         let mut center = vec![0.0f32; dim];
@@ -1502,41 +1502,41 @@ mod tests {
     ) where
         Unsigned: Representation<NBITS>,
         for<'a> CompensatedIP: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
         for<'a> CompensatedSquaredL2: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
         for<'a> CompensatedCosine: Target2<
-            diskann_wide::arch::Current,
-            distances::MathematicalResult<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::MathematicalResult<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
         for<'a> CompensatedIP: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
         for<'a> CompensatedSquaredL2: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
         for<'a> CompensatedCosine: Target2<
-            diskann_wide::arch::Current,
-            distances::Result<f32>,
-            FullQueryRef<'a>,
-            DataRef<'a, NBITS>,
-        >,
+                diskann_wide::arch::Current,
+                distances::Result<f32>,
+                FullQueryRef<'a>,
+                DataRef<'a, NBITS>,
+            >,
     {
         // The center
         let mut center = vec![0.0f32; dim];

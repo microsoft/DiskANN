@@ -9,12 +9,12 @@ use diskann::ANNResult;
 use diskann_providers::{
     model::PQCompressedData,
     storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider},
-    utils::{copy_aligned_data, write_metadata},
+    utils::copy_aligned_data,
 };
+use diskann_utils::io::Metadata;
 use iai_callgrind::black_box;
 use rand::Rng;
 use tempfile::TempDir;
-use vfs::PhysicalFS;
 
 pub const TEST_DATA_PATH: &str = "test_aligned_data.bin";
 pub const BENCHMARK_ID: &str = "copy_aligned_data";
@@ -31,7 +31,7 @@ pub fn benchmark_copy_aligned_data_iai() {
         clippy::disallowed_methods,
         reason = "Use physical file system rather than memory for testing the actual disk read/write"
     )]
-    let storage_provider = VirtualStorageProvider::new(PhysicalFS::new(tmp_dir.path()));
+    let storage_provider = VirtualStorageProvider::new_physical(tmp_dir.path());
 
     let num_points = 1_000_000;
     let num_pq_chunks = 192;
@@ -56,7 +56,7 @@ fn generate_random_data<Writer: Write>(
     dims: usize,
 ) -> ANNResult<()> {
     let mut writer = BufWriter::new(writer);
-    write_metadata(&mut writer, npts, dims)?;
+    Metadata::new(npts, dims)?.write(&mut writer)?;
 
     let mut rng = diskann_providers::utils::create_rnd_in_tests();
     let data: Vec<u8> = (0..dims).map(|_| rng.random()).collect();

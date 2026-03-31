@@ -3,16 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, fmt::Debug, future::Future};
+use std::{fmt::Debug, future::Future};
 
+use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
+    error::Infallible,
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
+        workingset,
     },
     neighbor::Neighbor,
     provider::{
@@ -21,6 +24,7 @@ use diskann::{
     },
     utils::{IntoUsize, VectorRepr},
 };
+
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
@@ -28,10 +32,10 @@ use crate::model::graph::{
     provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
+            SetElementHelper,
         },
-        inmem::DefaultProvider,
+        inmem::{DefaultProvider, PassThrough},
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     traits::AdHoc,
@@ -184,28 +188,22 @@ where
     }
 }
 
-impl<'a, T, Q, D, Ctx> Accessor for FullAccessor<'a, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> Accessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = &'a [T];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `Opaque` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = &'a [T]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = &'b [T];
+    type ElementRef<'a> = &'a [T];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
@@ -294,7 +292,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> BuildQueryComputer<[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -312,37 +310,13 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> ExpandBeam<[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-}
-
-impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        for i in itr {
-            set.entry(i).or_insert_with(|| unsafe {
-                self.provider.base_vectors.get_vector_sync(i.into_usize())
-            });
-        }
-        Ok(())
-    }
 }
 
 //-------------------//
@@ -379,17 +353,17 @@ pub trait GetFullPrecision {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Rerank;
 
-impl<A, T> glue::SearchPostProcess<A, [T]> for Rerank
+impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<[T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: BuildQueryComputer<&'a [T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &[T],
+        query: &'a [T],
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -421,6 +395,7 @@ where
         // Sort the full precision distances.
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
         // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
     }
@@ -430,20 +405,8 @@ where
 // Strategies //
 ////////////////
 
-// A layered approach is used for search strategies. The `Internal` version does the heavy
-// lifting in terms of establishing accessors and post processing.
-//
-// However, during post-processing, the `Internal` versions of strategies will not filter
-// out the start points. The publicly exposed types *will* filter out the start points.
-//
-// This layered approach allows algorithms like `InplaceDeleteStrategy` that need to adjust
-// the adjacency list for the start point to reuse the `Internal` strategies.
-
 /// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
-    for Internal<FullPrecision>
+impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -453,7 +416,6 @@ where
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = RemoveDeletedIdsAndCopy;
 
     fn search_accessor<'a>(
         &'a self,
@@ -461,39 +423,17 @@ where
         _context: &'a Ctx,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
     }
 }
 
-/// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+impl<T, Q, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
-    type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
-        _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 // Pruning
@@ -507,6 +447,7 @@ where
     type DistanceComputer = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = PassThrough;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -515,27 +456,62 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        PassThrough
+    }
 }
 
-/// Implementing this trait allows `FullPrecision` to be used for multi-insert.
-impl<'a, T, Q, D, Ctx> glue::AsElement<&'a [T]> for FullAccessor<'a, T, Q, D, Ctx>
+// All this does is return a `&Self` - which directly accesses the underlying provider.
+impl<T, Q, D, Ctx> workingset::Fill<PassThrough> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type Error = diskann::error::Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
+    type Error = Infallible;
+
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
     }
 }
 
-impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+// Pass-through view.
+impl<T, Q, D, Ctx> workingset::View<u32> for &FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = &'a [T];
+    type Element<'a>
+        = &'a [T]
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<&[T]> {
+        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+        // this invariant is not enforced. See `get_vector_sync` for details
+        Some(unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) })
+    }
+}
+
+impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -548,6 +524,43 @@ where
     }
 }
 
+impl<T, Q, D, Ctx, B> glue::MultiInsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, B>
+    for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            FullPrecisionProvider<T, Q, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type Seed = PassThrough;
+    type WorkingSet = PassThrough;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &FullPrecisionProvider<T, Q, D, Ctx>,
+        _ctx: &Ctx,
+        _batch: &std::sync::Arc<B>,
+        _ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(PassThrough))
+    }
+}
+
 // Inplace Delete //
 impl<T, Q, D, Ctx> InplaceDeleteStrategy<FullPrecisionProvider<T, Q, D, Ctx>> for FullPrecision
 where
@@ -557,16 +570,22 @@ where
     Ctx: ExecutionContext,
 {
     type DeleteElementError = Panics;
-    type DeleteElement<'a> = [T];
+    type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        *self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        RemoveDeletedIdsAndCopy
     }
 
     async fn get_delete_element<'a>(

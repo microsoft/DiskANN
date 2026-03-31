@@ -26,7 +26,7 @@ where
     V: SIMDVector<Scalar = T, ConstLanes = Const<N>>,
 {
     // Test loads for all alignments.
-    // Our strategy to to create an array of twice the underlying vector width and perform a
+    // Our strategy is to create an array of twice the underlying vector width and perform a
     // full-width load on each offset.
     let mut input = vec![T::default(); 2 * N];
     iota_slice(input.as_mut_slice());

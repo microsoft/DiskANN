@@ -102,22 +102,21 @@ where
     }
 }
 
-impl<T, D> provider::SetElement<MultiVec<T>> for Provider<T, D>
+impl<T, D> provider::SetElement<MultiVecRef<'_, T>> for Provider<T, D>
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly,
 {
     type SetError = ANNError;
-    type Guard = provider::NoopGuard<u32>;
 
     fn set_element(
         &self,
         _context: &provider::DefaultContext,
         id: &u32,
-        element: &MultiVec<T>,
+        element: MultiVecRef<'_, T>,
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let mut buf = vec![T::default(); self.base_vectors.dim()];
-        T::mean_pool(&mut buf, element.as_view());
+        T::mean_pool(&mut buf, element);
 
         let store = &self.base_vectors;
         let i = id.into_usize();
@@ -130,7 +129,7 @@ where
             store.pooled.get_mut_slice(i).copy_from_slice(&buf);
         }
 
-        *multi_guard = Some(element.clone());
+        *multi_guard = Some(element.to_owned());
 
         // Success.
         std::future::ready(Ok(provider::NoopGuard::new(*id)))
@@ -195,8 +194,6 @@ where
     T: VectorRepr,
     D: AsyncFriendly,
 {
-    type Extended = Box<[T]>;
-
     /// We share a reference to the local buffer to minimize the duration of the lock.
     type Element<'b>
         = &'b [T]
@@ -271,7 +268,7 @@ where
     }
 }
 
-impl<T, D> provider::BuildQueryComputer<MultiVec<T>> for Accessor<'_, T, D>
+impl<T, D> provider::BuildQueryComputer<MultiVecRef<'_, T>> for Accessor<'_, T, D>
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly,
@@ -281,11 +278,11 @@ where
 
     fn build_query_computer(
         &self,
-        from: &MultiVec<T>,
+        from: MultiVecRef<'_, T>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         // TODO: `build_query_computer` should recieve by `&mut`.
         let mut buf = vec![T::default(); self.store().dim()];
-        T::mean_pool(&mut buf, from.as_view());
+        T::mean_pool(&mut buf, from);
         Ok(T::query_distance(&buf, METRIC))
     }
 }
@@ -323,7 +320,7 @@ where
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ChamferRerank;
 
-impl<T, D> glue::SearchPostProcess<Accessor<'_, T, D>, MultiVec<T>> for ChamferRerank
+impl<T, D> glue::SearchPostProcess<Accessor<'_, T, D>, MultiVecRef<'_, T>> for ChamferRerank
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly + DeletionCheck,
@@ -334,7 +331,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut Accessor<'_, T, D>,
-        query: &MultiVec<T>,
+        query: MultiVecRef<'_, T>,
         _computer: &T::QueryDistance,
         candidates: I,
         output: &mut B,
@@ -351,7 +348,7 @@ where
                     None
                 } else {
                     let multi = accessor.store().multi[n.id.into_usize()].read().unwrap();
-                    let v = Chamfer::evaluate(query.as_view(), multi.as_ref().unwrap().as_view());
+                    let v = Chamfer::evaluate(query, multi.as_ref().unwrap().as_view());
                     Some((n.id, v))
                 }
             })
@@ -367,16 +364,9 @@ where
 // Glue //
 //////////
 
-impl<T, D> glue::ExpandBeam<MultiVec<T>> for Accessor<'_, T, D>
+impl<T, D> glue::ExpandBeam<MultiVecRef<'_, T>> for Accessor<'_, T, D>
 where
     T: VectorRepr + MeanPool,
-    D: AsyncFriendly,
-{
-}
-
-impl<T, D> glue::FillSet for Accessor<'_, T, D>
-where
-    T: VectorRepr,
     D: AsyncFriendly,
 {
 }
@@ -404,40 +394,23 @@ impl Strategy {
     }
 }
 
-impl<T, D> glue::SearchStrategy<Provider<T, D>, MultiVec<T>> for common::Internal<Strategy>
+impl<T, D> glue::DefaultPostProcessor<Provider<T, D>, MultiVecRef<'_, T>> for Strategy
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly + DeletionCheck,
+    for<'a, 'b> Chamfer: PureDistanceFunction<MultiVecRef<'a, T>, MultiVecRef<'b, T>>,
 {
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = Accessor<'a, T, D>;
-    type SearchAccessorError = common::Panics;
-    type PostProcessor = postprocess::RemoveDeletedIdsAndCopy;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a Provider<T, D>,
-        _context: &'a provider::DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(Accessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+    diskann::default_post_processor!(glue::Pipeline<glue::FilterStartPoints, ChamferRerank>);
 }
 
-impl<T, D> glue::SearchStrategy<Provider<T, D>, MultiVec<T>> for Strategy
+impl<T, D> glue::SearchStrategy<Provider<T, D>, MultiVecRef<'_, T>> for Strategy
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly + DeletionCheck,
-    for<'a, 'b> Chamfer: PureDistanceFunction<MultiVecRef<'a, T>, MultiVecRef<'a, T>>,
 {
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = Accessor<'a, T, D>;
     type SearchAccessorError = common::Panics;
-    type PostProcessor = glue::Pipeline<glue::FilterStartPoints, ChamferRerank>;
-    // type PostProcessor = glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -445,10 +418,6 @@ where
         _context: &'a provider::DefaultContext,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(Accessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
     }
 }
 
@@ -460,6 +429,7 @@ where
     type DistanceComputer = T::Distance;
     type PruneAccessor<'a> = Accessor<'a, T, D>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = graph::workingset::Map<u32, Box<[T]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -468,13 +438,18 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(Accessor::new(provider))
     }
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        use diskann::graph::workingset::map::{Builder, Capacity};
+
+        Builder::new(Capacity::Default).build(capacity)
+    }
 }
 
-impl<T, D> glue::InsertStrategy<Provider<T, D>, MultiVec<T>> for Strategy
+impl<T, D> glue::InsertStrategy<Provider<T, D>, MultiVecRef<'_, T>> for Strategy
 where
     T: VectorRepr + MeanPool,
     D: AsyncFriendly + DeletionCheck,
-    for<'a, 'b> Chamfer: PureDistanceFunction<MultiVecRef<'a, T>, MultiVecRef<'a, T>>,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -488,12 +463,16 @@ where
     D: AsyncFriendly + DeletionCheck,
 {
     type DeleteElementError = common::Panics;
-    type DeleteElement<'a> = MultiVec<T>;
-    type DeleteElementGuard = diskann_utils::reborrow::Place<MultiVec<T>>;
+    type DeleteElement<'a> = MultiVecRef<'a, T>;
+    type DeleteElementGuard = MultiVec<T>;
+    type DeleteSearchAccessor<'a> = Accessor<'a, T, D>;
+
     type PruneStrategy = Self;
-    type SearchStrategy = common::Internal<Self>;
+    type SearchStrategy = Self;
+    type SearchPostProcessor = postprocess::RemoveDeletedIdsAndCopy;
+
     fn search_strategy(&self) -> Self::SearchStrategy {
-        common::Internal(Self::new())
+        Self::new()
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -507,13 +486,15 @@ where
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
         let id = id.into_usize();
-        Ok(diskann_utils::reborrow::Place(
-            provider.base_vectors.multi[id]
-                .read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .clone(),
-        ))
+        Ok(provider.base_vectors.multi[id]
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone())
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 }

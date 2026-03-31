@@ -61,7 +61,7 @@ impl CheckDeserialization for InputFile {
 
 impl AsRef<Path> for InputFile {
     fn as_ref(&self) -> &Path {
-        &*self
+        self
     }
 }
 

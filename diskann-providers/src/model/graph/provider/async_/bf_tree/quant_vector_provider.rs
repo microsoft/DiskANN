@@ -69,10 +69,14 @@ impl QuantVectorProvider {
         self.metric
     }
 
-    /// Create a snapshot of the quant vector index
-    ///
-    pub fn snapshot(&self) {
-        self.quant_vector_index.snapshot();
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.quant_vector_index.config()
+    }
+
+    /// Access the underlying BfTree
+    pub(crate) fn bftree(&self) -> &BfTree {
+        &self.quant_vector_index
     }
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)

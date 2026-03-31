@@ -5,9 +5,9 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::{views::MatrixView, ReborrowMut};
+use diskann_utils::{ReborrowMut, views::MatrixView};
 use diskann_vector::{
-    distance::InnerProduct, norm::FastL2Norm, MathematicalValue, Norm, PureDistanceFunction,
+    MathematicalValue, Norm, PureDistanceFunction, distance::InnerProduct, norm::FastL2Norm,
 };
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
@@ -18,11 +18,8 @@ use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, DataMeta, DataMetaError, DataMut,
     FullQueryMeta, FullQueryMut, QueryMeta, QueryMut, SupportedMetric,
 };
-#[cfg(feature = "flatbuffers")]
 use crate::{
-    algorithms::transforms::TransformError, flatbuffers::spherical, spherical::InvalidMetric,
-};
-use crate::{
+    AsFunctor, CompressIntoWith,
     algorithms::{
         heap::SliceHeap,
         transforms::{NewTransformError, Transform, TransformFailed, TransformKind},
@@ -30,8 +27,11 @@ use crate::{
     alloc::{Allocator, AllocatorError, GlobalAllocator, Poly, ScopedAllocator, TryClone},
     bits::{PermutationStrategy, Representation, Unsigned},
     num::Positive,
-    utils::{compute_means_and_average_norm, compute_normalized_means, CannotBeEmpty},
-    AsFunctor, CompressIntoWith,
+    utils::{CannotBeEmpty, compute_means_and_average_norm, compute_normalized_means},
+};
+#[cfg(feature = "flatbuffers")]
+use crate::{
+    algorithms::transforms::TransformError, flatbuffers::spherical, spherical::InvalidMetric,
 };
 
 ///////////////
@@ -345,11 +345,7 @@ where
         let mul: f32 = match self.metric {
             SupportedMetric::Cosine => {
                 let norm: f32 = (FastL2Norm).evaluate(data);
-                if norm == 0.0 {
-                    1.0
-                } else {
-                    1.0 / norm
-                }
+                if norm == 0.0 { 1.0 } else { 1.0 / norm }
             }
             SupportedMetric::SquaredL2 | SupportedMetric::InnerProduct => scale,
         };
@@ -757,7 +753,7 @@ where
         {
             Ok(()) => {}
             Err(TransformFailed::AllocatorError(err)) => {
-                return Err(CompressionError::AllocatorError(err))
+                return Err(CompressionError::AllocatorError(err));
             }
             Err(TransformFailed::SourceMismatch { .. })
             | Err(TransformFailed::DestinationMismatch { .. }) => {
@@ -831,7 +827,7 @@ where
         {
             Ok(()) => {}
             Err(TransformFailed::AllocatorError(err)) => {
-                return Err(CompressionError::AllocatorError(err))
+                return Err(CompressionError::AllocatorError(err));
             }
             Err(TransformFailed::SourceMismatch { .. })
             | Err(TransformFailed::DestinationMismatch { .. }) => {
@@ -1151,7 +1147,7 @@ where
         {
             Ok(()) => {}
             Err(TransformFailed::AllocatorError(err)) => {
-                return Err(CompressionError::AllocatorError(err))
+                return Err(CompressionError::AllocatorError(err));
             }
             Err(TransformFailed::SourceMismatch { .. })
             | Err(TransformFailed::DestinationMismatch { .. }) => {
@@ -1211,16 +1207,15 @@ mod tests {
     use std::fmt::Display;
 
     use diskann_utils::{
-        lazy_format,
+        ReborrowMut, lazy_format,
         views::{self, Matrix},
-        ReborrowMut,
     };
-    use diskann_vector::{norm::FastL2NormSquared, PureDistanceFunction};
+    use diskann_vector::{PureDistanceFunction, norm::FastL2NormSquared};
     use diskann_wide::ARCH;
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
     use rand_distr::StandardNormal;
 
@@ -2106,11 +2101,11 @@ mod tests {
     where
         for<'a> T: ReborrowMut<'a>,
         for<'a> SphericalQuantizer: CompressIntoWith<
-            &'a [f32],
-            <T as ReborrowMut<'a>>::Target,
-            ScopedAllocator<'a>,
-            Error = CompressionError,
-        >,
+                &'a [f32],
+                <T as ReborrowMut<'a>>::Target,
+                ScopedAllocator<'a>,
+                Error = CompressionError,
+            >,
     {
         let mut succeeded = false;
         let mut failed = false;
@@ -2145,17 +2140,17 @@ mod tests {
         Unsigned: Representation<D>,
         Perm: PermutationStrategy<Q>,
         for<'a> SphericalQuantizer: CompressIntoWith<
-            &'a [f32],
-            DataMut<'a, D>,
-            ScopedAllocator<'a>,
-            Error = CompressionError,
-        >,
+                &'a [f32],
+                DataMut<'a, D>,
+                ScopedAllocator<'a>,
+                Error = CompressionError,
+            >,
         for<'a> SphericalQuantizer: CompressIntoWith<
-            &'a [f32],
-            QueryMut<'a, Q, Perm>,
-            ScopedAllocator<'a>,
-            Error = CompressionError,
-        >,
+                &'a [f32],
+                QueryMut<'a, Q, Perm>,
+                ScopedAllocator<'a>,
+                Error = CompressionError,
+            >,
     {
         assert_eq!(setup.nrows, problem.data.nrows());
         assert_eq!(setup.ncols, problem.data.ncols());
@@ -2195,17 +2190,17 @@ mod tests {
         Unsigned: Representation<D>,
         Perm: PermutationStrategy<Q>,
         for<'a> SphericalQuantizer: CompressIntoWith<
-            &'a [f32],
-            DataMut<'a, D>,
-            ScopedAllocator<'a>,
-            Error = CompressionError,
-        >,
+                &'a [f32],
+                DataMut<'a, D>,
+                ScopedAllocator<'a>,
+                Error = CompressionError,
+            >,
         for<'a> SphericalQuantizer: CompressIntoWith<
-            &'a [f32],
-            QueryMut<'a, Q, Perm>,
-            ScopedAllocator<'a>,
-            Error = CompressionError,
-        >,
+                &'a [f32],
+                QueryMut<'a, Q, Perm>,
+                ScopedAllocator<'a>,
+                Error = CompressionError,
+            >,
     {
         let problem = test_util::create_test_problem(setup.nrows, setup.ncols, rng);
         let computed_means_f32: Vec<_> = problem.means.iter().map(|i| *i as f32).collect();
@@ -2515,18 +2510,19 @@ mod tests {
 
         let mut v = Data::<4, _>::new_boxed(quantizer.input_dim());
         let data: &[f32] = &[1000.34, 1456.32, 1234.5446];
-        assert!(quantizer
-            .compress_into_with(data, v.reborrow_mut(), ScopedAllocator::global())
-            .is_ok(),
+        assert!(
+            quantizer
+                .compress_into_with(data, v.reborrow_mut(), ScopedAllocator::global())
+                .is_ok(),
             "if this failed, the likely culprit is exceeding the value of the 16-bit correction terms"
-            );
+        );
     }
 }
 
 #[cfg(feature = "flatbuffers")]
 #[cfg(test)]
 mod test_serialization {
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
