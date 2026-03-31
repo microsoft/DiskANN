@@ -90,7 +90,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --locked --workspace --exclude DiskAnnPy --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
 
   clippy-features:
     strategy:
@@ -114,7 +114,6 @@ jobs:
         run: |
           set -euxo pipefail
           cargo clippy --locked --workspace \
-            --exclude DiskAnnPy \
             --all-targets \
             --no-deps \
             --features ${{ env.DISKANN_FEATURES }} \
@@ -188,7 +187,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build workspace
-        run: cargo build --workspace --exclude DiskAnnPy --locked --profile ci
+        run: cargo build --workspace --locked --profile ci
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -372,8 +371,8 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --locked --workspace --exclude DiskAnnPy --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --locked --doc --workspace --exclude DiskAnnPy --profile ci --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
@@ -407,12 +406,11 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --locked --workspace \
-            --exclude DiskAnnPy \
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --features ${{ env.DISKANN_FEATURES }}
 
-          cargo test --locked --doc --workspace --exclude DiskAnnPy --profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -448,7 +446,6 @@ jobs:
           cargo llvm-cov nextest --locked --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --workspace \
-            --exclude DiskAnnPy \
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
