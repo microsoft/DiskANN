@@ -16,6 +16,8 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
+#[cfg(feature = "pipnn")]
+use diskann_providers::utils::ParallelIteratorInPool;
 use diskann_providers::{
     model::{
         graph::{
@@ -26,8 +28,8 @@ use diskann_providers::{
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, ParallelIteratorInPool, RayonThreadPool,
-        VectorDataIterator, MAX_MEDOID_SAMPLE_SIZE,
+        create_thread_pool, find_medoid_with_sampling, RayonThreadPool, VectorDataIterator,
+        MAX_MEDOID_SAMPLE_SIZE,
     },
 };
 use diskann_utils::io::{read_bin, write_bin};
