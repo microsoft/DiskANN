@@ -14,13 +14,14 @@ use rayon::prelude::*;
 pub struct QuantizedData {
     /// Packed bit vectors: each vector is `bytes_per_vec` bytes.
     /// Layout: npoints * bytes_per_vec, row-major.
-    pub bits: Vec<u8>,
-    /// Number of bytes per vector (ceil(ndims / 8)).
-    pub bytes_per_vec: usize,
+    /// Packed bit vectors: u64-aligned, each vector is `bytes_per_vec` bytes.
+    pub(crate) bits: Vec<u8>,
+    /// Number of bytes per vector (ceil(ndims / 8), rounded up to 8-byte alignment).
+    pub(crate) bytes_per_vec: usize,
     /// Original dimensionality.
-    pub ndims: usize,
+    pub(crate) ndims: usize,
     /// Number of points.
-    pub npoints: usize,
+    pub(crate) npoints: usize,
 }
 
 /// Quantize data to 1-bit using pre-trained shift and inverse_scale parameters.
@@ -51,8 +52,8 @@ pub fn quantize_1bit(
     // in-place, preserving the original alignment. Length and capacity are scaled by 8.
     let mut bits = unsafe {
         let ptr = bits_u64.as_mut_ptr() as *mut u8;
-        let len = bits_u64.len() * 8;
-        let cap = bits_u64.capacity() * 8;
+        let len = bits_u64.len().checked_mul(8).expect("u64→u8 len overflow");
+        let cap = bits_u64.capacity().checked_mul(8).expect("u64→u8 cap overflow");
         std::mem::forget(bits_u64);
         Vec::from_raw_parts(ptr, len, cap)
     };

@@ -19,6 +19,19 @@ use rayon::prelude::*;
 /// Maximum recursion depth to prevent stack overflow.
 const MAX_DEPTH: usize = 30;
 
+/// Maximum leaders per partition level. The paper recommends ~1000 as a practical
+/// upper bound; larger values increase partition GEMM cost without improving quality.
+const LEADER_HARDCAP: usize = 1000;
+
+/// Compute the number of leaders to sample for a partition level.
+#[inline]
+fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
+    ((n as f64 * p_samp).ceil() as usize)
+        .max(2)
+        .min(LEADER_HARDCAP)
+        .min(n)
+}
+
 /// A leaf partition containing indices into the original dataset.
 #[derive(Debug, Clone)]
 pub struct Leaf {
@@ -410,12 +423,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         1
     };
 
-    // Sample leaders. Hardcap at 1000 per the paper to prevent expensive GEMM at large N.
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
-        .max(2)
-        .min(1000)
-        .min(n);
-
+    let num_leaders = sample_num_leaders(n, config.p_samp);
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     // Fused GEMM + assignment (avoids materializing full distance matrix).
@@ -475,15 +483,9 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
         3
     };
 
-    // Sample leaders. Hardcap at 1000 per the paper.
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
-        .max(2)
-        .min(1000)
-        .min(n);
-
+    let num_leaders = sample_num_leaders(n, config.p_samp);
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
-    // Fused GEMM + assignment.
     let t0 = std::time::Instant::now();
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
     let assign_time = t0.elapsed();
@@ -558,9 +560,7 @@ pub fn parallel_partition_quantized(
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let fanout = if !config.fanout.is_empty() { config.fanout[0] } else { 3 };
 
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
-        .max(2).min(1000).min(n);
-
+    let num_leaders = sample_num_leaders(n, config.p_samp);
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
     let t0 = std::time::Instant::now();
@@ -629,7 +629,7 @@ fn partition_quantized_recursive(
     }
 
     let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(1000).min(n);
+    let num_leaders = sample_num_leaders(n, config.p_samp);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
