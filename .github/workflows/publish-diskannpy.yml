@@ -179,9 +179,6 @@ jobs:
     # See: https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/
     permissions:
       id-token: write
-    environment:
-      name: pypi
-      url: https://pypi.org/p/diskannpy
     steps:
       - uses: actions/download-artifact@v4
         with:
