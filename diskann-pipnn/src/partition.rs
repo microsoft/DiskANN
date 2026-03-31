@@ -27,8 +27,7 @@ const LEADER_HARDCAP: usize = 1000;
 #[inline]
 fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
     ((n as f64 * p_samp).ceil() as usize)
-        .max(2)
-        .min(LEADER_HARDCAP)
+        .clamp(2, LEADER_HARDCAP)
         .min(n)
 }
 
@@ -74,6 +73,9 @@ fn partition_assign_quantized(
     let stripe: usize = ((16 * 1024 * 1024)
         / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
     .clamp(256, 32_768);
+    // Lint: Using `ParallelIterator::for_each`. The caller (`parallel_partition_quantized`)
+    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
+    #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(stripe * num_assign)
         .enumerate()
@@ -94,14 +96,21 @@ fn partition_assign_quantized(
             let pd_ptr = point_data.as_ptr();
 
             for i in 0..sn {
+                // SAFETY: `pd_ptr` points to `point_data` which has `sn * u64s` elements;
+                // `i < sn` so `i * u64s` is within bounds.
                 let pt_base = unsafe { pd_ptr.add(i * u64s) };
 
                 // Compute Hamming distance to all leaders + build buf in one pass.
                 buf.clear();
                 for j in 0..nl {
+                    // SAFETY: `ld_ptr` points to `leader_data` which has `nl * u64s` elements;
+                    // `j < nl` so `j * u64s` is within bounds.
                     let ld_base = unsafe { ld_ptr.add(j * u64s) };
                     let mut h = 0u32;
                     for k in 0..u64s {
+                        // SAFETY: Both `pt_base` and `ld_base` point to contiguous
+                        // `u64s`-length slices within `point_data` and `leader_data`
+                        // respectively; `k < u64s` so the offsets are within bounds.
                         unsafe {
                             h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones();
                         }
@@ -197,6 +206,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
     // Partition is <5% of total build time, so the throughput cost is negligible.
     let stripe: usize =
         ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(256, 16_384);
+    // Lint: Using `ParallelIterator::for_each`. The caller (`parallel_partition`)
+    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
+    #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(stripe * num_assign)
         .enumerate()
@@ -224,8 +236,8 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                 match metric {
                     Metric::CosineNormalized => {
                         // Pre-normalized: dist = 1 - dot(a, b)
-                        for j in 0..nl {
-                            buf.push((j as u32, (1.0 - dot_row[j]).max(0.0)));
+                        for (j, &dot_val) in dot_row.iter().enumerate() {
+                            buf.push((j as u32, (1.0 - dot_val).max(0.0)));
                         }
                     }
                     Metric::Cosine => {
@@ -236,9 +248,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                             pi += v * v;
                         }
                         let pi_sqrt = pi.sqrt();
-                        for j in 0..nl {
+                        for (j, &dot_val) in dot_row.iter().enumerate() {
                             let denom = pi_sqrt * l_norms[j];
-                            let cos_sim = if denom > 0.0 { dot_row[j] / denom } else { 0.0 };
+                            let cos_sim = if denom > 0.0 { dot_val / denom } else { 0.0 };
                             buf.push((j as u32, (1.0 - cos_sim).max(0.0)));
                         }
                     }
@@ -248,14 +260,14 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                         for &v in row {
                             pi += v * v;
                         }
-                        for j in 0..nl {
-                            let d = (pi + l_norms[j] - 2.0 * dot_row[j]).max(0.0);
+                        for (j, &dot_val) in dot_row.iter().enumerate() {
+                            let d = (pi + l_norms[j] - 2.0 * dot_val).max(0.0);
                             buf.push((j as u32, d));
                         }
                     }
                     Metric::InnerProduct => {
-                        for j in 0..nl {
-                            buf.push((j as u32, -dot_row[j]));
+                        for (j, &dot_val) in dot_row.iter().enumerate() {
+                            buf.push((j as u32, -dot_val));
                         }
                     }
                 }
@@ -372,12 +384,12 @@ fn merge_small_into_nearest<T: VectorRepr>(
             for &idx in c {
                 T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
                     .expect("f32 conversion");
-                for d in 0..ndims {
-                    centroid[d] += point_buf[d];
+                for (cv, &pv) in centroid.iter_mut().zip(point_buf.iter()) {
+                    *cv += pv;
                 }
             }
-            for d in 0..ndims {
-                centroid[d] *= inv;
+            for cv in centroid.iter_mut() {
+                *cv *= inv;
             }
             centroid
         })
@@ -398,6 +410,8 @@ fn merge_small_into_nearest<T: VectorRepr>(
             .map(|(i, c)| {
                 let mut dist = 0.0f32;
                 for d in 0..ndims {
+                    // SAFETY: Both `rep_buf` and `c` have exactly `ndims` elements
+                    // (allocated as `vec![0.0f32; ndims]`), and `d < ndims`.
                     let diff = unsafe { *rep_buf.get_unchecked(d) - *c.get_unchecked(d) };
                     dist += diff * diff;
                 }
@@ -550,7 +564,10 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
 
     // Recurse in parallel. Each cluster is either a leaf or needs further splitting.
+    // Lint: Using `ParallelIterator::collect`. The caller (`build_internal` / `build_internal_sq`)
+    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
     let t2 = std::time::Instant::now();
+    #[allow(clippy::disallowed_methods)]
     let results: Vec<Vec<Leaf>> = merged_clusters
         .par_iter()
         .zip(sub_seeds.par_iter())
@@ -634,7 +651,10 @@ pub fn parallel_partition_quantized(
 
     let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
 
+    // Lint: Using `ParallelIterator::collect`. The caller (`build_internal_sq_impl`)
+    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
     let t2 = std::time::Instant::now();
+    #[allow(clippy::disallowed_methods)]
     let results: Vec<Vec<Leaf>> = merged_clusters
         .par_iter()
         .zip(sub_seeds.par_iter())

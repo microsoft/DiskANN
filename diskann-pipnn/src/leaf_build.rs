@@ -28,6 +28,12 @@ pub struct LeafBuffers {
     pub seen: Vec<bool>,
 }
 
+impl Default for LeafBuffers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeafBuffers {
     pub fn new() -> Self {
         Self {
@@ -134,6 +140,7 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
 
         // Reset indices for this row.
         for j in 0..n {
+            // SAFETY: `j` is in 0..n and `indices` has length n, so the access is in bounds.
             unsafe {
                 *indices.get_unchecked_mut(j) = j as u32;
             }
@@ -141,13 +148,19 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
 
         if actual_k < n {
             indices.select_nth_unstable_by(actual_k - 1, |&a, &b| {
+                // SAFETY: `a` originates from the `indices` array which contains
+                // values in 0..n, and `row` has length n, so the access is in bounds.
                 let da = unsafe { *row.get_unchecked(a as usize) };
+                // SAFETY: `b` originates from the `indices` array which contains
+                // values in 0..n, and `row` has length n, so the access is in bounds.
                 let db = unsafe { *row.get_unchecked(b as usize) };
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
 
         for idx in 0..actual_k {
+            // SAFETY: `idx` is in 0..actual_k where actual_k <= n, and `indices`
+            // has length n, so the access is in bounds.
             let j = unsafe { *indices.get_unchecked(idx) } as usize;
             edges.push((i, j, row[j]));
         }
@@ -220,8 +233,8 @@ fn build_leaf_with_buffers<T: VectorRepr>(
             // Pre-normalized: dist = 1 - dot(a, b)
             for i in 0..n {
                 let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for j in 0..n {
-                    row[j] = (1.0 - row[j]).max(0.0);
+                for val in row.iter_mut() {
+                    *val = (1.0 - *val).max(0.0);
                 }
                 row[i] = f32::MAX;
             }
@@ -259,8 +272,8 @@ fn build_leaf_with_buffers<T: VectorRepr>(
         Metric::InnerProduct => {
             for i in 0..n {
                 let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for j in 0..n {
-                    row[j] = -row[j];
+                for val in row.iter_mut() {
+                    *val = -*val;
                 }
                 row[i] = f32::MAX;
             }
@@ -319,19 +332,26 @@ pub fn build_leaf_quantized(
         let local_ptr = local.as_ptr();
         let dist_ptr = dist.as_mut_ptr();
         for i in 0..n {
+            // SAFETY: `i` is in 0..n, so `i * n + i` is within the n*n-element dist buffer.
             unsafe {
                 *dist_ptr.add(i * n + i) = f32::MAX;
             }
+            // SAFETY: `i * u64s` is within the `n * u64s`-element local buffer.
             let a_base = unsafe { local_ptr.add(i * u64s) };
             for j in (i + 1)..n {
+                // SAFETY: `j * u64s` is within the `n * u64s`-element local buffer.
                 let b_base = unsafe { local_ptr.add(j * u64s) };
                 let mut h = 0u32;
                 for k_idx in 0..u64s {
+                    // SAFETY: `k_idx` is in 0..u64s, so `a_base.add(k_idx)` and
+                    // `b_base.add(k_idx)` are within their respective vector slices.
                     unsafe {
                         h += (*a_base.add(k_idx) ^ *b_base.add(k_idx)).count_ones();
                     }
                 }
                 let d = h as f32;
+                // SAFETY: `i < j < n`, so both `i * n + j` and `j * n + i` are
+                // within the n*n-element dist buffer.
                 unsafe {
                     *dist_ptr.add(i * n + j) = d;
                     *dist_ptr.add(j * n + i) = d;

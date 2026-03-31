@@ -9,8 +9,8 @@
 //! 1. G <- empty graph
 //! 2. B <- Partition(X) via RBC
 //! 3. For each leaf b_i in B (in parallel):
-//!      edges <- Pick(b_i)  // GEMM + bi-directed k-NN
-//!      G.Prune_And_Add_Edges(edges)  // stream to HashPrune
+//!    edges <- Pick(b_i)  // GEMM + bi-directed k-NN
+//!    G.Prune_And_Add_Edges(edges)  // stream to HashPrune
 //! 4. Optional: final RobustPrune on each node
 //! 5. return G
 
@@ -268,8 +268,8 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
         }
     }
     let inv_n = 1.0 / npoints as f32;
-    for d in 0..ndims {
-        centroid[d] *= inv_n;
+    for c in &mut centroid {
+        *c *= inv_n;
     }
 
     let mut best_idx = 0;
@@ -506,6 +506,9 @@ fn build_internal_sq(
     run(sketches, qdata)
 }
 
+// The caller (`build_internal_sq`) installs a dedicated rayon thread pool via
+// `pool.install(|| ...)`, so all `par_iter` work here already executes on that pool.
+#[allow(clippy::disallowed_methods)]
 fn build_internal_sq_impl(
     npoints: usize,
     ndims: usize,
@@ -627,6 +630,9 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     build_internal_impl(data, npoints, ndims, config, qdata)
 }
 
+// The caller (`build_internal`) installs a dedicated rayon thread pool via
+// `pool.install(|| ...)`, so all `par_iter` work here already executes on that pool.
+#[allow(clippy::disallowed_methods)]
 fn build_internal_impl<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
@@ -683,7 +689,10 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let leaf_sizes: Vec<usize> = leaves.iter().map(|l| l.indices.len()).collect();
         total_leaves += leaves.len();
         let small_leaves = leaf_sizes.iter().filter(|&&s| s < 64).count();
-        let med_leaves = leaf_sizes.iter().filter(|&&s| s >= 64 && s < 512).count();
+        let med_leaves = leaf_sizes
+            .iter()
+            .filter(|&&s| (64..512).contains(&s))
+            .count();
         let big_leaves = leaf_sizes.iter().filter(|&&s| s >= 512).count();
         tracing::info!(
             replica = replica,
@@ -811,6 +820,9 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 /// RobustPrune from full reservoir: select max_degree from l_max candidates using diversity.
 /// Candidates already have distances from HashPrune — no recomputation needed for i→candidate.
 /// Only computes inter-candidate distances for the occlusion check.
+// Called from within `build_internal_impl` which already runs inside a dedicated rayon
+// thread pool installed by `build_internal`, so `par_iter` work executes on that pool.
+#[allow(clippy::disallowed_methods)]
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,

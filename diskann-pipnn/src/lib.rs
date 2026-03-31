@@ -143,7 +143,7 @@ impl PiPNNConfig {
         if self.fanout.is_empty() {
             return Err(PiPNNError::Config("fanout must not be empty".into()));
         }
-        if self.fanout.iter().any(|&f| f == 0) {
+        if self.fanout.contains(&0) {
             return Err(PiPNNError::Config("all fanout values must be > 0".into()));
         }
         if self.num_hash_planes == 0 || self.num_hash_planes > 16 {
