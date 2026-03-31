@@ -90,6 +90,14 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
 }
 
 impl QuantizedData {
+    /// Construct from pre-built raw bits buffer. The buffer must be u64-aligned
+    /// and sized exactly npoints × bytes_per_vec.
+    pub fn from_raw(bits: Vec<u8>, bytes_per_vec: usize, ndims: usize, npoints: usize) -> Self {
+        debug_assert_eq!(bits.len(), npoints * bytes_per_vec);
+        debug_assert_eq!(bytes_per_vec % 8, 0, "bytes_per_vec must be 8-byte aligned");
+        Self { bits, bytes_per_vec, ndims, npoints }
+    }
+
     /// Number of points.
     pub fn npoints(&self) -> usize { self.npoints }
     /// Number of bytes per quantized vector.

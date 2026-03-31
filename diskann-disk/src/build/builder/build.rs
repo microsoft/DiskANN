@@ -451,30 +451,21 @@ where
         // Build the PiPNN graph, using pre-trained SQ if available.
         let graph = match &self.build_quantizer {
             BuildQuantizer::Scalar1Bit(with_bits) => {
-                // Stream-quantize: load f16 data, quantize + compute medoid on the fly,
-                // then drop f16 before building. Only 48 MB quantized data in memory.
-                let (npoints, ndims, data) = load_data_typed::<Data::VectorDataType, _>(
-                    &data_path,
-                    self.storage_provider,
-                )?;
+                // Stream-quantize: read data in chunks, quantize + accumulate centroid
+                // per chunk, never holding the full dataset in memory. Peak memory is
+                // chunk_size (~7 MB) + quantized data (~48 MB) instead of full f16 (~790 MB).
                 let sq = with_bits.quantizer();
                 let scale = sq.scale();
                 let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
+                let shift = sq.shift();
 
-                info!("Quantizing + computing medoid from native data");
                 let t_q = std::time::Instant::now();
-                let qdata = diskann_pipnn::quantize::quantize_1bit(
-                    &data, npoints, ndims, sq.shift(), inverse_scale,
-                );
-                let medoid = builder::find_medoid_public(&data, npoints, ndims);
-                info!("Quantize + medoid: {:.3}s", t_q.elapsed().as_secs_f64());
-                drop(data); // Free f16 data (~790 MB) before graph build.
-
-                #[cfg(target_os = "linux")]
-                unsafe {
-                    extern "C" { fn malloc_trim(pad: usize) -> i32; }
-                    malloc_trim(0);
-                }
+                let (qdata, medoid) = stream_quantize_and_medoid::<Data::VectorDataType, _>(
+                    &data_path, self.storage_provider, shift, inverse_scale,
+                )?;
+                let npoints = qdata.npoints();
+                let ndims = qdata.ndims();
+                info!("Stream quantize + medoid: {:.3}s ({} points × {}d)", t_q.elapsed().as_secs_f64(), npoints, ndims);
 
                 builder::build_from_quantized(qdata, npoints, ndims, medoid, &config)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
@@ -698,8 +689,6 @@ where
 }
 
 /// Load data in its native type T without converting to f32.
-/// This avoids doubling memory for f16 data by keeping it as f16 in memory
-/// and converting to f32 on-the-fly at each access point inside PiPNN.
 #[cfg(feature = "pipnn")]
 fn load_data_typed<T, SP>(
     data_path: &str,
@@ -715,6 +704,129 @@ where
     let data: Vec<T> = matrix.into_inner().into_vec();
 
     Ok((npoints, ndims, data))
+}
+
+/// Stream-quantize from disk: read data in chunks, quantize + compute centroid
+/// per chunk, then find medoid. Never holds the full dataset in memory.
+///
+/// Peak memory: chunk (~7 MB) + quantized data (~48 MB) + centroid (1.5 KB).
+#[cfg(feature = "pipnn")]
+fn stream_quantize_and_medoid<T, SP>(
+    data_path: &str,
+    storage_provider: &SP,
+    shift: &[f32],
+    inverse_scale: f32,
+) -> ANNResult<(diskann_pipnn::quantize::QuantizedData, usize)>
+where
+    T: VectorRepr,
+    SP: StorageReadProvider,
+{
+    use std::io::{Read, Seek};
+    use diskann_utils::io::Metadata;
+
+    let mut reader = storage_provider.open_reader(data_path)?;
+    let metadata = Metadata::read(&mut reader)
+        .map_err(|e| ANNError::log_index_error(format!("Failed to read header: {}", e)))?;
+    let npoints = metadata.npoints();
+    let ndims = metadata.ndims();
+    let type_size = std::mem::size_of::<T>();
+
+    // Pre-allocate quantized output (48 MB for 1M × 384d).
+    let bytes_per_vec = ((ndims + 63) / 64) * 8;
+    let total_bytes = npoints * bytes_per_vec;
+    let u64s_total = total_bytes / 8;
+    let mut bits_u64 = vec![0u64; u64s_total];
+    let mut bits = unsafe {
+        let ptr = bits_u64.as_mut_ptr() as *mut u8;
+        let len = bits_u64.len().checked_mul(8).expect("overflow");
+        let cap = bits_u64.capacity().checked_mul(8).expect("overflow");
+        std::mem::forget(bits_u64);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
+
+    // Stream in chunks: read T, convert to f32, quantize, accumulate centroid.
+    let chunk_size = 10_000;
+    let mut centroid = vec![0.0f32; ndims];
+    let mut chunk_t = vec![<T as bytemuck::Zeroable>::zeroed(); chunk_size * ndims];
+    let mut chunk_f32 = vec![0.0f32; chunk_size * ndims];
+
+    let mut offset = 0;
+    while offset < npoints {
+        let n = (npoints - offset).min(chunk_size);
+        let byte_count = n * ndims * type_size;
+
+        let chunk_slice = &mut chunk_t[..n * ndims];
+        reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+            .map_err(|e| ANNError::log_index_error(format!("Read failed at offset {}: {}", offset, e)))?;
+
+        // Convert T→f32 for quantization + centroid.
+        let f32_slice = &mut chunk_f32[..n * ndims];
+        T::as_f32_into(chunk_slice, f32_slice).map_err(|_| {
+            ANNError::log_index_error("f32 conversion failed")
+        })?;
+
+        // Quantize this chunk into the pre-allocated bits buffer.
+        for i in 0..n {
+            let vec = &f32_slice[i * ndims..(i + 1) * ndims];
+            let out = &mut bits[(offset + i) * bytes_per_vec..(offset + i + 1) * bytes_per_vec];
+            for d in 0..ndims {
+                let code = ((vec[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
+                if code > 0 {
+                    out[d / 8] |= 1 << (d % 8);
+                }
+            }
+        }
+
+        // Accumulate centroid.
+        for i in 0..n {
+            let vec = &f32_slice[i * ndims..(i + 1) * ndims];
+            for d in 0..ndims {
+                centroid[d] += vec[d];
+            }
+        }
+
+        offset += n;
+    }
+
+    let qdata = diskann_pipnn::quantize::QuantizedData::from_raw(bits, bytes_per_vec, ndims, npoints);
+
+    // Find medoid: point closest to centroid.
+    let inv_n = 1.0 / npoints as f32;
+    for d in 0..ndims { centroid[d] *= inv_n; }
+
+    // Re-read file to find medoid (second pass, sequential, OS page cache hit).
+    reader.seek(std::io::SeekFrom::Start(8))
+        .map_err(|e| ANNError::log_index_error(format!("Seek failed: {}", e)))?;
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+    offset = 0;
+    while offset < npoints {
+        let n = (npoints - offset).min(chunk_size);
+        let chunk_slice = &mut chunk_t[..n * ndims];
+        reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+            .map_err(|e| ANNError::log_index_error(format!("Read failed: {}", e)))?;
+
+        let f32_slice = &mut chunk_f32[..n * ndims];
+        T::as_f32_into(chunk_slice, f32_slice).map_err(|_| {
+            ANNError::log_index_error("f32 conversion failed")
+        })?;
+
+        for i in 0..n {
+            let vec = &f32_slice[i * ndims..(i + 1) * ndims];
+            let mut dist = 0.0f32;
+            for d in 0..ndims {
+                let diff = vec[d] - centroid[d];
+                dist += diff * diff;
+            }
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = offset + i;
+            }
+        }
+        offset += n;
+    }
+
+    Ok((qdata, best_idx))
 }
 
 #[allow(clippy::too_many_arguments)]
