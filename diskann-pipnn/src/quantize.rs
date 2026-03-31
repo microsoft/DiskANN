@@ -59,7 +59,10 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
     let mut bits = unsafe {
         let ptr = bits_u64.as_mut_ptr() as *mut u8;
         let len = bits_u64.len().checked_mul(8).expect("u64→u8 len overflow");
-        let cap = bits_u64.capacity().checked_mul(8).expect("u64→u8 cap overflow");
+        let cap = bits_u64
+            .capacity()
+            .checked_mul(8)
+            .expect("u64→u8 cap overflow");
         std::mem::forget(bits_u64);
         Vec::from_raw_parts(ptr, len, cap)
     };
@@ -71,11 +74,15 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
             let src = &data[i * ndims..(i + 1) * ndims];
             QUANT_F32_BUF.with(|cell| {
                 let mut buf = cell.borrow_mut();
-                if buf.len() < ndims { buf.resize(ndims, 0.0); }
+                if buf.len() < ndims {
+                    buf.resize(ndims, 0.0);
+                }
                 let f32_vec = &mut buf[..ndims];
                 T::as_f32_into(src, f32_vec).expect("f32 conversion");
                 for d in 0..ndims {
-                    let code = ((f32_vec[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
+                    let code = ((f32_vec[d] - shift[d]) * inverse_scale)
+                        .clamp(0.0, 1.0)
+                        .round() as u8;
                     if code > 0 {
                         out[d / 8] |= 1 << (d % 8);
                     }
@@ -97,20 +104,36 @@ impl QuantizedData {
     pub fn from_raw(bits: Vec<u8>, bytes_per_vec: usize, ndims: usize, npoints: usize) -> Self {
         debug_assert_eq!(bits.len(), npoints * bytes_per_vec);
         debug_assert_eq!(bytes_per_vec % 8, 0, "bytes_per_vec must be 8-byte aligned");
-        Self { bits, bytes_per_vec, ndims, npoints }
+        Self {
+            bits,
+            bytes_per_vec,
+            ndims,
+            npoints,
+        }
     }
 
     /// Number of points.
-    pub fn npoints(&self) -> usize { self.npoints }
+    pub fn npoints(&self) -> usize {
+        self.npoints
+    }
     /// Number of bytes per quantized vector.
-    pub fn bytes_per_vec(&self) -> usize { self.bytes_per_vec }
+    pub fn bytes_per_vec(&self) -> usize {
+        self.bytes_per_vec
+    }
     /// Original dimensionality.
-    pub fn ndims(&self) -> usize { self.ndims }
+    pub fn ndims(&self) -> usize {
+        self.ndims
+    }
 
     /// Get the packed bit vector for point i.
     #[inline(always)]
     pub fn get(&self, i: usize) -> &[u8] {
-        debug_assert!(i < self.npoints, "QuantizedData::get index {} out of range (npoints={})", i, self.npoints);
+        debug_assert!(
+            i < self.npoints,
+            "QuantizedData::get index {} out of range (npoints={})",
+            i,
+            self.npoints
+        );
         let start = i * self.bytes_per_vec;
         unsafe { self.bits.get_unchecked(start..start + self.bytes_per_vec) }
     }
@@ -118,7 +141,12 @@ impl QuantizedData {
     /// Get the packed bit vector as u64 slice for point i (fast path).
     #[inline(always)]
     pub fn get_u64(&self, i: usize) -> &[u64] {
-        debug_assert!(i < self.npoints, "QuantizedData::get index {} out of range (npoints={})", i, self.npoints);
+        debug_assert!(
+            i < self.npoints,
+            "QuantizedData::get index {} out of range (npoints={})",
+            i,
+            self.npoints
+        );
         let start = i * self.bytes_per_vec;
         let u64s = self.bytes_per_vec / 8;
         // SAFETY: bits buffer was allocated as Vec<u64>, guaranteeing u64 alignment. bytes_per_vec is always a multiple of 8.
@@ -234,7 +262,13 @@ mod tests {
         use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         (0..npoints * ndims)
-            .map(|_| if rng.random_bool(0.5) { 1.0f32 } else { -1.0f32 })
+            .map(|_| {
+                if rng.random_bool(0.5) {
+                    1.0f32
+                } else {
+                    -1.0f32
+                }
+            })
             .collect()
     }
 
@@ -377,9 +411,11 @@ mod tests {
         for i in 0..n {
             for j in (i + 1)..n {
                 assert_eq!(
-                    dist[i * n + j], dist[j * n + i],
+                    dist[i * n + j],
+                    dist[j * n + i],
                     "asymmetry at ({}, {})",
-                    i, j
+                    i,
+                    j
                 );
             }
         }
@@ -406,7 +442,10 @@ mod tests {
         let qd = train_and_quantize(&data, 1, ndims);
         assert_eq!(qd.npoints, 1, "should have 1 point");
         assert_eq!(qd.ndims, ndims, "should preserve ndims");
-        assert_eq!(qd.bytes_per_vec, 8, "bytes_per_vec should be 8 (rounded up to multiple of 8)");
+        assert_eq!(
+            qd.bytes_per_vec, 8,
+            "bytes_per_vec should be 8 (rounded up to multiple of 8)"
+        );
     }
 
     #[test]
@@ -427,8 +466,15 @@ mod tests {
         let npoints = 3;
         let data = make_binary_data(npoints, ndims, 42);
         let qd = train_and_quantize(&data, npoints, ndims);
-        assert_eq!(qd.bytes_per_vec, 128, "bytes_per_vec for ndims=1024 should be 128");
-        assert_eq!(qd.u64s_per_vec(), 16, "u64s_per_vec for ndims=1024 should be 16");
+        assert_eq!(
+            qd.bytes_per_vec, 128,
+            "bytes_per_vec for ndims=1024 should be 128"
+        );
+        assert_eq!(
+            qd.u64s_per_vec(),
+            16,
+            "u64s_per_vec for ndims=1024 should be 16"
+        );
     }
 
     #[test]
@@ -438,11 +484,15 @@ mod tests {
         let ndims = 8;
         let data = vec![42.0f32; npoints * ndims];
         let qd = train_and_quantize(&data, npoints, ndims);
-        assert_eq!(qd.npoints, npoints, "should succeed with zero-variance data");
+        assert_eq!(
+            qd.npoints, npoints,
+            "should succeed with zero-variance data"
+        );
         // All points should have identical bit patterns.
         for i in 1..npoints {
             assert_eq!(
-                qd.get(i), qd.get(0),
+                qd.get(i),
+                qd.get(0),
                 "zero-variance data should produce identical quantized vectors"
             );
         }
@@ -464,7 +514,8 @@ mod tests {
         let a: Vec<u64> = vec![0b0000_0000];
         let b: Vec<u64> = vec![0b0000_0001];
         assert_eq!(
-            QuantizedData::hamming_u64(&a, &b), 1,
+            QuantizedData::hamming_u64(&a, &b),
+            1,
             "single bit difference should yield Hamming distance 1"
         );
     }
@@ -477,7 +528,11 @@ mod tests {
         let indices = vec![0];
         let dist = qd.compute_distance_matrix(&indices);
         assert_eq!(dist.len(), 1, "1x1 matrix should have 1 element");
-        assert_eq!(dist[0], f32::MAX, "diagonal for single point should be f32::MAX");
+        assert_eq!(
+            dist[0],
+            f32::MAX,
+            "diagonal for single point should be f32::MAX"
+        );
     }
 
     #[test]
@@ -490,11 +545,13 @@ mod tests {
         let indices = vec![0, 1];
         let dist = qd.compute_distance_matrix(&indices);
         assert_eq!(
-            dist[0 * 2 + 1], 0.0,
+            dist[0 * 2 + 1],
+            0.0,
             "two identical quantized vectors should have Hamming distance 0"
         );
         assert_eq!(
-            dist[1 * 2 + 0], 0.0,
+            dist[1 * 2 + 0],
+            0.0,
             "symmetric: two identical quantized vectors should have Hamming distance 0"
         );
     }
@@ -508,7 +565,10 @@ mod tests {
         let mut out: Vec<f32> = vec![];
         // Should not crash with empty leader list.
         qd.distances_to_leaders(0, &leader_indices, &mut out);
-        assert!(out.is_empty(), "empty leader list should produce empty output");
+        assert!(
+            out.is_empty(),
+            "empty leader list should produce empty output"
+        );
     }
 
     #[test]
@@ -518,9 +578,11 @@ mod tests {
             let data = vec![0.0f32; ndims];
             let qd = train_and_quantize(&data, 1, ndims);
             assert_eq!(
-                qd.bytes_per_vec % 8, 0,
+                qd.bytes_per_vec % 8,
+                0,
                 "bytes_per_vec ({}) should be a multiple of 8 for ndims={}",
-                qd.bytes_per_vec, ndims
+                qd.bytes_per_vec,
+                ndims
             );
         }
     }

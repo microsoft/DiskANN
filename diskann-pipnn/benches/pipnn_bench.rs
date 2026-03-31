@@ -81,8 +81,8 @@ fn train_and_quantize(data: &[f32], npoints: usize, ndims: usize) -> quantize::Q
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
     use diskann_utils::views::MatrixView;
 
-    let data_matrix = MatrixView::try_from(data, npoints, ndims)
-        .expect("data length must equal npoints * ndims");
+    let data_matrix =
+        MatrixView::try_from(data, npoints, ndims).expect("data length must equal npoints * ndims");
     let quantizer = ScalarQuantizationParameters::default().train(data_matrix);
     let shift = quantizer.shift().to_vec();
     let scale = quantizer.scale();
@@ -100,15 +100,11 @@ fn bench_hamming_distance_matrix(c: &mut Criterion) {
         let indices: Vec<usize> = (0..n).collect();
 
         group.throughput(Throughput::Elements((n * n) as u64));
-        group.bench_with_input(
-            BenchmarkId::new("n_points", n),
-            &n,
-            |b, _| {
-                b.iter(|| {
-                    qd.compute_distance_matrix(&indices);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("n_points", n), &n, |b, _| {
+            b.iter(|| {
+                qd.compute_distance_matrix(&indices);
+            });
+        });
     }
     group.finish();
 }
@@ -180,15 +176,11 @@ fn bench_hash_prune_add_edges(c: &mut Criterion) {
         let edges = leaf_build::build_leaf(&leaf_data, ndims, &leaf_indices, k, Metric::L2);
 
         group.throughput(Throughput::Elements(edges.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::new("npoints", npoints),
-            &(),
-            |b, _| {
-                b.iter(|| {
-                    hp.add_edges_batched(&edges);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("npoints", npoints), &(), |b, _| {
+            b.iter(|| {
+                hp.add_edges_batched(&edges);
+            });
+        });
     }
     group.finish();
 }
@@ -262,37 +254,17 @@ fn bench_full_build(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    gemm_benches,
-    bench_sgemm_aat,
-    bench_sgemm_abt,
-);
+criterion_group!(gemm_benches, bench_sgemm_aat, bench_sgemm_abt,);
 
-criterion_group!(
-    quantize_benches,
-    bench_hamming_distance_matrix,
-);
+criterion_group!(quantize_benches, bench_hamming_distance_matrix,);
 
-criterion_group!(
-    leaf_benches,
-    bench_build_leaf,
-    bench_build_leaf_quantized,
-);
+criterion_group!(leaf_benches, bench_build_leaf, bench_build_leaf_quantized,);
 
-criterion_group!(
-    hash_prune_benches,
-    bench_hash_prune_add_edges,
-);
+criterion_group!(hash_prune_benches, bench_hash_prune_add_edges,);
 
-criterion_group!(
-    partition_benches,
-    bench_partition,
-);
+criterion_group!(partition_benches, bench_partition,);
 
-criterion_group!(
-    build_benches,
-    bench_full_build,
-);
+criterion_group!(build_benches, bench_full_build,);
 
 criterion_main!(
     gemm_benches,

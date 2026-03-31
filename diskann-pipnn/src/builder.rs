@@ -24,8 +24,6 @@ use crate::leaf_build;
 use crate::partition::{self, PartitionConfig};
 use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
 
-
-
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
 
 /// Create a DiskANN distance functor for the given metric.
@@ -56,8 +54,16 @@ impl std::fmt::Display for PiPNNBuildStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "PiPNN Build Timing")?;
         writeln!(f, "  LSH sketches:   {:.3}s", self.sketch_secs)?;
-        writeln!(f, "  Partition:      {:.3}s  ({} leaves)", self.partition_secs, self.num_leaves)?;
-        writeln!(f, "  Leaf build:     {:.3}s  ({} edges)", self.leaf_build_secs, self.total_edges)?;
+        writeln!(
+            f,
+            "  Partition:      {:.3}s  ({} leaves)",
+            self.partition_secs, self.num_leaves
+        )?;
+        writeln!(
+            f,
+            "  Leaf build:     {:.3}s  ({} edges)",
+            self.leaf_build_secs, self.total_edges
+        )?;
         writeln!(f, "  Graph extract:  {:.3}s", self.extract_secs)?;
         writeln!(f, "  Final prune:    {:.3}s", self.final_prune_secs)?;
         writeln!(f, "  Total:          {:.3}s", self.total_secs)
@@ -95,7 +101,11 @@ impl PiPNNGraph {
 
     /// Get the max out-degree.
     pub fn max_degree(&self) -> usize {
-        self.adjacency.iter().map(|adj| adj.len()).max().unwrap_or(0)
+        self.adjacency
+            .iter()
+            .map(|adj| adj.len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Count the number of points with zero out-degree.
@@ -115,8 +125,8 @@ impl PiPNNGraph {
     ///     - u32 LE: number of neighbors
     ///     - N x u32 LE: neighbor IDs
     pub fn save_graph(&self, path: &std::path::Path) -> PiPNNResult<()> {
-        use std::io::{Write, Seek, SeekFrom, BufWriter};
         use std::fs::File;
+        use std::io::{BufWriter, Seek, SeekFrom, Write};
 
         let mut f = BufWriter::new(File::create(path)?);
 
@@ -160,7 +170,6 @@ impl PiPNNGraph {
 
         Ok(())
     }
-
 }
 
 /// Search is only available for testing.
@@ -197,10 +206,7 @@ impl PiPNNGraph {
         let mut visited = vec![false; npoints];
         let mut candidates: Vec<(usize, f32)> = Vec::with_capacity(l + 1);
 
-        let start_dist = dist_fn.call(
-            &data[start * ndims..(start + 1) * ndims],
-            query,
-        );
+        let start_dist = dist_fn.call(&data[start * ndims..(start + 1) * ndims], query);
         candidates.push((start, start_dist));
         visited[start] = true;
 
@@ -217,12 +223,10 @@ impl PiPNNGraph {
                 }
                 visited[neighbor] = true;
 
-                let dist = dist_fn.call(
-                    &data[neighbor * ndims..(neighbor + 1) * ndims],
-                    query,
-                );
+                let dist = dist_fn.call(&data[neighbor * ndims..(neighbor + 1) * ndims], query);
 
-                if candidates.len() < l || dist < candidates.last().map(|c| c.1).unwrap_or(f32::MAX) {
+                if candidates.len() < l || dist < candidates.last().map(|c| c.1).unwrap_or(f32::MAX)
+                {
                     let pos = candidates
                         .binary_search_by(|c| {
                             c.1.partial_cmp(&dist).unwrap_or(std::cmp::Ordering::Equal)
@@ -306,9 +310,7 @@ pub fn build_typed<T: VectorRepr + Send + Sync>(
     }
 
     if npoints == 0 || ndims == 0 {
-        return Err(PiPNNError::Config(
-            "npoints and ndims must be > 0".into(),
-        ));
+        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
     }
 
     tracing::info!(
@@ -327,13 +329,16 @@ pub fn build_typed<T: VectorRepr + Send + Sync>(
 /// Build a PiPNN index.
 ///
 /// `data` is row-major: npoints x ndims.
-pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -> PiPNNResult<PiPNNGraph> {
+pub fn build(
+    data: &[f32],
+    npoints: usize,
+    ndims: usize,
+    config: &PiPNNConfig,
+) -> PiPNNResult<PiPNNGraph> {
     config.validate()?;
 
     if npoints == 0 || ndims == 0 {
-        return Err(PiPNNError::Config(
-            "npoints and ndims must be > 0".into(),
-        ));
+        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
     }
 
     if data.len() != npoints * ndims {
@@ -408,8 +413,10 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
     }
 
     tracing::info!(
-        npoints = npoints, ndims = ndims,
-        k = config.k, max_degree = config.max_degree,
+        npoints = npoints,
+        ndims = ndims,
+        k = config.k,
+        max_degree = config.max_degree,
         "PiPNN build started (with pre-trained SQ, native type)"
     );
 
@@ -417,16 +424,27 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
     // Quantize and compute medoid from native data, then release the borrow.
     let t = Instant::now();
     let qdata = crate::quantize::quantize_1bit(
-        data, npoints, ndims, &sq_params.shift, sq_params.inverse_scale,
+        data,
+        npoints,
+        ndims,
+        &sq_params.shift,
+        sq_params.inverse_scale,
     );
     let medoid = find_medoid(data, npoints, ndims);
-    tracing::info!(elapsed_secs = t.elapsed().as_secs_f64(), "1-bit quantization + medoid complete");
+    tracing::info!(
+        elapsed_secs = t.elapsed().as_secs_f64(),
+        "1-bit quantization + medoid complete"
+    );
     // `data` borrow ends here — caller can drop native T data.
 
     // Compute LSH sketches from 1-bit vectors directly — no f16/f32 data needed.
     // dot(1bit_vec, hyperplane) = sum of hyperplane[d] where bit d is set.
     let sketches = crate::hash_prune::LshSketches::new_from_quantized(
-        &qdata, npoints, ndims, config.num_hash_planes, 42,
+        &qdata,
+        npoints,
+        ndims,
+        config.num_hash_planes,
+        42,
     );
 
     build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
@@ -450,13 +468,19 @@ pub fn build_from_quantized(
     }
 
     tracing::info!(
-        npoints = npoints, ndims = ndims,
-        k = config.k, max_degree = config.max_degree,
+        npoints = npoints,
+        ndims = ndims,
+        k = config.k,
+        max_degree = config.max_degree,
         "PiPNN build from pre-quantized data"
     );
 
     let sketches = crate::hash_prune::LshSketches::new_from_quantized(
-        &qdata, npoints, ndims, config.num_hash_planes, 42,
+        &qdata,
+        npoints,
+        ndims,
+        config.num_hash_planes,
+        42,
     );
 
     build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
@@ -470,9 +494,8 @@ fn build_internal_sq(
     sketches: crate::hash_prune::LshSketches,
     medoid: usize,
 ) -> PiPNNResult<PiPNNGraph> {
-    let run = |sketches, qdata| {
-        build_internal_sq_impl(npoints, ndims, config, qdata, sketches, medoid)
-    };
+    let run =
+        |sketches, qdata| build_internal_sq_impl(npoints, ndims, config, qdata, sketches, medoid);
     if config.num_threads > 0 {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(config.num_threads)
@@ -513,7 +536,12 @@ fn build_internal_sq_impl(
             metric: config.metric,
         };
         let indices: Vec<usize> = (0..npoints).collect();
-        let leaves = crate::partition::parallel_partition_quantized(&qdata, &indices, &partition_config, seed);
+        let leaves = crate::partition::parallel_partition_quantized(
+            &qdata,
+            &indices,
+            &partition_config,
+            seed,
+        );
         total_leaves += leaves.len();
         partition_secs += t1.elapsed().as_secs_f64();
 
@@ -529,9 +557,11 @@ fn build_internal_sq_impl(
         leaf_build_secs += t2.elapsed().as_secs_f64();
     }
 
-    (0..rayon::current_num_threads()).into_par_iter().for_each(|_| {
-        crate::leaf_build::release_thread_buffers();
-    });
+    (0..rayon::current_num_threads())
+        .into_par_iter()
+        .for_each(|_| {
+            crate::leaf_build::release_thread_buffers();
+        });
 
     let t3 = Instant::now();
     let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
@@ -540,8 +570,12 @@ fn build_internal_sq_impl(
         // final_prune needs f32 data which we don't have — fall back to no-prune.
         // (final_prune_from_candidates requires T: VectorRepr for distance recomputation)
         tracing::warn!("final_prune=true with SQ build: pruning skipped (no f32 data)");
-        let adj: Vec<Vec<u32>> = candidates.into_par_iter()
-            .map(|mut c| { c.truncate(config.max_degree); c.into_iter().map(|(id, _)| id).collect() })
+        let adj: Vec<Vec<u32>> = candidates
+            .into_par_iter()
+            .map(|mut c| {
+                c.truncate(config.max_degree);
+                c.into_iter().map(|(id, _)| id).collect()
+            })
             .collect();
         (adj, extract_secs, 0.0)
     } else {
@@ -552,13 +586,25 @@ fn build_internal_sq_impl(
 
     let total_secs = t_total.elapsed().as_secs_f64();
     let stats = PiPNNBuildStats {
-        sketch_secs, partition_secs, leaf_build_secs,
-        extract_secs, final_prune_secs, total_secs,
-        num_leaves: total_leaves, total_edges: total_edges_count,
+        sketch_secs,
+        partition_secs,
+        leaf_build_secs,
+        extract_secs,
+        final_prune_secs,
+        total_secs,
+        num_leaves: total_leaves,
+        total_edges: total_edges_count,
     };
     print!("{}", stats);
 
-    Ok(PiPNNGraph { adjacency, npoints, ndims, medoid, metric: config.metric, build_stats: stats })
+    Ok(PiPNNGraph {
+        adjacency,
+        npoints,
+        ndims,
+        medoid,
+        metric: config.metric,
+        build_stats: stats,
+    })
 }
 
 /// Internal build logic shared between `build()` and `build_typed()`.
@@ -686,9 +732,11 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     }
 
     // Release thread-local leaf buffers so their arena pages can be reclaimed.
-    (0..rayon::current_num_threads()).into_par_iter().for_each(|_| {
-        leaf_build::release_thread_buffers();
-    });
+    (0..rayon::current_num_threads())
+        .into_par_iter()
+        .for_each(|_| {
+            leaf_build::release_thread_buffers();
+        });
 
     // Extract graph and optionally apply diversity-aware final prune.
     let t3 = Instant::now();
@@ -696,11 +744,25 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         // Extract full reservoir (l_max candidates with distances) for RobustPrune.
         let candidates = hash_prune.extract_graph_for_prune();
         let extract_secs = t3.elapsed().as_secs_f64();
-        tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete (full reservoir)");
+        tracing::info!(
+            elapsed_secs = extract_secs,
+            "Graph extraction complete (full reservoir)"
+        );
 
         let t4 = Instant::now();
-        tracing::info!("Applying final prune (selecting {} from {} candidates)", config.max_degree, config.l_max);
-        let adj = final_prune_from_candidates(data, ndims, &candidates, config.max_degree, config.metric, config.alpha);
+        tracing::info!(
+            "Applying final prune (selecting {} from {} candidates)",
+            config.max_degree,
+            config.l_max
+        );
+        let adj = final_prune_from_candidates(
+            data,
+            ndims,
+            &candidates,
+            config.max_degree,
+            config.metric,
+            config.alpha,
+        );
         let final_prune_secs = t4.elapsed().as_secs_f64();
         (adj, extract_secs, final_prune_secs)
     } else {
@@ -776,9 +838,17 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                     break;
                 }
 
-                T::as_f32_into(&data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims], &mut point_cand).expect("f32 conversion");
+                T::as_f32_into(
+                    &data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims],
+                    &mut point_cand,
+                )
+                .expect("f32 conversion");
                 let is_pruned = selected.iter().any(|&sel_id| {
-                    T::as_f32_into(&data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims], &mut point_sel).expect("f32 conversion");
+                    T::as_f32_into(
+                        &data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims],
+                        &mut point_sel,
+                    )
+                    .expect("f32 conversion");
                     let dist_sel_cand = dist_fn.call(&point_sel, &point_cand);
                     dist_sel_cand * alpha < cand_dist
                 });
@@ -894,7 +964,9 @@ mod tests {
         let mut total_recall = 0.0;
 
         for _ in 0..num_queries {
-            let query: Vec<f32> = (0..ndims).map(|_| rng.random_range(-1.0f32..1.0f32)).collect();
+            let query: Vec<f32> = (0..ndims)
+                .map(|_| rng.random_range(-1.0f32..1.0f32))
+                .collect();
 
             let approx = graph.search(&data, &query, k, search_l);
             let exact = brute_force_knn(&data, ndims, npoints, &query, k);
@@ -913,11 +985,7 @@ mod tests {
         let avg_recall = total_recall / num_queries as f64;
         eprintln!("Average recall@{}: {:.4}", k, avg_recall);
 
-        assert!(
-            avg_recall > 0.2,
-            "recall too low: {:.4}",
-            avg_recall
-        );
+        assert!(avg_recall > 0.2, "recall too low: {:.4}", avg_recall);
     }
 
     #[test]
@@ -925,63 +993,111 @@ mod tests {
         let config = PiPNNConfig::default();
         assert!(config.validate().is_ok());
 
-        let bad = PiPNNConfig { c_max: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            c_max: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { c_min: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            c_min: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { c_min: 2048, c_max: 1024, ..Default::default() };
+        let bad = PiPNNConfig {
+            c_min: 2048,
+            c_max: 1024,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { p_samp: 0.0, ..Default::default() };
+        let bad = PiPNNConfig {
+            p_samp: 0.0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { p_samp: 1.5, ..Default::default() };
+        let bad = PiPNNConfig {
+            p_samp: 1.5,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { fanout: vec![], ..Default::default() };
+        let bad = PiPNNConfig {
+            fanout: vec![],
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { fanout: vec![0], ..Default::default() };
+        let bad = PiPNNConfig {
+            fanout: vec![0],
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { num_hash_planes: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            num_hash_planes: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
-        let bad = PiPNNConfig { num_hash_planes: 17, ..Default::default() };
+        let bad = PiPNNConfig {
+            num_hash_planes: 17,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
-
     }
 
     #[test]
     fn test_config_validate_failures() {
         // max_degree = 0
-        let bad = PiPNNConfig { max_degree: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            max_degree: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
         // k = 0
-        let bad = PiPNNConfig { k: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            k: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
         // replicas = 0
-        let bad = PiPNNConfig { replicas: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            replicas: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
         // l_max = 0
-        let bad = PiPNNConfig { l_max: 0, ..Default::default() };
+        let bad = PiPNNConfig {
+            l_max: 0,
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
 
         // p_samp exactly 1.0 is valid
-        let ok = PiPNNConfig { p_samp: 1.0, ..Default::default() };
+        let ok = PiPNNConfig {
+            p_samp: 1.0,
+            ..Default::default()
+        };
         assert!(ok.validate().is_ok());
 
         // num_hash_planes = 1 (boundary) is valid
-        let ok = PiPNNConfig { num_hash_planes: 1, ..Default::default() };
+        let ok = PiPNNConfig {
+            num_hash_planes: 1,
+            ..Default::default()
+        };
         assert!(ok.validate().is_ok());
 
         // num_hash_planes = 16 (boundary) is valid
-        let ok = PiPNNConfig { num_hash_planes: 16, ..Default::default() };
+        let ok = PiPNNConfig {
+            num_hash_planes: 16,
+            ..Default::default()
+        };
         assert!(ok.validate().is_ok());
     }
 
@@ -995,7 +1111,9 @@ mod tests {
             let row = &mut data[i * ndims..(i + 1) * ndims];
             let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
             if norm > 0.0 {
-                for v in row.iter_mut() { *v /= norm; }
+                for v in row.iter_mut() {
+                    *v /= norm;
+                }
             }
         }
 
@@ -1027,7 +1145,10 @@ mod tests {
         let shift = quantizer.shift().to_vec();
         let scale = quantizer.scale();
         let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
-        SQParams { shift, inverse_scale }
+        SQParams {
+            shift,
+            inverse_scale,
+        }
     }
 
     #[test]
@@ -1166,7 +1287,8 @@ mod tests {
 
         // With these settings no node should be completely isolated.
         assert_eq!(
-            graph.num_isolated(), 0,
+            graph.num_isolated(),
+            0,
             "found {} isolated nodes with replicas=2",
             graph.num_isolated()
         );
@@ -1202,7 +1324,11 @@ mod tests {
         };
         let graph = build(&data, 1, 4, &config).unwrap();
         assert_eq!(graph.npoints, 1, "should have 1 point");
-        assert_eq!(graph.adjacency[0].len(), 0, "single point should have 0 edges");
+        assert_eq!(
+            graph.adjacency[0].len(),
+            0,
+            "single point should have 0 edges"
+        );
     }
 
     #[test]
@@ -1221,7 +1347,10 @@ mod tests {
         assert_eq!(graph.npoints, 2, "should have 2 points");
         // With 2 points, they should connect to each other.
         let total_edges: usize = graph.adjacency.iter().map(|a| a.len()).sum();
-        assert!(total_edges > 0, "two points should have at least one edge between them");
+        assert!(
+            total_edges > 0,
+            "two points should have at least one edge between them"
+        );
     }
 
     #[test]
@@ -1240,7 +1369,10 @@ mod tests {
             ..Default::default()
         };
         let graph = build(&data, npoints, ndims, &config).unwrap();
-        assert_eq!(graph.npoints, npoints, "should build successfully with duplicate points");
+        assert_eq!(
+            graph.npoints, npoints,
+            "should build successfully with duplicate points"
+        );
     }
 
     #[test]
@@ -1259,7 +1391,10 @@ mod tests {
         };
         let graph = build(&data, npoints, ndims, &config).unwrap();
         assert_eq!(graph.npoints, npoints, "k=1 should produce valid graph");
-        assert!(graph.avg_degree() > 0.0, "k=1 should still produce some edges");
+        assert!(
+            graph.avg_degree() > 0.0,
+            "k=1 should still produce some edges"
+        );
     }
 
     #[test]
@@ -1278,7 +1413,10 @@ mod tests {
             ..Default::default()
         };
         let graph = build(&data, npoints, ndims, &config).unwrap();
-        assert_eq!(graph.npoints, npoints, "k > c_max should still produce valid graph");
+        assert_eq!(
+            graph.npoints, npoints,
+            "k > c_max should still produce valid graph"
+        );
     }
 
     #[test]
@@ -1293,7 +1431,10 @@ mod tests {
         };
         let query = vec![1.0f32, 2.0, 3.0, 4.0];
         let results = graph.search(&[], &query, 5, 10);
-        assert!(results.is_empty(), "search on empty graph should return empty results");
+        assert!(
+            results.is_empty(),
+            "search on empty graph should return empty results"
+        );
     }
 
     #[test]
@@ -1340,7 +1481,10 @@ mod tests {
         let medoid = graph.medoid;
         let query = &data[medoid * ndims..(medoid + 1) * ndims];
         let results = graph.search(&data, query, 5, 50);
-        assert!(!results.is_empty(), "search should return at least one result");
+        assert!(
+            !results.is_empty(),
+            "search should return at least one result"
+        );
         assert_eq!(
             results[0].0, medoid,
             "searching with a data point should find itself first"
@@ -1373,8 +1517,7 @@ mod tests {
         let k = 10;
         let query = &data[0..ndims];
         let exact = brute_force_knn(&data, ndims, npoints, query, k);
-        let exact_set: std::collections::HashSet<usize> =
-            exact.iter().map(|&(id, _)| id).collect();
+        let exact_set: std::collections::HashSet<usize> = exact.iter().map(|&(id, _)| id).collect();
 
         // Compare recall for small L vs large L.
         let results_small_l = graph.search(&data, query, k, k);
@@ -1482,11 +1625,18 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.len() >= 24, "file too small for single node graph");
         let file_size = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        assert_eq!(file_size as usize, bytes.len(), "header file_size mismatch for single node");
+        assert_eq!(
+            file_size as usize,
+            bytes.len(),
+            "header file_size mismatch for single node"
+        );
 
         // Max degree should be 0 for single node with no edges.
         let max_deg = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        assert_eq!(max_deg, 0, "single node with no edges should have max_degree=0");
+        assert_eq!(
+            max_deg, 0,
+            "single node with no edges should have max_degree=0"
+        );
 
         // Read back neighbor count for the single node.
         let num_neighbors = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
@@ -1519,23 +1669,26 @@ mod tests {
         // Read back and verify we can parse all adjacency lists.
         let bytes = std::fs::read(&path).unwrap();
         let file_size = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        assert_eq!(file_size as usize, bytes.len(), "header file_size mismatch for large graph");
+        assert_eq!(
+            file_size as usize,
+            bytes.len(),
+            "header file_size mismatch for large graph"
+        );
 
         let mut offset = 24usize;
         let mut total_parsed_nodes = 0usize;
         while offset < bytes.len() {
-            let num_neighbors = u32::from_le_bytes(
-                bytes[offset..offset + 4].try_into().unwrap()
-            ) as usize;
+            let num_neighbors =
+                u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             for _ in 0..num_neighbors {
-                let neighbor = u32::from_le_bytes(
-                    bytes[offset..offset + 4].try_into().unwrap()
-                ) as usize;
+                let neighbor =
+                    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 assert!(
                     neighbor < npoints,
                     "neighbor index {} out of range for node {}",
-                    neighbor, total_parsed_nodes
+                    neighbor,
+                    total_parsed_nodes
                 );
                 offset += 4;
             }
@@ -1680,7 +1833,9 @@ mod tests {
         let candidates = vec![
             // Node 0's candidates sorted by distance: 3 (close, same direction as 1), 1 (far along x), 2 (far along y)
             vec![(3, 0.01f32), (1, 1.0f32), (2, 1.0f32)],
-            vec![], vec![], vec![],
+            vec![],
+            vec![],
+            vec![],
         ];
 
         let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
@@ -1691,7 +1846,10 @@ mod tests {
         assert!(!node0.is_empty());
         assert!(node0.len() <= 2, "should respect max_degree=2");
         // Node 0 should keep at least one neighbor.
-        assert!(node0.contains(&3), "closest candidate should always be selected");
+        assert!(
+            node0.contains(&3),
+            "closest candidate should always be selected"
+        );
     }
 
     #[test]
@@ -1705,10 +1863,7 @@ mod tests {
     #[test]
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
-        let candidates = vec![
-            vec![(1, 1.0f32)],
-            vec![(0, 1.0f32)],
-        ];
+        let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
         let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
@@ -1722,12 +1877,19 @@ mod tests {
         let data = generate_random_data(npoints, ndims, 42);
 
         let config_aggressive = PiPNNConfig {
-            c_max: 64, c_min: 16, k: 6, max_degree: 16,
-            replicas: 2, l_max: 64, final_prune: true, alpha: 1.0,
+            c_max: 64,
+            c_min: 16,
+            k: 6,
+            max_degree: 16,
+            replicas: 2,
+            l_max: 64,
+            final_prune: true,
+            alpha: 1.0,
             ..Default::default()
         };
         let config_relaxed = PiPNNConfig {
-            alpha: 2.0, ..config_aggressive.clone()
+            alpha: 2.0,
+            ..config_aggressive.clone()
         };
 
         let graph_aggressive = build(&data, npoints, ndims, &config_aggressive).unwrap();
@@ -1737,7 +1899,8 @@ mod tests {
         assert!(
             graph_relaxed.avg_degree() >= graph_aggressive.avg_degree(),
             "alpha=2.0 ({:.1}) should produce >= degree than alpha=1.0 ({:.1})",
-            graph_relaxed.avg_degree(), graph_aggressive.avg_degree()
+            graph_relaxed.avg_degree(),
+            graph_aggressive.avg_degree()
         );
     }
 
@@ -1749,12 +1912,19 @@ mod tests {
         let data = generate_random_data(npoints, ndims, 42);
 
         let config_no_prune = PiPNNConfig {
-            c_max: 128, c_min: 32, k: 3, max_degree: 32,
-            replicas: 1, l_max: 64, final_prune: false,
+            c_max: 128,
+            c_min: 32,
+            k: 3,
+            max_degree: 32,
+            replicas: 1,
+            l_max: 64,
+            final_prune: false,
             ..Default::default()
         };
         let config_prune = PiPNNConfig {
-            l_max: 64, final_prune: true, ..config_no_prune.clone()
+            l_max: 64,
+            final_prune: true,
+            ..config_no_prune.clone()
         };
 
         let graph_no = build(&data, npoints, ndims, &config_no_prune).unwrap();
@@ -1768,7 +1938,8 @@ mod tests {
         assert!(
             graph_yes.avg_degree() <= graph_no.avg_degree(),
             "pruned ({:.1}) should be <= unpruned ({:.1})",
-            graph_yes.avg_degree(), graph_no.avg_degree()
+            graph_yes.avg_degree(),
+            graph_no.avg_degree()
         );
 
         // Both should be searchable.
@@ -1793,11 +1964,18 @@ mod tests {
         for i in 0..npoints {
             let row = &mut data[i * ndims..(i + 1) * ndims];
             let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if norm > 0.0 { for v in row.iter_mut() { *v /= norm; } }
+            if norm > 0.0 {
+                for v in row.iter_mut() {
+                    *v /= norm;
+                }
+            }
         }
 
         let config = PiPNNConfig {
-            c_max: 32, c_min: 8, k: 3, max_degree: 16,
+            c_max: 32,
+            c_min: 8,
+            k: 3,
+            max_degree: 16,
             metric: Metric::CosineNormalized,
             ..Default::default()
         };
@@ -1846,7 +2024,10 @@ mod tests {
         let ndims = 4;
         let data = generate_random_data(npoints, ndims, 42);
         let config = PiPNNConfig {
-            c_max: 32, c_min: 8, k: 3, max_degree: 16,
+            c_max: 32,
+            c_min: 8,
+            k: 3,
+            max_degree: 16,
             ..Default::default()
         };
         let graph = build(&data, npoints, ndims, &config).unwrap();
@@ -1858,7 +2039,11 @@ mod tests {
         assert!(graph.avg_degree() > 0.0);
         assert!(graph.avg_degree() <= config.max_degree as f64);
         // num_isolated should be 0 for a well-connected graph.
-        assert_eq!(graph.num_isolated(), 0, "graph should have no isolated nodes");
+        assert_eq!(
+            graph.num_isolated(),
+            0,
+            "graph should have no isolated nodes"
+        );
     }
 
     #[test]

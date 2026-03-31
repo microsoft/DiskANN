@@ -114,7 +114,11 @@ where
 ///
 /// Has the same `BF` signature as `single_or_multi_insert` for drop-in use in `run_build`.
 pub(super) fn pipnn_insert<U, V, D, T, S>(
-    index: Arc<DiskANNIndex<diskann_providers::model::graph::provider::async_::inmem::DefaultProvider<U, V, D>>>,
+    index: Arc<
+        DiskANNIndex<
+            diskann_providers::model::graph::provider::async_::inmem::DefaultProvider<U, V, D>,
+        >,
+    >,
     _strategy: S,
     data: Arc<Matrix<T>>,
     input: &IndexBuild,
@@ -122,8 +126,10 @@ pub(super) fn pipnn_insert<U, V, D, T, S>(
 ) -> anyhow::Result<BuildStats>
 where
     T: diskann::utils::VectorRepr + Send + Sync + bytemuck::Pod,
-    U: AsyncFriendly + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
-    V: AsyncFriendly + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
+    U: AsyncFriendly
+        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
+    V: AsyncFriendly
+        + diskann_providers::model::graph::provider::async_::common::SetElementHelper<T>,
     D: AsyncFriendly,
 {
     use std::io::Write;
@@ -165,9 +171,8 @@ where
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(input.num_threads)
         .build()?;
-    let graph = pool.install(|| {
-        diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &config)
-    })?;
+    let graph = pool
+        .install(|| diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &config))?;
 
     writeln!(output, "{}", graph.build_stats)?;
     writeln!(
@@ -192,13 +197,23 @@ where
         neighbors.set_neighbors_sync(npoints, &medoid_adj)?;
     }
     let transfer_secs = t_transfer.elapsed().as_secs_f64();
-    writeln!(output, "  Edge transfer: {:.3}s (medoid={})", transfer_secs, graph.medoid)?;
+    writeln!(
+        output,
+        "  Edge transfer: {:.3}s (medoid={})",
+        transfer_secs, graph.medoid
+    )?;
 
     let total_secs = graph.build_stats.total_secs + store_secs + transfer_secs;
-    writeln!(output, "  Total (incl. store + transfer): {:.3}s\n", total_secs)?;
+    writeln!(
+        output,
+        "  Total (incl. store + transfer): {:.3}s\n",
+        total_secs
+    )?;
 
     let total_us = MicroSeconds::from(std::time::Duration::from_secs_f64(total_secs));
-    let per_vec = MicroSeconds::from(std::time::Duration::from_secs_f64(total_secs / npoints as f64));
+    let per_vec = MicroSeconds::from(std::time::Duration::from_secs_f64(
+        total_secs / npoints as f64,
+    ));
     Ok(BuildStats {
         kind: BuildKind::PiPNN,
         total_time: total_us,

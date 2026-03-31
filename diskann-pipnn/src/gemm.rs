@@ -12,11 +12,7 @@ use diskann_linalg::Transpose;
 ///
 /// Uses diskann-linalg's sgemm backed by faer, the same GEMM DiskANN uses internally.
 #[inline]
-pub fn sgemm_abt(
-    a: &[f32], m: usize, k: usize,
-    b: &[f32], n: usize,
-    c: &mut [f32],
-) {
+pub fn sgemm_abt(a: &[f32], m: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
     debug_assert_eq!(a.len(), m * k);
     debug_assert_eq!(b.len(), n * k);
     debug_assert_eq!(c.len(), m * n);
@@ -24,9 +20,12 @@ pub fn sgemm_abt(
     diskann_linalg::sgemm(
         Transpose::None,
         Transpose::Ordinary,
-        m, n, k,
+        m,
+        n,
+        k,
         1.0,
-        a, b,
+        a,
+        b,
         None,
         c,
     );
@@ -46,15 +45,17 @@ mod tests {
     #[test]
     fn test_sgemm_abt_identity() {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let identity = vec![
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0,
-        ];
+        let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let mut c = vec![0.0f32; 6];
         sgemm_abt(&a, 2, 3, &identity, 3, &mut c);
         for i in 0..6 {
-            assert!((c[i] - a[i]).abs() < 1e-6, "A*I^T != A at {}: got {}, expected {}", i, c[i], a[i]);
+            assert!(
+                (c[i] - a[i]).abs() < 1e-6,
+                "A*I^T != A at {}: got {}, expected {}",
+                i,
+                c[i],
+                a[i]
+            );
         }
     }
 
@@ -66,7 +67,13 @@ mod tests {
         sgemm_abt(&a, 2, 2, &b, 2, &mut c);
         let expected = vec![17.0, 23.0, 39.0, 53.0];
         for i in 0..4 {
-            assert!((c[i] - expected[i]).abs() < 1e-5, "mismatch at {}: got {}, expected {}", i, c[i], expected[i]);
+            assert!(
+                (c[i] - expected[i]).abs() < 1e-5,
+                "mismatch at {}: got {}, expected {}",
+                i,
+                c[i],
+                expected[i]
+            );
         }
     }
 
@@ -77,7 +84,12 @@ mod tests {
         sgemm_aat(&a, 3, 3, &mut c);
         for i in 0..3 {
             for j in (i + 1)..3 {
-                assert!((c[i * 3 + j] - c[j * 3 + i]).abs() < 1e-5, "not symmetric at ({},{})", i, j);
+                assert!(
+                    (c[i * 3 + j] - c[j * 3 + i]).abs() < 1e-5,
+                    "not symmetric at ({},{})",
+                    i,
+                    j
+                );
             }
         }
         assert!((c[0] - 14.0).abs() < 1e-5, "got {}", c[0]);
@@ -91,7 +103,11 @@ mod tests {
         sgemm_abt(&a, 2, 3, &b, 4, &mut c);
         let expected = vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
         for i in 0..8 {
-            assert!((c[i] - expected[i]).abs() < 1e-6, "rectangular mismatch at {}", i);
+            assert!(
+                (c[i] - expected[i]).abs() < 1e-6,
+                "rectangular mismatch at {}",
+                i
+            );
         }
     }
 
@@ -131,7 +147,11 @@ mod tests {
         sgemm_abt(&a, 2, 2, &b, 2, &mut c);
         let expected = vec![-17.0, -23.0, -39.0, -53.0];
         for i in 0..4 {
-            assert!((c[i] - expected[i]).abs() < 1e-5, "negative mismatch at {}", i);
+            assert!(
+                (c[i] - expected[i]).abs() < 1e-5,
+                "negative mismatch at {}",
+                i
+            );
         }
     }
 

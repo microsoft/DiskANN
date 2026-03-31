@@ -86,8 +86,15 @@ impl BuildAlgorithm {
     ) -> Option<diskann_pipnn::PiPNNConfig> {
         match self {
             BuildAlgorithm::PiPNN {
-                c_max, c_min, p_samp, fanout, leaf_k, replicas,
-                l_max, num_hash_planes, final_prune,
+                c_max,
+                c_min,
+                p_samp,
+                fanout,
+                leaf_k,
+                replicas,
+                l_max,
+                num_hash_planes,
+                final_prune,
             } => Some(diskann_pipnn::PiPNNConfig {
                 c_max: *c_max,
                 c_min: *c_min,
@@ -140,7 +147,11 @@ mod tests {
     #[test]
     fn test_build_algorithm_default_is_vamana() {
         let algo = BuildAlgorithm::default();
-        assert_eq!(algo, BuildAlgorithm::Vamana, "default BuildAlgorithm should be Vamana");
+        assert_eq!(
+            algo,
+            BuildAlgorithm::Vamana,
+            "default BuildAlgorithm should be Vamana"
+        );
     }
 
     #[test]
@@ -165,8 +176,7 @@ mod tests {
         };
         let display = format!("{}", algo);
         assert_eq!(
-            display,
-            "PiPNN(c_max=2048, leaf_k=4, replicas=2)",
+            display, "PiPNN(c_max=2048, leaf_k=4, replicas=2)",
             "PiPNN display should include c_max, leaf_k, and replicas"
         );
     }
@@ -177,7 +187,10 @@ mod tests {
         let json = serde_json::to_string(&algo).expect("serialize Vamana should succeed");
         let deserialized: BuildAlgorithm =
             serde_json::from_str(&json).expect("deserialize Vamana should succeed");
-        assert_eq!(algo, deserialized, "Vamana should roundtrip through serde_json");
+        assert_eq!(
+            algo, deserialized,
+            "Vamana should roundtrip through serde_json"
+        );
     }
 
     #[test]
@@ -196,7 +209,10 @@ mod tests {
         let json = serde_json::to_string(&algo).expect("serialize PiPNN should succeed");
         let deserialized: BuildAlgorithm =
             serde_json::from_str(&json).expect("deserialize PiPNN should succeed");
-        assert_eq!(algo, deserialized, "PiPNN with all fields should roundtrip through serde_json");
+        assert_eq!(
+            algo, deserialized,
+            "PiPNN with all fields should roundtrip through serde_json"
+        );
     }
 
     #[test]
@@ -263,15 +279,23 @@ mod tests {
     #[cfg(feature = "pipnn")]
     fn test_to_pipnn_config_vamana_returns_none() {
         let algo = BuildAlgorithm::Vamana;
-        assert!(algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2, 16).is_none());
+        assert!(algo
+            .to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2, 16)
+            .is_none());
     }
 
     #[test]
     #[cfg(feature = "pipnn")]
     fn test_to_pipnn_config_pipnn_returns_some() {
         let algo = BuildAlgorithm::PiPNN {
-            c_max: 512, c_min: 128, p_samp: 0.01, fanout: vec![8],
-            leaf_k: 5, replicas: 1, l_max: 128, num_hash_planes: 12,
+            c_max: 512,
+            c_min: 128,
+            p_samp: 0.01,
+            fanout: vec![8],
+            leaf_k: 5,
+            replicas: 1,
+            l_max: 128,
+            num_hash_planes: 12,
             final_prune: true,
         };
         let config = algo.to_pipnn_config(64, diskann_vector::distance::Metric::L2, 1.2, 16);

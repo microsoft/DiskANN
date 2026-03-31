@@ -258,7 +258,9 @@ where
         // memory inflates peak RSS during the disk layout phase.
         #[cfg(target_os = "linux")]
         unsafe {
-            extern "C" { fn malloc_trim(pad: usize) -> i32; }
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
             malloc_trim(0);
         }
 
@@ -395,7 +397,9 @@ where
         // Runtime dropped — reclaim RSS from PQ phase before PiPNN starts.
         #[cfg(target_os = "linux")]
         unsafe {
-            extern "C" { fn malloc_trim(pad: usize) -> i32; }
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
             malloc_trim(0);
         }
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
@@ -409,7 +413,9 @@ where
 
         #[cfg(target_os = "linux")]
         unsafe {
-            extern "C" { fn malloc_trim(pad: usize) -> i32; }
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
             malloc_trim(0);
         }
 
@@ -431,25 +437,26 @@ where
     fn build_pipnn_index_sync(&mut self) -> ANNResult<()> {
         use diskann_pipnn::builder;
 
-        let config = self.disk_build_param.build_algorithm()
+        let config = self
+            .disk_build_param
+            .build_algorithm()
             .to_pipnn_config(
                 self.index_configuration.config.pruned_degree().get(),
                 self.index_configuration.dist_metric,
                 self.index_configuration.config.alpha(),
                 self.index_configuration.num_threads,
             )
-            .ok_or_else(|| ANNError::log_index_error(
-                "build_pipnn_index called but build algorithm is not PiPNN"
-            ))?;
+            .ok_or_else(|| {
+                ANNError::log_index_error(
+                    "build_pipnn_index called but build algorithm is not PiPNN",
+                )
+            })?;
 
-        config.validate().map_err(|e| {
-            ANNError::log_index_error(format!("PiPNN config error: {}", e))
-        })?;
+        config
+            .validate()
+            .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
 
-        info!(
-            "Building PiPNN index: max_degree={}",
-            config.max_degree
-        );
+        info!("Building PiPNN index: max_degree={}", config.max_degree);
 
         let data_path = self.index_writer.get_dataset_file();
 
@@ -465,11 +472,19 @@ where
 
                 let t_q = std::time::Instant::now();
                 let (qdata, medoid) = chunked_quantize_and_medoid::<Data::VectorDataType, _>(
-                    &data_path, self.storage_provider, sq.shift(), inverse_scale,
+                    &data_path,
+                    self.storage_provider,
+                    sq.shift(),
+                    inverse_scale,
                 )?;
                 let npoints = qdata.npoints();
                 let ndims = qdata.ndims();
-                info!("Chunked quantize + medoid: {:.3}s ({} points × {}d)", t_q.elapsed().as_secs_f64(), npoints, ndims);
+                info!(
+                    "Chunked quantize + medoid: {:.3}s ({} points × {}d)",
+                    t_q.elapsed().as_secs_f64(),
+                    npoints,
+                    ndims
+                );
 
                 builder::build_from_quantized(qdata, npoints, ndims, medoid, &config)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
@@ -478,17 +493,16 @@ where
                 // Full precision or PQ build quantization — load data in native type
                 // and use build_typed to avoid upfront f32 conversion (saves ~793 MB
                 // peak RSS for f16 data).
-                let (npoints, ndims, data) = load_data_typed::<Data::VectorDataType, _>(
-                    &data_path,
-                    self.storage_provider,
-                )?;
+                let (npoints, ndims, data) =
+                    load_data_typed::<Data::VectorDataType, _>(&data_path, self.storage_provider)?;
                 builder::build_typed(&data, npoints, ndims, &config)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
         };
 
         let save_path = self.index_writer.get_mem_index_file();
-        graph.save_graph(std::path::Path::new(&save_path))
+        graph
+            .save_graph(std::path::Path::new(&save_path))
             .map_err(|e| ANNError::log_index_error(format!("PiPNN graph save failed: {}", e)))?;
 
         info!(
@@ -699,8 +713,8 @@ where
     T: VectorRepr,
     SP: StorageReadProvider,
 {
-    use std::io::{Read, Seek};
     use diskann_utils::io::Metadata;
+    use std::io::{Read, Seek};
 
     use rayon::prelude::*;
 
@@ -733,7 +747,8 @@ where
     while offset < npoints {
         let n = (npoints - offset).min(chunk_size);
         let chunk_slice = &mut chunk_t[..n * ndims];
-        reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+        reader
+            .read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
             .map_err(|e| ANNError::log_index_error(format!("Read failed: {}", e)))?;
 
         // Parallel quantize this chunk into the output bits buffer.
@@ -748,11 +763,14 @@ where
                 }
                 BUF.with(|cell| {
                     let mut buf = cell.borrow_mut();
-                    if buf.len() < ndims { buf.resize(ndims, 0.0); }
+                    if buf.len() < ndims {
+                        buf.resize(ndims, 0.0);
+                    }
                     let f = &mut buf[..ndims];
                     T::as_f32_into(src, f).expect("f32 conversion");
                     for d in 0..ndims {
-                        let code = ((f[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
+                        let code =
+                            ((f[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
                         if code > 0 {
                             out[d / 8] |= 1 << (d % 8);
                         }
@@ -765,20 +783,26 @@ where
         for i in 0..n {
             T::as_f32_into(&chunk_slice[i * ndims..(i + 1) * ndims], &mut f32_buf)
                 .expect("f32 conversion");
-            for d in 0..ndims { centroid[d] += f32_buf[d]; }
+            for d in 0..ndims {
+                centroid[d] += f32_buf[d];
+            }
         }
 
         offset += n;
     }
     drop(chunk_t); // Free chunk buffer before medoid pass.
 
-    let qdata = diskann_pipnn::quantize::QuantizedData::from_raw(bits, bytes_per_vec, ndims, npoints);
+    let qdata =
+        diskann_pipnn::quantize::QuantizedData::from_raw(bits, bytes_per_vec, ndims, npoints);
 
     // Medoid: find point closest to centroid. Re-read from disk (OS page cache hit).
     let inv_n = 1.0 / npoints as f32;
-    for d in 0..ndims { centroid[d] *= inv_n; }
+    for d in 0..ndims {
+        centroid[d] *= inv_n;
+    }
 
-    reader.seek(std::io::SeekFrom::Start(8))
+    reader
+        .seek(std::io::SeekFrom::Start(8))
         .map_err(|e| ANNError::log_index_error(format!("Seek failed: {}", e)))?;
     let mut chunk_t2 = vec![<T as bytemuck::Zeroable>::zeroed(); chunk_size * ndims];
     let mut f32_buf = vec![0.0f32; ndims];
@@ -788,7 +812,8 @@ where
     while offset < npoints {
         let n = (npoints - offset).min(chunk_size);
         let chunk_slice = &mut chunk_t2[..n * ndims];
-        reader.read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+        reader
+            .read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
             .map_err(|e| ANNError::log_index_error(format!("Read failed: {}", e)))?;
 
         for i in 0..n {

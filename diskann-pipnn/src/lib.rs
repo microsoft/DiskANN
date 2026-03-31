@@ -31,7 +31,9 @@ pub enum PiPNNError {
     #[error("data dimension mismatch: expected {expected}, got {actual}")]
     DimensionMismatch { expected: usize, actual: usize },
 
-    #[error("data length mismatch: expected {expected} elements ({npoints} x {ndims}), got {actual}")]
+    #[error(
+        "data length mismatch: expected {expected} elements ({npoints} x {ndims}), got {actual}"
+    )]
     DataLengthMismatch {
         expected: usize,
         actual: usize,
