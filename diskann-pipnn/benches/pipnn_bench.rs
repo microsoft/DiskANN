@@ -15,6 +15,7 @@ use diskann_pipnn::hash_prune::HashPrune;
 use diskann_pipnn::leaf_build;
 use diskann_pipnn::partition::{self, PartitionConfig};
 use diskann_pipnn::quantize;
+use diskann_vector::distance::Metric;
 
 /// Generate random f32 data for benchmarking.
 fn random_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
@@ -61,7 +62,7 @@ fn bench_sgemm_abt(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("m_n_k", format!("{}x{}x{}", m, n, k)),
             &(m, n, k),
-            |b_iter, &(m, k, _)| {
+            |b_iter, &(m, n, k)| {
                 b_iter.iter(|| {
                     gemm::sgemm_abt(&a, m, k, &b, n, &mut result);
                 });
@@ -118,7 +119,6 @@ fn bench_hamming_distance_matrix(c: &mut Criterion) {
 
 fn bench_build_leaf(c: &mut Criterion) {
     let mut group = c.benchmark_group("leaf_build/build_leaf");
-    gemm::set_blas_threads(1);
 
     for &(n, ndims, k) in &[(128, 128, 3), (512, 128, 4), (1024, 128, 4), (512, 384, 5)] {
         let data = random_data(n, ndims, 42);
@@ -130,7 +130,7 @@ fn bench_build_leaf(c: &mut Criterion) {
             &(),
             |b, _| {
                 b.iter(|| {
-                    leaf_build::build_leaf(&data, ndims, &indices, k, false);
+                    leaf_build::build_leaf(&data, ndims, &indices, k, Metric::L2);
                 });
             },
         );
@@ -177,7 +177,7 @@ fn bench_hash_prune_add_edges(c: &mut Criterion) {
         let k = 4;
         let leaf_data = random_data(leaf_size, ndims, 99);
         let leaf_indices: Vec<usize> = (0..leaf_size).collect();
-        let edges = leaf_build::build_leaf(&leaf_data, ndims, &leaf_indices, k, false);
+        let edges = leaf_build::build_leaf(&leaf_data, ndims, &leaf_indices, k, Metric::L2);
 
         group.throughput(Throughput::Elements(edges.len() as u64));
         group.bench_with_input(
@@ -199,7 +199,6 @@ fn bench_hash_prune_add_edges(c: &mut Criterion) {
 
 fn bench_partition(c: &mut Criterion) {
     let mut group = c.benchmark_group("partition/parallel_partition");
-    gemm::set_blas_threads(1);
     group.sample_size(10);
 
     for &(npoints, ndims) in &[(10_000, 128), (50_000, 128), (10_000, 384)] {
@@ -210,6 +209,7 @@ fn bench_partition(c: &mut Criterion) {
             c_min: 256,
             p_samp: 0.05,
             fanout: vec![8],
+            metric: Metric::L2,
         };
 
         group.throughput(Throughput::Elements(npoints as u64));
@@ -232,7 +232,6 @@ fn bench_partition(c: &mut Criterion) {
 
 fn bench_full_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("build/full");
-    gemm::set_blas_threads(1);
     group.sample_size(10);
 
     for &(npoints, ndims) in &[(1_000, 128), (10_000, 128), (10_000, 384)] {

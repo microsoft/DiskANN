@@ -125,7 +125,7 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
         }
 
         if actual_k < n {
-            indices.select_nth_unstable_by(actual_k, |&a, &b| {
+            indices.select_nth_unstable_by(actual_k - 1, |&a, &b| {
                 let da = unsafe { *row.get_unchecked(a as usize) };
                 let db = unsafe { *row.get_unchecked(b as usize) };
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
@@ -350,8 +350,8 @@ pub fn brute_force_knn(
         .collect();
 
     let actual_k = k.min(npoints);
-    if actual_k < dists.len() {
-        dists.select_nth_unstable_by(actual_k, |a, b| {
+    if actual_k > 0 && actual_k < dists.len() {
+        dists.select_nth_unstable_by(actual_k - 1, |a, b| {
             a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
         });
         dists.truncate(actual_k);

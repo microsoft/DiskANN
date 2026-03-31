@@ -106,8 +106,8 @@ fn partition_assign_quantized(
                     }
                     buf.push((j as u32, h as f32));
                 }
-                if num_assign < buf.len() {
-                    buf.select_nth_unstable_by(num_assign, |a, b| {
+                if num_assign > 0 && num_assign < buf.len() {
+                    buf.select_nth_unstable_by(num_assign - 1, |a, b| {
                         a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
@@ -250,8 +250,8 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                     }
                 }
 
-                if num_assign < buf.len() {
-                    buf.select_nth_unstable_by(num_assign, |a, b| {
+                if num_assign > 0 && num_assign < buf.len() {
+                    buf.select_nth_unstable_by(num_assign - 1, |a, b| {
                         a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
