@@ -129,14 +129,14 @@ impl PiPNNConfig {
         if self.l_max == 0 {
             return Err(PiPNNError::Config("l_max must be > 0".into()));
         }
+        if !self.p_samp.is_finite() {
+            return Err(PiPNNError::Config("p_samp must be finite".into()));
+        }
         if self.p_samp <= 0.0 || self.p_samp > 1.0 {
             return Err(PiPNNError::Config(format!(
                 "p_samp ({}) must be in (0.0, 1.0]",
                 self.p_samp
             )));
-        }
-        if !self.p_samp.is_finite() {
-            return Err(PiPNNError::Config("p_samp must be finite".into()));
         }
         if self.fanout.is_empty() {
             return Err(PiPNNError::Config("fanout must not be empty".into()));

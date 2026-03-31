@@ -51,9 +51,22 @@ impl LeafBuffers {
     }
 }
 
+/// Thread-local reusable buffers for quantized leaf building.
+struct QuantLeafBuffers {
+    local_u64: Vec<u64>,
+    dist_matrix: Vec<f32>,
+    seen: Vec<bool>,
+}
+
+impl QuantLeafBuffers {
+    fn new() -> Self {
+        Self { local_u64: Vec::new(), dist_matrix: Vec::new(), seen: Vec::new() }
+    }
+}
+
 thread_local! {
     static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
-    static QUANT_SEEN: RefCell<Vec<bool>> = RefCell::new(Vec::new());
+    static QUANT_BUFFERS: RefCell<QuantLeafBuffers> = RefCell::new(QuantLeafBuffers::new());
 }
 
 /// Release thread-local leaf build buffers on the calling thread.
@@ -71,8 +84,11 @@ pub fn release_thread_buffers() {
         bufs.dist_matrix = Vec::new();
         bufs.seen = Vec::new();
     });
-    QUANT_SEEN.with(|cell| {
-        *cell.borrow_mut() = Vec::new();
+    QUANT_BUFFERS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        bufs.local_u64 = Vec::new();
+        bufs.dist_matrix = Vec::new();
+        bufs.seen = Vec::new();
     });
 }
 
@@ -91,6 +107,9 @@ pub struct Edge {
 /// Sorting 4-byte indices instead of 8-byte (index, distance) pairs reduces memory
 /// movement during quickselect, yielding ~1.5x speedup over the pair-based approach.
 fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
+    if n <= 1 || k == 0 {
+        return Vec::new();
+    }
     let actual_k = k.min(n - 1);
     let mut edges = Vec::with_capacity(n * actual_k);
 
@@ -172,10 +191,10 @@ fn build_leaf_with_buffers<T: VectorRepr>(
     }
 
     // GEMM: dots = local_data * local_data^T
-    // Computes all n² dot products at once via BLAS — much faster than n² individual
-    // distance calls. The dot-to-distance conversion below is O(n²) scalar ops.
     let dot_matrix = &mut bufs.dot_matrix[..n * n];
     crate::gemm::sgemm_aat(local_data, n, ndims, dot_matrix);
+
+    let norms_sq = &bufs.norms_sq[..n];
 
     // Convert to distance matrix using the target metric.
     use diskann_vector::distance::Metric;
@@ -241,14 +260,50 @@ pub fn build_leaf_quantized(
         return Vec::new();
     }
 
-    let dist_matrix = qdata.compute_distance_matrix(indices);
-    let local_edges = extract_knn(&dist_matrix, n, k);
+    QUANT_BUFFERS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        let u64s = qdata.u64s_per_vec();
+        let nn = n * n;
 
-    QUANT_SEEN.with(|cell| {
-        let mut seen = cell.borrow_mut();
-        seen.resize(n * n, false);
+        // Ensure buffers are large enough, reusing across leaves.
+        if bufs.local_u64.len() < n * u64s { bufs.local_u64.resize(n * u64s, 0); }
+        if bufs.dist_matrix.len() < nn { bufs.dist_matrix.resize(nn, 0.0); }
+        if bufs.seen.len() < nn { bufs.seen.resize(nn, false); }
+
+        // Destructure for simultaneous mutable borrows.
+        let QuantLeafBuffers { local_u64, dist_matrix, seen } = &mut *bufs;
+
+        // Gather contiguous u64 data.
+        let local = &mut local_u64[..n * u64s];
+        for (i, &idx) in indices.iter().enumerate() {
+            local[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx));
+        }
+
+        // Compute all-pairs Hamming distance in-place.
+        let dist = &mut dist_matrix[..nn];
+        let local_ptr = local.as_ptr();
+        let dist_ptr = dist.as_mut_ptr();
+        for i in 0..n {
+            unsafe { *dist_ptr.add(i * n + i) = f32::MAX; }
+            let a_base = unsafe { local_ptr.add(i * u64s) };
+            for j in (i + 1)..n {
+                let b_base = unsafe { local_ptr.add(j * u64s) };
+                let mut h = 0u32;
+                for k_idx in 0..u64s {
+                    unsafe { h += (*a_base.add(k_idx) ^ *b_base.add(k_idx)).count_ones(); }
+                }
+                let d = h as f32;
+                unsafe {
+                    *dist_ptr.add(i * n + j) = d;
+                    *dist_ptr.add(j * n + i) = d;
+                }
+            }
+        }
+
+        let local_edges = extract_knn(dist, n, k);
+        let seen = &mut seen[..nn];
         seen.fill(false);
-        make_bidirected_edges(&local_edges, &dist_matrix, n, indices, &mut seen)
+        make_bidirected_edges(&local_edges, dist, n, indices, seen)
     })
 }
 
