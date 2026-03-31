@@ -507,14 +507,30 @@ pub(crate) struct PiPNNInmemConfig {
     pub final_prune: bool,
 }
 
-fn default_c_max() -> usize { 1024 }
-fn default_c_min() -> usize { 256 }
-fn default_p_samp() -> f64 { 0.005 }
-fn default_fanout() -> Vec<usize> { vec![10, 3] }
-fn default_leaf_k() -> usize { 3 }
-fn default_replicas() -> usize { 1 }
-fn default_l_max() -> usize { 128 }
-fn default_num_hash_planes() -> usize { 12 }
+fn default_c_max() -> usize {
+    1024
+}
+fn default_c_min() -> usize {
+    256
+}
+fn default_p_samp() -> f64 {
+    0.005
+}
+fn default_fanout() -> Vec<usize> {
+    vec![10, 3]
+}
+fn default_leaf_k() -> usize {
+    3
+}
+fn default_replicas() -> usize {
+    1
+}
+fn default_l_max() -> usize {
+    128
+}
+fn default_num_hash_planes() -> usize {
+    12
+}
 
 impl PiPNNInmemConfig {
     pub fn to_pipnn_config(&self, parent: &IndexBuild) -> diskann_pipnn::PiPNNConfig {

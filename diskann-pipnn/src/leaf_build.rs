@@ -15,8 +15,8 @@
 use std::cell::RefCell;
 
 use diskann::utils::VectorRepr;
-use diskann_vector::PureDistanceFunction;
 use diskann_vector::distance::SquaredL2;
+use diskann_vector::PureDistanceFunction;
 
 /// Thread-local reusable buffers for leaf building.
 /// Avoids repeated allocation/deallocation of large matrices.
@@ -43,11 +43,21 @@ impl LeafBuffers {
     fn ensure_capacity(&mut self, n: usize, ndims: usize) {
         let nd = n * ndims;
         let nn = n * n;
-        if self.local_data.len() < nd { self.local_data.resize(nd, 0.0); }
-        if self.norms_sq.len() < n { self.norms_sq.resize(n, 0.0); }
-        if self.dot_matrix.len() < nn { self.dot_matrix.resize(nn, 0.0); }
-        if self.dist_matrix.len() < nn { self.dist_matrix.resize(nn, 0.0); }
-        if self.seen.len() < nn { self.seen.resize(nn, false); }
+        if self.local_data.len() < nd {
+            self.local_data.resize(nd, 0.0);
+        }
+        if self.norms_sq.len() < n {
+            self.norms_sq.resize(n, 0.0);
+        }
+        if self.dot_matrix.len() < nn {
+            self.dot_matrix.resize(nn, 0.0);
+        }
+        if self.dist_matrix.len() < nn {
+            self.dist_matrix.resize(nn, 0.0);
+        }
+        if self.seen.len() < nn {
+            self.seen.resize(nn, false);
+        }
     }
 }
 
@@ -60,7 +70,11 @@ struct QuantLeafBuffers {
 
 impl QuantLeafBuffers {
     fn new() -> Self {
-        Self { local_u64: Vec::new(), dist_matrix: Vec::new(), seen: Vec::new() }
+        Self {
+            local_u64: Vec::new(),
+            dist_matrix: Vec::new(),
+            seen: Vec::new(),
+        }
     }
 }
 
@@ -100,7 +114,6 @@ pub struct Edge {
     pub distance: f32,
 }
 
-
 /// Extract k nearest neighbors for each point from the distance matrix.
 ///
 /// Uses index-sort: partitions a u32 index array by indirect distance comparison.
@@ -121,7 +134,9 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
 
         // Reset indices for this row.
         for j in 0..n {
-            unsafe { *indices.get_unchecked_mut(j) = j as u32; }
+            unsafe {
+                *indices.get_unchecked_mut(j) = j as u32;
+            }
         }
 
         if actual_k < n {
@@ -186,7 +201,9 @@ fn build_leaf_with_buffers<T: VectorRepr>(
     for i in 0..n {
         let row = &local_data[i * ndims..(i + 1) * ndims];
         let mut norm = 0.0f32;
-        for &v in row.iter() { norm += v * v; }
+        for &v in row.iter() {
+            norm += v * v;
+        }
         norms_sq[i] = norm;
     }
 
@@ -203,7 +220,9 @@ fn build_leaf_with_buffers<T: VectorRepr>(
             // Pre-normalized: dist = 1 - dot(a, b)
             for i in 0..n {
                 let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for j in 0..n { row[j] = (1.0 - row[j]).max(0.0); }
+                for j in 0..n {
+                    row[j] = (1.0 - row[j]).max(0.0);
+                }
                 row[i] = f32::MAX;
             }
             &mut bufs.dot_matrix[..n * n]
@@ -215,7 +234,11 @@ fn build_leaf_with_buffers<T: VectorRepr>(
                 let ni_sqrt = norms_sq[i].sqrt();
                 for j in 0..n {
                     let denom = ni_sqrt * norms_sq[j].sqrt();
-                    let cos_sim = if denom > 0.0 { dot_matrix[i * n + j] / denom } else { 0.0 };
+                    let cos_sim = if denom > 0.0 {
+                        dot_matrix[i * n + j] / denom
+                    } else {
+                        0.0
+                    };
                     dist[i * n + j] = (1.0 - cos_sim).max(0.0);
                 }
                 dist[i * n + i] = f32::MAX;
@@ -236,7 +259,9 @@ fn build_leaf_with_buffers<T: VectorRepr>(
         Metric::InnerProduct => {
             for i in 0..n {
                 let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for j in 0..n { row[j] = -row[j]; }
+                for j in 0..n {
+                    row[j] = -row[j];
+                }
                 row[i] = f32::MAX;
             }
             &mut bufs.dot_matrix[..n * n]
@@ -266,12 +291,22 @@ pub fn build_leaf_quantized(
         let nn = n * n;
 
         // Ensure buffers are large enough, reusing across leaves.
-        if bufs.local_u64.len() < n * u64s { bufs.local_u64.resize(n * u64s, 0); }
-        if bufs.dist_matrix.len() < nn { bufs.dist_matrix.resize(nn, 0.0); }
-        if bufs.seen.len() < nn { bufs.seen.resize(nn, false); }
+        if bufs.local_u64.len() < n * u64s {
+            bufs.local_u64.resize(n * u64s, 0);
+        }
+        if bufs.dist_matrix.len() < nn {
+            bufs.dist_matrix.resize(nn, 0.0);
+        }
+        if bufs.seen.len() < nn {
+            bufs.seen.resize(nn, false);
+        }
 
         // Destructure for simultaneous mutable borrows.
-        let QuantLeafBuffers { local_u64, dist_matrix, seen } = &mut *bufs;
+        let QuantLeafBuffers {
+            local_u64,
+            dist_matrix,
+            seen,
+        } = &mut *bufs;
 
         // Gather contiguous u64 data.
         let local = &mut local_u64[..n * u64s];
@@ -284,13 +319,17 @@ pub fn build_leaf_quantized(
         let local_ptr = local.as_ptr();
         let dist_ptr = dist.as_mut_ptr();
         for i in 0..n {
-            unsafe { *dist_ptr.add(i * n + i) = f32::MAX; }
+            unsafe {
+                *dist_ptr.add(i * n + i) = f32::MAX;
+            }
             let a_base = unsafe { local_ptr.add(i * u64s) };
             for j in (i + 1)..n {
                 let b_base = unsafe { local_ptr.add(j * u64s) };
                 let mut h = 0u32;
                 for k_idx in 0..u64s {
-                    unsafe { h += (*a_base.add(k_idx) ^ *b_base.add(k_idx)).count_ones(); }
+                    unsafe {
+                        h += (*a_base.add(k_idx) ^ *b_base.add(k_idx)).count_ones();
+                    }
                 }
                 let d = h as f32;
                 unsafe {
@@ -321,11 +360,19 @@ fn make_bidirected_edges(
     for &(src, dst, dist) in local_edges {
         if !seen[src * n + dst] {
             seen[src * n + dst] = true;
-            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
+            global_edges.push(Edge {
+                src: indices[src],
+                dst: indices[dst],
+                distance: dist,
+            });
         }
         if !seen[dst * n + src] {
             seen[dst * n + src] = true;
-            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
+            global_edges.push(Edge {
+                src: indices[dst],
+                dst: indices[src],
+                distance: dist_matrix[dst * n + src],
+            });
         }
     }
     global_edges
@@ -421,11 +468,7 @@ mod tests {
 
     #[test]
     fn test_extract_knn() {
-        let dist = vec![
-            f32::MAX, 1.0, 4.0,
-            1.0, f32::MAX, 1.0,
-            4.0, 1.0, f32::MAX,
-        ];
+        let dist = vec![f32::MAX, 1.0, 4.0, 1.0, f32::MAX, 1.0, 4.0, 1.0, f32::MAX];
         let edges = extract_knn(&dist, 3, 1);
 
         assert_eq!(edges.len(), 3);
@@ -458,17 +501,19 @@ mod tests {
     fn test_build_leaf_cosine() {
         // Verify that cosine distance path works correctly with normalized vectors.
         let mut data = vec![
-            1.0, 0.0,   // point 0: along x
-            0.0, 1.0,   // point 1: along y
+            1.0, 0.0, // point 0: along x
+            0.0, 1.0, // point 1: along y
             0.707, 0.707, // point 2: 45 degrees
-            -1.0, 0.0,  // point 3: negative x
+            -1.0, 0.0, // point 3: negative x
         ];
         // Normalize all vectors.
         for i in 0..4 {
             let row = &mut data[i * 2..(i + 1) * 2];
             let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
             if norm > 0.0 {
-                for v in row.iter_mut() { *v /= norm; }
+                for v in row.iter_mut() {
+                    *v /= norm;
+                }
             }
         }
 
@@ -550,12 +595,7 @@ mod tests {
     #[test]
     fn test_build_leaf_k_equals_n() {
         // k >= n, every point should connect to every other.
-        let data = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let indices = vec![0, 1, 2, 3];
         let n = indices.len();
         // k = n means each point gets n-1 nearest neighbors = all others.
@@ -572,7 +612,8 @@ mod tests {
                     assert!(
                         edge_set.contains(&(i, j)),
                         "k >= n: edge ({} -> {}) should exist",
-                        i, j
+                        i,
+                        j
                     );
                 }
             }
@@ -582,12 +623,7 @@ mod tests {
     #[test]
     fn test_build_leaf_with_buffers_reuse() {
         // Call build_leaf_with_buffers twice and verify buffers are reused.
-        let data = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let indices = vec![0, 1, 2, 3];
         let mut bufs = LeafBuffers::new();
 
@@ -595,12 +631,16 @@ mod tests {
         assert!(!edges1.is_empty(), "first call should produce edges");
 
         // Verify buffers are allocated.
-        assert!(!bufs.local_data.is_empty(), "buffers should be allocated after first call");
+        assert!(
+            !bufs.local_data.is_empty(),
+            "buffers should be allocated after first call"
+        );
 
         // Second call with same data should still work.
         let edges2 = build_leaf_with_buffers(&data, 2, &indices, 2, Metric::L2, &mut bufs);
         assert_eq!(
-            edges1.len(), edges2.len(),
+            edges1.len(),
+            edges2.len(),
             "same input should produce same number of edges with reused buffers"
         );
     }
@@ -608,13 +648,11 @@ mod tests {
     #[test]
     fn test_extract_knn_k_larger_than_n() {
         // k > n-1 should be clamped.
-        let dist = vec![
-            f32::MAX, 1.0,
-            1.0, f32::MAX,
-        ];
+        let dist = vec![f32::MAX, 1.0, 1.0, f32::MAX];
         let edges = extract_knn(&dist, 2, 100); // k=100 but only 2 points
         assert_eq!(
-            edges.len(), 2,
+            edges.len(),
+            2,
             "k > n-1 should be clamped, each point gets 1 neighbor, total 2 edges"
         );
     }
@@ -624,7 +662,11 @@ mod tests {
         let data = vec![5.0f32, 10.0];
         let query = vec![5.0, 10.0];
         let results = brute_force_knn(&data, 2, 1, &query, 5);
-        assert_eq!(results.len(), 1, "brute force on 1 point should return 1 result");
+        assert_eq!(
+            results.len(),
+            1,
+            "brute force on 1 point should return 1 result"
+        );
         assert_eq!(results[0].0, 0, "should return the only point (index 0)");
         assert!(
             results[0].1 < 1e-6,
@@ -635,15 +677,13 @@ mod tests {
     #[test]
     fn test_brute_force_knn_identity() {
         // query = data point, first result should be self with distance 0.
-        let data = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let query = vec![1.0, 0.0]; // same as point 1
         let results = brute_force_knn(&data, 2, 4, &query, 3);
-        assert_eq!(results[0].0, 1, "query identical to point 1 should find it first");
+        assert_eq!(
+            results[0].0, 1,
+            "query identical to point 1 should find it first"
+        );
         assert!(
             results[0].1 < 1e-6,
             "self-distance should be 0, got {}",
@@ -655,13 +695,7 @@ mod tests {
     fn test_edge_symmetry() {
         // Verify that build_leaf produces bi-directed edges:
         // if (a -> b) exists, then (b -> a) should also exist.
-        let data = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-            0.5, 0.5,
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.5];
         let indices = vec![0, 1, 2, 3, 4];
         let edges = build_leaf(&data, 2, &indices, 2, Metric::L2);
 
@@ -674,7 +708,10 @@ mod tests {
             assert!(
                 edge_set.contains(&(edge.dst, edge.src)),
                 "edge ({} -> {}) exists but reverse ({} -> {}) does not",
-                edge.src, edge.dst, edge.dst, edge.src
+                edge.src,
+                edge.dst,
+                edge.dst,
+                edge.src
             );
         }
     }
@@ -696,16 +733,18 @@ mod tests {
         // Points 0 and 1 are co-linear — cosine distance should be ~0.
         let e01 = edges.iter().find(|e| e.src == 0 && e.dst == 1);
         assert!(e01.is_some(), "co-linear points should be neighbors");
-        assert!(e01.unwrap().distance < 0.01, "cosine dist between co-linear should be ~0, got {}", e01.unwrap().distance);
+        assert!(
+            e01.unwrap().distance < 0.01,
+            "cosine dist between co-linear should be ~0, got {}",
+            e01.unwrap().distance
+        );
     }
 
     #[test]
     fn test_build_leaf_inner_product() {
         // InnerProduct: distance = -dot(a,b). Lower (more negative) = closer.
         let data = vec![
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0, // dot with self = 2, dot with (1,0) = 1
+            1.0, 0.0, 0.0, 1.0, 1.0, 1.0, // dot with self = 2, dot with (1,0) = 1
         ];
         let indices = vec![0, 1, 2];
         let edges = build_leaf(&data, 2, &indices, 1, Metric::InnerProduct);
@@ -724,7 +763,12 @@ mod tests {
         for i in 0..5 {
             for j in 0..5 {
                 if i != j {
-                    assert!(edge_set.contains(&(i, j)), "all-pairs edge ({}, {}) missing", i, j);
+                    assert!(
+                        edge_set.contains(&(i, j)),
+                        "all-pairs edge ({}, {}) missing",
+                        i,
+                        j
+                    );
                 }
             }
         }
@@ -733,16 +777,19 @@ mod tests {
     #[test]
     fn test_build_leaf_distances_nonnegative() {
         // All distance metrics should produce non-negative distances.
-        let data = vec![
-            -1.5, 2.3, 0.1,
-            0.7, -0.4, 1.9,
-            1.0, 1.0, 1.0,
-        ];
+        let data = vec![-1.5, 2.3, 0.1, 0.7, -0.4, 1.9, 1.0, 1.0, 1.0];
         let indices = vec![0, 1, 2];
         for metric in [Metric::L2, Metric::Cosine, Metric::CosineNormalized] {
             let edges = build_leaf(&data, 3, &indices, 2, metric);
             for e in &edges {
-                assert!(e.distance >= 0.0, "{:?}: negative distance {} for ({},{})", metric, e.distance, e.src, e.dst);
+                assert!(
+                    e.distance >= 0.0,
+                    "{:?}: negative distance {} for ({},{})",
+                    metric,
+                    e.distance,
+                    e.src,
+                    e.dst
+                );
             }
         }
     }
@@ -766,6 +813,9 @@ mod tests {
         let data_small = vec![1.0f32; 4 * 4];
         let indices_small: Vec<usize> = (0..4).collect();
         let edges2 = build_leaf(&data_small, 4, &indices_small, 2, Metric::L2);
-        assert!(!edges2.is_empty(), "small leaf after large should work with reused buffers");
+        assert!(
+            !edges2.is_empty(),
+            "small leaf after large should work with reused buffers"
+        );
     }
 }

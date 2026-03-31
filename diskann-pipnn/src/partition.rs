@@ -49,7 +49,6 @@ pub struct PartitionConfig {
     pub metric: diskann_vector::distance::Metric,
 }
 
-
 /// Quantized version of partition_assign using Hamming distance on 1-bit data.
 /// Pre-extracts leader u64 data for cache locality.
 fn partition_assign_quantized(
@@ -72,8 +71,9 @@ fn partition_assign_quantized(
     let mut assignments = vec![0u32; np * num_assign];
 
     // Adaptive stripe: limit per-stripe memory to ~16 MB, matching the FP path.
-    let stripe: usize = ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
-        .clamp(256, 32_768);
+    let stripe: usize = ((16 * 1024 * 1024)
+        / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
+    .clamp(256, 32_768);
     assignments
         .par_chunks_mut(stripe * num_assign)
         .enumerate()
@@ -102,7 +102,9 @@ fn partition_assign_quantized(
                     let ld_base = unsafe { ld_ptr.add(j * u64s) };
                     let mut h = 0u32;
                     for k in 0..u64s {
-                        unsafe { h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones(); }
+                        unsafe {
+                            h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones();
+                        }
                     }
                     buf.push((j as u32, h as f32));
                 }
@@ -163,7 +165,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
             for i in 0..nl {
                 let row = &l_data[i * ndims..(i + 1) * ndims];
                 let mut norm = 0.0f32;
-                for &v in row { norm += v * v; }
+                for &v in row {
+                    norm += v * v;
+                }
                 norms[i] = norm;
             }
             norms
@@ -173,7 +177,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
             for i in 0..nl {
                 let row = &l_data[i * ndims..(i + 1) * ndims];
                 let mut norm = 0.0f32;
-                for &v in row { norm += v * v; }
+                for &v in row {
+                    norm += v * v;
+                }
                 norms[i] = norm.sqrt();
             }
             norms
@@ -189,8 +195,8 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
     // Smaller stripes reduce concurrent memory from ~1.4 GB (8 threads × 90 MB)
     // to ~350 MB (8 threads × 22 MB), cutting partition peak RSS by ~1 GB.
     // Partition is <5% of total build time, so the throughput cost is negligible.
-    let stripe: usize = ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>()))
-        .clamp(256, 16_384);
+    let stripe: usize =
+        ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(256, 16_384);
     assignments
         .par_chunks_mut(stripe * num_assign)
         .enumerate()
@@ -226,7 +232,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                         // Unnormalized: dist = 1 - dot(a,b)/(||a||*||b||)
                         let mut pi = 0.0f32;
                         let row = &p_data[i * ndims..(i + 1) * ndims];
-                        for &v in row { pi += v * v; }
+                        for &v in row {
+                            pi += v * v;
+                        }
                         let pi_sqrt = pi.sqrt();
                         for j in 0..nl {
                             let denom = pi_sqrt * l_norms[j];
@@ -237,7 +245,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
                     Metric::L2 => {
                         let mut pi = 0.0f32;
                         let row = &p_data[i * ndims..(i + 1) * ndims];
-                        for &v in row { pi += v * v; }
+                        for &v in row {
+                            pi += v * v;
+                        }
                         for j in 0..nl {
                             let d = (pi + l_norms[j] - 2.0 * dot_row[j]).max(0.0);
                             buf.push((j as u32, d));
@@ -295,16 +305,23 @@ fn merge_small_quantized(
     let mut large: Vec<Vec<usize>> = Vec::new();
     let mut smalls: Vec<Vec<usize>> = Vec::new();
     for c in clusters.drain(..) {
-        if c.len() < c_min && !c.is_empty() { smalls.push(c); }
-        else if !c.is_empty() { large.push(c); }
+        if c.len() < c_min && !c.is_empty() {
+            smalls.push(c);
+        } else if !c.is_empty() {
+            large.push(c);
+        }
     }
     if smalls.is_empty() || large.is_empty() {
-        if large.is_empty() { return smalls; }
+        if large.is_empty() {
+            return smalls;
+        }
         return large;
     }
     for small in smalls {
         let rep = qdata.get_u64(small[0]);
-        let nearest = large.iter().enumerate()
+        let nearest = large
+            .iter()
+            .enumerate()
             .map(|(i, c)| {
                 let d = crate::quantize::QuantizedData::hamming_u64(rep, qdata.get_u64(c[0]));
                 (i, d)
@@ -339,21 +356,29 @@ fn merge_small_into_nearest<T: VectorRepr>(
     }
 
     if smalls.is_empty() || large.is_empty() {
-        if large.is_empty() { return smalls; }
+        if large.is_empty() {
+            return smalls;
+        }
         return large;
     }
 
     // Compute centroids for large clusters, converting T -> f32 per point.
-    let centroids: Vec<Vec<f32>> = large.iter()
+    let centroids: Vec<Vec<f32>> = large
+        .iter()
         .map(|c| {
             let mut centroid = vec![0.0f32; ndims];
             let inv = 1.0 / c.len() as f32;
             let mut point_buf = vec![0.0f32; ndims];
             for &idx in c {
-                T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf).expect("f32 conversion");
-                for d in 0..ndims { centroid[d] += point_buf[d]; }
+                T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
+                    .expect("f32 conversion");
+                for d in 0..ndims {
+                    centroid[d] += point_buf[d];
+                }
             }
-            for d in 0..ndims { centroid[d] *= inv; }
+            for d in 0..ndims {
+                centroid[d] *= inv;
+            }
             centroid
         })
         .collect();
@@ -362,8 +387,14 @@ fn merge_small_into_nearest<T: VectorRepr>(
     // from the small cluster's representative point to each large centroid.
     for small in smalls {
         let mut rep_buf = vec![0.0f32; ndims];
-        T::as_f32_into(&data[small[0] * ndims..(small[0] + 1) * ndims], &mut rep_buf).expect("f32 conversion");
-        let nearest = centroids.iter().enumerate()
+        T::as_f32_into(
+            &data[small[0] * ndims..(small[0] + 1) * ndims],
+            &mut rep_buf,
+        )
+        .expect("f32 conversion");
+        let nearest = centroids
+            .iter()
+            .enumerate()
             .map(|(i, c)| {
                 let mut dist = 0.0f32;
                 for d in 0..ndims {
@@ -422,9 +453,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     // Map local indices back to global.
     let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
-        .map(|local_cluster| {
-            local_cluster.into_iter().map(|li| indices[li]).collect()
-        })
+        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
         .collect();
 
     // Merge undersized clusters into nearest large cluster by centroid proximity.
@@ -474,7 +503,10 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     };
 
     let num_leaders = sample_num_leaders(n, config.p_samp);
-    let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
+    let leaders: Vec<usize> = indices
+        .choose_multiple(&mut rng, num_leaders)
+        .copied()
+        .collect();
 
     let t0 = std::time::Instant::now();
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
@@ -483,9 +515,7 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     let t1 = std::time::Instant::now();
     let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
-        .map(|local_cluster| {
-            local_cluster.into_iter().map(|li| indices[li]).collect()
-        })
+        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
         .collect();
     let map_time = t1.elapsed();
 
@@ -500,8 +530,15 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     // Merge undersized clusters into nearest large cluster by centroid proximity.
     let merged_clusters = merge_small_into_nearest(data, ndims, clusters, config.c_min);
 
-    let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
-    let total_in_recurse: usize = merged_clusters.iter().filter(|c| c.len() > config.c_max).map(|c| c.len()).sum();
+    let need_recurse = merged_clusters
+        .iter()
+        .filter(|c| c.len() > config.c_max)
+        .count();
+    let total_in_recurse: usize = merged_clusters
+        .iter()
+        .filter(|c| c.len() > config.c_max)
+        .map(|c| c.len())
+        .sum();
     tracing::debug!(
         num_clusters = merged_clusters.len(),
         need_recurse = need_recurse,
@@ -510,9 +547,7 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     );
 
     // Generate sub-seeds for parallel recursion.
-    let sub_seeds: Vec<u64> = (0..merged_clusters.len())
-        .map(|_| rng.random())
-        .collect();
+    let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
 
     // Recurse in parallel. Each cluster is either a leaf or needs further splitting.
     let t2 = std::time::Instant::now();
@@ -531,7 +566,10 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
         })
         .collect();
 
-    tracing::debug!(recursion_secs = t2.elapsed().as_secs_f64(), "partition recursion complete");
+    tracing::debug!(
+        recursion_secs = t2.elapsed().as_secs_f64(),
+        "partition recursion complete"
+    );
     results.into_iter().flatten().collect()
 }
 
@@ -544,14 +582,23 @@ pub fn parallel_partition_quantized(
 ) -> Vec<Leaf> {
     let n = indices.len();
     if n <= config.c_max {
-        return vec![Leaf { indices: indices.to_vec() }];
+        return vec![Leaf {
+            indices: indices.to_vec(),
+        }];
     }
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let fanout = if !config.fanout.is_empty() { config.fanout[0] } else { 3 };
+    let fanout = if !config.fanout.is_empty() {
+        config.fanout[0]
+    } else {
+        3
+    };
 
     let num_leaders = sample_num_leaders(n, config.p_samp);
-    let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
+    let leaders: Vec<usize> = indices
+        .choose_multiple(&mut rng, num_leaders)
+        .copied()
+        .collect();
 
     let t0 = std::time::Instant::now();
     let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
@@ -575,7 +622,10 @@ pub fn parallel_partition_quantized(
     // Merge undersized clusters into nearest large cluster by Hamming distance.
     let merged_clusters = merge_small_quantized(qdata, clusters, config.c_min);
 
-    let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
+    let need_recurse = merged_clusters
+        .iter()
+        .filter(|c| c.len() > config.c_max)
+        .count();
     tracing::debug!(
         num_clusters = merged_clusters.len(),
         need_recurse = need_recurse,
@@ -590,7 +640,9 @@ pub fn parallel_partition_quantized(
         .zip(sub_seeds.par_iter())
         .map(|(cluster, sub_seed)| {
             if cluster.len() <= config.c_max {
-                vec![Leaf { indices: cluster.clone() }]
+                vec![Leaf {
+                    indices: cluster.clone(),
+                }]
             } else if cluster.len() <= config.c_max * 3 {
                 force_split(cluster, config.c_max)
             } else {
@@ -601,7 +653,10 @@ pub fn parallel_partition_quantized(
         })
         .collect();
 
-    tracing::debug!(recursion_secs = t2.elapsed().as_secs_f64(), "partition recursion complete (quantized)");
+    tracing::debug!(
+        recursion_secs = t2.elapsed().as_secs_f64(),
+        "partition recursion complete (quantized)"
+    );
     results.into_iter().flatten().collect()
 }
 
@@ -613,12 +668,20 @@ fn partition_quantized_recursive(
     rng: &mut impl Rng,
 ) -> Vec<Leaf> {
     let n = indices.len();
-    if n <= config.c_max { return vec![Leaf { indices: indices.to_vec() }]; }
+    if n <= config.c_max {
+        return vec![Leaf {
+            indices: indices.to_vec(),
+        }];
+    }
     if level >= MAX_DEPTH {
         return force_split(indices, config.c_max);
     }
 
-    let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
+    let fanout = if level < config.fanout.len() {
+        config.fanout[level]
+    } else {
+        1
+    };
     let num_leaders = sample_num_leaders(n, config.p_samp);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
@@ -643,7 +706,13 @@ fn partition_quantized_recursive(
         } else {
             let sub_seed: u64 = rng.random();
             let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
-            leaves.extend(partition_quantized_recursive(qdata, &cluster, config, level + 1, &mut sub_rng));
+            leaves.extend(partition_quantized_recursive(
+                qdata,
+                &cluster,
+                config,
+                level + 1,
+                &mut sub_rng,
+            ));
         }
     }
     leaves
@@ -657,7 +726,9 @@ mod tests {
 
     fn gen_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        (0..npoints * ndims).map(|_| rng.random_range(-1.0f32..1.0f32)).collect()
+        (0..npoints * ndims)
+            .map(|_| rng.random_range(-1.0f32..1.0f32))
+            .collect()
     }
 
     #[test]
@@ -669,7 +740,7 @@ mod tests {
             c_min: 3,
             p_samp: 0.5,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -690,13 +761,17 @@ mod tests {
             c_min: 5,
             p_samp: 0.1,
             fanout: vec![3, 2],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
 
         let mut rng2 = rand::rngs::StdRng::seed_from_u64(123);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng2);
 
-        assert!(leaves.len() > 1, "expected multiple leaves, got {}", leaves.len());
+        assert!(
+            leaves.len() > 1,
+            "expected multiple leaves, got {}",
+            leaves.len()
+        );
 
         for leaf in &leaves {
             assert!(
@@ -727,7 +802,7 @@ mod tests {
             c_min: 10,
             p_samp: 0.05,
             fanout: vec![5, 3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
 
         let leaves = parallel_partition(&data, 2, &indices, &config, 42);
@@ -788,7 +863,7 @@ mod tests {
             c_min: 10,
             p_samp: 0.1,
             fanout: vec![5, 2],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
 
         let leaves = parallel_partition(&data, ndims, &indices, &config, 99);
@@ -812,12 +887,16 @@ mod tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
         assert_eq!(leaves.len(), 1, "single point should produce 1 leaf");
-        assert_eq!(leaves[0].indices.len(), 1, "leaf should contain exactly 1 point");
+        assert_eq!(
+            leaves[0].indices.len(),
+            1,
+            "leaf should contain exactly 1 point"
+        );
         assert_eq!(leaves[0].indices[0], 0, "leaf should contain index 0");
     }
 
@@ -830,12 +909,20 @@ mod tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
-        assert_eq!(leaves.len(), 1, "two points with c_max=5 should produce 1 leaf");
-        assert_eq!(leaves[0].indices.len(), 2, "leaf should contain both points");
+        assert_eq!(
+            leaves.len(),
+            1,
+            "two points with c_max=5 should produce 1 leaf"
+        );
+        assert_eq!(
+            leaves[0].indices.len(),
+            2,
+            "leaf should contain both points"
+        );
     }
 
     #[test]
@@ -850,7 +937,7 @@ mod tests {
             c_min: 5,
             p_samp: 0.1,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "should produce at least one leaf");
@@ -858,13 +945,16 @@ mod tests {
         assert!(
             total >= npoints,
             "total in leaves ({}) should be >= npoints ({})",
-            total, npoints
+            total,
+            npoints
         );
         for (i, leaf) in leaves.iter().enumerate() {
             assert!(
                 leaf.indices.len() <= config.c_max,
                 "leaf {} has {} elements > c_max={}",
-                i, leaf.indices.len(), config.c_max
+                i,
+                leaf.indices.len(),
+                config.c_max
             );
         }
     }
@@ -887,12 +977,17 @@ mod tests {
             metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty(), "high fanout should still produce leaves");
+        assert!(
+            !leaves.is_empty(),
+            "high fanout should still produce leaves"
+        );
         for (i, leaf) in leaves.iter().enumerate() {
             assert!(
                 leaf.indices.len() <= config.c_max,
                 "leaf {} has {} elements > c_max={}",
-                i, leaf.indices.len(), config.c_max
+                i,
+                leaf.indices.len(),
+                config.c_max
             );
         }
     }
@@ -912,15 +1007,20 @@ mod tests {
             c_min: 8,
             p_samp: 0.1,
             fanout: vec![4, 2],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(leaves.len() > 1, "multi-level fanout should produce multiple leaves");
+        assert!(
+            leaves.len() > 1,
+            "multi-level fanout should produce multiple leaves"
+        );
         for (i, leaf) in leaves.iter().enumerate() {
             assert!(
                 leaf.indices.len() <= config.c_max,
                 "leaf {} has {} elements > c_max={}",
-                i, leaf.indices.len(), config.c_max
+                i,
+                leaf.indices.len(),
+                config.c_max
             );
         }
     }
@@ -940,7 +1040,7 @@ mod tests {
             c_min: 30,
             p_samp: 0.1,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "c_min == c_max should produce leaves");
@@ -948,7 +1048,9 @@ mod tests {
             assert!(
                 leaf.indices.len() <= config.c_max,
                 "leaf {} has {} elements > c_max={}",
-                i, leaf.indices.len(), config.c_max
+                i,
+                leaf.indices.len(),
+                config.c_max
             );
         }
     }
@@ -968,7 +1070,7 @@ mod tests {
             c_min: 3,
             p_samp: 1.0,
             fanout: vec![3],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "p_samp=1.0 should produce leaves");
@@ -976,7 +1078,9 @@ mod tests {
             assert!(
                 leaf.indices.len() <= config.c_max,
                 "leaf {} has {} elements > c_max={}",
-                i, leaf.indices.len(), config.c_max
+                i,
+                leaf.indices.len(),
+                config.c_max
             );
         }
     }
@@ -996,7 +1100,7 @@ mod tests {
             c_min: 20,
             p_samp: 0.05,
             fanout: vec![3, 2],
-        metric: diskann_vector::distance::Metric::L2,
+            metric: diskann_vector::distance::Metric::L2,
         };
 
         let (shift, inverse_scale) = {
@@ -1035,12 +1139,19 @@ mod tests {
         for i in 0..npoints {
             let row = &mut data[i * ndims..(i + 1) * ndims];
             let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if norm > 0.0 { for v in row.iter_mut() { *v /= norm; } }
+            if norm > 0.0 {
+                for v in row.iter_mut() {
+                    *v /= norm;
+                }
+            }
         }
         let indices: Vec<usize> = (0..npoints).collect();
         let config = PartitionConfig {
-            c_max: 64, c_min: 16, p_samp: 0.1,
-            fanout: vec![4], metric: Metric::CosineNormalized,
+            c_max: 64,
+            c_min: 16,
+            p_samp: 0.1,
+            fanout: vec![4],
+            metric: Metric::CosineNormalized,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty());
@@ -1060,8 +1171,11 @@ mod tests {
         let data = gen_data(npoints, ndims, 99);
         let indices: Vec<usize> = (0..npoints).collect();
         let config = PartitionConfig {
-            c_max: 32, c_min: 8, p_samp: 0.1,
-            fanout: vec![3], metric: Metric::Cosine,
+            c_max: 32,
+            c_min: 8,
+            p_samp: 0.1,
+            fanout: vec![3],
+            metric: Metric::Cosine,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty());
@@ -1075,20 +1189,30 @@ mod tests {
         // Mix of zero-norm and normal vectors — should not panic.
         let mut data = gen_data(50, 4, 42);
         // Set first 5 vectors to all zeros.
-        for v in data[..20].iter_mut() { *v = 0.0; }
+        for v in data[..20].iter_mut() {
+            *v = 0.0;
+        }
         let indices: Vec<usize> = (0..50).collect();
         let config = PartitionConfig {
-            c_max: 16, c_min: 4, p_samp: 0.2,
-            fanout: vec![2], metric: Metric::Cosine,
+            c_max: 16,
+            c_min: 4,
+            p_samp: 0.2,
+            fanout: vec![2],
+            metric: Metric::Cosine,
         };
         let leaves = parallel_partition(&data, 4, &indices, &config, 42);
         assert!(!leaves.is_empty());
         // Zero-norm vectors should appear in at least one leaf.
-        let all_indices: std::collections::HashSet<usize> = leaves.iter()
+        let all_indices: std::collections::HashSet<usize> = leaves
+            .iter()
             .flat_map(|l| l.indices.iter().copied())
             .collect();
         for i in 0..5 {
-            assert!(all_indices.contains(&i), "zero-norm point {} missing from all leaves", i);
+            assert!(
+                all_indices.contains(&i),
+                "zero-norm point {} missing from all leaves",
+                i
+            );
         }
     }
 }

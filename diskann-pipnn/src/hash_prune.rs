@@ -36,7 +36,13 @@ impl LshSketches {
     /// Create new LSH sketches for the given data using parallel dot products.
     ///
     /// `data` is row-major: npoints x ndims.
-    pub fn new<T: VectorRepr + Send + Sync>(data: &[T], npoints: usize, ndims: usize, num_planes: usize, seed: u64) -> Self {
+    pub fn new<T: VectorRepr + Send + Sync>(
+        data: &[T],
+        npoints: usize,
+        ndims: usize,
+        num_planes: usize,
+        seed: u64,
+    ) -> Self {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
         // Generate random hyperplanes from standard normal distribution.
@@ -60,7 +66,8 @@ impl LshSketches {
                 SKETCH_BUF.with(|cell| {
                     let mut buf = cell.borrow_mut();
                     buf.resize(ndims, 0.0);
-                    T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf).expect("f32 conversion");
+                    T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf)
+                        .expect("f32 conversion");
                     for j in 0..num_planes {
                         let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
                         let mut dot = 0.0f32;
@@ -110,14 +117,20 @@ impl LshSketches {
                     // Iterate set bits: for each byte, check each bit.
                     for d in 0..ndims {
                         if bits[d / 8] & (1 << (d % 8)) != 0 {
-                            unsafe { dot += *plane.get_unchecked(d); }
+                            unsafe {
+                                dot += *plane.get_unchecked(d);
+                            }
                         }
                     }
                     sketch_row[j] = dot;
                 }
             });
 
-        Self { num_planes, sketches, npoints }
+        Self {
+            num_planes,
+            sketches,
+            npoints,
+        }
     }
 
     /// Compute the hash of candidate c relative to point p.
@@ -144,8 +157,6 @@ impl LshSketches {
         hash
     }
 }
-
-
 
 /// Convert f32 distance to bf16 (truncate lower 16 mantissa bits).
 /// For non-negative values, bf16 bit ordering matches f32 ordering,
@@ -224,9 +235,7 @@ impl HashPruneReservoir {
     /// Find entry with matching hash using binary search.
     #[inline]
     fn find_hash(&self, hash: u16) -> Option<usize> {
-        self.entries
-            .binary_search_by_key(&hash, |e| e.hash)
-            .ok()
+        self.entries.binary_search_by_key(&hash, |e| e.hash).ok()
     }
 
     /// Update the cached farthest entry.
@@ -271,14 +280,22 @@ impl HashPruneReservoir {
 
         // If reservoir is not full, insert in sorted position.
         if self.entries.len() < self.l_max {
-            let pos = self.entries
+            let pos = self
+                .entries
                 .binary_search_by_key(&hash, |e| e.hash)
                 .unwrap_or_else(|e| e);
             // Fix: shift farthest_idx when inserting before it, since entries shift right.
             if pos <= self.farthest_idx && !self.entries.is_empty() {
                 self.farthest_idx += 1;
             }
-            self.entries.insert(pos, ReservoirEntry { neighbor, distance: dist_bf16, hash });
+            self.entries.insert(
+                pos,
+                ReservoirEntry {
+                    neighbor,
+                    distance: dist_bf16,
+                    hash,
+                },
+            );
             if dist_bf16 >= self.farthest_dist {
                 self.farthest_dist = dist_bf16;
                 self.farthest_idx = pos;
@@ -289,10 +306,18 @@ impl HashPruneReservoir {
         // Reservoir is full: evict farthest if new is closer.
         if dist_bf16 < self.farthest_dist {
             self.entries.remove(self.farthest_idx);
-            let pos = self.entries
+            let pos = self
+                .entries
                 .binary_search_by_key(&hash, |e| e.hash)
                 .unwrap_or_else(|e| e);
-            self.entries.insert(pos, ReservoirEntry { neighbor, distance: dist_bf16, hash });
+            self.entries.insert(
+                pos,
+                ReservoirEntry {
+                    neighbor,
+                    distance: dist_bf16,
+                    hash,
+                },
+            );
             self.update_farthest();
             return true;
         }
@@ -309,7 +334,10 @@ impl HashPruneReservoir {
             .collect();
         // u16 comparison is correct for non-negative bf16 values.
         neighbors.sort_unstable_by_key(|&(_, d)| d);
-        neighbors.into_iter().map(|(id, d)| (id, bf16_to_f32(d))).collect()
+        neighbors
+            .into_iter()
+            .map(|(id, d)| (id, bf16_to_f32(d)))
+            .collect()
     }
 
     /// Get the number of entries in the reservoir.
@@ -349,7 +377,10 @@ impl HashPrune {
     ) -> Self {
         let t0 = std::time::Instant::now();
         let sketches = LshSketches::new(data, npoints, ndims, num_planes, seed);
-        tracing::debug!(elapsed_secs = t0.elapsed().as_secs_f64(), "sketch computation");
+        tracing::debug!(
+            elapsed_secs = t0.elapsed().as_secs_f64(),
+            "sketch computation"
+        );
 
         Self::from_sketches(sketches, npoints, l_max, max_degree)
     }
@@ -367,7 +398,10 @@ impl HashPrune {
         let reservoirs = (0..npoints)
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
-        tracing::debug!(elapsed_secs = t1.elapsed().as_secs_f64(), "reservoir allocation");
+        tracing::debug!(
+            elapsed_secs = t1.elapsed().as_secs_f64(),
+            "reservoir allocation"
+        );
 
         Self {
             reservoirs,
@@ -548,11 +582,7 @@ mod tests {
         assert_eq!(graph.len(), 4);
 
         for (i, neighbors) in graph.iter().enumerate() {
-            assert!(
-                !neighbors.is_empty(),
-                "point {} has no neighbors",
-                i
-            );
+            assert!(!neighbors.is_empty(), "point {} has no neighbors", i);
         }
     }
 
@@ -617,12 +647,17 @@ mod tests {
         let hp = HashPrune::new(&data, 10, 2, 4, 10, 1, 42);
         for i in 0..10 {
             for j in 0..10 {
-                if i != j { hp.add_edge(i, j, (i as f32 - j as f32).abs()); }
+                if i != j {
+                    hp.add_edge(i, j, (i as f32 - j as f32).abs());
+                }
             }
         }
         let graph = hp.extract_graph();
         for neighbors in &graph {
-            assert!(neighbors.len() <= 1, "max_degree=1 should limit to 1 neighbor");
+            assert!(
+                neighbors.len() <= 1,
+                "max_degree=1 should limit to 1 neighbor"
+            );
         }
     }
 
@@ -660,12 +695,7 @@ mod tests {
 
     #[test]
     fn test_extract_graph_for_prune_returns_full_reservoir() {
-        let data = vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         // l_max=10 (much larger than max_degree=2) to verify no truncation.
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
         hp.add_edge(0, 1, 1.0);
@@ -698,7 +728,10 @@ mod tests {
 
         let graph = hp.extract_graph();
         // max_degree=2, so node 0 should have at most 2 neighbors.
-        assert!(graph[0].len() <= 2, "extract_graph should truncate to max_degree");
+        assert!(
+            graph[0].len() <= 2,
+            "extract_graph should truncate to max_degree"
+        );
     }
 
     #[test]
@@ -712,8 +745,12 @@ mod tests {
         let node0 = &full[0];
         // Check distances are bf16-rounded but close to original.
         for &(id, dist) in node0 {
-            if id == 1 { assert!((dist - 1.5).abs() < 0.05, "dist for id=1: {}", dist); }
-            if id == 2 { assert!((dist - 2.5).abs() < 0.05, "dist for id=2: {}", dist); }
+            if id == 1 {
+                assert!((dist - 1.5).abs() < 0.05, "dist for id=1: {}", dist);
+            }
+            if id == 2 {
+                assert!((dist - 2.5).abs() < 0.05, "dist for id=2: {}", dist);
+            }
         }
     }
 
@@ -744,7 +781,7 @@ mod tests {
         let mut res = HashPruneReservoir::new(4);
         // Insert in hash order: 5, 10, 15
         res.insert(5, 1, 1.0);
-        res.insert(10, 2, 3.0);  // this is farthest
+        res.insert(10, 2, 3.0); // this is farthest
         res.insert(15, 3, 2.0);
         // Now insert hash=3, which goes before hash=5 in sorted order.
         // This shifts all indices right, including farthest_idx.
@@ -761,14 +798,36 @@ mod tests {
         let data = vec![0.0f32; 10 * 4];
         let hp = HashPrune::new(&data, 10, 4, 4, 10, 5, 42);
         let edges = vec![
-            Edge { src: 0, dst: 1, distance: 1.0 },
-            Edge { src: 1, dst: 0, distance: 1.0 },
-            Edge { src: 2, dst: 3, distance: 2.0 },
-            Edge { src: 3, dst: 2, distance: 2.0 },
+            Edge {
+                src: 0,
+                dst: 1,
+                distance: 1.0,
+            },
+            Edge {
+                src: 1,
+                dst: 0,
+                distance: 1.0,
+            },
+            Edge {
+                src: 2,
+                dst: 3,
+                distance: 2.0,
+            },
+            Edge {
+                src: 3,
+                dst: 2,
+                distance: 2.0,
+            },
         ];
         hp.add_edges_batched(&edges);
         let graph = hp.extract_graph();
-        assert!(!graph[0].is_empty(), "node 0 should have neighbors after batched add");
-        assert!(!graph[2].is_empty(), "node 2 should have neighbors after batched add");
+        assert!(
+            !graph[0].is_empty(),
+            "node 0 should have neighbors after batched add"
+        );
+        assert!(
+            !graph[2].is_empty(),
+            "node 2 should have neighbors after batched add"
+        );
     }
 }
