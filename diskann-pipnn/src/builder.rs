@@ -143,7 +143,7 @@ impl PiPNNGraph {
         let num_additional: u64 = 1;
         f.write_all(&num_additional.to_le_bytes())?;
 
-        // Write per-node adjacency lists
+        // Write per-node adjacency lists (npoints real nodes + 1 frozen start point)
         for adj in &self.adjacency {
             let num_neighbors = adj.len() as u32;
             f.write_all(&num_neighbors.to_le_bytes())?;
@@ -153,6 +153,17 @@ impl PiPNNGraph {
             observed_max_degree = observed_max_degree.max(num_neighbors);
             index_size += (4 + adj.len() * 4) as u64;
         }
+
+        // Write the frozen start point (copy of medoid's adjacency list).
+        // The header declares num_additional=1, so loaders expect exactly one
+        // extra node after the npoints real nodes.
+        let medoid_adj = &self.adjacency[self.medoid];
+        let num_neighbors = medoid_adj.len() as u32;
+        f.write_all(&num_neighbors.to_le_bytes())?;
+        for &neighbor in medoid_adj {
+            f.write_all(&neighbor.to_le_bytes())?;
+        }
+        index_size += (4 + medoid_adj.len() * 4) as u64;
 
         // Seek back and write correct header
         f.seek(SeekFrom::Start(0))?;
@@ -405,6 +416,11 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
     if npoints == 0 || ndims == 0 {
         return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
     }
+    if config.final_prune {
+        return Err(PiPNNError::Config(
+            "final_prune=true is not supported for quantized builds (requires f32 data for distance recomputation)".into(),
+        ));
+    }
     if sq_params.shift.len() != ndims {
         return Err(PiPNNError::DimensionMismatch {
             expected: ndims,
@@ -465,6 +481,20 @@ pub fn build_from_quantized(
     config.validate()?;
     if npoints == 0 || ndims == 0 {
         return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
+    }
+    if config.final_prune {
+        return Err(PiPNNError::Config(
+            "final_prune=true is not supported for quantized builds (requires f32 data for distance recomputation)".into(),
+        ));
+    }
+    // Validate consistency with QuantizedData metadata.
+    if qdata.npoints() != npoints || qdata.ndims() != ndims {
+        return Err(PiPNNError::DataLengthMismatch {
+            expected: npoints * ndims,
+            actual: qdata.npoints() * qdata.ndims(),
+            npoints,
+            ndims,
+        });
     }
 
     tracing::info!(
@@ -566,26 +596,12 @@ fn build_internal_sq_impl(
             crate::leaf_build::release_thread_buffers();
         });
 
+    // final_prune=true is rejected at entry points (build_with_sq / build_from_quantized).
+    debug_assert!(!config.final_prune, "SQ path does not support final_prune");
     let t3 = Instant::now();
-    let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
-        let candidates = hash_prune.extract_graph_for_prune();
-        let extract_secs = t3.elapsed().as_secs_f64();
-        // final_prune needs f32 data which we don't have — fall back to no-prune.
-        // (final_prune_from_candidates requires T: VectorRepr for distance recomputation)
-        tracing::warn!("final_prune=true with SQ build: pruning skipped (no f32 data)");
-        let adj: Vec<Vec<u32>> = candidates
-            .into_par_iter()
-            .map(|mut c| {
-                c.truncate(config.max_degree);
-                c.into_iter().map(|(id, _)| id).collect()
-            })
-            .collect();
-        (adj, extract_secs, 0.0)
-    } else {
-        let adj = hash_prune.extract_graph();
-        let extract_secs = t3.elapsed().as_secs_f64();
-        (adj, extract_secs, 0.0)
-    };
+    let adjacency = hash_prune.extract_graph();
+    let extract_secs = t3.elapsed().as_secs_f64();
+    let final_prune_secs = 0.0;
 
     let total_secs = t_total.elapsed().as_secs_f64();
     let stats = PiPNNBuildStats {
@@ -1707,9 +1723,9 @@ mod tests {
             total_parsed_nodes += 1;
         }
         assert_eq!(
-            total_parsed_nodes, npoints,
-            "expected to parse {} nodes but got {}",
-            npoints, total_parsed_nodes
+            total_parsed_nodes, npoints + 1, // +1 for frozen start point
+            "expected to parse {} nodes ({}+1 frozen) but got {}",
+            npoints + 1, npoints, total_parsed_nodes
         );
 
         std::fs::remove_dir_all(&dir).ok();
