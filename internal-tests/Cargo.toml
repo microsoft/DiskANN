@@ -1,0 +1,41 @@
+[package]
+name = "internal-tests"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+description = "Internal test infrastructure for DiskANN"
+publish = false
+
+[dependencies]
+# Primary dependency - diskann-tools with perf_test feature
+diskann-tools = { workspace = true, features = ["perf_test"] }
+
+# Direct dependencies used in tests (not re-exported by diskann-tools)
+diskann = { workspace = true }
+diskann-disk = { workspace = true, features = ["virtual_storage", "perf_test", "pipnn"] }
+diskann-providers = { workspace = true, default-features = false, features = [
+    "testing",
+    "virtual_storage",
+    "perf_test",
+] }
+diskann-utils = { workspace = true, features = ["testing"] }
+diskann-vector = { workspace = true }
+
+# Test infrastructure
+assert_ok = "1.0.2"
+rstest.workspace = true
+vfs.workspace = true
+
+# Additional dependencies
+byteorder.workspace = true
+csv = "1.3.1"
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+toml = "0.8.13"
+tracing.workspace = true
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"
