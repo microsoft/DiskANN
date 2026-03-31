@@ -709,7 +709,7 @@ impl std::fmt::Display for IndexBuild {
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
     Load(IndexLoad),
-    Build(IndexBuild),
+    Build(Box<IndexBuild>),
 }
 
 impl CheckDeserialization for IndexSource {
@@ -755,7 +755,7 @@ impl CheckDeserialization for IndexOperation {
 impl Example for IndexOperation {
     fn example() -> Self {
         Self {
-            source: IndexSource::Build(IndexBuild::example()),
+            source: IndexSource::Build(Box::new(IndexBuild::example())),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
         }
     }
