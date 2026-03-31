@@ -386,13 +386,15 @@ pub struct SQParams {
 
 /// Build a PiPNN index using a pre-trained scalar quantizer for 1-bit mode.
 ///
-/// When DiskANN's build pipeline has already trained a `ScalarQuantizer`,
-/// this function reuses those parameters instead of training from scratch.
-/// This ensures identical quantization between Vamana and PiPNN builds.
+/// Build a PiPNN index using pre-trained SQ parameters.
 ///
-/// `data` is row-major f32: npoints x ndims.
-pub fn build_with_sq(
-    data: Vec<f32>,
+/// Generic over `T: VectorRepr` — works with f16, f32, u8, etc.
+/// Converts T→f32 per-vector streaming during quantization and LSH sketch
+/// computation, without materializing a full f32 copy of the dataset.
+///
+/// `data` is row-major: npoints x ndims in native type T.
+pub fn build_with_sq<T: VectorRepr + Send + Sync>(
+    data: &[T],
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
@@ -419,27 +421,22 @@ pub fn build_with_sq(
     }
 
     tracing::info!(
-        npoints = npoints,
-        ndims = ndims,
-        k = config.k,
-        max_degree = config.max_degree,
-        c_max = config.c_max,
-        replicas = config.replicas,
-        "PiPNN build started (with pre-trained SQ)"
+        npoints = npoints, ndims = ndims,
+        k = config.k, max_degree = config.max_degree,
+        "PiPNN build started (with pre-trained SQ, native type)"
     );
 
-    // Quantize, compute LSH sketches and medoid from f32 data, then drop it.
-    // Sketches use f32 for accurate angular projections — projecting 1-bit vectors
-    // onto hyperplanes would lose directional information.
+    // Quantize from native T (streaming T→f32 per vector, no full f32 copy).
     let t = Instant::now();
     let qdata = crate::quantize::quantize_1bit(
-        &data, npoints, ndims, &sq_params.shift, sq_params.inverse_scale,
+        data, npoints, ndims, &sq_params.shift, sq_params.inverse_scale,
     );
     tracing::info!(elapsed_secs = t.elapsed().as_secs_f64(), "1-bit quantization complete");
 
-    let medoid = find_medoid(&data, npoints, ndims);
-    let sketches = crate::hash_prune::LshSketches::new(&data[..], npoints, ndims, config.num_hash_planes, 42);
-    drop(data); // Free ~1.6 GB before HashPrune reservoirs are allocated.
+    // LSH sketches and medoid from native T (T→f32 streaming inside).
+    let medoid = find_medoid(data, npoints, ndims);
+    let sketches = crate::hash_prune::LshSketches::new(data, npoints, ndims, config.num_hash_planes, 42);
+    // `data` borrow ends here — caller is free to drop the native data.
 
     build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
 }
@@ -1039,7 +1036,7 @@ mod tests {
 
         let sq_params = train_sq_params(&data, npoints, ndims);
 
-        let graph = super::build_with_sq(data.clone(), npoints, ndims, &config, &sq_params).unwrap();
+        let graph = super::build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
     }
@@ -1409,7 +1406,7 @@ mod tests {
             shift: vec![0.0f32; ndims + 5], // wrong length
             inverse_scale: 1.0,
         };
-        let result = build_with_sq(data.clone(), npoints, ndims, &config, &sq_params);
+        let result = build_with_sq(&data, npoints, ndims, &config, &sq_params);
         assert!(
             result.is_err(),
             "shift length != ndims should produce an error"
@@ -1435,7 +1432,7 @@ mod tests {
             ..Default::default()
         };
         let sq_params = train_sq_params(&data, npoints, ndims);
-        let graph = build_with_sq(data.clone(), npoints, ndims, &config, &sq_params).unwrap();
+        let graph = build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
         assert_eq!(
             graph.num_isolated(), 0,
             "build_with_sq should produce a connected graph with sufficient replicas, found {} isolated nodes",
