@@ -264,6 +264,11 @@ impl PiPNNGraph {
 /// matching DiskANN's `find_medoid_with_sampling` behavior. The centroid
 /// is a geometric center, so L2 is the natural metric regardless of the
 /// build distance metric.
+/// Public wrapper for find_medoid, used by diskann-disk's build pipeline.
+pub fn find_medoid_public<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
+    find_medoid(data, npoints, ndims)
+}
+
 fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
     let dist_fn = make_dist_fn(Metric::L2);
 
@@ -447,6 +452,36 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
 
 /// SQ build path: f32 data already dropped, using pre-computed sketches.
 /// Saves ~1.6 GB peak memory by not holding f32 alongside HashPrune reservoirs.
+/// Build a PiPNN index from pre-quantized data + pre-computed medoid.
+///
+/// Lowest-memory entry point for SQ builds: the caller quantizes and computes
+/// medoid, then drops native data before calling this. Only the 1-bit quantized
+/// data (~48 MB for 1M×384d) needs to be in memory during the graph build.
+pub fn build_from_quantized(
+    qdata: crate::quantize::QuantizedData,
+    npoints: usize,
+    ndims: usize,
+    medoid: usize,
+    config: &PiPNNConfig,
+) -> PiPNNResult<PiPNNGraph> {
+    config.validate()?;
+    if npoints == 0 || ndims == 0 {
+        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
+    }
+
+    tracing::info!(
+        npoints = npoints, ndims = ndims,
+        k = config.k, max_degree = config.max_degree,
+        "PiPNN build from pre-quantized data"
+    );
+
+    let sketches = crate::hash_prune::LshSketches::new_from_quantized(
+        &qdata, npoints, ndims, config.num_hash_planes, 42,
+    );
+
+    build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
+}
+
 fn build_internal_sq(
     npoints: usize,
     ndims: usize,
