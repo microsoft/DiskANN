@@ -86,7 +86,7 @@ def extract_search_metrics(results: dict, search_l: int, beam_width: int) -> dic
             metrics["mean_hops"] = sr.get("mean_hops", 0)
             metrics["mean_io_time"] = sr.get("mean_io_time", 0)
             metrics["mean_cpus"] = sr.get("mean_cpu_time", 0)
-            metrics["latency_95"] = sr.get("p999_latency", 0)
+            metrics["latency_95"] = sr.get("p95_latency", 0)
             break
 
     # Override with span metrics if available
