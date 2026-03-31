@@ -478,6 +478,78 @@ pub(crate) struct IndexBuild {
     pub(crate) num_threads: usize,
     pub(crate) multi_insert: Option<MultiInsert>,
     pub(crate) save_path: Option<String>,
+    /// When present, uses PiPNN graph builder instead of Vamana.
+    #[serde(default)]
+    pub(crate) pipnn: Option<PiPNNInmemConfig>,
+}
+
+/// PiPNN-specific parameters for inmem index build.
+/// Shared params (max_degree, distance/metric, alpha) come from the parent IndexBuild.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PiPNNInmemConfig {
+    #[serde(default = "default_c_max")]
+    pub c_max: usize,
+    #[serde(default = "default_c_min")]
+    pub c_min: usize,
+    #[serde(default = "default_p_samp")]
+    pub p_samp: f64,
+    #[serde(default = "default_fanout")]
+    pub fanout: Vec<usize>,
+    #[serde(default = "default_leaf_k")]
+    pub leaf_k: usize,
+    #[serde(default = "default_replicas")]
+    pub replicas: usize,
+    #[serde(default = "default_l_max")]
+    pub l_max: usize,
+    #[serde(default = "default_num_hash_planes")]
+    pub num_hash_planes: usize,
+    #[serde(default)]
+    pub final_prune: bool,
+}
+
+fn default_c_max() -> usize {
+    1024
+}
+fn default_c_min() -> usize {
+    256
+}
+fn default_p_samp() -> f64 {
+    0.005
+}
+fn default_fanout() -> Vec<usize> {
+    vec![10, 3]
+}
+fn default_leaf_k() -> usize {
+    3
+}
+fn default_replicas() -> usize {
+    1
+}
+fn default_l_max() -> usize {
+    128
+}
+fn default_num_hash_planes() -> usize {
+    12
+}
+
+impl PiPNNInmemConfig {
+    pub fn to_pipnn_config(&self, parent: &IndexBuild) -> diskann_pipnn::PiPNNConfig {
+        diskann_pipnn::PiPNNConfig {
+            num_hash_planes: self.num_hash_planes,
+            c_max: self.c_max,
+            c_min: self.c_min,
+            p_samp: self.p_samp,
+            fanout: self.fanout.clone(),
+            k: self.leaf_k,
+            max_degree: parent.max_degree,
+            replicas: self.replicas,
+            l_max: self.l_max,
+            metric: parent.distance.into(),
+            final_prune: self.final_prune,
+            alpha: parent.alpha,
+            num_threads: parent.num_threads,
+        }
+    }
 }
 
 impl IndexBuild {
@@ -566,6 +638,16 @@ impl IndexBuild {
             None => write_field!(f, "Save Path", "None")?,
             Some(p) => write_field!(f, "Save Path", p)?,
         }
+        if let Some(p) = &self.pipnn {
+            write_field!(f, "build algorithm", "PiPNN")?;
+            write_field!(f, "pipnn.c_max", p.c_max)?;
+            write_field!(f, "pipnn.c_min", p.c_min)?;
+            write_field!(f, "pipnn.leaf_k", p.leaf_k)?;
+            write_field!(f, "pipnn.l_max", p.l_max)?;
+            write_field!(f, "pipnn.replicas", p.replicas)?;
+        } else {
+            write_field!(f, "build algorithm", "Vamana")?;
+        }
         Ok(())
     }
 }
@@ -608,6 +690,7 @@ impl Example for IndexBuild {
             insert_retry: None,
             start_point_strategy: StartPointStrategy::Medoid,
             save_path: None,
+            pipnn: None,
         }
     }
 }
@@ -626,7 +709,7 @@ impl std::fmt::Display for IndexBuild {
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
     Load(IndexLoad),
-    Build(IndexBuild),
+    Build(Box<IndexBuild>),
 }
 
 impl CheckDeserialization for IndexSource {
@@ -672,7 +755,7 @@ impl CheckDeserialization for IndexOperation {
 impl Example for IndexOperation {
     fn example() -> Self {
         Self {
-            source: IndexSource::Build(IndexBuild::example()),
+            source: IndexSource::Build(Box::new(IndexBuild::example())),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
         }
     }

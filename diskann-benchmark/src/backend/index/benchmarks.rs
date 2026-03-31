@@ -523,7 +523,11 @@ macro_rules! impl_build {
                                 )?;
                                 Ok(index)
                             },
-                            single_or_multi_insert,
+                            if build.pipnn.is_some() {
+                                build::pipnn_insert
+                            } else {
+                                single_or_multi_insert
+                            },
                         )?;
 
                         // save the index if requested

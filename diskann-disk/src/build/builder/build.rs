@@ -16,6 +16,8 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
+#[cfg(feature = "pipnn")]
+use diskann_providers::utils::ParallelIteratorInPool;
 use diskann_providers::{
     model::{
         graph::{
@@ -53,6 +55,7 @@ use crate::{
             },
             continuation::{process_while_resource_is_available_async, ChunkingConfig},
         },
+        configuration::build_algorithm::BuildAlgorithm,
     },
     storage::{
         quant::{GeneratorContext, PQGeneration, PQGenerationContext, QuantDataGenerator},
@@ -208,6 +211,13 @@ where
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
+        // PiPNN is fully synchronous (rayon-only, no async). Run it outside tokio
+        // to avoid the async future capturing all build state.
+        #[cfg(feature = "pipnn")]
+        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+            return self.build_sync_pipnn();
+        }
+
         let runtime = create_runtime(self.index_configuration.num_threads)?;
         runtime.block_on(async {
             match self.build_internal().await {
@@ -235,15 +245,37 @@ where
             self.index_configuration.num_threads
         );
 
+        let t_pq = std::time::Instant::now();
         self.generate_compressed_data(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
+        let pq_secs = t_pq.elapsed().as_secs_f64();
 
+        let t_index = std::time::Instant::now();
         self.build_inmem_index(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        let index_secs = t_index.elapsed().as_secs_f64();
+
+        // Return freed memory (f32 data, graph, PiPNN internals) to the OS
+        // before disk layout starts. Without this, ~1.7 GB of freed-but-retained
+        // memory inflates peak RSS during the disk layout phase.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
+            malloc_trim(0);
+        }
 
         // Use physical file to pass the memory index to the disk writer
+        let t_layout = std::time::Instant::now();
         self.create_disk_layout()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
+        let layout_secs = t_layout.elapsed().as_secs_f64();
+
+        println!("Disk Index Build Phases");
+        println!("  PQ compression: {:.3}s", pq_secs);
+        println!("  Graph build:    {:.3}s", index_secs);
+        println!("  Disk layout:    {:.3}s", layout_secs);
 
         Ok(())
     }
@@ -313,6 +345,24 @@ where
     }
 
     async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+        // PiPNN is handled by build_sync_pipnn() — should not reach here.
+        #[cfg(feature = "pipnn")]
+        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+            return Err(ANNError::log_index_error(
+                "PiPNN should use build_sync_pipnn(), not the async path",
+            ));
+        }
+
+        #[cfg(not(feature = "pipnn"))]
+        if !matches!(
+            self.disk_build_param.build_algorithm(),
+            &BuildAlgorithm::Vamana
+        ) {
+            return Err(ANNError::log_index_error(
+                "PiPNN build algorithm requires the 'pipnn' feature to be enabled",
+            ));
+        }
+
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -324,6 +374,161 @@ where
                     .await
             }
         }
+    }
+
+    /// Fully synchronous PiPNN build: PQ compression + PiPNN graph + disk layout.
+    /// Runs without tokio runtime, avoiding the ~1.6 GB async future overhead.
+    #[cfg(feature = "pipnn")]
+    fn build_sync_pipnn(&mut self) -> ANNResult<()> {
+        let mut logger = PerfLogger::new_disk_index_build_logger();
+        let pool = create_thread_pool(self.index_configuration.num_threads)?;
+
+        info!(
+            "Starting PiPNN build (sync): R={} L={} T={}",
+            self.index_configuration.config.pruned_degree(),
+            self.index_configuration.config.l_build(),
+            self.index_configuration.num_threads
+        );
+
+        // PQ compression (sync — generate_compressed_data has no .await calls).
+        let t_pq = std::time::Instant::now();
+        {
+            let runtime = create_runtime(self.index_configuration.num_threads)?;
+            runtime.block_on(self.generate_compressed_data(&pool))?;
+        }
+        // Runtime dropped — reclaim RSS from PQ phase before PiPNN starts.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
+            malloc_trim(0);
+        }
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
+        let pq_secs = t_pq.elapsed().as_secs_f64();
+
+        // PiPNN graph build (pure rayon, no tokio).
+        let t_index = std::time::Instant::now();
+        self.build_pipnn_index_sync()?;
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        let index_secs = t_index.elapsed().as_secs_f64();
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
+            malloc_trim(0);
+        }
+
+        let t_layout = std::time::Instant::now();
+        self.create_disk_layout()?;
+        logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
+        let layout_secs = t_layout.elapsed().as_secs_f64();
+
+        println!("Disk Index Build Phases");
+        println!("  PQ compression: {:.3}s", pq_secs);
+        println!("  Graph build:    {:.3}s", index_secs);
+        println!("  Disk layout:    {:.3}s", layout_secs);
+
+        Ok(())
+    }
+
+    /// PiPNN graph construction — sync version of build_pipnn_index.
+    #[cfg(feature = "pipnn")]
+    fn build_pipnn_index_sync(&mut self) -> ANNResult<()> {
+        use diskann_pipnn::builder;
+
+        let config = self
+            .disk_build_param
+            .build_algorithm()
+            .to_pipnn_config(
+                self.index_configuration.config.pruned_degree().get(),
+                self.index_configuration.dist_metric,
+                self.index_configuration.config.alpha(),
+                self.index_configuration.num_threads,
+            )
+            .ok_or_else(|| {
+                ANNError::log_index_error(
+                    "build_pipnn_index called but build algorithm is not PiPNN",
+                )
+            })?;
+
+        config
+            .validate()
+            .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
+
+        info!("Building PiPNN index: max_degree={}", config.max_degree);
+
+        let data_path = self.index_writer.get_dataset_file();
+
+        // Build the PiPNN graph, using pre-trained SQ if available.
+        let graph = match &self.build_quantizer {
+            BuildQuantizer::Scalar1Bit(with_bits) => {
+                // Chunked parallel quantize: load 100K vectors at a time, quantize in
+                // parallel with rayon, accumulate centroid, drop chunk. Peak memory is
+                // chunk (75 MB) + quantized (48 MB) instead of full f16 (790 MB).
+                let sq = with_bits.quantizer();
+                let scale = sq.scale();
+                let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
+
+                let t_q = std::time::Instant::now();
+                let pool = create_thread_pool(self.index_configuration.num_threads)?;
+                let (qdata, medoid) = chunked_quantize_and_medoid::<Data::VectorDataType, _>(
+                    &data_path,
+                    self.storage_provider,
+                    sq.shift(),
+                    inverse_scale,
+                    &pool,
+                )?;
+                let npoints = qdata.npoints();
+                let ndims = qdata.ndims();
+                info!(
+                    "Chunked quantize + medoid: {:.3}s ({} points × {}d)",
+                    t_q.elapsed().as_secs_f64(),
+                    npoints,
+                    ndims
+                );
+
+                builder::build_from_quantized(qdata, npoints, ndims, medoid, &config)
+                    .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
+            }
+            _ => {
+                // Full precision or PQ build quantization — load data in native type
+                // and use build_typed to avoid upfront f32 conversion (saves ~793 MB
+                // peak RSS for f16 data).
+                let (npoints, ndims, data) =
+                    load_data_typed::<Data::VectorDataType, _>(&data_path, self.storage_provider)?;
+                builder::build_typed(&data, npoints, ndims, &config)
+                    .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
+            }
+        };
+
+        let save_path = self.index_writer.get_mem_index_file();
+        graph
+            .save_graph(std::path::Path::new(&save_path))
+            .map_err(|e| ANNError::log_index_error(format!("PiPNN graph save failed: {}", e)))?;
+
+        info!(
+            "PiPNN build complete: avg_degree={:.1}, max_degree={}, isolated={}, total={:.3}s",
+            graph.avg_degree(),
+            graph.max_degree(),
+            graph.num_isolated(),
+            graph.build_stats.total_secs
+        );
+        // Print timing breakdown to stdout (tracing goes to OpenTelemetry spans,
+        // not stdout, so use print! for user-visible output like Vamana does).
+        print!("{}", graph.build_stats);
+
+        // Mark checkpoint stages as complete so the checkpoint system is consistent.
+        self.checkpoint_record_manager.execute_stage(
+            WorkStage::InMemIndexBuild,
+            WorkStage::WriteDiskLayout,
+            || Ok(()),
+            || Ok(()),
+        )?;
+
+        Ok(())
     }
 
     async fn build_merged_vamana_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
@@ -478,6 +683,161 @@ where
             Progress::Completed => Ok(()),
         }
     }
+}
+
+/// Load data in its native type T without converting to f32.
+#[cfg(feature = "pipnn")]
+fn load_data_typed<T, SP>(
+    data_path: &str,
+    storage_provider: &SP,
+) -> ANNResult<(usize, usize, Vec<T>)>
+where
+    T: VectorRepr,
+    SP: StorageReadProvider,
+{
+    let matrix = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
+    let npoints = matrix.nrows();
+    let ndims = matrix.ncols();
+    let data: Vec<T> = matrix.into_inner().into_vec();
+
+    Ok((npoints, ndims, data))
+}
+
+/// Chunked parallel quantize: read data in 100K-vector chunks, quantize each
+/// chunk in parallel with rayon, accumulate centroid, then find medoid.
+/// Peak memory: chunk (~75 MB for 100K×384×f16) + quantized (~48 MB).
+#[cfg(feature = "pipnn")]
+fn chunked_quantize_and_medoid<T, SP>(
+    data_path: &str,
+    storage_provider: &SP,
+    shift: &[f32],
+    inverse_scale: f32,
+    pool: &RayonThreadPool,
+) -> ANNResult<(diskann_pipnn::quantize::QuantizedData, usize)>
+where
+    T: VectorRepr,
+    SP: StorageReadProvider,
+{
+    use diskann_utils::io::Metadata;
+    use std::io::{Read, Seek};
+
+    use rayon::prelude::*;
+
+    let mut reader = storage_provider.open_reader(data_path)?;
+    let metadata = Metadata::read(&mut reader)
+        .map_err(|e| ANNError::log_index_error(format!("Failed to read header: {}", e)))?;
+    let npoints = metadata.npoints();
+    let ndims = metadata.ndims();
+
+    // Pre-allocate quantized output (u64-aligned).
+    let bytes_per_vec = ndims.div_ceil(64) * 8;
+    let total_bytes = npoints * bytes_per_vec;
+    let u64s_total = total_bytes / 8;
+    let mut bits_u64 = vec![0u64; u64s_total];
+    let mut bits = unsafe {
+        let ptr = bits_u64.as_mut_ptr() as *mut u8;
+        let len = bits_u64.len().checked_mul(8).expect("overflow");
+        let cap = bits_u64.capacity().checked_mul(8).expect("overflow");
+        std::mem::forget(bits_u64);
+        Vec::from_raw_parts(ptr, len, cap)
+    };
+
+    // Read + quantize + centroid in 100K-vector chunks.
+    // Each chunk: read from disk → parallel T→f32 convert + quantize via rayon.
+    let chunk_size: usize = 100_000;
+    let mut centroid = vec![0.0f32; ndims];
+    let mut chunk_t = vec![<T as bytemuck::Zeroable>::zeroed(); chunk_size * ndims];
+
+    let mut offset = 0;
+    while offset < npoints {
+        let n = (npoints - offset).min(chunk_size);
+        let chunk_slice = &mut chunk_t[..n * ndims];
+        reader
+            .read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+            .map_err(|e| ANNError::log_index_error(format!("Read failed: {}", e)))?;
+
+        // Parallel quantize this chunk into the output bits buffer.
+        let bits_chunk = &mut bits[offset * bytes_per_vec..(offset + n) * bytes_per_vec];
+        bits_chunk
+            .par_chunks_mut(bytes_per_vec)
+            .enumerate()
+            .for_each_in_pool(pool, |(i, out)| {
+                let src = &chunk_slice[i * ndims..(i + 1) * ndims];
+                thread_local! {
+                    static BUF: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+                }
+                BUF.with(|cell| {
+                    let mut buf = cell.borrow_mut();
+                    if buf.len() < ndims {
+                        buf.resize(ndims, 0.0);
+                    }
+                    let f = &mut buf[..ndims];
+                    T::as_f32_into(src, f).expect("f32 conversion");
+                    for d in 0..ndims {
+                        let code =
+                            ((f[d] - shift[d]) * inverse_scale).clamp(0.0, 1.0).round() as u8;
+                        if code > 0 {
+                            out[d / 8] |= 1 << (d % 8);
+                        }
+                    }
+                });
+            });
+
+        // Accumulate centroid (sequential, cheap).
+        let mut f32_buf = vec![0.0f32; ndims];
+        for i in 0..n {
+            T::as_f32_into(&chunk_slice[i * ndims..(i + 1) * ndims], &mut f32_buf)
+                .expect("f32 conversion");
+            for d in 0..ndims {
+                centroid[d] += f32_buf[d];
+            }
+        }
+
+        offset += n;
+    }
+    drop(chunk_t); // Free chunk buffer before medoid pass.
+
+    let qdata =
+        diskann_pipnn::quantize::QuantizedData::from_raw(bits, bytes_per_vec, ndims, npoints);
+
+    // Medoid: find point closest to centroid. Re-read from disk (OS page cache hit).
+    let inv_n = 1.0 / npoints as f32;
+    for c in centroid.iter_mut() {
+        *c *= inv_n;
+    }
+
+    reader
+        .seek(std::io::SeekFrom::Start(8))
+        .map_err(|e| ANNError::log_index_error(format!("Seek failed: {}", e)))?;
+    let mut chunk_t2 = vec![<T as bytemuck::Zeroable>::zeroed(); chunk_size * ndims];
+    let mut f32_buf = vec![0.0f32; ndims];
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+    offset = 0;
+    while offset < npoints {
+        let n = (npoints - offset).min(chunk_size);
+        let chunk_slice = &mut chunk_t2[..n * ndims];
+        reader
+            .read_exact(bytemuck::must_cast_slice_mut::<T, u8>(chunk_slice))
+            .map_err(|e| ANNError::log_index_error(format!("Read failed: {}", e)))?;
+
+        for i in 0..n {
+            T::as_f32_into(&chunk_slice[i * ndims..(i + 1) * ndims], &mut f32_buf)
+                .expect("f32 conversion");
+            let mut dist = 0.0f32;
+            for d in 0..ndims {
+                let diff = f32_buf[d] - centroid[d];
+                dist += diff * diff;
+            }
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = offset + i;
+            }
+        }
+        offset += n;
+    }
+
+    Ok((qdata, best_idx))
 }
 
 #[allow(clippy::too_many_arguments)]
