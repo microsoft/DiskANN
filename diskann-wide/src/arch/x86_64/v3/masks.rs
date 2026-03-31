@@ -884,6 +884,8 @@ mod test_masks {
             let m = mask8x16::from_fn(arch, |i| i < 7);
             let bm = BitMask::<16, V3>::from_fn(arch, |i| i < 10);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 
@@ -894,6 +896,8 @@ mod test_masks {
             let m = mask8x32::from_fn(arch, |i| i < 7);
             let bm = BitMask::<32, V3>::from_fn(arch, |i| i < 10);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 
@@ -904,6 +908,8 @@ mod test_masks {
             let m = mask32x4::from_fn(arch, |i| i < 3);
             let bm = BitMask::<4, V3>::from_fn(arch, |i| i <= 3);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 
@@ -914,6 +920,8 @@ mod test_masks {
             let m = mask32x8::from_fn(arch, |i| i < 7);
             let bm = BitMask::<8, V3>::from_fn(arch, |i| i <= 7);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 
@@ -924,6 +932,8 @@ mod test_masks {
             let m = mask64x2::from_fn(arch, |i| i < 1);
             let bm = BitMask::<2, V3>::from_fn(arch, |i| i <= 1);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 
@@ -934,6 +944,8 @@ mod test_masks {
             let m = mask64x4::from_fn(arch, |i| i < 3);
             let bm = BitMask::<4, V3>::from_fn(arch, |i| i <= 3);
             check_avx2_mask(m, bm);
+        } else {
+            panic!("skipping test due to architecture incompatibility");
         }
     }
 

@@ -14,8 +14,7 @@ use std::{
 
 use diskann_utils::{
     Reborrow,
-    future::{AssertSend, AsyncFriendly, SendFuture, boxit},
-    reborrow::AsyncLower,
+    future::{AssertSend, SendFuture, boxit},
 };
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::FutureExt;
@@ -26,8 +25,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
-        self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
+        self, Batch, ExpandBeam, IdIterator, InplaceDeleteStrategy, InsertStrategy,
+        MultiInsertStrategy, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -36,11 +35,13 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
+    workingset::{AsWorkingSet, Fill, View},
 };
 
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
+    internal,
     neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
@@ -50,7 +51,7 @@ use crate::{
     tracked_debug, tracked_error, tracked_trace,
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
-        async_tools::{self, DynamicBalancer, VectorIdBoxSlice},
+        async_tools::{self, DynamicBalancer},
         object_pool::{ObjectPool, PooledRef},
     },
 };
@@ -205,19 +206,6 @@ type BatchResult<T> = Result<T, (T, ANNError)>;
 ///   type parameter because the type of the query computer depends on the type of the query.
 pub type PagedSearchState<DP, S, C> = SearchState<<DP as DataProvider>::InternalId, (S, C)>;
 
-/// The result of invoking [`DiskANNIndex::set_elements`], which invokes [`SetElement`] on
-/// a batch of vector ids and returns the guards for the batch (as well as the batch data
-/// with the appropriate internal ids.
-struct SetBatchElements<G, I, T> {
-    /// The [`SetElement::Guard`]s for every item in the set.
-    guards: Vec<G>,
-
-    /// The batch with the corresponding internal ids. The elements here have a position-wide
-    /// correspondence with guards. That is, the guard at index `i` is the guard for
-    /// the data vector as index `i`.
-    batch: Arc<[VectorIdBoxSlice<I, T>]>,
-}
-
 impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
@@ -300,12 +288,12 @@ where
         strategy: S,
         context: &DP::Context,
         id: &DP::ExternalId,
-        vector: &T,
+        vector: T,
     ) -> impl SendFuture<ANNResult<()>>
     where
         S: InsertStrategy<DP, T>,
-        T: Sync + ?Sized,
         DP: SetElement<T>,
+        T: Copy + Send,
     {
         async move {
             let guard = self
@@ -340,8 +328,7 @@ where
             let insert_retry = self.config.experimental_insert_retry();
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-            // N.B.: Working set needs to be outlived by `accessor`.
-            let mut working_set = HashMap::default();
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
@@ -428,40 +415,45 @@ where
 
     /// Perform a search for the given `vector_id, vector`, prune and return the visited set.
     /// Returns a tuple of the `vector_id` and a list of nodes from which to append an edge to `vector_id`.
-    fn search_and_prune<S, T>(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal method with tightly coupled params"
+    )]
+    fn search_and_prune<S, B, Set>(
         &self,
         strategy: &S,
         context: &DP::Context,
-        vector_id_pair: &VectorIdBoxSlice<DP::InternalId, T>,
+        batch: &B,
+        ids: &[DP::InternalId],
         position: usize,
-        batch: &[VectorIdBoxSlice<DP::InternalId, T>],
+        working_set: &mut Set,
         prune_scratch: &mut prune::Scratch<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
-        T: Sync,
-        DP: SetElement<[T]>,
-        S: InsertStrategy<DP, [T]>,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
+        S: for<'a> InsertStrategy<
+                DP,
+                B::Element<'a>,
+                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
+            >,
+        B: Batch,
+        Set: Send + Sync,
     {
         async move {
             // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
-            let internal_id = vector_id_pair.vector_id;
-            let vector = vector_id_pair.vector.as_ref();
+            let internal_id = ids[position];
 
             // NOTE: Use the `insert_search_accessor` API to allow insert-specific customization.
             let mut accessor = strategy
                 .insert_search_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(vector).into_ann_result()?;
+            let computer = accessor
+                .build_query_computer(batch.get(position))
+                .into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
             let mut search_l = scratch.best.search_l();
-
-            // NOTE: We don't filter the start points out of `visited_nodes`, as those are
-            // needed to generate out edges from the start points.
-            let mut new_out_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
             // If the experimental config is present, use it to obtain the maximum number
             // of retries. Otherwise, we stick with the default of 1.
@@ -489,65 +481,29 @@ where
                     .prune_accessor(&self.data_provider, context)
                     .into_ann_result()?;
 
-                let mut working_set = HashMap::new();
+                // N.B.: If `candidates == 0`, then `async_tools::around` naturally returns
+                // an empty iterator and `robust_prune_with` will skip the additional
+                // distance computations.
                 let candidates = self.config.intra_batch_candidates().get(batch.len());
-                if candidates != 0 {
-                    let prune_computer =
-                        prune_accessor.build_distance_computer().into_ann_result()?;
-                    let this_vector: <
-                        <S::PruneStrategy as PruneStrategy<DP>>::PruneAccessor<'_> as Accessor>::Extended = prune_accessor
-                        .as_element(vector, internal_id)
-                        .await
-                        .escalate("Retrieving the inserted vector must succeed")?
-                        .into();
-
-                    for other in async_tools::around(batch, position, candidates) {
-                        let id = other.vector_id;
-                        if let Some(element) = prune_accessor
-                            .as_element(&other.vector, id)
-                            .await
-                            .allow_transient(
-                                "Failure to retrieve others in the batch is acceptable",
-                            )?
-                        {
-                            search_record.push(Neighbor::new(
-                                id,
-                                prune_computer.evaluate_similarity(
-                                    this_vector.reborrow(),
-                                    element.reborrow(),
-                                ),
-                            ));
-
-                            working_set.insert(id, element.into());
-                        }
-                    }
-                }
-
-                let context = prune::Context {
-                    pool: SortedNeighbors::new(
-                        &mut search_record.visited,
-                        self.max_occlusion_size(),
-                    ),
-                    occlude_factor: &mut prune_scratch.occlude_factor,
-                    neighbors: &mut new_out_neighbors,
-                    last_checked: &mut prune_scratch.last_checked,
-                };
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
                 };
 
-                self.robust_prune(
+                self.robust_prune_with(
                     &mut prune_accessor,
                     internal_id,
-                    context,
-                    &mut working_set,
+                    async_tools::around(ids, position, candidates).copied(),
+                    &mut search_record,
+                    prune_scratch,
+                    working_set,
                     options,
                 )
-                .await?;
+                .await
+                .escalate("self id retrieval must succeed")?;
 
-                let should_retry =
-                    insert_retry.is_some_and(|v| v.should_retry(attempt, new_out_neighbors.len()));
+                let should_retry = insert_retry
+                    .is_some_and(|v| v.should_retry(attempt, prune_scratch.neighbors.len()));
                 if !should_retry {
                     break;
                 }
@@ -557,7 +513,10 @@ where
                 scratch.clear();
             }
 
-            Ok(PendingEdge::new(internal_id, new_out_neighbors))
+            Ok(PendingEdge::new(
+                internal_id,
+                std::mem::take(&mut prune_scratch.neighbors),
+            ))
         }
     }
 
@@ -570,27 +529,27 @@ where
     /// call to [`DP::set_element`] fail.
     ///
     /// This is the leaf task for the batch [`Self::set_elements`] method.
-    async fn set_chunk<T>(
+    async fn set_chunk<B>(
         &self,
         context: &DP::Context,
-        vectors: Vec<VectorIdBoxSlice<DP::ExternalId, T>>,
-    ) -> ANNResult<Vec<(DP::Guard, Box<[T]>)>>
+        batch: &B,
+        ids: &[DP::ExternalId],
+        range: Range<usize>,
+    ) -> ANNResult<Vec<DP::Guard>>
     where
-        DP: SetElement<[T]>,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
     {
-        let mut output = Vec::with_capacity(vectors.len());
-        for pair in vectors {
-            let id = pair.vector_id;
-            let data = pair.vector;
-
+        let mut output = Vec::with_capacity(range.len());
+        for i in range {
             let guard = self
                 .provider()
-                .set_element(context, &id, &data)
+                .set_element(context, &ids[i], batch.get(i))
                 .await
                 .escalate("cannot support failures during `set_element` in multi-insert")
                 .into_ann_result()?;
 
-            output.push((guard, data));
+            output.push(guard);
         }
         Ok(output)
     }
@@ -607,63 +566,62 @@ where
     ///
     /// The data backing each translated vector will be the same as that in `vectors`. That
     /// is, the backing data is *moved* internally, not copied.
-    fn set_elements<T>(
+    fn set_elements<B>(
         self: &Arc<Self>,
         context: &DP::Context,
-        vectors: Box<[VectorIdBoxSlice<DP::ExternalId, T>]>,
+        batch: &Arc<B>,
+        ids: &Arc<[DP::ExternalId]>,
         ntasks: NonZeroUsize,
-    ) -> impl SendFuture<ANNResult<SetBatchElements<DP::Guard, DP::InternalId, T>>>
+    ) -> impl SendFuture<ANNResult<Vec<DP::Guard>>>
     where
         Self: 'static,
-        T: AsyncFriendly,
-        DP: SetElement<[T]>,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
     {
         async move {
-            let len = vectors.len();
-            let partitions = async_tools::PartitionIter::new(vectors.len(), ntasks);
+            if batch.len() != ids.len() {
+                return Err(ANNError::new(
+                    ANNErrorKind::IndexError,
+                    BatchIdMismatch {
+                        batch_len: batch.len(),
+                        ids_len: ids.len(),
+                    },
+                ));
+            }
 
-            // In the loop below, we chunk `itr` according to the lengths in `partitions`.
-            let mut itr = vectors.into_iter();
+            let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
+
             let handles: Vec<_> = partitions
                 .map(|r| {
                     let self_clone = self.clone();
-
-                    // Note: `by_ref`: avoids consuming `itr` but still take ownership of the
-                    // yielded elements.
-                    let chunk: Vec<_> = itr.by_ref().take(r.len()).collect();
                     let context_clone = context.clone();
+                    let batch_clone = batch.clone();
+                    let ids_clone = ids.clone();
 
                     // The task assigned to each round of `set_element`.
-                    let future = async move { self_clone.set_chunk(&context_clone, chunk).await };
+                    let future = async move {
+                        self_clone
+                            .set_chunk(&context_clone, &batch_clone, &ids_clone, r)
+                            .await
+                    };
 
                     tokio::spawn(context.wrap_spawn(future))
                 })
                 .collect();
 
             // The collection of all the insert guards for the batch.
-            let mut guards = Vec::with_capacity(len);
-
-            // The repackage input data.
-            let mut batch = Vec::with_capacity(len);
+            let mut guards = Vec::with_capacity(batch.len());
 
             for h in handles {
                 let processed = h
                     .await
                     .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
-                for (guard, data) in processed {
-                    let id = guard.id();
+                for guard in processed {
                     guards.push(guard);
-                    batch.push(VectorIdBoxSlice {
-                        vector_id: id,
-                        vector: data,
-                    });
                 }
             }
 
-            Ok(SetBatchElements {
-                guards,
-                batch: batch.into(),
-            })
+            Ok(guards)
         }
     }
 
@@ -674,29 +632,35 @@ where
     ///
     /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
     /// contain all edges successfully processed by this task.
-    fn search_and_prune_batch<S, T>(
+    fn search_and_prune_batch<S, B, Set>(
         &self,
         strategy: &S,
         context: &DP::Context,
-        work: &DynamicBalancer<VectorIdBoxSlice<DP::InternalId, T>>,
+        batch: &B,
+        work: &DynamicBalancer<DP::InternalId>,
+        working_set: &mut Set,
     ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
     where
-        T: Send + Sync,
-        DP: SetElement<[T]>,
-        S: InsertStrategy<DP, [T]>,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
+        B: Batch,
+        S: for<'a> InsertStrategy<
+                DP,
+                B::Element<'a>,
+                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
+            >,
+        Set: Send + Sync,
     {
         async move {
             let mut output = Vec::new();
             let mut prune_scratch = prune::Scratch::new();
-            while let Some((vector, position)) = work.next() {
+            while let Some((_, position)) = work.next() {
                 match self
                     .search_and_prune(
                         strategy,
                         context,
-                        vector,
-                        position,
+                        batch,
                         work.all(),
+                        position,
+                        working_set,
                         &mut prune_scratch,
                     )
                     .await
@@ -746,7 +710,7 @@ where
                 .into_ann_result()?;
 
             let mut prune_scratch = prune::Scratch::new();
-            let mut working_set = HashMap::new();
+            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
@@ -806,14 +770,17 @@ where
     ///
     /// If `self.config.max_minibatch_par()` is 1 or `edge.len() == 1`, then no additional
     /// spawns are made by this function.
-    fn multi_insert_bootstrap<S>(
+    ///
+    /// The callback `F` is a lets us defer the creation of the `PruneStrategy`.
+    fn multi_insert_bootstrap<F, S>(
         self: Arc<Self>,
-        strategy: S,
+        f: F,
         context: DP::Context,
         edges: Vec<PendingEdge<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<Vec<PendingEdge<DP::InternalId>>>>
     where
-        S: PruneStrategy<DP> + Clone,
+        F: Fn() -> S + Send + Sync,
+        S: PruneStrategy<DP>,
     {
         async move {
             let num_items = edges.len();
@@ -825,16 +792,12 @@ where
             let handles: Vec<_> = (0..num_tasks - 1)
                 .map(|_| {
                     let self_clone = self.clone();
-                    let strategy_clone = strategy.clone();
+                    let strategy = f();
                     let context_clone = context.clone();
                     let work_clone = work.clone();
                     tokio::spawn(context.wrap_spawn(async move {
                         self_clone
-                            .multi_insert_bootstrap_task(
-                                &strategy_clone,
-                                &context_clone,
-                                &work_clone,
-                            )
+                            .multi_insert_bootstrap_task(&strategy, &context_clone, &work_clone)
                             .await
                     }))
                 })
@@ -842,7 +805,7 @@ where
 
             // Process work on this thread.
             let mut next = match self
-                .multi_insert_bootstrap_task(&strategy, &context, &work)
+                .multi_insert_bootstrap_task(&f(), &context, &work)
                 .await
             {
                 Ok(v) => v,
@@ -938,19 +901,18 @@ where
     /// updated. First with the generated candidates, and second to commit the backedges,
     /// triggering secondary prunes if necessary. This phase is partitioned so each parallel
     /// task updates a disjoint set of elements.
-    pub fn multi_insert<S, T>(
+    pub fn multi_insert<S, B>(
         self: &Arc<Self>,
         strategy: S,
         context: &DP::Context,
-        vectors: Box<[VectorIdBoxSlice<DP::ExternalId, T>]>,
+        vectors: Arc<B>,
+        ids: Arc<[DP::ExternalId]>,
     ) -> impl SendFuture<ANNResult<()>>
     where
         Self: 'static,
-        T: AsyncFriendly,
-        S: InsertStrategy<DP, [T]> + Clone + AsyncFriendly,
-        DP: SetElement<[T]>,
-        S::PruneStrategy: Clone,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
+        S: MultiInsertStrategy<DP, B>,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
     {
         async move {
             let num_tasks = self.config.max_minibatch_par();
@@ -959,8 +921,7 @@ where
             // Set Elements //
             //--------------//
 
-            let SetBatchElements { guards, batch } =
-                boxit(self.set_elements(context, vectors, num_tasks)).await?;
+            let guards = boxit(self.set_elements(context, &vectors, &ids, num_tasks)).await?;
 
             //----------------------//
             // Candidate Generation //
@@ -969,19 +930,40 @@ where
             // Dynamically partition the work across tasks. The time spent processing each
             // item (measured in the hundreds of micro-seconds) likely far exceeds the
             // synchronization overhead of the atomic increment.
-            let work = Arc::new(DynamicBalancer::new(batch));
+            let work = Arc::new(DynamicBalancer::new(
+                guards.iter().map(|g| g.id()).collect(),
+            ));
 
             // Launch `max_minibatch_par - 1` tasks to do work, running the last task on
             // the local thread.
+            let seed = strategy
+                .finish(
+                    self.provider(),
+                    context,
+                    &vectors,
+                    guards.iter().map(|g| g.id()),
+                )
+                .await
+                .into_ann_result()?;
+
             let handles: Vec<_> = (0..num_tasks.get() - 1)
                 .map(|_| {
                     let self_clone = self.clone();
-                    let strategy_clone = strategy.clone();
+                    let insert_strategy = strategy.insert_strategy();
                     let context_clone = context.clone();
+                    let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
+                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
+
                     let future = async move {
                         self_clone
-                            .search_and_prune_batch(&strategy_clone, &context_clone, &work_clone)
+                            .search_and_prune_batch(
+                                &insert_strategy,
+                                &context_clone,
+                                &vectors_clone,
+                                &work_clone,
+                                &mut working_set,
+                            )
                             .await
                     };
                     tokio::spawn(context.wrap_spawn(future))
@@ -989,7 +971,16 @@ where
                 .collect();
 
             // Defer dealing with the `result` until after we have joined the other tasks.
-            let mut edges = match self.search_and_prune_batch(&strategy, context, &work).await {
+            let mut edges = match self
+                .search_and_prune_batch(
+                    &strategy.insert_strategy(),
+                    context,
+                    &vectors,
+                    &work,
+                    &mut seed.as_working_set(self.max_occlusion_size()),
+                )
+                .await
+            {
                 Ok(v) => v,
                 Err((v, err)) => {
                     tracked_error!("search_prune_and_search main failed: {}", err);
@@ -1029,7 +1020,7 @@ where
             /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
-                    strategy.prune_strategy(),
+                    || strategy.insert_strategy().prune_strategy(),
                     context.clone(),
                     edges,
                 ))
@@ -1047,7 +1038,7 @@ where
             // Sequential assignment of the current neighbors. This does not yet appear
             // to be a huge bottleneck (compared to backedge aggregation).
             {
-                let prune_strategy = strategy.prune_strategy();
+                let prune_strategy = strategy.insert_strategy().prune_strategy();
                 let accessor = &mut prune_strategy
                     .prune_accessor(&self.data_provider, context)
                     .into_ann_result()?;
@@ -1065,22 +1056,19 @@ where
                 .map(|i| {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
-                    let strategy_clone = strategy.prune_strategy();
+                    let strategy_clone = strategy.insert_strategy().prune_strategy();
                     let backedges_clone = backedges.clone();
+                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
+
                     tokio::spawn(context.wrap_spawn(async move {
                         // Get the range of items to process in this task.
                         let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
                         let itr = backedges_clone.iter().skip(range.start).take(range.len());
 
                         let mut prune_scratch = prune::Scratch::new();
-                        let mut working_set = HashMap::new();
                         let mut sorted_buf = Vec::new();
 
                         for (source, adj_list) in itr {
-                            // FIXME: Give providers control over the size of the working
-                            // set.
-                            working_set.clear();
-
                             // Sort backedges so that add_edge_and_prune produces
                             // deterministic results regardless of HashMap iteration order.
                             sorted_buf.clear();
@@ -1286,7 +1274,7 @@ where
                 .into_ann_result()?;
 
             let computer = search_accessor
-                .build_query_computer(&v.async_lower())
+                .build_query_computer(v.reborrow())
                 .into_ann_result()?;
 
             let start_ids = search_accessor.starting_points().await?;
@@ -1307,12 +1295,11 @@ where
 
             // NOTE: We rely on `post_process` to remove deleted items from the results
             // placed into the output.
-            let proxy = v.async_lower();
-            let post_processor = strategy.search_post_processor();
-            let num_results = post_processor
+            let num_results = strategy
+                .search_post_processor()
                 .post_process(
                     &mut search_accessor,
-                    &*proxy,
+                    v.reborrow(),
                     &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
@@ -1564,7 +1551,8 @@ where
                             };
 
                             let mut prune_scratch = prune::Scratch::new();
-                            let mut working_set = HashMap::new();
+                            let mut working_set =
+                                strategy_clone.create_working_set(self_clone.max_occlusion_size());
 
                             match result {
                                 Some(source) => {
@@ -1576,9 +1564,6 @@ where
                                         }
                                     }
 
-                                    // FIXME: Give providers more control over the working
-                                    // set.
-                                    working_set.clear();
                                     self_clone
                                         .add_edge_and_prune(
                                             &strategy_clone,
@@ -1659,14 +1644,10 @@ where
             delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
-            let mut working_set = HashMap::new();
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
-                // FIXME: Allow providers to set the maximum size of the working set to
-                // avoid always needing clearing.
-                working_set.clear();
-
                 self.add_edge_and_prune(
                     &prune_strategy,
                     context,
@@ -1740,30 +1721,46 @@ where
             };
 
             let prune_strategy = strategy.prune_strategy();
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut accessor = prune_strategy
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
-            let mut working_set = HashMap::new();
             let mut edges_to_add = HashMap::<DP::InternalId, Vec<DP::InternalId>>::new();
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-            accessor
-                .fill_set(&mut working_set, replace_candidates.iter().copied())
-                .await
-                .allow_transient("observed failure during working set population")?;
+            // fetch the filtered adjacency list of `p`.
+            let PartitionedNeighbors {
+                undeleted: adjacency_list,
+                ..
+            } = self
+                .get_undeleted_neighbors(context, &mut accessor, vector_id)
+                .await?;
 
-            accessor
-                .fill_set(&mut working_set, in_neighbors.iter().copied())
+            let computer = accessor.build_distance_computer().into_ann_result()?;
+
+            // This is the total union of elements that we consider for neighbors.
+            // It's possible there is some repitition, but implementations of `Fill` should
+            // already properly handle that.
+            let view = accessor
+                .fill(
+                    &mut working_set,
+                    internal::chain(
+                        internal::chain(
+                            replace_candidates.iter().copied(),
+                            in_neighbors.iter().copied(),
+                        ),
+                        adjacency_list.iter().copied(),
+                    ),
+                )
                 .await
-                .allow_transient("observed failure during working set population")?;
+                .into_ann_result()?;
 
             // For each candidate `c` with an edge to `p`, compute the closest nodes to `c`
             // from the `best_k_candidates`.
             let mut pool = Vec::<Neighbor<DP::InternalId>>::new();
             for neighbor in in_neighbors.iter() {
                 pool.clear();
-                let candidate = match working_set.get(neighbor) {
+                let candidate = match view.get(*neighbor) {
                     Some(candidate) => candidate,
                     None => continue,
                 };
@@ -1774,7 +1771,7 @@ where
                         continue;
                     }
 
-                    let other = match working_set.get(other_id) {
+                    let other = match view.get(*other_id) {
                         Some(other) => other,
                         None => continue,
                     };
@@ -1790,23 +1787,10 @@ where
                 edges_to_add.insert(*neighbor, best);
             }
 
-            // fetch the filtered adjacency list of `p`.
-            let PartitionedNeighbors {
-                undeleted: adjacency_list,
-                ..
-            } = self
-                .get_undeleted_neighbors(context, &mut accessor, vector_id)
-                .await?;
-
             for neighbor in adjacency_list {
                 pool.clear();
-                // We can accept a transient error on this candidate retrieval by skipping this
-                // computation.
-                let candidate = match accessor
-                    .get_element(neighbor)
-                    .await
-                    .allow_transient_with(|| format!("skipping candidate {}", neighbor))?
-                {
+
+                let candidate = match view.get(neighbor) {
                     Some(candidate) => candidate,
                     None => continue,
                 };
@@ -1817,7 +1801,7 @@ where
                         continue;
                     }
 
-                    let other = match working_set.get(other_id) {
+                    let other = match view.get(*other_id) {
                         Some(other) => other,
                         None => continue,
                     };
@@ -1982,7 +1966,7 @@ where
                     neighbors
                 } else {
                     let mut prune_scratch = prune::Scratch::new();
-                    let mut working_set = HashMap::new();
+                    let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
@@ -2034,7 +2018,6 @@ where
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
         A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
-        T: ?Sized,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {
@@ -2159,7 +2142,7 @@ where
         search_params: P,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
@@ -2167,7 +2150,6 @@ where
         S: glue::DefaultPostProcessor<DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        T: ?Sized,
     {
         let processor = strategy.default_post_processor();
         self.search_with(search_params, strategy, processor, context, query, output)
@@ -2180,7 +2162,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
@@ -2189,7 +2171,6 @@ where
         PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        T: ?Sized,
     {
         search_params.search(self, strategy, processor, context, query, output)
     }
@@ -2225,13 +2206,13 @@ where
         &'a self,
         strategy: &'a S,
         context: &'a DP::Context,
-        query: &T,
+        query: T,
         vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
         search_params: &Knn,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where
-        T: ?Sized,
+        T: Copy + Send,
         S: glue::DefaultSearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
@@ -2295,12 +2276,12 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Sync + ?Sized,
+        T: Copy + Send,
     {
         async move {
             self.start_paged_search_with_init_ids(strategy, context, query, l_value, None)
@@ -2312,13 +2293,13 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
         init_ids: Option<&[DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Sync + ?Sized,
+        T: Copy + Send,
     {
         async move {
             let (computer, scratch) = {
@@ -2380,7 +2361,6 @@ where
     ) -> impl SendFuture<ANNResult<usize>>
     where
         S: SearchStrategy<DP, T>,
-        T: Send + Sync + ?Sized,
     {
         async move {
             if k > search_state.search_param_l {
@@ -2576,7 +2556,7 @@ where
         targets: &[DP::InternalId],
         source: DP::InternalId,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut HashMap<DP::InternalId, <S::PruneAccessor<'a> as Accessor>::Extended>,
+        working_set: &mut S::WorkingSet,
         to_remove: Option<&HashSet<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<()>>
     where
@@ -2655,20 +2635,21 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`FillSet::fill_set`]. Transient errors from
+    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
     /// this API are suppressed and any IDs that failed will be skipped during prune.
     ///
     /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune<'a, A>(
-        &'a self,
+    fn robust_prune<A, Set>(
+        &self,
         accessor: &mut A,
         location: DP::InternalId,
         mut context: prune::Context<'_, DP::InternalId>,
-        working_set: &mut HashMap<DP::InternalId, A::Extended>,
+        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + FillSet + 'a,
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
     {
         async move {
             // Early exit.
@@ -2676,17 +2657,18 @@ where
                 return Ok(());
             }
 
-            let _: Option<()> = accessor
-                .fill_set(working_set, context.pool.iter().map(|n| n.id))
+            let computer = accessor.build_distance_computer().into_ann_result()?;
+
+            let view = accessor
+                .fill(working_set, context.pool.iter().map(|n| n.id))
                 .send()
                 .await
-                .allow_transient("failures during working set fill are okay")?;
+                .into_ann_result()?;
 
-            // Note: Turbofish needed to help inference.
-            self.occlude_list::<A::Extended, _, _>(
-                &accessor.build_distance_computer().into_ann_result()?,
+            self.occlude_list::<A::View<'_>, _, _>(
+                &computer,
                 &mut context,
-                working_set,
+                view,
                 |id| id == location,
                 options,
             );
@@ -2697,34 +2679,35 @@ where
 
     /// A specialization of [`Self::robust_prune`] that prunes the IDs in an [`AdjacencyList`].
     ///
-    /// The resulting candidates list will be placed into `state's`
+    /// The resulting candidates list will be placed into `scratch`'s
     /// [`prune::Scratch::neighbors`] field.
     ///
-    /// All other fields of `state` are clobbered.
+    /// All other fields of `scratch` are clobbered.
     ///
     /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`FillSet`] and then computing distances to populate the candidate pool.
+    /// via [`Fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`FillSet::fill_set`]. Transient errors from
+    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
     /// this API are suppressed and any IDs that failed will be skipped during prune unless
     /// the vector that was not retrieved was `location`. If this is the case,
     /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
     /// the caller.
     ///
     /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune_list<'a, A>(
-        &'a self,
+    fn robust_prune_list<A, Set>(
+        &self,
         accessor: &mut A,
         location: DP::InternalId,
         list: &AdjacencyList<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut HashMap<DP::InternalId, A::Extended>,
+        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + FillSet + 'a,
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
     {
         async move {
             // Early exit.
@@ -2732,39 +2715,134 @@ where
                 return Ok(());
             }
 
-            // Fetch into the working set.
-            let _: Option<()> = accessor
-                .fill_set(
+            let computer = accessor.build_distance_computer().into_ann_result()?;
+
+            // Fetch into the working set, including the source location.
+            let view = accessor
+                .fill(
                     working_set,
-                    std::iter::once(location).chain(list.iter().copied()),
+                    internal::chain(std::iter::once(location), list.iter().copied()),
                 )
                 .send()
                 .await
-                .allow_transient("failures during working set fill are okay")?;
+                .into_ann_result()?;
 
             scratch.pool.clear();
             scratch.pool.reserve(list.len());
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-            if let Some(vector) = working_set.get(&location) {
+            // Look up the source vector from the working set and compute distances.
+            {
+                let vector = match view.get(location) {
+                    Some(v) => v,
+                    None => return Err(prune::ListError::failed_retrieval(location)),
+                };
+
                 for id in list.iter().filter(|&&i| i != location) {
-                    if let Some(other) = working_set.get(id) {
+                    if let Some(other) = view.get(*id) {
                         scratch.pool.push(Neighbor::new(
                             *id,
                             computer.evaluate_similarity(vector.reborrow(), other.reborrow()),
                         ));
                     }
                 }
-            } else {
-                return Err(prune::ListError::failed_retrieval(location));
             }
 
             // Note: Turbofish needed to help inference.
-            self.occlude_list::<A::Extended, _, _>(
+            self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
                 &mut scratch.as_context(self.max_occlusion_size()),
-                working_set,
+                view,
                 |id| id == location,
+                options,
+            );
+
+            Ok(())
+        }
+    }
+
+    /// A specialization of [`Self::robust_prune`] that prunes using a search record and
+    /// optional extra candidates.
+    ///
+    /// The resulting candidates list will be placed into `scratch`'s
+    /// [`prune::Scratch::neighbors`] field.
+    ///
+    /// All other fields of `scratch` are clobbered.
+    ///
+    /// This works by filling `working_set` with `internal_id`, `extras`, and the visited
+    /// candidates from `record`, capped at [`Self::max_occlusion_size`]. Items are filled in
+    /// priority order: `internal_id` first, then `extras`, then `record` candidates.
+    ///
+    /// If `extras` is non-empty, distances from `internal_id` to each extra are computed and
+    /// pushed into `record` before pruning. This allows batch neighbors to participate in
+    /// the candidate pool alongside search results.
+    ///
+    /// # Errors
+    ///
+    /// Forwards critical errors from [`Fill::fill`]. If `internal_id` cannot be retrieved
+    /// from the working set, [`prune::ListError::FailedVectorRetrieval`] is returned.
+    ///
+    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal method with tightly coupled params"
+    )]
+    fn robust_prune_with<A, Set, Itr>(
+        &self,
+        accessor: &mut A,
+        internal_id: DP::InternalId,
+        extras: Itr,
+        record: &mut VisitedSearchRecord<DP::InternalId>,
+        scratch: &mut prune::Scratch<DP::InternalId>,
+        working_set: &mut Set,
+        options: prune::Options,
+    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
+    where
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
+        Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
+    {
+        async move {
+            let computer = accessor.build_distance_computer().into_ann_result()?;
+            let view = accessor
+                .fill(
+                    working_set,
+                    internal::chain(
+                        std::iter::once(internal_id),
+                        internal::chain(extras.clone(), record.ids()),
+                    )
+                    .take(self.max_occlusion_size()),
+                )
+                .await
+                .into_ann_result()?;
+
+            if extras.len() != 0 {
+                let this_vector = view
+                    .get(internal_id)
+                    .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
+
+                for id in extras {
+                    if let Some(element) = view.get(id) {
+                        record.push(Neighbor::new(
+                            id,
+                            computer
+                                .evaluate_similarity(this_vector.reborrow(), element.reborrow()),
+                        ))
+                    }
+                }
+            }
+
+            let mut context = prune::Context {
+                pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
+                occlude_factor: &mut scratch.occlude_factor,
+                last_checked: &mut scratch.last_checked,
+                neighbors: &mut scratch.neighbors,
+            };
+
+            self.occlude_list::<A::View<'_>, _, _>(
+                &computer,
+                &mut context,
+                view,
+                |id| id == internal_id,
                 options,
             );
 
@@ -2803,20 +2881,16 @@ where
     ///
     /// This algorithm saturates the adjacency list if configured in the global
     /// configuration or if forced via [`prune::Options`].
-    fn occlude_list<V, C, F>(
+    fn occlude_list<M, C, F>(
         &self,
         computer: &C,
         context: &mut prune::Context<'_, DP::InternalId>,
-        map: &HashMap<DP::InternalId, V>,
+        map: M,
         exclude: F,
         options: prune::Options,
     ) where
-        for<'a> V: Reborrow<'a>,
-        C: for<'a, 'b> DistanceFunction<
-                <V as Reborrow<'a>>::Target,
-                <V as Reborrow<'b>>::Target,
-                f32,
-            >,
+        M: View<DP::InternalId>,
+        C: for<'a, 'b> DistanceFunction<M::ElementRef<'a>, M::ElementRef<'b>, f32>,
         F: Fn(DP::InternalId) -> bool,
     {
         if context.pool.is_empty() {
@@ -2850,7 +2924,7 @@ where
         //
         // During the pruning phase, we store results by their relative position in the
         // cache, and only resolve to their `local_id` at the end.
-        let cache: Vec<(f32, Option<&_>)> = pool
+        let cache: Vec<(f32, Option<_>)> = pool
             .iter()
             .map(|neighbor| {
                 // Filter out self loops.
@@ -2858,7 +2932,7 @@ where
                 if exclude(*id) {
                     (neighbor.distance, None)
                 } else {
-                    (neighbor.distance, map.get(id))
+                    (neighbor.distance, map.get(*id))
                 }
             })
             .collect();
@@ -2921,7 +2995,7 @@ where
 
                     // Otherwise, compute the distance between the result and this neighbor
                     // and update the occlude factor.
-                    let distance = match cache[result_position] {
+                    let distance = match &cache[result_position] {
                         (_, Some(v)) => {
                             computer.evaluate_similarity((*neighbor).reborrow(), v.reborrow())
                         }
@@ -3009,14 +3083,14 @@ where
         S: PruneStrategy<DP>,
     {
         async move {
-            let mut working_set = HashMap::default();
-
             let start: u64 = range.start.into();
             let end: u64 = range.end.into();
 
             let mut accessor = strategy
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
+
+            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
@@ -3027,8 +3101,6 @@ where
                 if neighbors.len() <= self.pruned_degree() {
                     continue;
                 }
-
-                working_set.clear();
 
                 // Saturation is controlled by the index configuration.
                 let options = prune::Options {
@@ -3084,4 +3156,11 @@ impl InternalSearchStats {
             range_search_second_round: self.range_search_second_round,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Error)]
+#[error("batch length ({}) does not match ids length ({})", self.batch_len, self.ids_len)]
+struct BatchIdMismatch {
+    batch_len: usize,
+    ids_len: usize,
 }

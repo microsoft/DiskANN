@@ -315,10 +315,10 @@ pub(super) fn run_build<T, BF, CF, B, DP>(
 ) -> anyhow::Result<(Index<DP>, BuildStats)>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + provider::SetElement<[T]>,
+        + for<'a> provider::SetElement<&'a [T]>,
     CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: glue::SearchStrategy<DP, [T]> + Clone + Send + Sync,
+    B: for<'a> glue::SearchStrategy<DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -347,9 +347,9 @@ pub(super) fn run_search_outer<T, S, DP>(
 ) -> anyhow::Result<BuildResult>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + provider::SetElement<[T]>,
+        + for<'a> provider::SetElement<&'a [T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: glue::DefaultSearchStrategy<DP, [T]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {

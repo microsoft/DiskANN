@@ -25,11 +25,9 @@
 //! * [`AsCacheAccessorFor`]: Create a cache accessor for a [`DataProvider`]/element type
 //!   combination.
 //!
-//! * [`CachedFillSet`]: The caching version of [`FillSet`]. A provided implementation can
+//! * [`CachedFill`]: The caching version of [`Fill`]. A provided implementation can
 //!   be used if desired, or the behavior can be customized per [`Accessor`]/cache accessor
 //!   pair.
-//!
-//! * [`CachedAsElement`]: The caching version of [`AsElement`].
 //!
 //! To make use of a caching provider, after creating the inner [`DataProvider`] (`DP`),
 //! create a cache `C` that implements the above traits for `DP` and the accessors whose
@@ -58,20 +56,20 @@
 //!   by the inner [`Accessor`] and is customized for a cache accessor.
 //! * The traits [`Evict`] and [`AsCacheAccessorFor`] are implemented by the **cache**.
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    fmt::Debug,
-};
+use std::{fmt::Debug, sync::Arc};
+
+use futures_util::FutureExt;
 
 use diskann::{
     ANNResult,
-    error::{self as core_error, IntoANNResult, StandardError, ToRanked},
+    error::{self as core_error, IntoANNResult, StandardError},
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, AsElement, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, Pipeline,
-            PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
+            self, Batch, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+            Pipeline, PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
         },
+        workingset,
     },
     neighbor::Neighbor,
     provider::{
@@ -102,7 +100,7 @@ where
     I: Clone,
 {
     /// Set the current entry to `element` - consuming `self`.
-    fn set<E>(self, element: &E::Of<'_>) -> Result<(), C::Error>
+    pub fn set<E>(self, element: &E::Of<'_>) -> Result<(), C::Error>
     where
         C: ElementCache<I, E>,
         E: WithLifetime,
@@ -327,7 +325,7 @@ where
     ) -> Result<CachingAccessor<A, Self::Accessor>, Self::Error>;
 }
 
-/// The caching equivalent of [`diskann::glue::FillSet`], implemented by the
+/// The caching equivalent of [`diskann::glue::Fill`], implemented by the
 /// **inner** [`Accessor`] for a cache accessor `C`. This allows the [`Accessor`] to
 ///
 /// customize the interaction with the cache.
@@ -339,61 +337,19 @@ where
 /// not present, it will be retrieved via [`Self::get_element`] and inserted into the cache.
 ///
 /// **ALL** errors are propagated eagerly by this method.
-pub trait CachedFillSet<C>: CacheableAccessor
+pub trait CachedFill<C, State>: CacheableAccessor
 where
     C: ElementCache<Self::Id, Self::Map>,
+    Self: workingset::Fill<State>,
 {
-    fn cached_fill_set<Itr>(
-        &mut self,
-        cache: &mut C,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> impl SendFuture<Result<(), CachingError<Self::GetError, C::Error>>>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        async move {
-            for i in itr {
-                if let Entry::Vacant(e) = set.entry(i) {
-                    match cache.try_get(i).map_err(CachingError::Cache)? {
-                        // Conversion chain:
-                        //
-                        // * `C::Element -> A::Element<'_>` via `CacheableAccessor`.
-                        // * `A::Element<'_> -> A::Extended` via `Into`.
-                        MaybeCached::Present(element) => {
-                            e.insert(Self::from_cached(element).into());
-                        }
-                        MaybeCached::Missing(missing) => {
-                            let element = self.get_element(i).await.map_err(CachingError::Inner)?;
-                            missing
-                                .set(Self::as_cached(&element))
-                                .map_err(CachingError::Cache)?;
-                            e.insert(element.into());
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
-/// The caching equivalent of [`diskann::glue::AsElement`], implemented by the
-/// **underlying** [`Accessor`]. This allows the [`Accessor`] to customize the interaction
-/// with the cache.
-pub trait CachedAsElement<T, C>: CacheableAccessor
-where
-    T: Send,
-{
-    type Error: ToRanked + std::fmt::Debug + Send + Sync;
-
-    /// Efficiently convert `vector` with corresponding internal `id` to `Self::Element`.
-    fn cached_as_element<'a>(
+    fn cached_fill<'a, Itr>(
         &'a mut self,
         cache: &'a mut C,
-        vector: T,
-        id: Self::Id,
-    ) -> impl SendFuture<Result<Self::Element<'a>, Self::Error>>;
+        state: &'a mut State,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::View<'a>, CachingError<Self::Error, C::Error>>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 }
 
 ///////////////
@@ -415,9 +371,7 @@ where
 /// * [`AsCacheAccessorFor`]: Create an accessor for the underlying cache targeting the
 ///   underlying provider with a specific element type.
 ///
-/// * [`CachedFillSet`]: [`diskann::glue::FillSet`] specialization for the cache.
-///
-/// * [`CachedAsElement`]: [`diskann::glue::AsElement`] specialization for the cache.
+/// * [`CachedFill`]: [`diskann::glue::Fill`] specialization for the cache.
 pub struct CachingProvider<T, C> {
     provider: T,
     cache: C,
@@ -481,6 +435,15 @@ impl<S> Cached<S> {
     /// Construct a new [`Cached`] around the inner `strategy`.
     pub fn new(strategy: S) -> Self {
         Self { strategy }
+    }
+}
+
+impl<T, U> workingset::AsWorkingSet<Cached<T>> for Cached<U>
+where
+    U: workingset::AsWorkingSet<T>,
+{
+    fn as_working_set(&self, capacity: usize) -> Cached<T> {
+        Cached::new(self.strategy.as_working_set(capacity))
     }
 }
 
@@ -621,6 +584,7 @@ where
     type Error = T::Error;
     type ExternalId = T::ExternalId;
     type InternalId = T::InternalId;
+    type Guard = T::Guard;
 
     fn to_external_id(
         &self,
@@ -684,17 +648,16 @@ where
 impl<DP, C, T> SetElement<T> for CachingProvider<DP, C>
 where
     DP: SetElement<T>,
-    T: Send + Sync + ?Sized,
+    T: Send + Sync,
     C: AsyncFriendly + Evict<DP::InternalId>,
 {
     type SetError = DP::SetError;
-    type Guard = DP::Guard;
 
     async fn set_element(
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &T,
+        element: T,
     ) -> Result<Self::Guard, Self::SetError> {
         use diskann::provider::Guard;
 
@@ -781,7 +744,6 @@ where
     A: CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
-    type Extended = A::Extended;
     type Element<'a>
         = A::Element<'a>
     where
@@ -814,7 +776,6 @@ where
 
 impl<T, A, C> BuildQueryComputer<T> for CachingAccessor<A, C>
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
@@ -823,50 +784,42 @@ where
 
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.inner.build_query_computer(from)
     }
 }
 
-impl<T, A, C> AsElement<T> for CachingAccessor<A, C>
+impl<A, C, State> workingset::Fill<Cached<State>> for CachingAccessor<A, C>
 where
-    A: CachedAsElement<T, C>,
+    A: workingset::Fill<State>,
+    A: CacheableAccessor + CachedFill<C, State>,
     C: ElementCache<A::Id, A::Map>,
-    T: Send,
 {
-    type Error = <A as CachedAsElement<T, C>>::Error;
-    async fn as_element(
-        &mut self,
-        vector: T,
-        id: Self::Id,
-    ) -> Result<Self::Element<'_>, Self::Error> {
-        self.inner
-            .cached_as_element(&mut self.cache, vector, id)
-            .await
-    }
-}
+    type Error = CachingError<A::Error, C::Error>;
 
-impl<A, C> FillSet for CachingAccessor<A, C>
-where
-    A: CacheableAccessor + CachedFillSet<C>,
-    C: ElementCache<A::Id, A::Map>,
-{
-    fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    type View<'a>
+        = A::View<'a>
     where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
+        Self: 'a,
+        State: 'a;
+
+    fn fill<'a, Itr>(
+        &'a mut self,
+        state: &'a mut Cached<State>,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
     {
-        self.inner.cached_fill_set(&mut self.cache, set, itr)
+        self.inner
+            .cached_fill(&mut self.cache, &mut state.strategy, itr)
     }
 }
 
 impl<A, C, T> ExpandBeam<T> for CachingAccessor<A, C>
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
     C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,
 {
@@ -878,7 +831,6 @@ pub struct Unwrap;
 
 impl<A, C, T> SearchPostProcessStep<CachingAccessor<A, C>, T> for Unwrap
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
@@ -893,7 +845,7 @@ where
         &self,
         next: &Next,
         accessor: &mut CachingAccessor<A, C>,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -945,7 +897,6 @@ type PruneAccessor<'a, S, DP> = <S as PruneStrategy<DP>>::PruneAccessor<'a>;
 /// that the relevant accessor can also access the underlying graph.
 impl<DP, C, T, S, E> SearchStrategy<CachingProvider<DP, C>, T> for Cached<S>
 where
-    T: ?Sized,
     DP: DataProvider,
     S: for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
     C: for<'a> AsCacheAccessorFor<
@@ -984,7 +935,6 @@ where
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
 impl<DP, C, T, S, E> glue::DefaultPostProcessor<CachingProvider<DP, C>, T> for Cached<S>
 where
-    T: ?Sized,
     DP: DataProvider,
     S: glue::DefaultPostProcessor<DP, T>
         + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
@@ -1011,7 +961,7 @@ where
 /// implementation of `ElementCache` that is compatible with `E` and allows mutation of the
 /// cached graph.
 ///
-/// Finally, the underlying [`PruneAccessor`] needs to implement [`CachedFillSet`] for the
+/// Finally, the underlying [`PruneAccessor`] needs to implement [`CachedFill`] for the
 /// corresponding cached accessor.
 impl<DP, C, S, E> PruneStrategy<CachingProvider<DP, C>> for Cached<S>
 where
@@ -1023,10 +973,10 @@ where
             Accessor: NeighborCache<DP::InternalId>,
             Error = E,
         > + AsyncFriendly,
-    for<'a> S::PruneAccessor<'a>:
-        CachedFillSet<<C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor>,
+    for<'a> S::PruneAccessor<'a>: CachedFill<<C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor, S::WorkingSet>,
     E: StandardError,
 {
+    type WorkingSet = Cached<S::WorkingSet>;
     type DistanceComputer = S::DistanceComputer;
     type PruneAccessor<'a> = CachingAccessor<
         PruneAccessor<'a, S, DP>,
@@ -1049,6 +999,10 @@ where
             .as_cache_accessor_for(inner)
             .map_err(CachingError::Cache)
     }
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        Cached::new(self.strategy.create_working_set(capacity))
+    }
 }
 
 /// Surprisingly - the `where` clause for this, while not pretty, is not too bad.
@@ -1056,7 +1010,6 @@ impl<DP, C, T, S> InsertStrategy<CachingProvider<DP, C>, T> for Cached<S>
 where
     DP: DataProvider,
     S: InsertStrategy<DP, T>,
-    T: ?Sized,
     Cached<S>: SearchStrategy<CachingProvider<DP, C>, T>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
     C: AsyncFriendly,
@@ -1137,6 +1090,48 @@ where
     {
         self.strategy
             .get_delete_element(&provider.provider, context, id)
+    }
+}
+
+impl<DP, C, S, B> MultiInsertStrategy<CachingProvider<DP, C>, B> for Cached<S>
+where
+    DP: DataProvider,
+    B: Batch,
+    S: MultiInsertStrategy<DP, B>,
+    Cached<S::InsertStrategy>: for<'a> InsertStrategy<
+            CachingProvider<DP, C>,
+            B::Element<'a>,
+            PruneStrategy: PruneStrategy<
+                CachingProvider<DP, C>,
+                WorkingSet = Cached<S::WorkingSet>,
+            >,
+        >,
+    C: AsyncFriendly,
+{
+    type Seed = Cached<S::Seed>;
+    type WorkingSet = Cached<S::WorkingSet>;
+    type FinishError = S::FinishError;
+    type InsertStrategy = Cached<S::InsertStrategy>;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        Cached {
+            strategy: self.strategy.insert_strategy(),
+        }
+    }
+
+    fn finish<Itr>(
+        &self,
+        provider: &CachingProvider<DP, C>,
+        context: &DP::Context,
+        batch: &Arc<B>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = DP::InternalId> + Send,
+    {
+        self.strategy
+            .finish(provider.inner(), context, batch, ids)
+            .map(|r| r.map(Cached::new))
     }
 }
 

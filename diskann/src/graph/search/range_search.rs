@@ -13,7 +13,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt},
+        glue::{self, ExpandBeam, SearchExt, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::{self, SearchOutputBuffer},
@@ -160,8 +160,8 @@ impl Range {
 impl<DP, S, T> Search<DP, S, T> for Range
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
@@ -171,7 +171,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
@@ -333,7 +333,6 @@ pub(crate) async fn range_search_internal<I, A, T>(
 where
     I: crate::utils::VectorId,
     A: ExpandBeam<T, Id = I> + SearchExt,
-    T: ?Sized,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 
