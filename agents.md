@@ -112,9 +112,9 @@ DiskANN uses a baseline caching system for regression detection. See [`diskann/R
 
 When touching architecture-specific intrinsics, run cross-platform validation per `diskann-wide/README.md`:
 
-* Testing AVX-512 code on non-AVX-512 capable x86-64 machines.
-* Testing Aarch64 code on x86-64 machines.
-* Testing code compiled for and running on the `x86-64` CPU (no AVX2) does not execute unsupported instructions.
+- Testing AVX-512 code on non-AVX-512 capable x86-64 machines.
+- Testing Aarch64 code on x86-64 machines.
+- Testing code compiled for and running on the `x86-64` CPU (no AVX/AVX2) does not execute unsupported instructions.
 
 ---
 
@@ -134,10 +134,10 @@ Low-level crates should use bespoke, precise, non-allocating error types. Use `t
 
 Use `diskann::ANNError` and its context machinery. This type:
 
-* Has a small size and `Drop` implementation, so is efficient in function ABIs.
-* Records stack trace of its first creation under `RUST_BACKTRACE=1`.
-* Precisely records line numbers of creation.
-* Has a context layering machinery to add additional information as an error is passed up the stack.
+- Has a small size and `Drop` implementation, so is efficient in function ABIs.
+- Records stack trace of its first creation under `RUST_BACKTRACE=1`.
+- Precisely records line numbers of creation.
+- Has a context layering machinery to add additional information as an error is passed up the stack.
 
 When converting to `ANNError`, use `#[track_caller]` for better source reporting.
 
@@ -152,10 +152,10 @@ At this level `anyhow::Error` is an appropriate type to use.
 
 Do not use a single crate-level error enum. Problems:
 
-* Provides no documentation on how an individual function could fail
-* Encourages **worse** error messages than bespoke types
-* Generate large structs that blow up the stack
-* Have branch-heavy `Drop` implementations which bloat code
+- Provides no documentation on how an individual function could fail
+- Encourages **worse** error messages than bespoke types
+- Generates large structs that blow up the stack
+- Branch-heavy `Drop` implementations which bloat code
 
 ### Formatting
 
