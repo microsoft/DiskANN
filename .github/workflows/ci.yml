@@ -448,6 +448,7 @@ jobs:
           cargo llvm-cov nextest --locked --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --workspace \
+            --exclude DiskAnnPy \
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
