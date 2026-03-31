@@ -210,9 +210,9 @@ where
 
     pub fn build(&mut self) -> ANNResult<()> {
         // PiPNN is fully synchronous (rayon-only, no async). Run it outside tokio
-        // to avoid the async future capturing all build state (~1.6 GB overhead).
+        // to avoid the async future capturing all build state.
         #[cfg(feature = "pipnn")]
-        if let BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
             return self.build_sync_pipnn();
         }
 
@@ -343,7 +343,7 @@ where
     async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
         // PiPNN is handled by build_sync_pipnn() — should not reach here.
         #[cfg(feature = "pipnn")]
-        if let BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
             return Err(ANNError::log_index_error(
                 "PiPNN should use build_sync_pipnn(), not the async path",
             ));
@@ -352,7 +352,7 @@ where
         #[cfg(not(feature = "pipnn"))]
         if !matches!(
             self.disk_build_param.build_algorithm(),
-            BuildAlgorithm::Vamana
+            &BuildAlgorithm::Vamana
         ) {
             return Err(ANNError::log_index_error(
                 "PiPNN build algorithm requires the 'pipnn' feature to be enabled",
