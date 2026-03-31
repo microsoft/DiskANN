@@ -83,7 +83,11 @@ impl SearchStats {
     // function supporting statistics objects from the in-memory index, which
     // are different from the static disk index
     pub fn from_stats_slice_inmem(cmps: &[u32]) -> Self {
-        let mean_comps = cmps.iter().map(|v| *v as f64).sum::<f64>() / (cmps.len() as f64);
+        let mean_comps = if cmps.is_empty() {
+            0.0
+        } else {
+            cmps.iter().map(|v| *v as f64).sum::<f64>() / (cmps.len() as f64)
+        };
 
         SearchStats {
             mean_latency: None,

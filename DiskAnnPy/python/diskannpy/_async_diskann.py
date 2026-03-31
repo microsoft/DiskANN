@@ -129,7 +129,7 @@ class AsyncDiskIndex:
             warnings.warn(
                 f"k_neighbors={k_value} asked for, but list_size={l_value} was smaller. Increasing {l_value} to {k_value}"
             )
-            complexity = k_value
+            l_value = k_value
 
         result, cmps = self._index.search(query=_query, k_value=k_value, l_value=l_value, use_full_precision_to_search=use_full_precision_to_search)
         neighbors = result.ids

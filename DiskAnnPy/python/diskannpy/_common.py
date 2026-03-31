@@ -30,21 +30,25 @@ def valid_dtype(dtype: Type) -> VectorDType:
     dtype we will use internally (e.g. np.single -> np.float32)
     """
     _assert_dtype(dtype)
-    if dtype == np.uint8:
+    canonical_dtype = np.dtype(dtype).type
+    if canonical_dtype == np.uint8:
         return np.uint8
-    if dtype == np.int8:
+    if canonical_dtype == np.int8:
         return np.int8
-    if dtype == np.float32:
+    if canonical_dtype == np.float32:
         return np.float32
-    
+    raise ValueError(f"Unsupported dtype after canonicalization: {dtype!r}")
+
 def valid_dap_dtype(dtype: Type) -> dap.DataType:
     _assert_dtype(dtype)
-    if dtype == np.uint8:
+    canonical_dtype = np.dtype(dtype).type
+    if canonical_dtype == np.uint8:
         return dap.DataType.Uint8
-    if dtype == np.int8:
+    if canonical_dtype == np.int8:
         return dap.DataType.Int8
-    if dtype == np.float32:
+    if canonical_dtype == np.float32:
         return dap.DataType.Float
+    raise ValueError(f"Unsupported dap vector dtype: {dtype!r}")
 
 def _assert(statement_eval: bool, message: str):
     if not statement_eval:

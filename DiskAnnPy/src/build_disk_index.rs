@@ -4,7 +4,7 @@
 */
 
 use diskann::{
-    graph::config::{self, defaults::ALPHA},
+    graph::config,
     utils::{IntoUsize, ONE},
     ANNError, ANNResult,
 };
@@ -153,7 +153,7 @@ pub fn build_disk_index(
 ) -> ANNResultPy<()> {
     println!(
          "Starting index build with R: {}  Lbuild: {}  alpha: {}  #threads: {} num_of_pq_chunks: {} build_DRAM_budget: {}",
-         graph_degree, complexity, ALPHA, num_threads, num_of_pq_chunks, build_dram_budget
+         graph_degree, complexity, alpha, num_threads, num_of_pq_chunks, build_dram_budget
      );
 
     let err = match data_type {
