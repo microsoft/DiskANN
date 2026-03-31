@@ -8,15 +8,15 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::{
-    dispatcher::{DispatchRule, Map},
-    output::Sink,
-    Any, Checkpoint, Input, Output,
+    benchmark::{self, Benchmark, DynBenchmark},
+    dispatcher::FailureScore,
+    input, Any, Checkpoint, Input, Output,
 };
 
 /// A collection of [`crate::Input`].
 pub struct Inputs {
     // Inputs keyed by their tag type.
-    inputs: HashMap<&'static str, Box<dyn Input>>,
+    inputs: HashMap<&'static str, Box<dyn input::DynInput>>,
 }
 
 impl Inputs {
@@ -27,28 +27,25 @@ impl Inputs {
         }
     }
 
-    /// Return the input with the registerd `tag` if present. Otherwise, return `None`.
-    pub fn get(&self, tag: &str) -> Option<&dyn Input> {
-        match self.inputs.get(tag) {
-            Some(v) => Some(&**v),
-            None => None,
-        }
+    /// Return the input with the registered `tag` if present. Otherwise, return `None`.
+    pub fn get(&self, tag: &str) -> Option<input::Registered<'_>> {
+        self.inputs.get(tag).map(|v| input::Registered(&**v))
     }
 
-    /// Register `input` in the registry.
+    /// Register the [`Input`] `T` in the registry.
     ///
     /// Returns an error if any other input with the same [`Input::tag()`] has been registered
     /// while leaving the underlying registry unchanged.
-    pub fn register<T>(&mut self, input: T) -> anyhow::Result<()>
+    pub fn register<T>(&mut self) -> anyhow::Result<()>
     where
         T: Input + 'static,
     {
         use std::collections::hash_map::Entry;
 
-        let tag = input.tag();
+        let tag = T::tag();
         match self.inputs.entry(tag) {
             Entry::Vacant(entry) => {
-                entry.insert(Box::new(input));
+                entry.insert(Box::new(crate::input::Wrapper::<T>::new()));
                 Ok(())
             }
             Entry::Occupied(_) => {
@@ -73,47 +70,52 @@ impl Default for Inputs {
     }
 }
 
-/// A collection of registerd benchmarks.
+/// A registered benchmark entry: a name paired with a type-erased benchmark.
+struct RegisteredBenchmark {
+    name: String,
+    benchmark: Box<dyn DynBenchmark>,
+}
+
+/// A collection of registered benchmarks.
 pub struct Benchmarks {
-    dispatcher: Dispatcher,
+    benchmarks: Vec<RegisteredBenchmark>,
 }
 
 impl Benchmarks {
     /// Return a new empty registry.
     pub fn new() -> Self {
         Self {
-            dispatcher: Dispatcher::new(),
+            benchmarks: Vec::new(),
         }
     }
 
     /// Register a new benchmark with the given name.
-    ///
-    /// The type parameter `T` is used to match this benchmark with a registered
-    /// [`crate::Any`], which is determined using by `<T as DispatchRule<&Any>>`.
-    pub fn register<T>(
-        &mut self,
-        name: impl Into<String>,
-        benchmark: impl Fn(T::Type<'_>, Checkpoint<'_>, &mut dyn Output) -> anyhow::Result<serde_json::Value>
-            + 'static,
-    ) where
-        T: for<'a> Map<Type<'a>: DispatchRule<&'a Any>>,
+    pub fn register<T>(&mut self, name: impl Into<String>)
+    where
+        T: Benchmark + 'static,
     {
-        self.dispatcher
-            .register::<_, T, CheckpointRef, DynOutput>(name.into(), benchmark)
+        self.benchmarks.push(RegisteredBenchmark {
+            name: name.into(),
+            benchmark: Box::new(benchmark::Wrapper::<T>::new()),
+        });
     }
 
-    pub(crate) fn methods(&self) -> impl ExactSizeIterator<Item = &(String, Method)> {
-        self.dispatcher.methods()
+    /// Return an iterator over registered benchmark names and their descriptions.
+    pub(crate) fn names(&self) -> impl ExactSizeIterator<Item = (&str, String)> {
+        self.benchmarks.iter().map(|entry| {
+            (
+                entry.name.as_str(),
+                Capture(&*entry.benchmark, None).to_string(),
+            )
+        })
     }
 
-    /// Return `true` if `job` matches with any registerd benchmark. Otherwise, return `false`.
+    /// Return `true` if `job` matches with any registered benchmark. Otherwise, return `false`.
     pub fn has_match(&self, job: &Any) -> bool {
-        let sink: &mut dyn Output = &mut Sink::new();
-        self.dispatcher.has_match(&job, &Checkpoint::empty(), &sink)
+        self.find_best_match(job).is_some()
     }
 
-    /// Attempt to the best matching benchmark for `job` - forwarding the `checkpoint` and
-    /// `output` to the benchmark.
+    /// Attempt to run the best matching benchmark for `job`.
     ///
     /// Returns the results of the benchmark if successful.
     ///
@@ -124,40 +126,64 @@ impl Benchmarks {
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<serde_json::Value> {
-        self.dispatcher.call(job, checkpoint, output).unwrap()
+        match self.find_best_match(job) {
+            Some(entry) => entry.benchmark.run(job, checkpoint, output),
+            None => Err(anyhow::Error::msg(
+                "could not find a matching benchmark for the given input",
+            )),
+        }
     }
 
-    /// Attempt to debug reasons for a missed dispatch, returning at most `methods` reasons.
+    /// Attempt to debug reasons for a missed dispatch, returning at most `max_methods`
+    /// reasons.
     ///
-    /// This implementation works by invoking [`DispatchRule::try_match`] with
-    /// `job` on all registered benchmarks. If no successful matches are found, the lowest
-    /// ranking [`crate::dispatcher::FailureScore`]s are collected and used to report details
-    /// of the nearest misses using [`DispatchRule::description`].
-    ///
-    /// Returns `Ok(())` is a match was found.
-    pub fn debug(&self, job: &Any, methods: usize) -> Result<(), Vec<Mismatch>> {
-        let checkpoint = Checkpoint::empty();
-        let sink: &mut dyn Output = &mut Sink::new();
-        let mismatches = match self.dispatcher.debug(methods, &job, &checkpoint, &sink) {
-            Ok(()) => return Ok(()),
-            Err(mismatches) => mismatches,
-        };
+    /// Returns `Ok(())` if a match was found.
+    pub fn debug(&self, job: &Any, max_methods: usize) -> Result<(), Vec<Mismatch>> {
+        if self.has_match(job) {
+            return Ok(());
+        }
 
-        // Just retrieve the mismatch information for the first argument since that is the
-        // one that does all the heavy lifting.
-        Err(mismatches
+        // Collect all failures with their scores, sorted by score (best near-misses first).
+        let mut failures: Vec<(&RegisteredBenchmark, FailureScore)> = self
+            .benchmarks
+            .iter()
+            .filter_map(|entry| match entry.benchmark.try_match(job) {
+                Ok(_) => None,
+                Err(score) => Some((entry, score)),
+            })
+            .collect();
+
+        failures.sort_by_key(|(_, score)| *score);
+        failures.truncate(max_methods);
+
+        let mismatches = failures
             .into_iter()
-            .map(|m| {
-                let reason = m.mismatches()[0]
-                    .as_ref()
-                    .map(|opt| opt.to_string())
-                    .unwrap_or("<missing>".into());
+            .map(|(entry, _)| {
+                let reason = Capture(&*entry.benchmark, Some(job)).to_string();
+
                 Mismatch {
-                    method: m.method().to_string(),
+                    method: entry.name.clone(),
                     reason,
                 }
             })
-            .collect())
+            .collect();
+
+        Err(mismatches)
+    }
+
+    /// Find the best matching benchmark for `job` by score.
+    fn find_best_match(&self, job: &Any) -> Option<&RegisteredBenchmark> {
+        self.benchmarks
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .benchmark
+                    .try_match(job)
+                    .ok()
+                    .map(|score| (entry, score))
+            })
+            .min_by_key(|(_, score)| *score)
+            .map(|(entry, _)| entry)
     }
 }
 
@@ -167,7 +193,7 @@ impl Default for Benchmarks {
     }
 }
 
-/// Document the reason for a method mathing failure.
+/// Document the reason for a method matching failure.
 pub struct Mismatch {
     method: String,
     reason: String,
@@ -185,39 +211,11 @@ impl Mismatch {
     }
 }
 
-//------------------//
-// Dispatch Helpers //
-//------------------//
+/// Helper to capture a `DynBenchmark::description` call into a `String` via `Display`.
+struct Capture<'a>(&'a dyn DynBenchmark, Option<&'a Any>);
 
-/// A [`Map`] for `&mut dyn Output`.
-pub(crate) struct DynOutput;
-
-impl Map for DynOutput {
-    type Type<'a> = &'a mut dyn Output;
+impl std::fmt::Display for Capture<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.description(f, self.1)
+    }
 }
-
-/// A dispatcher compatible mapper for [`Checkpoint`].
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CheckpointRef;
-
-impl Map for CheckpointRef {
-    type Type<'a> = Checkpoint<'a>;
-}
-
-/// The internal `Dispatcher` used for method resolution.
-type Dispatcher = crate::dispatcher::Dispatcher3<
-    anyhow::Result<serde_json::Value>,
-    crate::dispatcher::Ref<Any>,
-    CheckpointRef,
-    DynOutput,
->;
-
-/// The concrete type of a method.
-type Method = Box<
-    dyn crate::dispatcher::Dispatch3<
-        anyhow::Result<serde_json::Value>,
-        crate::dispatcher::Ref<Any>,
-        CheckpointRef,
-        DynOutput,
-    >,
->;

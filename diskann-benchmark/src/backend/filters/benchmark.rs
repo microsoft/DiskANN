@@ -5,11 +5,11 @@
 
 use anyhow::Result;
 use diskann_benchmark_runner::{
-    dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+    dispatcher::{FailureScore, MatchScore},
     output::Output,
     registry::Benchmarks,
     utils::{percentiles, MicroSeconds},
-    Any, Checkpoint,
+    Benchmark, Checkpoint,
 };
 use diskann_label_filter::{
     kv_index::GenericIndex,
@@ -29,14 +29,7 @@ use crate::{
 };
 
 pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    // Register the metadata index job
-    benchmarks.register::<MetadataIndexJob<'static>>(
-        "metadata-index-build",
-        |job, checkpoint, out| {
-            let stats = job.run(checkpoint, out)?;
-            Ok(serde_json::to_value(stats)?)
-        },
-    );
+    benchmarks.register::<MetadataIndexJob<'static>>("metadata-index-build");
 }
 
 // Metadata-only index job wrapper
@@ -50,27 +43,17 @@ impl<'a> MetadataIndexJob<'a> {
     }
 }
 
-impl dispatcher::Map for MetadataIndexJob<'static> {
-    type Type<'a> = MetadataIndexJob<'a>;
-}
+impl Benchmark for MetadataIndexJob<'static> {
+    type Input = MetadataIndexBuild;
+    type Output = MetadataIndexBuildStats;
 
-// Dispatch from the concrete input type
-impl<'a> DispatchRule<&'a crate::inputs::filters::MetadataIndexBuild> for MetadataIndexJob<'a> {
-    type Error = std::convert::Infallible;
-
-    fn try_match(
-        _from: &&'a crate::inputs::filters::MetadataIndexBuild,
-    ) -> Result<MatchScore, FailureScore> {
+    fn try_match(_input: &MetadataIndexBuild) -> Result<MatchScore, FailureScore> {
         Ok(MatchScore(1))
-    }
-
-    fn convert(from: &'a crate::inputs::filters::MetadataIndexBuild) -> Result<Self, Self::Error> {
-        Ok(MetadataIndexJob::new(from))
     }
 
     fn description(
         f: &mut std::fmt::Formatter<'_>,
-        _from: Option<&&'a crate::inputs::filters::MetadataIndexBuild>,
+        _input: Option<&MetadataIndexBuild>,
     ) -> std::fmt::Result {
         writeln!(
             f,
@@ -78,22 +61,13 @@ impl<'a> DispatchRule<&'a crate::inputs::filters::MetadataIndexBuild> for Metada
             crate::inputs::filters::MetadataIndexBuild::tag()
         )
     }
-}
 
-// Central dispatch mapping
-impl<'a> DispatchRule<&'a Any> for MetadataIndexJob<'a> {
-    type Error = anyhow::Error;
-
-    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-        from.try_match::<MetadataIndexBuild, Self>()
-    }
-
-    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-        from.convert::<MetadataIndexBuild, Self>()
-    }
-
-    fn description(f: &mut std::fmt::Formatter, from: Option<&&'a Any>) -> std::fmt::Result {
-        Any::description::<MetadataIndexBuild, Self>(f, from, MetadataIndexBuild::tag())
+    fn run(
+        input: &MetadataIndexBuild,
+        checkpoint: Checkpoint<'_>,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<MetadataIndexBuildStats> {
+        MetadataIndexJob::new(input).run(checkpoint, output)
     }
 }
 

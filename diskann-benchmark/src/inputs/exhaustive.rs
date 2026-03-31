@@ -12,7 +12,7 @@ use diskann_benchmark_runner::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, Example, Input},
+    inputs::{as_input, Example},
     utils::{datafiles::ConvertingLoad, SimilarityMeasure},
 };
 
@@ -34,9 +34,9 @@ as_input!(MinMax);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<Spherical>::new())?;
-    registry.register(Input::<Product>::new())?;
-    registry.register(Input::<MinMax>::new())?;
+    registry.register::<Spherical>()?;
+    registry.register::<Product>()?;
+    registry.register::<MinMax>()?;
     Ok(())
 }
 

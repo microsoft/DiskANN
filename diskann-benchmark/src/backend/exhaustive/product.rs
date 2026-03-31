@@ -11,12 +11,7 @@ crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register::<imp::ProductQ<'static>>(NAME, |object, _checkpoint, output| match object
-        .run(output)
-    {
-        Ok(v) => Ok(serde_json::to_value(v)?),
-        Err(err) => Err(err),
-    });
+    benchmarks.register::<imp::ProductQ<'static>>(NAME);
 
     #[cfg(not(feature = "product-quantization"))]
     imp::register(NAME, benchmarks)
@@ -32,9 +27,9 @@ mod imp {
 
     use diskann_benchmark_runner::{
         describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+        dispatcher::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
-        Any, Output,
+        Benchmark, Output,
     };
     use diskann_quantization::{product::train::TrainQuantizer, CompressInto};
     use indicatif::{ProgressBar, ProgressStyle};
@@ -196,53 +191,31 @@ mod imp {
         }
     }
 
-    impl dispatcher::Map for ProductQ<'static> {
-        type Type<'a> = ProductQ<'a>;
-    }
+    impl Benchmark for ProductQ<'static> {
+        type Input = inputs::exhaustive::Product;
+        type Output = Results;
 
-    impl<'a> DispatchRule<&'a inputs::exhaustive::Product> for ProductQ<'a> {
-        type Error = std::convert::Infallible;
-
-        fn try_match(_from: &&'a inputs::exhaustive::Product) -> Result<MatchScore, FailureScore> {
+        fn try_match(_input: &inputs::exhaustive::Product) -> Result<MatchScore, FailureScore> {
             Ok(MatchScore(0))
-        }
-
-        fn convert(from: &'a inputs::exhaustive::Product) -> Result<Self, Self::Error> {
-            Ok(Self::new(from))
         }
 
         fn description(
             f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a inputs::exhaustive::Product>,
+            input: Option<&inputs::exhaustive::Product>,
         ) -> std::fmt::Result {
-            if from.is_none() {
+            if input.is_none() {
                 describeln!(f, "- Exhaustive search for product quantization",)?;
                 describeln!(f, "- Requires `float32` data")?;
             }
             Ok(())
         }
-    }
 
-    impl<'a> DispatchRule<&'a Any> for ProductQ<'a> {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<inputs::exhaustive::Product, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<inputs::exhaustive::Product, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<inputs::exhaustive::Product, Self>(
-                f,
-                from,
-                inputs::exhaustive::Product::tag(),
-            )
+        fn run(
+            input: &inputs::exhaustive::Product,
+            _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
+            output: &mut dyn Output,
+        ) -> anyhow::Result<Results> {
+            ProductQ::new(input).run(output)
         }
     }
 

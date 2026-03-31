@@ -102,49 +102,43 @@ macro_rules! stub_impl {
         mod imp {
             use diskann_benchmark_runner::{
                 describeln,
-                dispatcher::{DispatchRule, FailureScore, MatchScore},
+                dispatcher::{FailureScore, MatchScore},
                 output::Output,
                 registry::Benchmarks,
-                Any, Checkpoint,
+                Benchmark, Checkpoint, Input,
             };
 
             use crate::inputs;
 
             pub(super) fn register(name: &str, registry: &mut Benchmarks) {
-                registry.register::<Stub>(name, run)
+                registry.register::<Stub>(name);
             }
 
-            pub(super) fn run(
-                _: Stub,
-                _: Checkpoint<'_>,
-                _: &mut dyn Output,
-            ) -> anyhow::Result<serde_json::Value> {
-                panic!("this function should not be called!");
-            }
-
-            // An empty placeholder to provide a hint for the necessary feature.
+            /// An empty placeholder to provide a hint for the necessary feature.
             pub(super) struct Stub;
-            diskann_benchmark_runner::self_map!(Stub);
 
-            impl<'a> DispatchRule<&'a Any> for Stub {
-                type Error = anyhow::Error;
-                fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-                    Err(match from.downcast_ref::<$input>() {
-                        // It's the correct type, but we do not actually have an
-                        // implementation.
-                        Some(_) => FailureScore(0),
-                        None => diskann_benchmark_runner::any::MATCH_FAIL,
-                    })
+            impl Benchmark for Stub {
+                type Input = $input;
+                type Output = serde_json::Value;
+
+                fn try_match(_input: &$input) -> Result<MatchScore, FailureScore> {
+                    Err(FailureScore(0))
                 }
-                fn convert(_from: &'a Any) -> Result<Self, Self::Error> {
-                    panic!("This should not have been reached. Please file a bug report.")
-                }
+
                 fn description(
                     f: &mut std::fmt::Formatter<'_>,
-                    _from: Option<&&'a Any>,
+                    _input: Option<&$input>,
                 ) -> std::fmt::Result {
-                    writeln!(f, "tag: \"{}\"", <$input>::tag())?;
+                    writeln!(f, "tag: \"{}\"", <$input as Input>::tag())?;
                     describeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
+                }
+
+                fn run(
+                    _input: &$input,
+                    _checkpoint: Checkpoint<'_>,
+                    _output: &mut dyn Output,
+                ) -> anyhow::Result<serde_json::Value> {
+                    panic!("this function should not be called!");
                 }
             }
         }

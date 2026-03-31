@@ -51,11 +51,6 @@ impl<'a> Checkpoint<'a> {
         }
     }
 
-    /// Create an empty checkpointer that turns calls to `checkpoint` into a no-op.
-    pub(crate) fn empty() -> Self {
-        Self { inner: None }
-    }
-
     /// Atomically save the zip of the inputs and results to the configured path.
     pub fn save(&self) -> anyhow::Result<()> {
         if let Some(inner) = &self.inner {
@@ -249,15 +244,6 @@ mod tests {
         let message = format!("{:?}", err);
         assert!(message.contains("Temporary file"));
         assert!(message.contains("already exists"));
-    }
-
-    #[test]
-    fn test_empty() {
-        let checkpoint = Checkpoint::empty();
-
-        // Make sure we can still call "save" and "checkpoint".
-        assert!(checkpoint.save().is_ok());
-        assert!(checkpoint.checkpoint("hello world").is_ok());
     }
 
     #[test]

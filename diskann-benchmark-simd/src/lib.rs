@@ -19,20 +19,17 @@ use thiserror::Error;
 
 use diskann_benchmark_runner::{
     describeln,
-    dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+    dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
     utils::{
         datatype::{self, DataType},
         percentiles, MicroSeconds,
     },
-    Any, CheckDeserialization, Checker,
+    Any, Benchmark, CheckDeserialization, Checker, Input,
 };
 
 ////////////////
 // Public API //
 ////////////////
-
-#[derive(Debug)]
-pub struct SimdInput;
 
 pub fn register(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
     register_benchmarks_impl(dispatcher)
@@ -112,7 +109,7 @@ pub(crate) struct Run {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct SimdOp {
+pub struct SimdOp {
     pub(crate) query_type: DataType,
     pub(crate) data_type: DataType,
     pub(crate) arch: Arch,
@@ -132,10 +129,6 @@ macro_rules! write_field {
 }
 
 impl SimdOp {
-    pub(crate) const fn tag() -> &'static str {
-        "simd-op"
-    }
-
     fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "query type", self.query_type)?;
         write_field!(f, "data type", self.data_type)?;
@@ -153,20 +146,19 @@ impl std::fmt::Display for SimdOp {
     }
 }
 
-impl diskann_benchmark_runner::Input for SimdInput {
-    fn tag(&self) -> &'static str {
+impl Input for SimdOp {
+    fn tag() -> &'static str {
         "simd-op"
     }
 
     fn try_deserialize(
-        &self,
         serialized: &serde_json::Value,
         checker: &mut Checker,
     ) -> anyhow::Result<Any> {
-        checker.any(SimdOp::deserialize(serialized)?)
+        checker.any(Self::deserialize(serialized)?)
     }
 
-    fn example(&self) -> anyhow::Result<serde_json::Value> {
+    fn example() -> anyhow::Result<serde_json::Value> {
         const DIM: [NonZeroUsize; 2] = [
             NonZeroUsize::new(128).unwrap(),
             NonZeroUsize::new(150).unwrap(),
@@ -197,7 +189,7 @@ impl diskann_benchmark_runner::Input for SimdInput {
             },
         ];
 
-        Ok(serde_json::to_value(&SimdOp {
+        Ok(serde_json::to_value(&Self {
             query_type: DataType::Float32,
             data_type: DataType::Float32,
             arch: Arch::X86_64_V3,
@@ -213,16 +205,10 @@ impl diskann_benchmark_runner::Input for SimdInput {
 macro_rules! register {
     ($arch:literal, $dispatcher:ident, $name:literal, $($kernel:tt)*) => {
         #[cfg(target_arch = $arch)]
-        $dispatcher.register::<$($kernel)*>(
-            $name,
-            run_benchmark,
-        )
+        $dispatcher.register::<$($kernel)*>($name)
     };
     ($dispatcher:ident, $name:literal, $($kernel:tt)*) => {
-        $dispatcher.register::<$($kernel)*>(
-            $name,
-            run_benchmark,
-        )
+        $dispatcher.register::<$($kernel)*>($name)
     };
 }
 
@@ -232,25 +218,25 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
         "x86_64",
         dispatcher,
         "simd-op-f32xf32-x86_64_V4",
-        Kernel<'static, diskann_wide::arch::x86_64::V4, f32, f32>
+        Kernel<diskann_wide::arch::x86_64::V4, f32, f32>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-f16xf16-x86_64_V4",
-        Kernel<'static, diskann_wide::arch::x86_64::V4, f16, f16>
+        Kernel<diskann_wide::arch::x86_64::V4, f16, f16>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-u8xu8-x86_64_V4",
-        Kernel<'static, diskann_wide::arch::x86_64::V4, u8, u8>
+        Kernel<diskann_wide::arch::x86_64::V4, u8, u8>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-i8xi8-x86_64_V4",
-        Kernel<'static, diskann_wide::arch::x86_64::V4, i8, i8>
+        Kernel<diskann_wide::arch::x86_64::V4, i8, i8>
     );
 
     // x86-64-v3
@@ -258,25 +244,25 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
         "x86_64",
         dispatcher,
         "simd-op-f32xf32-x86_64_V3",
-        Kernel<'static, diskann_wide::arch::x86_64::V3, f32, f32>
+        Kernel<diskann_wide::arch::x86_64::V3, f32, f32>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-f16xf16-x86_64_V3",
-        Kernel<'static, diskann_wide::arch::x86_64::V3, f16, f16>
+        Kernel<diskann_wide::arch::x86_64::V3, f16, f16>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-u8xu8-x86_64_V3",
-        Kernel<'static, diskann_wide::arch::x86_64::V3, u8, u8>
+        Kernel<diskann_wide::arch::x86_64::V3, u8, u8>
     );
     register!(
         "x86_64",
         dispatcher,
         "simd-op-i8xi8-x86_64_V3",
-        Kernel<'static, diskann_wide::arch::x86_64::V3, i8, i8>
+        Kernel<diskann_wide::arch::x86_64::V3, i8, i8>
     );
 
     // aarch64-neon
@@ -284,69 +270,69 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
         "aarch64",
         dispatcher,
         "simd-op-f32xf32-aarch64_neon",
-        Kernel<'static, diskann_wide::arch::aarch64::Neon, f32, f32>
+        Kernel<diskann_wide::arch::aarch64::Neon, f32, f32>
     );
     register!(
         "aarch64",
         dispatcher,
         "simd-op-f16xf16-aarch64_neon",
-        Kernel<'static, diskann_wide::arch::aarch64::Neon, f16, f16>
+        Kernel<diskann_wide::arch::aarch64::Neon, f16, f16>
     );
     register!(
         "aarch64",
         dispatcher,
         "simd-op-u8xu8-aarch64_neon",
-        Kernel<'static, diskann_wide::arch::aarch64::Neon, u8, u8>
+        Kernel<diskann_wide::arch::aarch64::Neon, u8, u8>
     );
     register!(
         "aarch64",
         dispatcher,
         "simd-op-i8xi8-aarch64_neon",
-        Kernel<'static, diskann_wide::arch::aarch64::Neon, i8, i8>
+        Kernel<diskann_wide::arch::aarch64::Neon, i8, i8>
     );
 
     // scalar
     register!(
         dispatcher,
         "simd-op-f32xf32-scalar",
-        Kernel<'static, diskann_wide::arch::Scalar, f32, f32>
+        Kernel<diskann_wide::arch::Scalar, f32, f32>
     );
     register!(
         dispatcher,
         "simd-op-f16xf16-scalar",
-        Kernel<'static, diskann_wide::arch::Scalar, f16, f16>
+        Kernel<diskann_wide::arch::Scalar, f16, f16>
     );
     register!(
         dispatcher,
         "simd-op-u8xu8-scalar",
-        Kernel<'static, diskann_wide::arch::Scalar, u8, u8>
+        Kernel<diskann_wide::arch::Scalar, u8, u8>
     );
     register!(
         dispatcher,
         "simd-op-i8xi8-scalar",
-        Kernel<'static, diskann_wide::arch::Scalar, i8, i8>
+        Kernel<diskann_wide::arch::Scalar, i8, i8>
     );
 
     // reference
     register!(
         dispatcher,
         "simd-op-f32xf32-reference",
-        Kernel<'static, Reference, f32, f32>
+        Kernel<Reference, f32, f32>
     );
     register!(
         dispatcher,
         "simd-op-f16xf16-reference",
-        Kernel<'static, Reference, f16, f16>
+        Kernel<Reference, f16, f16>
     );
     register!(
         dispatcher,
         "simd-op-u8xu8-reference",
-        Kernel<'static, Reference, u8, u8>
+        Kernel<Reference, u8, u8>
     );
     register!(
         dispatcher,
         "simd-op-i8xi8-reference",
-        Kernel<'static, Reference, i8, i8>
+        Kernel<Reference, i8, i8>
     );
 }
 
@@ -361,36 +347,18 @@ struct Reference;
 #[derive(Debug)]
 struct Identity<T>(T);
 
-impl<T> dispatcher::Map for Identity<T>
-where
-    T: 'static,
-{
-    type Type<'a> = T;
-}
-
-struct Kernel<'a, A, Q, D> {
-    input: &'a SimdOp,
+struct Kernel<A, Q, D> {
     arch: A,
     _type: std::marker::PhantomData<(A, Q, D)>,
 }
 
-impl<'a, A, Q, D> Kernel<'a, A, Q, D> {
-    fn new(input: &'a SimdOp, arch: A) -> Self {
+impl<A, Q, D> Kernel<A, Q, D> {
+    fn new(arch: A) -> Self {
         Self {
-            input,
             arch,
             _type: std::marker::PhantomData,
         }
     }
-}
-
-impl<A, Q, D> dispatcher::Map for Kernel<'static, A, Q, D>
-where
-    A: 'static,
-    Q: 'static,
-    D: 'static,
-{
-    type Type<'a> = Kernel<'a, A, Q, D>;
 }
 
 // Map Architectures to the enum.
@@ -508,16 +476,18 @@ match_arch!("x86_64", diskann_wide::arch::x86_64::V4, X86_64_V4);
 match_arch!("x86_64", diskann_wide::arch::x86_64::V3, X86_64_V3);
 match_arch!("aarch64", diskann_wide::arch::aarch64::Neon, Neon);
 
-impl<'a, A, Q, D> DispatchRule<&'a SimdOp> for Kernel<'a, A, Q, D>
+impl<A, Q, D> Benchmark for Kernel<A, Q, D>
 where
     datatype::Type<Q>: DispatchRule<datatype::DataType>,
     datatype::Type<D>: DispatchRule<datatype::DataType>,
     Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
+    Kernel<A, Q, D>: RunBenchmark,
 {
-    type Error = ArchNotSupported;
+    type Input = SimdOp;
+    type Output = Vec<RunResult>;
 
     // Matching simply requires that we match the inner type.
-    fn try_match(from: &&'a SimdOp) -> Result<MatchScore, FailureScore> {
+    fn try_match(from: &SimdOp) -> Result<MatchScore, FailureScore> {
         let mut failscore: Option<u32> = None;
         if datatype::Type::<Q>::try_match(&from.query_type).is_err() {
             *failscore.get_or_insert(0) += 10;
@@ -535,29 +505,36 @@ where
         }
     }
 
-    fn convert(from: &'a SimdOp) -> Result<Self, Self::Error> {
-        assert!(Self::try_match(&from).is_ok());
-        let arch = Identity::<A>::convert(from.arch)?.0;
-        Ok(Self::new(from, arch))
+    fn run(
+        input: &SimdOp,
+        _: diskann_benchmark_runner::Checkpoint<'_>,
+        mut output: &mut dyn diskann_benchmark_runner::Output,
+    ) -> anyhow::Result<Self::Output> {
+        let arch = Identity::<A>::convert(input.arch)?.0;
+        let kernel = Self::new(arch);
+        writeln!(output, "{}", input)?;
+        let results = kernel.run(input)?;
+        writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
+        Ok(results)
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a SimdOp>) -> std::fmt::Result {
-        match from {
+    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&SimdOp>) -> std::fmt::Result {
+        match input {
             None => {
                 describeln!(
                     f,
                     "- Query Type: {}",
-                    dispatcher::Description::<datatype::DataType, datatype::Type<Q>>::new()
+                    Description::<datatype::DataType, datatype::Type<Q>>::new()
                 )?;
                 describeln!(
                     f,
                     "- Data Type: {}",
-                    dispatcher::Description::<datatype::DataType, datatype::Type<D>>::new()
+                    Description::<datatype::DataType, datatype::Type<D>>::new()
                 )?;
                 describeln!(
                     f,
                     "- Implementation: {}",
-                    dispatcher::Description::<Arch, Identity<A>>::new()
+                    Description::<Arch, Identity<A>>::new()
                 )?;
             }
             Some(input) => {
@@ -576,50 +553,12 @@ where
     }
 }
 
-impl<'a, A, Q, D> DispatchRule<&'a diskann_benchmark_runner::Any> for Kernel<'a, A, Q, D>
-where
-    Kernel<'a, A, Q, D>: DispatchRule<&'a SimdOp>,
-    <Kernel<'a, A, Q, D> as DispatchRule<&'a SimdOp>>::Error:
-        std::error::Error + Send + Sync + 'static,
-{
-    type Error = anyhow::Error;
-
-    fn try_match(from: &&'a diskann_benchmark_runner::Any) -> Result<MatchScore, FailureScore> {
-        from.try_match::<SimdOp, Self>()
-    }
-
-    fn convert(from: &'a diskann_benchmark_runner::Any) -> Result<Self, Self::Error> {
-        from.convert::<SimdOp, Self>()
-    }
-
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        from: Option<&&'a diskann_benchmark_runner::Any>,
-    ) -> std::fmt::Result {
-        Any::description::<SimdOp, Self>(f, from, SimdOp::tag())
-    }
-}
-
 ///////////////
 // Benchmark //
 ///////////////
 
-fn run_benchmark<A, Q, D>(
-    kernel: Kernel<'_, A, Q, D>,
-    _: diskann_benchmark_runner::Checkpoint<'_>,
-    mut output: &mut dyn diskann_benchmark_runner::Output,
-) -> Result<serde_json::Value, anyhow::Error>
-where
-    for<'a> Kernel<'a, A, Q, D>: RunBenchmark,
-{
-    writeln!(output, "{}", kernel.input)?;
-    let results = kernel.run()?;
-    writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
-    Ok(serde_json::to_value(results)?)
-}
-
 trait RunBenchmark {
-    fn run(self) -> Result<Vec<RunResult>, anyhow::Error>;
+    fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error>;
 }
 
 #[derive(Debug, Serialize)]
@@ -745,10 +684,10 @@ impl<Q, D> Data<Q, D> {
 
 macro_rules! stamp {
     (reference, $Q:ty, $D:ty, $f_l2:ident, $f_ip:ident, $f_cosine:ident) => {
-        impl RunBenchmark for Kernel<'_, Reference, $Q, $D> {
-            fn run(self) -> Result<Vec<RunResult>, anyhow::Error> {
+        impl RunBenchmark for Kernel<Reference, $Q, $D> {
+            fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error> {
                 let mut results = Vec::new();
-                for run in self.input.runs.iter() {
+                for run in input.runs.iter() {
                     let data = Data::<$Q, $D>::new(run);
                     let result = match run.distance {
                         SimilarityMeasure::SquaredL2 => data.run(run, reference::$f_l2),
@@ -762,15 +701,15 @@ macro_rules! stamp {
         }
     };
     ($arch:path, $Q:ty, $D:ty) => {
-        impl RunBenchmark for Kernel<'_, $arch, $Q, $D> {
-            fn run(self) -> Result<Vec<RunResult>, anyhow::Error> {
+        impl RunBenchmark for Kernel<$arch, $Q, $D> {
+            fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error> {
                 let mut results = Vec::new();
 
                 let l2 = &simd::L2 {};
                 let ip = &simd::IP {};
                 let cosine = &simd::CosineStateless {};
 
-                for run in self.input.runs.iter() {
+                for run in input.runs.iter() {
                     let data = Data::<$Q, $D>::new(run);
                     // For each kernel, we need to do a two-step wrapping of closures so
                     // the inner-most closure is executed by the architecture.

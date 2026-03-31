@@ -1,0 +1,1 @@
+run --input-file $INPUT --output-file $OUTPUT
