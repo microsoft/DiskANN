@@ -427,16 +427,20 @@ pub fn build_with_sq<T: VectorRepr + Send + Sync>(
     );
 
     // Quantize from native T (streaming T→f32 per vector, no full f32 copy).
+    // Quantize and compute medoid from native data, then release the borrow.
     let t = Instant::now();
     let qdata = crate::quantize::quantize_1bit(
         data, npoints, ndims, &sq_params.shift, sq_params.inverse_scale,
     );
-    tracing::info!(elapsed_secs = t.elapsed().as_secs_f64(), "1-bit quantization complete");
-
-    // LSH sketches and medoid from native T (T→f32 streaming inside).
     let medoid = find_medoid(data, npoints, ndims);
-    let sketches = crate::hash_prune::LshSketches::new(data, npoints, ndims, config.num_hash_planes, 42);
-    // `data` borrow ends here — caller is free to drop the native data.
+    tracing::info!(elapsed_secs = t.elapsed().as_secs_f64(), "1-bit quantization + medoid complete");
+    // `data` borrow ends here — caller can drop native T data.
+
+    // Compute LSH sketches from 1-bit vectors directly — no f16/f32 data needed.
+    // dot(1bit_vec, hyperplane) = sum of hyperplane[d] where bit d is set.
+    let sketches = crate::hash_prune::LshSketches::new_from_quantized(
+        &qdata, npoints, ndims, config.num_hash_planes, 42,
+    );
 
     build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
 }
