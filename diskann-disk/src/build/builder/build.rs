@@ -451,8 +451,8 @@ where
         // Build the PiPNN graph, using pre-trained SQ if available.
         let graph = match &self.build_quantizer {
             BuildQuantizer::Scalar1Bit(with_bits) => {
-                // Load data in native type (f16/f32) — no f32 conversion needed.
-                // build_with_sq converts T→f32 per-vector streaming during quantization.
+                // Stream-quantize: load f16 data, quantize + compute medoid on the fly,
+                // then drop f16 before building. Only 48 MB quantized data in memory.
                 let (npoints, ndims, data) = load_data_typed::<Data::VectorDataType, _>(
                     &data_path,
                     self.storage_provider,
@@ -460,12 +460,23 @@ where
                 let sq = with_bits.quantizer();
                 let scale = sq.scale();
                 let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
-                let sq_params = builder::SQParams {
-                    shift: sq.shift().to_vec(),
-                    inverse_scale,
-                };
-                info!("Using pre-trained SQ quantizer for PiPNN 1-bit build (native type)");
-                builder::build_with_sq(&data, npoints, ndims, &config, &sq_params)
+
+                info!("Quantizing + computing medoid from native data");
+                let t_q = std::time::Instant::now();
+                let qdata = diskann_pipnn::quantize::quantize_1bit(
+                    &data, npoints, ndims, sq.shift(), inverse_scale,
+                );
+                let medoid = builder::find_medoid_public(&data, npoints, ndims);
+                info!("Quantize + medoid: {:.3}s", t_q.elapsed().as_secs_f64());
+                drop(data); // Free f16 data (~790 MB) before graph build.
+
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    extern "C" { fn malloc_trim(pad: usize) -> i32; }
+                    malloc_trim(0);
+                }
+
+                builder::build_from_quantized(qdata, npoints, ndims, medoid, &config)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
             _ => {
