@@ -296,7 +296,12 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
     clusters
 }
 
-/// Force-split a set of indices into chunks of at most c_max, used as fallback.
+/// Force-split a set of indices into chunks of at most c_max.
+/// Used for clusters between c_max and c_max*3 (too small for recursive RBC to
+/// improve quality, but too large for a single leaf). This is a practical shortcut
+/// — not in the paper — that trades marginal overlap quality for avoiding an
+/// expensive recursion level on near-threshold clusters. Both FP and SQ paths
+/// use this identically.
 fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
     indices
         .chunks(c_max)
