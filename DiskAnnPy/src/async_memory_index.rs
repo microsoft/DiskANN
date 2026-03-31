@@ -731,12 +731,7 @@ where
                     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
                     let distances: Vec<f32> = results.iter().map(|n| n.distance).collect();
 
-                    ANNResult::Ok((
-                        ids,
-                        distances,
-                        stats.cmps,
-                        stats.range_search_second_round,
-                    ))
+                    ANNResult::Ok((ids, distances, stats.cmps, stats.range_search_second_round))
                 }
                 AsyncIndexType::PQIndex(index) => {
                     let mut results: Vec<Neighbor<u32>> = Vec::new();
@@ -753,12 +748,7 @@ where
                     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
                     let distances: Vec<f32> = results.iter().map(|n| n.distance).collect();
 
-                    ANNResult::Ok((
-                        ids,
-                        distances,
-                        stats.cmps,
-                        stats.range_search_second_round,
-                    ))
+                    ANNResult::Ok((ids, distances, stats.cmps, stats.range_search_second_round))
                 }
             }
         })

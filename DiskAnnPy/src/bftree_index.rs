@@ -224,12 +224,7 @@ where
             let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
             let distances: Vec<f32> = results.iter().map(|n| n.distance).collect();
 
-            ANNResult::Ok((
-                ids,
-                distances,
-                stats.cmps,
-                stats.range_search_second_round,
-            ))
+            ANNResult::Ok((ids, distances, stats.cmps, stats.range_search_second_round))
         })
     }
 
@@ -519,12 +514,7 @@ where
             let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
             let distances: Vec<f32> = results.iter().map(|n| n.distance).collect();
 
-            ANNResult::Ok((
-                ids,
-                distances,
-                stats.cmps,
-                stats.range_search_second_round,
-            ))
+            ANNResult::Ok((ids, distances, stats.cmps, stats.range_search_second_round))
         })
     }
 
