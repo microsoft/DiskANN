@@ -392,7 +392,7 @@ pub struct SQParams {
 ///
 /// `data` is row-major f32: npoints x ndims.
 pub fn build_with_sq(
-    data: &[f32],
+    data: Vec<f32>,
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
@@ -428,27 +428,126 @@ pub fn build_with_sq(
         "PiPNN build started (with pre-trained SQ)"
     );
 
-    // Quantize using pre-trained parameters.
-    tracing::info!("Quantizing to 1-bit with pre-trained SQ params");
+    // Quantize, compute LSH sketches and medoid from f32 data, then drop it.
+    // Sketches use f32 for accurate angular projections — projecting 1-bit vectors
+    // onto hyperplanes would lose directional information.
     let t = Instant::now();
     let qdata = crate::quantize::quantize_1bit(
-        data,
-        npoints,
-        ndims,
-        &sq_params.shift,
-        sq_params.inverse_scale,
+        &data, npoints, ndims, &sq_params.shift, sq_params.inverse_scale,
     );
-    tracing::info!(
-        elapsed_secs = t.elapsed().as_secs_f64(),
-        bytes_per_vec = qdata.bytes_per_vec,
-        "Quantization complete (pre-trained SQ)"
-    );
+    tracing::info!(elapsed_secs = t.elapsed().as_secs_f64(), "1-bit quantization complete");
 
-    // Build using the internal build loop with pre-quantized data.
-    build_internal::<f32>(data, npoints, ndims, config, Some(qdata))
+    let medoid = find_medoid(&data, npoints, ndims);
+    let sketches = crate::hash_prune::LshSketches::new(&data[..], npoints, ndims, config.num_hash_planes, 42);
+    drop(data); // Free ~1.6 GB before HashPrune reservoirs are allocated.
+
+    build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
 }
 
-/// Internal build logic shared between `build()`, `build_typed()`, and `build_with_sq()`.
+/// SQ build path: f32 data already dropped, using pre-computed sketches.
+/// Saves ~1.6 GB peak memory by not holding f32 alongside HashPrune reservoirs.
+fn build_internal_sq(
+    npoints: usize,
+    ndims: usize,
+    config: &PiPNNConfig,
+    qdata: crate::quantize::QuantizedData,
+    sketches: crate::hash_prune::LshSketches,
+    medoid: usize,
+) -> PiPNNResult<PiPNNGraph> {
+    let run = |sketches, qdata| {
+        build_internal_sq_impl(npoints, ndims, config, qdata, sketches, medoid)
+    };
+    if config.num_threads > 0 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(config.num_threads)
+            .build()
+            .map_err(|e| PiPNNError::Config(format!("Failed to create thread pool: {}", e)))?;
+        return pool.install(|| run(sketches, qdata));
+    }
+    run(sketches, qdata)
+}
+
+fn build_internal_sq_impl(
+    npoints: usize,
+    ndims: usize,
+    config: &PiPNNConfig,
+    qdata: crate::quantize::QuantizedData,
+    sketches: crate::hash_prune::LshSketches,
+    medoid: usize,
+) -> PiPNNResult<PiPNNGraph> {
+    let t_total = Instant::now();
+
+    let t0 = Instant::now();
+    let hash_prune = HashPrune::from_sketches(sketches, npoints, config.l_max, config.max_degree);
+    let sketch_secs = t0.elapsed().as_secs_f64();
+
+    let mut partition_secs = 0.0f64;
+    let mut leaf_build_secs = 0.0f64;
+    let mut total_leaves = 0usize;
+    let mut total_edges_count = 0usize;
+
+    for replica in 0..config.replicas {
+        let seed = 1000 + replica as u64 * 7919;
+        let t1 = Instant::now();
+        let partition_config = crate::partition::PartitionConfig {
+            c_max: config.c_max,
+            c_min: config.c_min,
+            p_samp: config.p_samp,
+            fanout: config.fanout.clone(),
+            metric: config.metric,
+        };
+        let indices: Vec<usize> = (0..npoints).collect();
+        let leaves = crate::partition::parallel_partition_quantized(&qdata, &indices, &partition_config, seed);
+        total_leaves += leaves.len();
+        partition_secs += t1.elapsed().as_secs_f64();
+
+        let t2 = Instant::now();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let total_edges = AtomicUsize::new(0);
+        leaves.par_iter().for_each(|leaf| {
+            let edges = crate::leaf_build::build_leaf_quantized(&qdata, &leaf.indices, config.k);
+            total_edges.fetch_add(edges.len(), Ordering::Relaxed);
+            hash_prune.add_edges_batched(&edges);
+        });
+        total_edges_count += total_edges.load(Ordering::Relaxed);
+        leaf_build_secs += t2.elapsed().as_secs_f64();
+    }
+
+    (0..rayon::current_num_threads()).into_par_iter().for_each(|_| {
+        crate::leaf_build::release_thread_buffers();
+    });
+
+    let t3 = Instant::now();
+    let (adjacency, extract_secs, final_prune_secs) = if config.final_prune {
+        let candidates = hash_prune.extract_graph_for_prune();
+        let extract_secs = t3.elapsed().as_secs_f64();
+        trim_heap();
+        // final_prune needs f32 data which we don't have — fall back to no-prune.
+        // (final_prune_from_candidates requires T: VectorRepr for distance recomputation)
+        tracing::warn!("final_prune=true with SQ build: pruning skipped (no f32 data)");
+        let adj: Vec<Vec<u32>> = candidates.into_par_iter()
+            .map(|mut c| { c.truncate(config.max_degree); c.into_iter().map(|(id, _)| id).collect() })
+            .collect();
+        (adj, extract_secs, 0.0)
+    } else {
+        let adj = hash_prune.extract_graph();
+        let extract_secs = t3.elapsed().as_secs_f64();
+        trim_heap();
+        (adj, extract_secs, 0.0)
+    };
+
+    let total_secs = t_total.elapsed().as_secs_f64();
+    let stats = PiPNNBuildStats {
+        sketch_secs, partition_secs, leaf_build_secs,
+        extract_secs, final_prune_secs, total_secs,
+        num_leaves: total_leaves, total_edges: total_edges_count,
+    };
+    print!("{}", stats);
+
+    Ok(PiPNNGraph { adjacency, npoints, ndims, medoid, metric: config.metric, build_stats: stats })
+}
+
+/// Internal build logic shared between `build()` and `build_typed()`.
 fn build_internal<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
@@ -940,7 +1039,7 @@ mod tests {
 
         let sq_params = train_sq_params(&data, npoints, ndims);
 
-        let graph = super::build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
+        let graph = super::build_with_sq(data.clone(), npoints, ndims, &config, &sq_params).unwrap();
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
     }
@@ -1310,7 +1409,7 @@ mod tests {
             shift: vec![0.0f32; ndims + 5], // wrong length
             inverse_scale: 1.0,
         };
-        let result = build_with_sq(&data, npoints, ndims, &config, &sq_params);
+        let result = build_with_sq(data.clone(), npoints, ndims, &config, &sq_params);
         assert!(
             result.is_err(),
             "shift length != ndims should produce an error"
@@ -1336,7 +1435,7 @@ mod tests {
             ..Default::default()
         };
         let sq_params = train_sq_params(&data, npoints, ndims);
-        let graph = build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
+        let graph = build_with_sq(data.clone(), npoints, ndims, &config, &sq_params).unwrap();
         assert_eq!(
             graph.num_isolated(), 0,
             "build_with_sq should produce a connected graph with sufficient replicas, found {} isolated nodes",

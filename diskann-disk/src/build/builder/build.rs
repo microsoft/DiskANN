@@ -407,7 +407,7 @@ where
                     inverse_scale,
                 };
                 info!("Using pre-trained SQ quantizer for PiPNN 1-bit build");
-                builder::build_with_sq(&data, npoints, ndims, &config, &sq_params)
+                builder::build_with_sq(data, npoints, ndims, &config, &sq_params)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
             _ => {

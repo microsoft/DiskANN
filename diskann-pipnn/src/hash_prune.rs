@@ -311,11 +311,20 @@ impl HashPrune {
         let t0 = std::time::Instant::now();
         let sketches = LshSketches::new(data, npoints, ndims, num_planes, seed);
         tracing::debug!(elapsed_secs = t0.elapsed().as_secs_f64(), "sketch computation");
+
+        Self::from_sketches(sketches, npoints, l_max, max_degree)
+    }
+
+    /// Create a HashPrune from pre-computed LSH sketches.
+    /// Allows the caller to compute sketches from f32 data, drop the data,
+    /// then create HashPrune without holding the f32 borrow.
+    pub fn from_sketches(
+        sketches: LshSketches,
+        npoints: usize,
+        l_max: usize,
+        max_degree: usize,
+    ) -> Self {
         let t1 = std::time::Instant::now();
-        // Use lazy allocation: reservoirs grow on demand as edges are inserted.
-        // Pre-allocating 64×8B×1M = 512 MB upfront is worse because it spikes
-        // before any leaf data is freed. Lazy growth + malloc_trim between
-        // phases keeps peak RSS lower despite realloc fragmentation.
         let reservoirs = (0..npoints)
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();

@@ -81,9 +81,11 @@ pub fn quantize_1bit(
 
 impl QuantizedData {
     /// Number of points.
-    pub fn npoints(&self) -> usize {
-        self.npoints
-    }
+    pub fn npoints(&self) -> usize { self.npoints }
+    /// Number of bytes per quantized vector.
+    pub fn bytes_per_vec(&self) -> usize { self.bytes_per_vec }
+    /// Original dimensionality.
+    pub fn ndims(&self) -> usize { self.ndims }
 
     /// Get the packed bit vector for point i.
     #[inline(always)]
