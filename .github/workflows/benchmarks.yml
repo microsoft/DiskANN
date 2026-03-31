@@ -46,7 +46,7 @@ jobs:
   # Macro benchmark: Wikipedia-100K dataset
   macro-benchmark-wikipedia-100K:
     name: Macro Benchmark - Wikipedia 100K
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
     # TODO: For production benchmarks, consider using a self-hosted runner with:
     # - NVMe storage for consistent I/O performance
     # - CPU pinning (taskset) for reduced variance
@@ -143,7 +143,7 @@ jobs:
   # Macro benchmark: OpenAI ArXiv dataset
   macro-benchmark-oai-large:
     name: Macro Benchmark - OAI ArXiv 100K
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
     # TODO: For production benchmarks, consider using a self-hosted runner
     timeout-minutes: 120
 

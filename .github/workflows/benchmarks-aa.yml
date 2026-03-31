@@ -35,7 +35,7 @@ jobs:
   # A/A benchmark: Wikipedia-100K dataset (main vs main)
   aa-wikipedia-100K:
     name: A/A - Wikipedia 100K
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
     timeout-minutes: 120
 
     steps:
@@ -125,7 +125,7 @@ jobs:
   # A/A benchmark: OpenAI ArXiv 100K dataset (main vs main)
   aa-openai-100K:
     name: A/A - OAI ArXiv 100K
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
     timeout-minutes: 120
 
     steps:
