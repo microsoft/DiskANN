@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Simple kernel implementation of multi-vector distance computation.
+//! Fallback kernel implementation of multi-vector distance computation.
 
 use std::ops::Deref;
 
@@ -49,17 +49,17 @@ impl<'a, T: Repr> Deref for QueryMatRef<'a, T> {
     }
 }
 
-//////////////////
-// SimpleKernel //
-//////////////////
+////////////////////
+// FallbackKernel //
+////////////////////
 
-/// Simple double-loop kernel to compute max-sim distances over multi-vectors.
+/// Fallback double-loop kernel to compute max-sim distances over multi-vectors.
 ///
 /// This kernel performs a simple double-loop over the rows of `query`
 /// and the `doc` and dispatches to [`InnerProduct`] to compute the similarity.
-pub struct SimpleKernel;
+pub struct FallbackKernel;
 
-impl SimpleKernel {
+impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
@@ -128,7 +128,7 @@ where
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
         }
 
-        SimpleKernel::max_sim_kernel(query, doc, |i, score| {
+        FallbackKernel::max_sim_kernel(query, doc, |i, score| {
             // SAFETY: We asserted that self.size() == query.num_vectors(),
             // and i < query.num_vectors() due to the kernel loop bound.
             unsafe { *self.scores.get_unchecked_mut(i) = score };
@@ -151,7 +151,7 @@ where
     fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
         let mut sum = 0.0f32;
 
-        SimpleKernel::max_sim_kernel(query, doc, |_i, score| {
+        FallbackKernel::max_sim_kernel(query, doc, |_i, score| {
             sum += score;
         });
 
@@ -270,8 +270,8 @@ mod tests {
                     );
                 }
 
-                // Check that SimpleKernel is also correct.
-                SimpleKernel::max_sim_kernel(query, doc, |i, score| {
+                // Check that FallbackKernel is also correct.
+                FallbackKernel::max_sim_kernel(query, doc, |i, score| {
                     assert!((scores[i] - score).abs() <= 1e-6)
                 });
 

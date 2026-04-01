@@ -1185,33 +1185,6 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
 }
 
 // ════════════════════════════════════════════════════════════════════
-// From<MatRef<Standard<T>>> for BlockTransposed
-// ════════════════════════════════════════════════════════════════════
-
-impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
-    From<MatRef<'_, super::matrix::Standard<T>>> for BlockTransposed<T, GROUP, PACK>
-{
-    /// Convert a row-major [`MatRef`] into a block-transposed matrix.
-    ///
-    /// This copies the data from the dense row-major layout into the
-    /// block-transposed layout suitable for SIMD distance computation.
-    fn from(v: MatRef<'_, super::matrix::Standard<T>>) -> Self {
-        let nrows = v.num_vectors();
-        let ncols = v.vector_dim();
-        // SAFETY: `MatRef<Standard<T>>` stores `nrows * ncols` contiguous `T` elements
-        // starting at the raw pointer returned by `as_raw_ptr()`.
-        let slice =
-            unsafe { std::slice::from_raw_parts(v.as_raw_ptr().cast::<T>(), nrows * ncols) };
-        // The dimensions are guaranteed valid because `MatRef<Standard<T>>` was
-        // constructed from the same `nrows * ncols` layout.
-        #[allow(clippy::expect_used)]
-        let view = MatrixView::try_from(slice, nrows, ncols)
-            .expect("MatRef<Standard<T>> has valid dimensions");
-        Self::from_matrix_view(view)
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════
 // Index<(usize, usize)> for BlockTransposed
 // ════════════════════════════════════════════════════════════════════
 

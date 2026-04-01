@@ -1,15 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Generic cache-aware tiling loop and shared reduction utilities.
+//! Generic tiling loop and shared reduction utilities.
 //!
-//! This module contains the type-agnostic parts of the cache-aware implementation:
+//! This module contains the type-agnostic parts of the kernel implementation:
 //!
 //! - `FullReduce` — tile planner that computes A/B panel counts from cache budgets.
-//! - `tiled_reduce` — the 5-level loop nest that drives any `CacheAwareKernel`.
+//! - `tiled_reduce` — the 5-level loop nest that drives any [`Kernel<A>`](super::Kernel).
 //! - `Reduce` — compile-time unroll reduction trait for fixed-size accumulator arrays.
 
-use super::{CacheAwareKernel, L1_B_TILE_BUDGET, L2_A_TILE_BUDGET};
+use diskann_wide::Architecture;
+
+use super::{Kernel, l1_b_tile_budget, l2_a_tile_budget};
 
 // ── Tile planner ─────────────────────────────────────────────────
 
@@ -28,10 +30,10 @@ struct FullReduce {
 impl FullReduce {
     /// Compute A-tile and B-tile panel counts from cache budgets.
     ///
-    /// * `a_row_bytes` — bytes per query row (`k * size_of::<QueryElem>()`).
-    /// * `b_row_bytes` — bytes per document row (`k * size_of::<DocElem>()`).
-    /// * `a_panel` — micro-kernel query panel height (`K::A_PANEL`).
-    /// * `b_panel` — micro-kernel document panel width (`K::B_PANEL`).
+    /// * `a_row_bytes` — bytes per A row (`k * size_of::<AElem>()`).
+    /// * `b_row_bytes` — bytes per B row (`k * size_of::<BElem>()`).
+    /// * `a_panel` — micro-kernel A panel height (`K::A_PANEL`).
+    /// * `b_panel` — micro-kernel B panel width (`K::B_PANEL`).
     /// * `l2_budget` — L2 cache budget in bytes for the A tile.
     /// * `l1_budget` — L1 cache budget in bytes for the B tile.
     fn new(
@@ -57,12 +59,12 @@ impl FullReduce {
 
 // ── Generic tiled reduce ─────────────────────────────────────────
 
-/// Execute the 5-level cache-aware tiling loop with a pluggable SIMD micro-kernel.
+/// Execute the 5-level tiling loop with a pluggable SIMD micro-kernel.
 ///
 /// This is the core scheduling primitive. The loop nest is:
 /// ```text
-/// Loop 1: A tiles     (query tiles, sized to L2)
-///   Loop 2: B tiles   (doc tiles, sized to L1)
+/// Loop 1: A tiles     (sized to L2)
+///   Loop 2: B tiles   (sized to L1)
 ///     Loop 3: A panels (micro-panels within A tile)
 ///       Loop 4: B panels (micro-panels within B tile)
 ///         K::full_panel / K::remainder_dispatch
@@ -70,15 +72,15 @@ impl FullReduce {
 ///
 /// # Safety
 ///
-/// * `a_ptr` must be valid for `a_available_rows * k` elements of `K::QueryElem`.
-/// * `b_ptr` must be valid for `b_nrows * k` elements of `K::DocElem`.
+/// * `a_ptr` must be valid for `a_available_rows * k` elements of `K::AElem`.
+/// * `b_ptr` must be valid for `b_nrows * k` elements of `K::BElem`.
 /// * `scratch` must have length `a_available_rows` and be initialized by caller.
 /// * `a_available_rows` must be a multiple of `K::A_PANEL`.
-pub(crate) unsafe fn tiled_reduce<K: CacheAwareKernel>(
-    arch: diskann_wide::arch::Current,
-    a_ptr: *const K::QueryElem,
+pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
+    arch: A,
+    a_ptr: *const K::AElem,
     a_available_rows: usize,
-    b_ptr: *const K::DocElem,
+    b_ptr: *const K::BElem,
     b_nrows: usize,
     k: usize,
     scratch: &mut [f32],
@@ -90,15 +92,15 @@ pub(crate) unsafe fn tiled_reduce<K: CacheAwareKernel>(
         K::A_PANEL,
     );
 
-    let a_row_bytes = k * std::mem::size_of::<K::QueryElem>();
-    let b_row_bytes = k * std::mem::size_of::<K::DocElem>();
+    let a_row_bytes = k * std::mem::size_of::<K::AElem>();
+    let b_row_bytes = k * std::mem::size_of::<K::BElem>();
     let plan = FullReduce::new(
         a_row_bytes,
         b_row_bytes,
         K::A_PANEL,
         K::B_PANEL,
-        L2_A_TILE_BUDGET,
-        L1_B_TILE_BUDGET,
+        l2_a_tile_budget(),
+        l1_b_tile_budget(),
     );
 
     let a_panel_stride = K::A_PANEL * k;
@@ -108,8 +110,6 @@ pub(crate) unsafe fn tiled_reduce<K: CacheAwareKernel>(
 
     let remainder = b_nrows % K::B_PANEL;
 
-    // SAFETY: Caller guarantees a_ptr is valid for a_available_rows * k elements.
-    let pa_end = unsafe { a_ptr.add(a_available_rows * k) };
     // SAFETY: Caller guarantees b_ptr is valid for b_nrows * k elements.
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };
     // SAFETY: remainder < B_PANEL, so pb_end - remainder * k is within allocation.
@@ -117,19 +117,22 @@ pub(crate) unsafe fn tiled_reduce<K: CacheAwareKernel>(
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
-        let mut pa_tile = a_ptr;
+        let a_total = a_available_rows * k;
+        let mut a_offset: usize = 0;
         let mut pr_tile = scratch.as_mut_ptr();
 
         // Loop 1: Tiles of `A`.
-        while pa_tile < pa_end {
-            let remaining_a =
-                (pa_end as usize - pa_tile as usize) / std::mem::size_of::<K::QueryElem>();
+        while a_offset < a_total {
+            let remaining_a = a_total - a_offset;
+            let pa_tile = a_ptr.add(a_offset);
             let pa_tile_end = pa_tile.add(a_tile_stride.min(remaining_a));
 
             let mut pb_tile = b_ptr;
 
             // Loop 2: Full B-tiles (every panel in the tile is complete).
-            while pb_tile.wrapping_add(b_tile_stride) <= pb_full_end {
+            // SAFETY: `pb_tile` is always in `[b_ptr, pb_full_end]` — both within
+            // the same allocation — so `offset_from` is well-defined.
+            while pb_full_end.offset_from(pb_tile) >= b_tile_stride as isize {
                 let pb_tile_end = pb_tile.add(b_tile_stride);
 
                 let mut pa_panel = pa_tile;
@@ -176,9 +179,8 @@ pub(crate) unsafe fn tiled_reduce<K: CacheAwareKernel>(
                 }
             }
 
-            // NOTE: Use `wrapping_add` so we can still do this on the last iteration.
-            pa_tile = pa_tile.wrapping_add(a_tile_stride);
-            pr_tile = pr_tile.wrapping_add(K::A_PANEL * plan.a_panels);
+            a_offset += a_tile_stride;
+            pr_tile = pr_tile.add(K::A_PANEL * plan.a_panels);
         }
     }
 }

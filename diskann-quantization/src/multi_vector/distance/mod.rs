@@ -8,7 +8,7 @@
 //! - [`MaxSim`]: Per-query-vector maximum similarities.
 //! - [`Chamfer`]: Sum of MaxSim scores (asymmetric Chamfer distance).
 //!
-//! Both are currently implemented using a simple double-loop kernel over
+//! Both are currently implemented using a fallback double-loop kernel over
 //! [`InnerProduct`](diskann_vector::distance::InnerProduct).
 //!
 //! # Example
@@ -45,10 +45,9 @@
 //! // scores[1] =  0.0 (query[1] has no good match)
 //! ```
 
-pub mod cache_aware;
+mod fallback;
+pub mod kernels;
 mod max_sim;
-mod simple;
 
-pub use cache_aware::QueryBlockTransposedRef;
+pub use fallback::QueryMatRef;
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use simple::QueryMatRef;

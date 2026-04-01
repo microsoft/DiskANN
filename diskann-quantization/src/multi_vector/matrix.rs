@@ -29,7 +29,7 @@
 
 use std::{alloc::Layout, iter::FusedIterator, marker::PhantomData, ptr::NonNull};
 
-use diskann_utils::{Reborrow, ReborrowMut};
+use diskann_utils::{Reborrow, ReborrowMut, views::MatrixView};
 use thiserror::Error;
 
 use crate::utils;
@@ -831,6 +831,27 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Return the backing data as a contiguous slice of `T`.
+    ///
+    /// The returned slice has `num_vectors() * vector_dim()` elements in row-major order.
+    #[inline]
+    pub fn as_slice(&self) -> &'a [T] {
+        let len = self.num_vectors() * self.vector_dim();
+        // SAFETY: `Standard<T>` guarantees `nrows * ncols` contiguous `T` elements
+        // starting at `self.ptr`. The lifetime `'a` is tied to the original data.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
+    }
+
+    /// Return a [`MatrixView`] over the backing data.
+    #[allow(clippy::expect_used)]
+    #[inline]
+    pub fn as_matrix_view(&self) -> MatrixView<'a, T> {
+        // `Standard::new` validates that `nrows * ncols` does not overflow,
+        // so `try_from` is infallible here.
+        MatrixView::try_from(self.as_slice(), self.num_vectors(), self.vector_dim())
+            .expect("Standard<T> has valid dimensions")
     }
 }
 
