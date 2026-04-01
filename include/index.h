@@ -28,6 +28,7 @@
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
+#include "debug_utils.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -145,7 +146,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     template <typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
                                                            IDType *indices, float *distances = nullptr, const uint32_t maxLperSeller = 0,
-                                                           std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
+                                                           std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
+                                                           DebugTraversalInfo *debug_info = nullptr);
 
     template <typename IDType>
     std::pair<uint32_t, uint32_t> diverse_search(const T* query, const size_t K, const uint32_t L, const uint32_t maxLperSeller, IDType* indices,
@@ -157,6 +159,30 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                               float *distances, std::vector<T *> &res_vectors, bool use_filters,
                                               const std::vector<std::string>& filter_labels);
 
+    // Debug interface: retrieve the raw embedding stored at the given internal location index.
+    // Caller must allocate vec with at least get_aligned_dim() elements of type T.
+    DISKANN_DLLEXPORT void get_embedding(uint32_t location, T *vec) const;
+
+    // Debug search: runs ANN search and records every traversed node.
+    // debug_info is populated in traversal order; call FilterReason helpers to classify entries.
+    template <typename IDType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> debug_search(
+        const T *query, const size_t K, const uint32_t L,
+        IDType *indices, float *distances,
+        DebugTraversalInfo &debug_info,
+        const uint32_t maxLperSeller = 0,
+        std::function<float(const std::uint8_t *, size_t)> rerank_fn = nullptr);
+
+    // Debug filtered search: same as debug_search but applies label filtering.
+    template <typename IDType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> debug_search_with_filters(
+        const T *query, const std::vector<LabelT> &filter_labels,
+        const size_t K, const uint32_t L,
+        IDType *indices, float *distances,
+        DebugTraversalInfo &debug_info,
+        const uint32_t maxLperSeller = 0,
+        std::function<float(const std::uint8_t *, size_t)> rerank_fn = nullptr);
+
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
         std::any& indices, float* distances = nullptr,
         std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) override;
@@ -166,7 +192,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_labels,
                                                                         const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                                         IndexType *indices, float *distances,
-                                                                        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
+                                                                        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
+                                                                        DebugTraversalInfo *debug_info = nullptr);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -235,6 +262,22 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances,
                                                                std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) override;
 
+    virtual void _get_embedding(uint32_t location, DataType &vec) override;
+
+    virtual std::pair<uint32_t, uint32_t> _debug_search(const DataType &query, const size_t K, const uint32_t L,
+                                                        std::any &indices, float *distances,
+                                                        DebugTraversalInfo &debug_info,
+                                                        const uint32_t maxLperSeller,
+                                                        std::function<float(const std::uint8_t *, size_t)> rerank_fn) override;
+
+    virtual std::pair<uint32_t, uint32_t> _debug_search_with_filters(const DataType &query,
+                                                                      const std::vector<std::string> &raw_labels,
+                                                                      const size_t K, const uint32_t L,
+                                                                      std::any &indices, float *distances,
+                                                                      DebugTraversalInfo &debug_info,
+                                                                      const uint32_t maxLperSeller,
+                                                                      std::function<float(const std::uint8_t *, size_t)> rerank_fn) override;
+
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, const std::vector<std::string> &labels) override;
 
@@ -293,7 +336,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation, uint32_t maxLperSeller = 0);
+                                                         const std::vector<LabelT> &filters, bool search_invocation,
+                                                         uint32_t maxLperSeller = 0,
+                                                         DebugTraversalInfo *debug_info = nullptr);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,

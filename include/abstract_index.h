@@ -6,6 +6,7 @@
 #include "index_config.h"
 #include "index_build_params.h"
 #include "percentile_stats.h"
+#include "debug_utils.h"
 #include <any>
 
 namespace diskann
@@ -90,6 +91,30 @@ class AbstractIndex
                                                       float *distances,
                                                       std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
+    // Debug interface: retrieve the raw embedding at internal location index.
+    // Caller must pre-allocate vec with at least the index dimension elements.
+    template <typename data_type>
+    void get_embedding(uint32_t location, data_type *vec);
+
+    // Debug search: runs ANN search and records every traversed node in debug_info.
+    template <typename data_type, typename IDType>
+    std::pair<uint32_t, uint32_t> debug_search(
+        const data_type *query, const size_t K, const uint32_t L,
+        IDType *indices, float *distances,
+        DebugTraversalInfo &debug_info,
+        const uint32_t maxLperSeller = 0,
+        std::function<float(const std::uint8_t *, size_t)> rerank_fn = nullptr);
+
+    // Debug filtered search: same as debug_search with label filtering.
+    template <typename IDType>
+    std::pair<uint32_t, uint32_t> debug_search_with_filters(
+        const DataType &query, const std::vector<std::string> &raw_labels,
+        const size_t K, const uint32_t L,
+        IDType *indices, float *distances,
+        DebugTraversalInfo &debug_info,
+        const uint32_t maxLperSeller = 0,
+        std::function<float(const std::uint8_t *, size_t)> rerank_fn = nullptr);
+
     // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type>
     int insert_point(const data_type *point, const tag_type tag, const std::vector<std::string> &labels);
@@ -148,5 +173,18 @@ class AbstractIndex
                                      const std::vector<std::string>& filter_labels) = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
     virtual void _set_universal_label(const LabelType universal_label) = 0;
+    virtual void _get_embedding(uint32_t location, DataType &vec) = 0;
+    virtual std::pair<uint32_t, uint32_t> _debug_search(const DataType &query, const size_t K, const uint32_t L,
+                                                        std::any &indices, float *distances,
+                                                        DebugTraversalInfo &debug_info,
+                                                        const uint32_t maxLperSeller,
+                                                        std::function<float(const std::uint8_t *, size_t)> rerank_fn) = 0;
+    virtual std::pair<uint32_t, uint32_t> _debug_search_with_filters(const DataType &query,
+                                                                      const std::vector<std::string> &raw_labels,
+                                                                      const size_t K, const uint32_t L,
+                                                                      std::any &indices, float *distances,
+                                                                      DebugTraversalInfo &debug_info,
+                                                                      const uint32_t maxLperSeller,
+                                                                      std::function<float(const std::uint8_t *, size_t)> rerank_fn) = 0;
 };
 } // namespace diskann

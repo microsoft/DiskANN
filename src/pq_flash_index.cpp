@@ -1185,10 +1185,11 @@ template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const std::vector<LabelT> &filter_labels,
-                                                 const uint32_t io_limit, uint32_t maxLperSeller, 
+                                                 const uint32_t io_limit, uint32_t maxLperSeller,
                                                  const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
-                                                 QueryStats *stats)
+                                                 QueryStats *stats,
+                                                 DebugTraversalInfo *debug_info)
 {
 
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
@@ -1492,13 +1493,19 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (use_filter)
                     {
                         if (!match_proxy.contain_filtered_label(id))
+                        {
+                            if (debug_info != nullptr)
+                                debug_info->record_label_rejected(id);
                             continue;
+                        }
                     }
 
                     cmps++;
                     float dist = dist_scratch[m];
                     Neighbor nn(id, dist);
                     retset->insert(nn);
+                    if (debug_info != nullptr)
+                        debug_info->record_visited(id, dist);
                 }
             }
         }
@@ -1558,7 +1565,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (use_filter)
                     {
                         if (!match_proxy.contain_filtered_label(id))
+                        {
+                            if (debug_info != nullptr)
+                                debug_info->record_label_rejected(id);
                             continue;
+                        }
                     }
 
                     cmps++;
@@ -1570,6 +1581,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
                     Neighbor nn(id, dist);
                     retset->insert(nn);
+                    if (debug_info != nullptr)
+                        debug_info->record_visited(id, dist);
                 }
             }
 
@@ -1793,6 +1806,48 @@ std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t v
 template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::get_num_points()
 {
     return _num_points;
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::get_embedding(uint32_t id, T *vec)
+{
+    std::vector<uint32_t> ids = {id};
+    std::vector<T *> coord_bufs = {vec};
+    // nbr_buffers entry: passing null pointer pair — we only need coordinates
+    std::vector<std::pair<uint32_t, uint32_t *>> nbr_bufs = {{0, nullptr}};
+    auto results = read_nodes(ids, coord_bufs, nbr_bufs);
+    if (!results[0])
+        throw ANNException("get_embedding: failed to read node " + std::to_string(id), -1, __FUNCSIG__, __FILE__, __LINE__);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::debug_search(
+    const T *query, const uint64_t k_search, const uint64_t l_search,
+    uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+    DebugTraversalInfo &debug_info,
+    uint32_t maxLperSeller)
+{
+    debug_info.clear();
+    std::vector<LabelT> empty_filter_labels;
+    cached_beam_search(query, k_search, l_search, res_ids, res_dists, beam_width,
+                       false, empty_filter_labels,
+                       std::numeric_limits<uint32_t>::max(), maxLperSeller,
+                       false, nullptr, nullptr, &debug_info);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::debug_search_with_filters(
+    const T *query, const uint64_t k_search, const uint64_t l_search,
+    uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+    const std::vector<LabelT> &filter_labels,
+    DebugTraversalInfo &debug_info,
+    uint32_t maxLperSeller)
+{
+    debug_info.clear();
+    cached_beam_search(query, k_search, l_search, res_ids, res_dists, beam_width,
+                       true, filter_labels,
+                       std::numeric_limits<uint32_t>::max(), maxLperSeller,
+                       false, nullptr, nullptr, &debug_info);
 }
 
 // instantiations
