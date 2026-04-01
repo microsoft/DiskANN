@@ -833,9 +833,12 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     Ok(graph)
 }
 
-/// Diversity prune from full reservoir: select max_degree from l_max candidates using diversity.
-/// Candidates already have distances from HashPrune — no recomputation needed for i→candidate.
-/// Only computes inter-candidate distances for the occlusion check.
+/// Final diversity prune matching DiskANN's occlude_list algorithm:
+/// - Iterative alpha: starts at 1.0, increments by min(alpha, 1.2) each round
+/// - Accumulated occlusion factor per candidate: max(dist_to_point / dist_to_selected)
+/// - Resumable inner loop via last_checked positions
+///
+/// Candidates already have distances from HashPrune — sorted by distance ascending.
 // Called from within `build_internal_impl` which already runs inside a dedicated rayon
 // thread pool installed by `build_internal`, so `par_iter` work executes on that pool.
 #[allow(clippy::disallowed_methods)]
@@ -847,7 +850,10 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     metric: Metric,
     alpha: f32,
 ) -> Vec<Vec<u32>> {
+    // f32 SIMD distance for inter-candidate occlusion checks.
+    // T→f32 conversion is done lazily per pair via two small buffers.
     let dist_fn = make_dist_fn(metric);
+    let increment = alpha.min(1.2);
 
     candidates_per_node
         .par_iter()
@@ -856,37 +862,71 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                 return Vec::new();
             }
 
-            // Candidates are already sorted by distance from get_neighbors_sorted().
-            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+            let nc = candidates.len();
+            let mut buf_sel = vec![0.0f32; ndims];
+            let mut buf_cand = vec![0.0f32; ndims];
 
-            let mut point_sel = vec![0.0f32; ndims];
-            let mut point_cand = vec![0.0f32; ndims];
-            for &(cand_id, cand_dist) in candidates {
-                if selected.len() >= max_degree {
+            let mut occlude_factor = vec![0.0f32; nc];
+            let mut last_checked = vec![0usize; nc];
+            let mut selected_idx: Vec<usize> = Vec::with_capacity(max_degree);
+
+            let mut current_alpha = 1.0f32;
+            loop {
+                for i in 0..nc {
+                    if selected_idx.len() >= max_degree {
+                        break;
+                    }
+                    if occlude_factor[i] > current_alpha {
+                        continue;
+                    }
+
+                    let cand_id = candidates[i].0 as usize;
+                    let cand_dist = candidates[i].1;
+                    T::as_f32_into(&data[cand_id * ndims..(cand_id + 1) * ndims], &mut buf_cand)
+                        .expect("f32 conversion");
+
+                    let mut skip = false;
+                    while last_checked[i] < selected_idx.len() {
+                        let sel_pos = selected_idx[last_checked[i]];
+                        last_checked[i] += 1;
+
+                        if sel_pos >= i { continue; }
+
+                        let sel_id = candidates[sel_pos].0 as usize;
+                        T::as_f32_into(&data[sel_id * ndims..(sel_id + 1) * ndims], &mut buf_sel)
+                            .expect("f32 conversion");
+                        let dist_sel_cand = dist_fn.call(&buf_sel, &buf_cand);
+
+                        // Triangle inequality occlusion: ratio of distances.
+                        let ratio = if dist_sel_cand == 0.0 {
+                            f32::MAX
+                        } else {
+                            cand_dist / dist_sel_cand
+                        };
+                        occlude_factor[i] = occlude_factor[i].max(ratio);
+
+                        if occlude_factor[i] > current_alpha {
+                            skip = true;
+                            break;
+                        }
+                    }
+
+                    if skip || occlude_factor[i] > current_alpha {
+                        continue;
+                    }
+
+                    // Accept this candidate.
+                    occlude_factor[i] = f32::MAX;
+                    selected_idx.push(i);
+                }
+
+                if current_alpha >= alpha || selected_idx.len() >= max_degree {
                     break;
                 }
-
-                T::as_f32_into(
-                    &data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims],
-                    &mut point_cand,
-                )
-                .expect("f32 conversion");
-                let is_pruned = selected.iter().any(|&sel_id| {
-                    T::as_f32_into(
-                        &data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims],
-                        &mut point_sel,
-                    )
-                    .expect("f32 conversion");
-                    let dist_sel_cand = dist_fn.call(&point_sel, &point_cand);
-                    dist_sel_cand * alpha < cand_dist
-                });
-
-                if !is_pruned {
-                    selected.push(cand_id);
-                }
+                current_alpha = (current_alpha * increment).min(alpha);
             }
 
-            selected
+            selected_idx.iter().map(|&i| candidates[i].0).collect()
         })
         .collect()
 }
