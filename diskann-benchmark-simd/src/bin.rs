@@ -4,7 +4,7 @@
  */
 
 use diskann_benchmark_runner::{output, registry, App, Output};
-use diskann_benchmark_simd::{register, SimdInput};
+use diskann_benchmark_simd::{register, SimdOp};
 
 pub fn main() -> anyhow::Result<()> {
     // Create the pocket bench application.
@@ -15,7 +15,7 @@ pub fn main() -> anyhow::Result<()> {
 fn main_inner(app: &App, output: &mut dyn Output) -> anyhow::Result<()> {
     // Register inputs and benchmarks.
     let mut inputs = registry::Inputs::new();
-    inputs.register(SimdInput)?;
+    inputs.register::<SimdOp>()?;
 
     let mut benchmarks = registry::Benchmarks::new();
     register(&mut benchmarks);

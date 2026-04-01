@@ -1,0 +1,24 @@
+[
+  {
+    "input": {
+      "content": {
+        "data_type": "float32",
+        "dim": 1000,
+        "error_when_checked": false
+      },
+      "type": "test-input-types"
+    },
+    "results": "hello<1000>: float32"
+  },
+  {
+    "input": {
+      "content": {
+        "data_type": "float32",
+        "dim": 128,
+        "error_when_checked": false
+      },
+      "type": "test-input-types"
+    },
+    "results": "float32"
+  }
+]
