@@ -1696,6 +1696,15 @@ mod tests {
             }
         }
 
+        // ── available_rows() returns padded row count ────────────
+
+        assert_eq!(
+            transpose.as_view().available_rows(),
+            padded_nrows,
+            "available_rows() mismatch -- {}",
+            context,
+        );
+
         // ── from_matrix_view produces identical results ──────────
 
         if nrows > 0 && ncols > 0 {

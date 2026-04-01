@@ -1796,4 +1796,20 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn as_matrix_view_roundtrip() {
+        let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mat = MatRef::new(Standard::new(2, 3).unwrap(), &data).unwrap();
+        let view = mat.as_matrix_view();
+
+        assert_eq!(view.nrows(), 2);
+        assert_eq!(view.ncols(), 3);
+        // Data should be identical — as_matrix_view wraps the same slice.
+        for row in 0..2 {
+            for col in 0..3 {
+                assert_eq!(view[(row, col)], data[row * 3 + col]);
+            }
+        }
+    }
 }

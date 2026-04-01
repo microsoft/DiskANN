@@ -3,13 +3,19 @@
 
 //! Scalar (emulated) f32 micro-kernel (8×2) and Neon delegation.
 //!
-//! Uses `Emulated<f32, 8>` for arithmetic — 8 scalar FMAs per `mul_add_simd`,
-//! 8 scalar comparisons per `max_simd`. Geometry is A_PANEL=8 (1 × f32x8),
-//! B_PANEL=2 (matching the `Strategy2x1` pattern used by scalar distance
-//! functions elsewhere in the codebase).
+//! Uses `Emulated<f32, 8>` for arithmetic — 8 multiply-accumulate operations
+//! per inner iteration, 8 scalar comparisons per `max_simd`. Geometry is
+//! A_PANEL=8 (1 × f32x8), B_PANEL=2 (matching the `Strategy2x1` pattern used
+//! by scalar distance functions elsewhere in the codebase).
+//!
+//! The inner loop uses separate multiply and add (`a * b + acc`) instead of
+//! `mul_add_simd` to avoid calling into libm's software `fma()` routine on
+//! x86-64 targets without hardware FMA support.
+
+use std::marker::PhantomData;
 
 use diskann_wide::arch::Scalar;
-use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
+use diskann_wide::{SIMDMinMax, SIMDVector};
 
 use super::super::Kernel;
 use super::super::tiled_reduce::Reduce;
@@ -23,8 +29,36 @@ diskann_wide::alias!(f32s = <Scalar>::f32x8);
 unsafe impl Kernel<Scalar> for F32Kernel<Scalar, 8> {
     type AElem = f32;
     type BElem = f32;
+    type APrepared = f32;
+    type BPrepared = f32;
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;
+
+    fn new(_k: usize) -> Self {
+        F32Kernel(PhantomData)
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_a(
+        &mut self,
+        _arch: Scalar,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_b(
+        &mut self,
+        _arch: Scalar,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
 
     #[inline(always)]
     unsafe fn full_panel(arch: Scalar, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
@@ -68,8 +102,36 @@ use diskann_wide::arch::aarch64::Neon;
 unsafe impl Kernel<Neon> for F32Kernel<Neon, 8> {
     type AElem = f32;
     type BElem = f32;
+    type APrepared = f32;
+    type BPrepared = f32;
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;
+
+    fn new(_k: usize) -> Self {
+        F32Kernel(PhantomData)
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_a(
+        &mut self,
+        _arch: Neon,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_b(
+        &mut self,
+        _arch: Neon,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
 
     #[inline(always)]
     unsafe fn full_panel(arch: Neon, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
@@ -107,10 +169,10 @@ unsafe impl Kernel<Neon> for F32Kernel<Neon, 8> {
 
 /// Emulated micro-kernel: processes 8 A rows × `UNROLL` B rows.
 ///
-/// Uses `Emulated<f32, 8>` for `mul_add_simd` (8 scalar FMAs) and `max_simd`
-/// (8 scalar comparisons). A single register tile covers A_PANEL = 8 =
-/// f32s::LANES. B_PANEL=2 follows the `Strategy2x1` pattern from scalar
-/// distance functions.
+/// Uses separate multiply and add (`a * b + acc`) rather than `mul_add_simd`
+/// to avoid calling libm's software `fma()` on x86-64 without hardware FMA.
+/// A single register tile covers A_PANEL = 8 = f32s::LANES. B_PANEL=2
+/// follows the `Strategy2x1` pattern from scalar distance functions.
 ///
 /// # Safety
 ///
@@ -118,7 +180,9 @@ unsafe impl Kernel<Neon> for F32Kernel<Neon, 8> {
 /// * `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
 /// * `r` must point to at least `A_PANEL(8)` writable `f32` values.
 #[inline(always)]
-unsafe fn scalar_f32_microkernel<const UNROLL: usize>(
+pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
+    const UNROLL: usize,
+>(
     arch: Scalar,
     a_packed: *const f32,
     b: *const f32,
@@ -142,7 +206,7 @@ unsafe fn scalar_f32_microkernel<const UNROLL: usize>(
 
             for j in 0..UNROLL {
                 let bj = f32s::splat(arch, b.add(i + offsets[j]).read_unaligned());
-                p0[j] = a0.mul_add_simd(bj, p0[j]);
+                p0[j] = a0 * bj + p0[j];
             }
         }
     }

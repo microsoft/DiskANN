@@ -70,12 +70,17 @@ impl FullReduce {
 ///         K::full_panel / K::remainder_dispatch
 /// ```
 ///
+/// The last A panel may be partial (`rows < A_PANEL`) — the kernel's
+/// `prepare_a` zero-pads it to a full panel so the micro-kernel body is
+/// unchanged. The extra scratch entries are written but ignored by the caller.
+///
 /// # Safety
 ///
 /// * `a_ptr` must be valid for `a_available_rows * k` elements of `K::AElem`.
 /// * `b_ptr` must be valid for `b_nrows * k` elements of `K::BElem`.
-/// * `scratch` must have length `a_available_rows` and be initialized by caller.
-/// * `a_available_rows` must be a multiple of `K::A_PANEL`.
+/// * `scratch` must have length ≥ `a_available_rows` and be initialized by caller.
+///   If `a_available_rows` is not a multiple of `A_PANEL`, up to `A_PANEL - 1`
+///   extra entries past `scratch[a_available_rows - 1]` may be written.
 pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     arch: A,
     a_ptr: *const K::AElem,
@@ -85,13 +90,6 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     k: usize,
     scratch: &mut [f32],
 ) {
-    debug_assert_eq!(
-        a_available_rows % K::A_PANEL,
-        0,
-        "a_available_rows ({a_available_rows}) must be a multiple of A_PANEL ({})",
-        K::A_PANEL,
-    );
-
     let a_row_bytes = k * std::mem::size_of::<K::AElem>();
     let b_row_bytes = k * std::mem::size_of::<K::BElem>();
     let plan = FullReduce::new(
@@ -108,12 +106,20 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     let b_panel_stride = K::B_PANEL * k;
     let b_tile_stride = b_panel_stride * plan.b_panels;
 
-    let remainder = b_nrows % K::B_PANEL;
+    let b_remainder = b_nrows % K::B_PANEL;
+    let a_remainder = a_available_rows % K::A_PANEL;
+
+    // Kernel owns its staging buffers (identity kernels stay zero-sized).
+    let mut kernel = K::new(k);
 
     // SAFETY: Caller guarantees b_ptr is valid for b_nrows * k elements.
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };
-    // SAFETY: remainder < B_PANEL, so pb_end - remainder * k is within allocation.
-    let pb_full_end = unsafe { pb_end.sub(remainder * k) };
+    // SAFETY: b_remainder < B_PANEL, so pb_end - b_remainder * k is within allocation.
+    let pb_full_end = unsafe { pb_end.sub(b_remainder * k) };
+
+    // End-of-A pointer for detecting the last (potentially partial) A panel.
+    // SAFETY: Caller guarantees a_ptr is valid for a_available_rows * k elements.
+    let pa_end = unsafe { a_ptr.add(a_available_rows * k) };
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
@@ -140,11 +146,19 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3: Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
+                    // Determine A panel row count: partial for the last panel.
+                    let a_rows = if pa_panel.add(a_panel_stride) > pa_end && a_remainder > 0 {
+                        a_remainder
+                    } else {
+                        K::A_PANEL
+                    };
+                    let prepared_a = kernel.prepare_a(arch, pa_panel, a_rows, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4: Micro-panels of `B` (all full, no remainder check).
                     while pb_panel < pb_tile_end {
-                        K::full_panel(arch, pa_panel, pb_panel, k, pr_panel);
+                        let prepared_b = kernel.prepare_b(arch, pb_panel, K::B_PANEL, k);
+                        K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
                         pb_panel = pb_panel.add(b_panel_stride);
                     }
 
@@ -161,17 +175,32 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3 (peeled): Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
+                    let a_rows = if pa_panel.add(a_panel_stride) > pa_end && a_remainder > 0 {
+                        a_remainder
+                    } else {
+                        K::A_PANEL
+                    };
+                    let prepared_a = kernel.prepare_a(arch, pa_panel, a_rows, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4 (peeled): Full B-panels in the last tile.
                     while pb_panel < pb_full_end {
-                        K::full_panel(arch, pa_panel, pb_panel, k, pr_panel);
+                        let prepared_b = kernel.prepare_b(arch, pb_panel, K::B_PANEL, k);
+                        K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
                         pb_panel = pb_panel.add(b_panel_stride);
                     }
 
                     // Remainder dispatch: 1..(B_PANEL-1) leftover B-rows.
-                    if remainder > 0 {
-                        K::remainder_dispatch(arch, remainder, pa_panel, pb_panel, k, pr_panel);
+                    if b_remainder > 0 {
+                        let prepared_b = kernel.prepare_b(arch, pb_panel, b_remainder, k);
+                        K::remainder_dispatch(
+                            arch,
+                            b_remainder,
+                            prepared_a,
+                            prepared_b,
+                            k,
+                            pr_panel,
+                        );
                     }
 
                     pa_panel = pa_panel.add(a_panel_stride);
@@ -243,5 +272,60 @@ impl<T: Copy> Reduce for [T; 4] {
         F: Fn(T, T) -> T,
     {
         f(f(self[0], self[1]), f(self[2], self[3]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FullReduce;
+
+    #[test]
+    fn basic_panel_counts() {
+        // 16 A-rows × 256 bytes/row = 4096 bytes per A-panel.
+        // L2 budget 40960 → 40960 / 4096 = 10 A-panels.
+        // One A-panel = 4096 bytes, L1 budget 36000 → 36000 - 4096 = 31904.
+        // 4 B-rows × 256 bytes/row = 1024 bytes per B-panel.
+        // 31904 / 1024 = 31 B-panels.
+        let plan = FullReduce::new(256, 256, 16, 4, 40960, 36000);
+        assert_eq!(plan.a_panels, 10);
+        assert_eq!(plan.b_panels, 31);
+    }
+
+    #[test]
+    fn tiny_budget_clamps_to_one() {
+        // Budget too small for even one panel — clamp to 1.
+        let plan = FullReduce::new(1024, 1024, 16, 4, 1, 1);
+        assert_eq!(plan.a_panels, 1);
+        assert_eq!(plan.b_panels, 1);
+    }
+
+    #[test]
+    fn zero_byte_rows_clamped() {
+        // Zero-byte rows (e.g. k=0) should not divide by zero.
+        // FullReduce clamps row bytes to max(1), so a_row_bytes=1, b_row_bytes=1.
+        let plan = FullReduce::new(0, 0, 16, 4, 100_000, 50_000);
+        // a_panels = 100_000 / (1 * 16) = 6250
+        assert_eq!(plan.a_panels, 6250);
+        // a_panel_bytes = 16 * 1 = 16. b_tile_budget = 50_000 - 16 = 49_984.
+        // b_panels = 49_984 / (1 * 4) = 12_496
+        assert_eq!(plan.b_panels, 12_496);
+    }
+
+    #[test]
+    fn exact_fit_one_panel() {
+        // Budget exactly fits one A-panel (16 × 64 = 1024 bytes).
+        // No room for a second → a_panels = 1.
+        let plan = FullReduce::new(64, 64, 16, 4, 1024, 2048);
+        assert_eq!(plan.a_panels, 1);
+        // L1: 2048 - 16*64(=1024) = 1024 for B. 4*64=256 per B-panel → 4 panels.
+        assert_eq!(plan.b_panels, 4);
+    }
+
+    #[test]
+    fn l1_saturated_by_a_panel() {
+        // A-panel alone exceeds L1 budget → b_tile_budget saturates to 0,
+        // b_panels clamps to 1.
+        let plan = FullReduce::new(1024, 64, 16, 4, 100_000, 100);
+        assert_eq!(plan.b_panels, 1);
     }
 }

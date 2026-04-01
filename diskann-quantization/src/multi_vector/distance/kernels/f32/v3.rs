@@ -3,6 +3,8 @@
 
 //! V3 (AVX2+FMA) f32 micro-kernel (16×4) and V4 delegation.
 
+use std::marker::PhantomData;
+
 use diskann_wide::arch::x86_64::{V3, V4};
 use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
 
@@ -18,8 +20,38 @@ diskann_wide::alias!(f32s = <V3>::f32x8);
 unsafe impl Kernel<V3> for F32Kernel<V3, 16> {
     type AElem = f32;
     type BElem = f32;
+    type APrepared = f32;
+    type BPrepared = f32;
     const A_PANEL: usize = 16;
     const B_PANEL: usize = 4;
+
+    fn new(_k: usize) -> Self {
+        F32Kernel(PhantomData)
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_a(
+        &mut self,
+        _arch: V3,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        // Identity: AElem == APrepared, no conversion needed.
+        src
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_b(
+        &mut self,
+        _arch: V3,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        // Identity: BElem == BPrepared, no conversion needed.
+        src
+    }
 
     #[inline(always)]
     unsafe fn full_panel(arch: V3, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
@@ -59,8 +91,36 @@ unsafe impl Kernel<V3> for F32Kernel<V3, 16> {
 unsafe impl Kernel<V4> for F32Kernel<V4, 16> {
     type AElem = f32;
     type BElem = f32;
+    type APrepared = f32;
+    type BPrepared = f32;
     const A_PANEL: usize = 16;
     const B_PANEL: usize = 4;
+
+    fn new(_k: usize) -> Self {
+        F32Kernel(PhantomData)
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_a(
+        &mut self,
+        _arch: V4,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
+
+    #[inline(always)]
+    unsafe fn prepare_b(
+        &mut self,
+        _arch: V4,
+        src: *const f32,
+        _rows: usize,
+        _k: usize,
+    ) -> *const f32 {
+        src
+    }
 
     #[inline(always)]
     unsafe fn full_panel(arch: V4, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
@@ -110,7 +170,7 @@ unsafe impl Kernel<V4> for F32Kernel<V4, 16> {
 /// * `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
 /// * `r` must point to at least `A_PANEL(16)` writable `f32` values.
 #[inline(always)]
-unsafe fn f32_microkernel<const UNROLL: usize>(
+pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const UNROLL: usize>(
     arch: V3,
     a_packed: *const f32,
     b: *const f32,
