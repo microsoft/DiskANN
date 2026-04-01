@@ -37,12 +37,12 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'q, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
     Strategy: SearchStrategy<DP, &'q Q>,
-    Q: Send + Sync,
+    Q: Send + Sync + ?Sized,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
@@ -74,12 +74,12 @@ where
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'q, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
     Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
-    Q: Send + Sync,
+    Q: Send + Sync + ?Sized,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -149,11 +149,11 @@ impl<IPP> FilterResults<IPP> {
     }
 }
 
-impl<'a, 'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'a, Q>>
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'q, Q>>
     for FilterResults<IPP>
 where
     IA: BuildQueryComputer<&'q Q>,
-    Q: Send + Sync,
+    Q: Send + Sync + ?Sized,
     IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {
     type Error = ANNError;
@@ -161,7 +161,7 @@ where
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<Q>,
+        query: &'q FilteredQuery<'q, Q>,
         computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,

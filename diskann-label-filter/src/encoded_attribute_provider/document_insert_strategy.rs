@@ -68,7 +68,6 @@ where
         = Inner::Element<'a>
     where
         Self: 'a;
-    type Extended = Inner::Extended;
     type GetError = Inner::GetError;
 
     fn get_element(
@@ -92,9 +91,9 @@ where
     }
 }
 
-impl<'doc, Inner, VT> BuildQueryComputer<Document<'doc, VT>> for DocumentSearchAccessor<Inner>
+impl<'doc, Inner, VT> BuildQueryComputer<&'doc Document<'doc, VT>> for DocumentSearchAccessor<Inner>
 where
-    Inner: BuildQueryComputer<VT>,
+    Inner: BuildQueryComputer<&'doc VT>,
     VT: ?Sized,
 {
     type QueryComputerError = Inner::QueryComputerError;
@@ -102,7 +101,7 @@ where
 
     fn build_query_computer(
         &self,
-        from: &Document<'doc, VT>,
+        from: &'doc Document<'doc, VT>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.inner.build_query_computer(from.vector())
     }
@@ -118,9 +117,9 @@ where
     }
 }
 
-impl<'doc, Inner, VT> ExpandBeam<Document<'doc, VT>> for DocumentSearchAccessor<Inner>
+impl<'doc, Inner, VT> ExpandBeam<&'doc Document<'doc, VT>> for DocumentSearchAccessor<Inner>
 where
-    Inner: ExpandBeam<VT>,
+    Inner: ExpandBeam<&'doc VT>,
     VT: ?Sized,
 {
 }
@@ -140,10 +139,12 @@ where
 }
 
 impl<'doc, Inner, DP, VT>
-    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, Document<'doc, VT>>
-    for DocumentInsertStrategy<Inner>
+    SearchStrategy<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        &'doc Document<'doc, VT>,
+    > for DocumentInsertStrategy<Inner>
 where
-    Inner: InsertStrategy<DP, VT>,
+    Inner: InsertStrategy<DP, &'doc VT>,
     DP: DataProvider,
     VT: Sync + Send + ?Sized + 'static,
 {
@@ -164,10 +165,12 @@ where
 }
 
 impl<'doc, Inner, DP, VT>
-    InsertStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, Document<'doc, VT>>
-    for DocumentInsertStrategy<Inner>
+    InsertStrategy<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        &'doc Document<'doc, VT>,
+    > for DocumentInsertStrategy<Inner>
 where
-    Inner: InsertStrategy<DP, VT>,
+    Inner: InsertStrategy<DP, &'doc VT>,
     DP: DataProvider,
     VT: Sync + Send + ?Sized + 'static,
 {
@@ -209,6 +212,7 @@ where
     type DistanceComputer = Inner::DistanceComputer;
     type PruneAccessor<'a> = Inner::PruneAccessor<'a>;
     type PruneAccessorError = Inner::PruneAccessorError;
+    type WorkingSet = Inner::WorkingSet;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -217,5 +221,9 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         self.inner
             .prune_accessor(provider.inner_provider(), context)
+    }
+
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        self.inner.create_working_set(_capacity)
     }
 }

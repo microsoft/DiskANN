@@ -19,10 +19,12 @@ use diskann::{
         StartPointStrategy,
     },
     provider::DefaultContext,
+    utils::VectorRepr,
     ANNError, ANNErrorKind,
 };
 use diskann_benchmark_core::{
-    build::{self, Build, Parallelism},
+    build,
+    build::{Build, Parallelism},
     recall, search as search_api, tokio,
 };
 use diskann_benchmark_runner::{
@@ -30,7 +32,7 @@ use diskann_benchmark_runner::{
     output::Output,
     registry::Benchmarks,
     utils::{datatype, fmt, percentiles, MicroSeconds},
-    Any,
+    Benchmark,
 };
 use diskann_label_filter::{
     attribute::{Attribute, AttributeValue},
@@ -68,13 +70,7 @@ use crate::{
 
 /// Register the document index benchmarks.
 pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<DocumentIndexJob<'static, f32>>(
-        "document-index-build-f32",
-        |job, _checkpoint, out| {
-            let stats = job.run(out)?;
-            Ok(serde_json::to_value(stats)?)
-        },
-    );
+    benchmarks.register::<DocumentIndexJob<'static, f32>>("document-index-build-f32");
 }
 
 /// Document index benchmark job.
@@ -92,45 +88,41 @@ impl<'a, T> DocumentIndexJob<'a, T> {
     }
 }
 
-impl<T: 'static> diskann_benchmark_runner::dispatcher::Map for DocumentIndexJob<'static, T> {
-    type Type<'a> = DocumentIndexJob<'a, T>;
-}
-
-// Dispatch from the concrete input type
-impl<'a, T> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a, T>
+impl<T> Benchmark for DocumentIndexJob<'static, T>
 where
+    T: VectorRepr
+        + diskann::graph::SampleableForStart
+        + diskann_utils::sampling::WithApproximateNorm
+        + 'static,
     datatype::Type<T>: DispatchRule<datatype::DataType>,
+    for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>,
 {
-    type Error = std::convert::Infallible;
+    type Input = DocumentIndexBuild;
+    type Output = DocumentIndexStats;
 
-    fn try_match(_from: &&'a DocumentIndexBuild) -> Result<MatchScore, FailureScore> {
-        datatype::Type::<T>::try_match(&_from.build.data_type)
+    fn try_match(input: &Self::Input) -> std::result::Result<MatchScore, FailureScore> {
+        datatype::Type::<T>::try_match(&input.build.data_type)
     }
 
-    fn convert(from: &'a DocumentIndexBuild) -> Result<Self, Self::Error> {
-        Ok(DocumentIndexJob::new(from))
+    fn description(
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&Self::Input>,
+    ) -> std::fmt::Result {
+        match input {
+            Some(arg) => datatype::Type::<T>::description(f, Some(&arg.build.data_type)),
+            None => datatype::Type::<T>::description(f, None::<&datatype::DataType>),
+        }
+    }
+
+    fn run(
+        input: &Self::Input,
+        _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
+        DocumentIndexJob::<T>::new(input).run(output)
     }
 }
 
-// Central dispatch mapping from Any
-impl<'a, T> DispatchRule<&'a Any> for DocumentIndexJob<'a, T>
-where
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
-{
-    type Error = anyhow::Error;
-
-    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-        from.try_match::<DocumentIndexBuild, Self>()
-    }
-
-    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-        from.convert::<DocumentIndexBuild, Self>()
-    }
-
-    fn description(f: &mut std::fmt::Formatter, from: Option<&&'a Any>) -> std::fmt::Result {
-        Any::description::<DocumentIndexBuild, Self>(f, from, DocumentIndexBuild::tag())
-    }
-}
 /// Convert a HashMap<String, AttributeValue> to Vec<Attribute>
 fn hashmap_to_attributes(map: std::collections::HashMap<String, AttributeValue>) -> Vec<Attribute> {
     map.into_iter()
@@ -430,8 +422,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>
-        + glue::DefaultPostProcessor<DP, FilteredQuery<'a, [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, [T]>>
+        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, [T]>, u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -639,8 +631,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>
-        + glue::DefaultPostProcessor<DP, FilteredQuery<'a, [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, [T]>>
+        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, [T]>, u32>,
 {
     let searcher = Arc::new(FilteredSearcher {
         index: index.clone(),
@@ -813,10 +805,10 @@ impl<DP: diskann::provider::DataProvider, T> DocumentIndexBuilder<DP, T> {
 impl<DP, T> Build for DocumentIndexBuilder<DP, T>
 where
     DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32>
-        + for<'doc> diskann::provider::SetElement<Document<'doc, [T]>>
+        + for<'a> diskann::provider::SetElement<&'a Document<'a, [T]>>
         + AsyncFriendly,
-    for<'doc> DocumentInsertStrategy<common::FullPrecision>:
-        diskann::graph::glue::InsertStrategy<DP, Document<'doc, [T]>>,
+    for<'a> DocumentInsertStrategy<common::FullPrecision>:
+        diskann::graph::glue::InsertStrategy<DP, &'a Document<'a, [T]>>,
     DocumentInsertStrategy<common::FullPrecision>: AsyncFriendly,
     T: AsyncFriendly,
 {

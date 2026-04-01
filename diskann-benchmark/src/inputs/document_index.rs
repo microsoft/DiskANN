@@ -18,7 +18,7 @@ use diskann_benchmark_runner::{
 use serde::{Deserialize, Serialize};
 
 use super::async_::GraphSearch;
-use crate::inputs::{as_input, Example, Input};
+use crate::inputs::{as_input, Example};
 
 //////////////
 // Registry //
@@ -29,7 +29,7 @@ as_input!(DocumentIndexBuild);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<DocumentIndexBuild>::new())?;
+    registry.register::<DocumentIndexBuild>()?;
     Ok(())
 }
 
