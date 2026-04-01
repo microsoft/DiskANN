@@ -46,18 +46,18 @@ pub(crate) struct F32Kernel<A: Architecture, const GROUP: usize>(PhantomData<A>)
 /// The natural block-transposed GROUP size for the f32 micro-kernel on the
 /// current platform.
 ///
-/// - x86_64 (V3/V4): 16 (two `f32x8` register tiles).
-/// - Other platforms (Scalar/Neon): 8 (one `f32x8` register tile).
-#[cfg(target_arch = "x86_64")]
+/// - x86_64 with AVX2+ (V3/V4): 16 (two `f32x8` register tiles).
+/// - Other platforms or x86_64 without AVX2 (Scalar/Neon): 8 (one `f32x8` register tile).
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[allow(dead_code)] // used in tests; callers will adopt
 pub(crate) const F32_GROUP: usize = 16;
 
 /// The natural block-transposed GROUP size for the f32 micro-kernel on the
 /// current platform.
 ///
-/// - x86_64 (V3/V4): 16 (two `f32x8` register tiles).
-/// - Other platforms (Scalar/Neon): 8 (one `f32x8` register tile).
-#[cfg(not(target_arch = "x86_64"))]
+/// - x86_64 with AVX2+ (V3/V4): 16 (two `f32x8` register tiles).
+/// - Other platforms or x86_64 without AVX2 (Scalar/Neon): 8 (one `f32x8` register tile).
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 #[allow(dead_code)] // used in tests; callers will adopt
 pub(crate) const F32_GROUP: usize = 8;
 
