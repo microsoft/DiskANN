@@ -3,14 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use std::{future::Future, sync::Mutex};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
 use diskann::{
     ANNError, ANNResult, default_post_processor,
     error::{RankedError, ToRanked, TransientError},
-    graph::glue::{
-        AsElement, CopyIds, DefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
-        PruneStrategy, SearchExt, SearchStrategy,
+    graph::{
+        glue::{
+            CopyIds, DefaultPostProcessor, ExpandBeam, InsertStrategy, MultiInsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
+        },
+        workingset::{self, map},
     },
     neighbor::Neighbor,
     provider::{
@@ -19,6 +25,7 @@ use diskann::{
     },
     utils::IntoUsize,
 };
+use diskann_utils::views::Matrix;
 
 use super::{DefaultProvider, DefaultQuant};
 use crate::model::graph::provider::async_::{
@@ -157,17 +164,15 @@ impl HasId for FlakyAccessor<'_> {
     type Id = u32;
 }
 
-impl<'a> Accessor for FlakyAccessor<'a> {
-    type Extended = &'a [f32];
-
+impl Accessor for FlakyAccessor<'_> {
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    type Element<'b>
+    type Element<'a>
         = &'a [f32]
     where
-        Self: 'b;
+        Self: 'a;
 
-    type ElementRef<'b> = &'b [f32];
+    type ElementRef<'a> = &'a [f32];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = TestError;
@@ -211,19 +216,20 @@ impl<'a> BuildDistanceComputer for FlakyAccessor<'a> {
     }
 }
 
-impl<'a> BuildQueryComputer<[f32]> for FlakyAccessor<'a> {
-    type QueryComputerError = <FullAccessor<'a> as BuildQueryComputer<[f32]>>::QueryComputerError;
-    type QueryComputer = <FullAccessor<'a> as BuildQueryComputer<[f32]>>::QueryComputer;
+impl<'a, 'b> BuildQueryComputer<&'a [f32]> for FlakyAccessor<'b> {
+    type QueryComputerError =
+        <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputerError;
+    type QueryComputer = <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputer;
 
     fn build_query_computer(
         &self,
-        from: &[f32],
+        from: &'a [f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.as_full().build_query_computer(from)
     }
 }
 
-impl ExpandBeam<[f32]> for FlakyAccessor<'_> {}
+impl ExpandBeam<&[f32]> for FlakyAccessor<'_> {}
 
 impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     type Delegate = &'a SimpleNeighborProviderAsync<u32>;
@@ -232,8 +238,8 @@ impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     }
 }
 
-impl SearchStrategy<TestProvider, [f32]> for Flaky {
-    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<[f32]>>::QueryComputer;
+impl<'x> SearchStrategy<TestProvider, &'x [f32]> for Flaky {
+    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<&'x [f32]>>::QueryComputer;
     type SearchAccessor<'a> = FlakyAccessor<'a>;
     type SearchAccessorError = ANNError;
 
@@ -250,21 +256,22 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
     }
 }
 
-impl DefaultPostProcessor<TestProvider, [f32]> for Flaky {
+impl DefaultPostProcessor<TestProvider, &[f32]> for Flaky {
     default_post_processor!(CopyIds);
 }
-
-impl FillSet for FlakyAccessor<'_> {}
 
 const STATIC_PRUNE_THRESHOLD: usize = 5;
 /// We need to tune the flakiness of the `Prune` accessor so that occasionally, the first
 /// item retrieved is a failure.
 static START_COUNT: Mutex<usize> = Mutex::new(STATIC_PRUNE_THRESHOLD);
 
+type WorkingSet = map::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
+
 impl PruneStrategy<TestProvider> for Flaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = WorkingSet;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -280,9 +287,13 @@ impl PruneStrategy<TestProvider> for Flaky {
 
         Ok(FlakyAccessor::new(provider, STATIC_PRUNE_THRESHOLD, start))
     }
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        map::Builder::new(map::Capacity::Default).build(capacity)
+    }
 }
 
-impl InsertStrategy<TestProvider, [f32]> for Flaky {
+impl InsertStrategy<TestProvider, &[f32]> for Flaky {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self {
@@ -290,14 +301,28 @@ impl InsertStrategy<TestProvider, [f32]> for Flaky {
     }
 }
 
-impl<'a> AsElement<&'a [f32]> for FlakyAccessor<'a> {
-    type Error = TestError;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
+impl MultiInsertStrategy<TestProvider, Matrix<f32>> for Flaky {
+    type Seed = map::Builder<u32, map::Ref<[f32]>>;
+    type WorkingSet = WorkingSet;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &TestProvider,
+        _ctx: &DefaultContext,
+        batch: &Arc<Matrix<f32>>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(map::Builder::new(map::Capacity::Default)
+            .with_overlay(map::Overlay::from_batch(batch.clone(), ids))))
     }
 }
 
@@ -308,6 +333,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -315,5 +341,9 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
         _context: &'a DefaultContext,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FlakyAccessor::new(provider, 1, 1))
+    }
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        map::Builder::new(map::Capacity::None).build(capacity)
     }
 }

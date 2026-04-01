@@ -34,15 +34,15 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
     }
 }
 
-impl<DP, Strategy, Q>
+impl<'q, DP, Strategy, Q>
     SearchStrategy<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        FilteredQuery<'_, Q>,
+        &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, Q>,
-    Q: Send + Sync + ?Sized,
+    Strategy: SearchStrategy<DP, &'q Q>,
+    Q: Send + Sync,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
@@ -71,15 +71,15 @@ where
 
 /// [`DefaultPostProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
 /// the inner strategy's default processor with [`FilterResults`].
-impl<DP, Strategy, Q>
+impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        FilteredQuery<'_, Q>,
+        &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q>,
-    Q: Send + Sync + ?Sized,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
+    Q: Send + Sync,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -149,20 +149,20 @@ impl<IPP> FilterResults<IPP> {
     }
 }
 
-impl<'a, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, FilteredQuery<'a, Q>>
+impl<'a, 'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'a, Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<Q>,
-    IPP: SearchPostProcess<IA, Q> + Send + Sync,
-    Q: Send + Sync + ?Sized,
+    IA: BuildQueryComputer<&'q Q>,
+    Q: Send + Sync,
+    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &FilteredQuery<'a, Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q>>::QueryComputer>,
+        query: &'q FilteredQuery<Q>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>

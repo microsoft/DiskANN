@@ -16,23 +16,6 @@ use thiserror::Error;
 
 use crate::ANNError;
 
-//////////////////////
-// VectorIdBoxSlice //
-//////////////////////
-
-/// An auxiliary type for an ID/Vector pair.
-#[derive(Debug)]
-pub struct VectorIdBoxSlice<I, T> {
-    pub vector_id: I,
-    pub vector: Box<[T]>,
-}
-
-impl<I, T> VectorIdBoxSlice<I, T> {
-    pub fn new(vector_id: I, vector: Box<[T]>) -> Self {
-        Self { vector_id, vector }
-    }
-}
-
 ////////////
 // Around //
 ////////////
@@ -71,7 +54,7 @@ pub(crate) fn around<T>(slice: &[T], i: usize, len: usize) -> Around<'_, T> {
 
 /// Iterator for sampling a slice in a window around a fixed position. See [`around`] for
 /// details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Around<'a, T> {
     slice: &'a [T],
     skip: usize,

@@ -16,10 +16,10 @@ use diskann::{
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, DefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
-            InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy, SearchExt,
-            SearchStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FilterStartPoints, InplaceDeleteStrategy,
+            InsertStrategy, Pipeline, PruneStrategy, SearchExt, SearchStrategy,
         },
+        workingset::{self, map},
     },
     provider::{
         self, Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultAccessor,
@@ -30,6 +30,7 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_quantization::CompressInto;
+use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
@@ -39,7 +40,10 @@ use crate::{
         distance::{DistanceComputer, QueryComputer},
         graph::provider::async_::{
             common::{FullPrecision, Panics, Quantized},
-            distances::{self, pq::Hybrid},
+            distances::{
+                self,
+                pq::{Hybrid, HybridMap},
+            },
             postprocess,
         },
         pq,
@@ -289,6 +293,7 @@ impl DataProvider for DebugProvider {
     type Context = DefaultContext;
     type InternalId = u32;
     type ExternalId = u32;
+    type Guard = provider::NoopGuard<u32>;
     type Error = InvalidId;
 
     fn to_internal_id(
@@ -384,10 +389,8 @@ impl Delete for DebugProvider {
     }
 }
 
-impl provider::SetElement<[f32]> for DebugProvider {
+impl provider::SetElement<&[f32]> for DebugProvider {
     type SetError = ANNError;
-
-    type Guard = provider::NoopGuard<u32>;
 
     fn set_element(
         &self,
@@ -596,7 +599,6 @@ impl HasId for FullAccessor<'_> {
 }
 
 impl Accessor for FullAccessor<'_> {
-    type Extended = Box<[f32]>;
     type Element<'a>
         = &'a [f32]
     where
@@ -668,7 +670,7 @@ impl BuildDistanceComputer for FullAccessor<'_> {
     }
 }
 
-impl BuildQueryComputer<[f32]> for FullAccessor<'_> {
+impl BuildQueryComputer<&[f32]> for FullAccessor<'_> {
     type QueryComputerError = Panics;
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
@@ -680,8 +682,7 @@ impl BuildQueryComputer<[f32]> for FullAccessor<'_> {
     }
 }
 
-impl ExpandBeam<[f32]> for FullAccessor<'_> {}
-impl FillSet for FullAccessor<'_> {}
+impl ExpandBeam<&[f32]> for FullAccessor<'_> {}
 
 impl postprocess::AsDeletionCheck for FullAccessor<'_> {
     type Checker = DebugProvider;
@@ -709,7 +710,6 @@ impl HasId for QuantAccessor<'_> {
 }
 
 impl Accessor for QuantAccessor<'_> {
-    type Extended = Vec<u8>;
     type Element<'a>
         = Vec<u8>
     where
@@ -748,7 +748,7 @@ impl<'a> DelegateNeighbor<'a> for QuantAccessor<'_> {
     }
 }
 
-impl BuildQueryComputer<[f32]> for QuantAccessor<'_> {
+impl BuildQueryComputer<&[f32]> for QuantAccessor<'_> {
     type QueryComputerError = Panics;
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
 
@@ -766,7 +766,7 @@ impl BuildQueryComputer<[f32]> for QuantAccessor<'_> {
     }
 }
 
-impl ExpandBeam<[f32]> for QuantAccessor<'_> {}
+impl ExpandBeam<&[f32]> for QuantAccessor<'_> {}
 
 impl postprocess::AsDeletionCheck for QuantAccessor<'_> {
     type Checker = DebugProvider;
@@ -794,7 +794,6 @@ impl HasId for HybridAccessor<'_> {
 }
 
 impl Accessor for HybridAccessor<'_> {
-    type Extended = Hybrid<Vec<f32>, Vec<u8>>;
     type Element<'a>
         = Hybrid<Vec<f32>, Vec<u8>>
     where
@@ -848,38 +847,40 @@ impl BuildDistanceComputer for HybridAccessor<'_> {
     }
 }
 
-impl FillSet for HybridAccessor<'_> {
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
+impl workingset::Fill<HybridMap<f32, u8>> for HybridAccessor<'_> {
+    type Error = diskann::error::Infallible;
+    type View<'a>
+        = distances::pq::View<'a, f32, u8>
     where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        state: &'a mut HybridMap<f32, u8>,
+        itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
     {
+        let map = state.get_mut();
+        map.prepare(itr.clone());
+
         let threshold = 1; // one full vec per fill
         let data = self.provider.data();
-        itr.enumerate().for_each(|(i, id)| {
-            let e = set.entry(id);
-            if i < threshold {
-                e.and_modify(|v| {
-                    if !v.is_full() {
-                        let element = data.get(&id).unwrap();
-                        *v = Hybrid::Full(element.full().to_owned());
-                    }
-                })
-                .or_insert_with(|| {
-                    let element = data.get(&id).unwrap();
-                    Hybrid::Full(element.full().to_owned())
-                });
-            } else {
-                e.or_insert_with(|| {
-                    let element = data.get(&id).unwrap();
-                    Hybrid::Quant(element.quant().to_owned())
-                });
+        itr.enumerate().for_each(|(i, id)| match map.entry(id) {
+            map::Entry::Seeded(_) | map::Entry::Occupied(_) => {}
+            map::Entry::Vacant(v) => {
+                let element = data.get(&id).unwrap();
+                if i < threshold {
+                    v.insert(Hybrid::Full(element.full().to_owned()))
+                } else {
+                    v.insert(Hybrid::Quant(element.quant().to_owned()))
+                }
             }
         });
-        Ok(())
+
+        Ok(map.view())
     }
 }
 
@@ -887,7 +888,7 @@ impl FillSet for HybridAccessor<'_> {
 // Strategies //
 ////////////////
 
-impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
+impl SearchStrategy<DebugProvider, &[f32]> for FullPrecision {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = FullAccessor<'a>;
@@ -901,11 +902,11 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     }
 }
 
-impl DefaultPostProcessor<DebugProvider, [f32]> for FullPrecision {
+impl DefaultPostProcessor<DebugProvider, &[f32]> for FullPrecision {
     default_post_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
-impl SearchStrategy<DebugProvider, [f32]> for Quantized {
+impl SearchStrategy<DebugProvider, &[f32]> for Quantized {
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = QuantAccessor<'a>;
@@ -919,7 +920,7 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     }
 }
 
-impl DefaultPostProcessor<DebugProvider, [f32]> for Quantized {
+impl DefaultPostProcessor<DebugProvider, &[f32]> for Quantized {
     default_post_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
@@ -927,6 +928,7 @@ impl PruneStrategy<DebugProvider> for FullPrecision {
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = FullAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = map::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -935,16 +937,9 @@ impl PruneStrategy<DebugProvider> for FullPrecision {
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FullAccessor::new(provider))
     }
-}
 
-impl<'a> AsElement<&'a [f32]> for FullAccessor<'a> {
-    type Error = Panics;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        map::Builder::new(map::Capacity::Default).build(capacity)
     }
 }
 
@@ -952,6 +947,7 @@ impl PruneStrategy<DebugProvider> for Quantized {
     type DistanceComputer = distances::pq::HybridComputer<f32>;
     type PruneAccessor<'a> = HybridAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = HybridMap<f32, u8>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -960,20 +956,13 @@ impl PruneStrategy<DebugProvider> for Quantized {
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(HybridAccessor::new(provider))
     }
-}
 
-impl<'a> AsElement<&'a [f32]> for HybridAccessor<'a> {
-    type Error = Panics;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(Hybrid::Full(vector.to_vec())))
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        HybridMap::with_capacity(capacity)
     }
 }
 
-impl InsertStrategy<DebugProvider, [f32]> for FullPrecision {
+impl InsertStrategy<DebugProvider, &[f32]> for FullPrecision {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -990,7 +979,7 @@ impl InsertStrategy<DebugProvider, [f32]> for FullPrecision {
     }
 }
 
-impl InsertStrategy<DebugProvider, [f32]> for Quantized {
+impl InsertStrategy<DebugProvider, &[f32]> for Quantized {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1008,8 +997,8 @@ impl InsertStrategy<DebugProvider, [f32]> for Quantized {
 }
 
 impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
-    type DeleteElement<'a> = [f32];
-    type DeleteElementGuard = Vec<f32>;
+    type DeleteElement<'a> = &'a [f32];
+    type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = FullAccessor<'a>;
@@ -1035,13 +1024,13 @@ impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
         id: <DebugProvider as DataProvider>::InternalId,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
-        futures_util::future::ok(provider.data().get(&id).unwrap().full().to_vec())
+        futures_util::future::ok(provider.data().get(&id).unwrap().full().into())
     }
 }
 
 impl InplaceDeleteStrategy<DebugProvider> for Quantized {
-    type DeleteElement<'a> = [f32];
-    type DeleteElementGuard = Vec<f32>;
+    type DeleteElement<'a> = &'a [f32];
+    type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = QuantAccessor<'a>;
@@ -1067,7 +1056,56 @@ impl InplaceDeleteStrategy<DebugProvider> for Quantized {
         id: <DebugProvider as DataProvider>::InternalId,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
-        futures_util::future::ok(provider.data().get(&id).unwrap().full().to_vec())
+        futures_util::future::ok(provider.data().get(&id).unwrap().full().into())
+    }
+}
+
+impl glue::MultiInsertStrategy<DebugProvider, Matrix<f32>> for FullPrecision {
+    type Seed = map::Builder<u32, map::Ref<[f32]>>;
+    type WorkingSet = map::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &DebugProvider,
+        _ctx: &DefaultContext,
+        batch: &Arc<Matrix<f32>>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(map::Builder::new(map::Capacity::Default)
+            .with_overlay(map::Overlay::from_batch(batch.clone(), ids))))
+    }
+}
+
+impl glue::MultiInsertStrategy<DebugProvider, Matrix<f32>> for Quantized {
+    type Seed = map::Overlay<u32, distances::pq::Projection<f32, u8>>;
+    type WorkingSet = HybridMap<f32, u8>;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &DebugProvider,
+        _ctx: &DefaultContext,
+        batch: &Arc<Matrix<f32>>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(map::Overlay::from_batch(batch.clone(), ids)))
     }
 }
 
@@ -1078,8 +1116,8 @@ mod tests {
     use diskann::{
         graph::{self, DiskANNIndex},
         provider::{Guard, SetElement},
-        utils::async_tools::VectorIdBoxSlice,
     };
+    use diskann_utils::views::Matrix;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rstest::rstest;
 
@@ -1378,15 +1416,11 @@ mod tests {
         {
             let index = init_index();
             let ctx = DefaultContext;
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+            let batch = Arc::new(squish(vectors.iter().take(num_points), dim));
+            let ids: Arc<[u32]> = (0..num_points as u32).collect();
 
             index
-                .multi_insert(FullPrecision, &ctx, batch)
+                .multi_insert::<_, Matrix<f32>>(FullPrecision, &ctx, batch, ids)
                 .await
                 .unwrap();
 
@@ -1404,14 +1438,13 @@ mod tests {
         {
             let index = init_index();
             let ctx = DefaultContext;
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+            let batch = Arc::new(squish(vectors.iter().take(num_points), dim));
+            let ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-            index.multi_insert(Quantized, &ctx, batch).await.unwrap();
+            index
+                .multi_insert::<_, Matrix<f32>>(Quantized, &ctx, batch, ids)
+                .await
+                .unwrap();
 
             // Ensure the `insert_search_accessor` API is invoked.
             assert_eq!(
