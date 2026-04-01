@@ -46,7 +46,7 @@ jobs:
   # Macro benchmark: Wikipedia-100K dataset
   macro-benchmark-wikipedia-100K:
     name: Macro Benchmark - Wikipedia 100K
-    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
+    runs-on: ubuntu-latest
     # TODO: For production benchmarks, consider using a self-hosted runner with:
     # - NVMe storage for consistent I/O performance
     # - CPU pinning (taskset) for reduced variance
@@ -95,7 +95,7 @@ jobs:
       - name: Download wikipedia-100K dataset
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o wikipedia-100K.tar.gz https://github.com/YuanyuanTian-hh/diskann-benchmark-data/releases/download/v1/wikipedia-100K.tar.gz
+          curl -L -o wikipedia-100K.tar.gz https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/wikipedia-100K.tar.gz
           tar xzf wikipedia-100K.tar.gz -C diskann_rust/target/tmp/
           cp -r diskann_rust/target/tmp/wikipedia_cohere baseline/target/tmp/
 
@@ -141,7 +141,7 @@ jobs:
   # Macro benchmark: OpenAI ArXiv dataset
   macro-benchmark-oai-large:
     name: Macro Benchmark - OAI ArXiv 100K
-    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
+    runs-on: ubuntu-latest
     # TODO: For production benchmarks, consider using a self-hosted runner
     timeout-minutes: 120
 
@@ -187,7 +187,7 @@ jobs:
       - name: Download openai-100K dataset
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o openai-100K.tar.gz https://github.com/YuanyuanTian-hh/diskann-benchmark-data/releases/download/v1/openai-100K.tar.gz
+          curl -L -o openai-100K.tar.gz https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/openai-100K.tar.gz
           tar xzf openai-100K.tar.gz -C diskann_rust/target/tmp/
           cp -r diskann_rust/target/tmp/OpenAIArXiv baseline/target/tmp/
 
