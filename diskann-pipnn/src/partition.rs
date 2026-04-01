@@ -309,9 +309,11 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
         .collect()
 }
 
-/// Merge undersized quantized clusters into the nearest large cluster by Hamming distance.
-/// Uses average Hamming distance from all small cluster points to each large cluster's
-/// representative (first point) to find the nearest merge target.
+/// Merge undersized quantized clusters into the nearest large cluster.
+///
+/// Computes majority-vote bitwise centroids for both small and large clusters
+/// (closest 1-bit analogue to the FP path's f32 centroid), then finds the
+/// nearest large cluster by Hamming distance between centroids.
 fn merge_small_quantized(
     qdata: &crate::quantize::QuantizedData,
     mut clusters: Vec<Vec<usize>>,
@@ -320,29 +322,72 @@ fn merge_small_quantized(
     let mut large: Vec<Vec<usize>> = Vec::new();
     let mut smalls: Vec<Vec<usize>> = Vec::new();
     for c in clusters.drain(..) {
-        if c.len() < c_min && !c.is_empty() {
-            smalls.push(c);
-        } else if !c.is_empty() {
-            large.push(c);
-        }
+        if c.len() < c_min && !c.is_empty() { smalls.push(c); }
+        else if !c.is_empty() { large.push(c); }
     }
     if smalls.is_empty() || large.is_empty() {
-        if large.is_empty() {
-            return smalls;
-        }
+        if large.is_empty() { return smalls; }
         return large;
     }
+
+    let u64s = qdata.u64s_per_vec();
+
+    // Compute majority-vote bitwise centroid for each large cluster.
+    // For each u64 word and each bit position, set the bit if >50% of points have it set.
+    let large_centroids: Vec<Vec<u64>> = large.iter().map(|c| {
+        let half = c.len() / 2;
+        let mut centroid = vec![0u64; u64s];
+        let mut counts = vec![0u32; u64s * 64];
+        for &idx in c {
+            let bits = qdata.get_u64(idx);
+            for (w, &word) in bits.iter().enumerate() {
+                let mut b = word;
+                while b != 0 {
+                    let bit = b.trailing_zeros() as usize;
+                    counts[w * 64 + bit] += 1;
+                    b &= b - 1;
+                }
+            }
+        }
+        for (w, cw) in centroid.iter_mut().enumerate() {
+            for bit in 0..64 {
+                if counts[w * 64 + bit] > half as u32 {
+                    *cw |= 1u64 << bit;
+                }
+            }
+        }
+        centroid
+    }).collect();
+
     for small in smalls {
-        // Average Hamming distance from all small cluster points to each large cluster rep.
-        let nearest = large
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let large_rep = qdata.get_u64(c[0]);
-                let total_dist: u32 = small.iter()
-                    .map(|&idx| crate::quantize::QuantizedData::hamming_u64(qdata.get_u64(idx), large_rep))
-                    .sum();
-                (i, total_dist)
+        // Compute small cluster centroid.
+        let half = small.len() / 2;
+        let mut small_centroid = vec![0u64; u64s];
+        let mut counts = vec![0u32; u64s * 64];
+        for &idx in &small {
+            let bits = qdata.get_u64(idx);
+            for (w, &word) in bits.iter().enumerate() {
+                let mut b = word;
+                while b != 0 {
+                    let bit = b.trailing_zeros() as usize;
+                    counts[w * 64 + bit] += 1;
+                    b &= b - 1;
+                }
+            }
+        }
+        for (w, cw) in small_centroid.iter_mut().enumerate() {
+            for bit in 0..64 {
+                if counts[w * 64 + bit] > half as u32 {
+                    *cw |= 1u64 << bit;
+                }
+            }
+        }
+
+        // Find nearest large cluster by centroid-to-centroid Hamming distance.
+        let nearest = large_centroids.iter().enumerate()
+            .map(|(i, lc)| {
+                let d = crate::quantize::QuantizedData::hamming_u64(&small_centroid, lc);
+                (i, d)
             })
             .min_by_key(|&(_, d)| d)
             .map(|(i, _)| i)
