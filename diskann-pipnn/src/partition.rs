@@ -297,11 +297,9 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
 }
 
 /// Force-split a set of indices into chunks of at most c_max.
-/// Used for clusters between c_max and c_max*3 (too small for recursive RBC to
-/// improve quality, but too large for a single leaf). This is a practical shortcut
-/// — not in the paper — that trades marginal overlap quality for avoiding an
-/// expensive recursion level on near-threshold clusters. Both FP and SQ paths
-/// use this identically.
+/// Used only as a fallback when recursion hits MAX_DEPTH or when a single
+/// merged cluster remains oversized. Not used as a general shortcut — all
+/// oversized clusters go through recursive RBC per the paper.
 fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
     indices
         .chunks(c_max)
@@ -673,10 +671,7 @@ pub fn parallel_partition_quantized(
                 vec![Leaf {
                     indices: cluster.clone(),
                 }]
-            } else if cluster.len() <= config.c_max * 3 {
-                force_split(cluster, config.c_max)
             } else {
-                // Recursive quantized partition.
                 let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
                 partition_quantized_recursive(qdata, cluster, config, 1, &mut sub_rng)
             }
