@@ -2362,10 +2362,7 @@ mod tests {
         let s = DefaultContextStrategy::default();
         let s2 = DefaultContextStrategy::new();
         // Both should be identical (inner Strategy is Default).
-        assert_eq!(
-            std::mem::size_of_val(&s),
-            std::mem::size_of_val(&s2),
-        );
+        assert_eq!(std::mem::size_of_val(&s), std::mem::size_of_val(&s2),);
     }
 
     #[test]
