@@ -33,6 +33,7 @@ tracing.workspace = true
 diskann-linalg = { workspace = true }
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
+diskann-storage = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
@@ -81,7 +82,7 @@ perf_test = ["dep:opentelemetry"]
 testing = ["dep:tempfile"]
 bf_tree = ["dep:bf-tree", "dep:polonius-the-crab", "dep:serde_json"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
-virtual_storage = ["dep:vfs"]
+virtual_storage = ["dep:vfs", "diskann-storage/virtual_storage"]
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]

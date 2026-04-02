@@ -6,7 +6,8 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use diskann_providers::{storage::StorageWriteProvider, utils::math_util};
+use diskann_providers::utils::math_util;
+use diskann_storage::StorageWriteProvider;
 use diskann_utils::io::Metadata;
 use diskann_vector::Half;
 
@@ -197,7 +198,7 @@ fn write_random_vector_block<
 
 #[cfg(test)]
 mod tests {
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use rstest::rstest;
 
     use super::*;

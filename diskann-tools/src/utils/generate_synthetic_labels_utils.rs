@@ -6,7 +6,7 @@
 use std::{collections::HashMap, io::Write};
 
 use diskann::ANNResult;
-use diskann_providers::storage::DynWriteProvider;
+use diskann_storage::DynWriteProvider;
 use rand::{
     distr::{Bernoulli, Distribution},
     Rng,
@@ -132,9 +132,7 @@ pub fn generate_labels(
 mod test {
     use std::io::BufRead;
 
-    use diskann_providers::storage::{
-        StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
-    };
+    use diskann_storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
 
     use super::generate_labels;
 

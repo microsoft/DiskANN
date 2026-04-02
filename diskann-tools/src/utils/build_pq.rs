@@ -4,17 +4,17 @@
  */
 
 use diskann::ANNResult;
-use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
         graph::traits::GraphDataType, GeneratePivotArguments, MAX_PQ_TRAINING_SET_SIZE,
         NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
-    storage::{
-        get_disk_index_compressed_pq_file, get_disk_index_pq_pivot_file, FileStorageProvider,
-        PQStorage,
-    },
+    storage::PQStorage,
     utils::{load_metadata_from_file, Timer},
+};
+use diskann_storage::{
+    get_disk_index_compressed_pq_file, get_disk_index_pq_pivot_file, FileStorageProvider,
+    StorageReadProvider,
 };
 use diskann_vector::distance::Metric;
 use tracing::info;

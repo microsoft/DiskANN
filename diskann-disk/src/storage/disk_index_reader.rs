@@ -5,8 +5,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use diskann::ANNResult;
-use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{model::pq::PQData, storage::PQStorage, utils::load_metadata_from_file};
+use diskann_storage::StorageReadProvider;
 use tracing::info;
 
 /// This struct is used by the DiskIndexSearcher to read the index data from storage. Noted that the index data here is different from index graph,
@@ -69,7 +69,7 @@ impl<VectorType> DiskIndexReader<VectorType> {
 #[cfg(test)]
 mod disk_index_storage_test {
     use diskann::ANNErrorKind;
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 

@@ -12,6 +12,8 @@ members = [
     "diskann-platform",
     # Algorithm
     "diskann",
+    # Storage
+    "diskann-storage",
     # Providers
     "diskann-providers",
     "diskann-disk",
@@ -56,6 +58,8 @@ diskann-quantization = { path = "diskann-quantization", default-features = false
 diskann-platform = { path = "diskann-platform", version = "0.50.0" }
 # Algorithm
 diskann = { path = "diskann", version = "0.50.0" }
+# Storage
+diskann-storage = { path = "diskann-storage", default-features = false, version = "0.50.0" }
 # Providers
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.50.0" }
 diskann-disk = { path = "diskann-disk", version = "0.50.0" }

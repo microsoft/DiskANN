@@ -9,7 +9,7 @@ use anyhow::Context;
 use bit_set::BitSet;
 use diskann::utils::IntoUsize;
 use diskann_benchmark_runner::utils::datatype::DataType;
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 use diskann_utils::views::Matrix;
 use serde::{Deserialize, Serialize};
 
@@ -23,8 +23,7 @@ where
     T: Copy + bytemuck::Pod,
 {
     let data = diskann_utils::io::read_bin::<T>(
-        &mut diskann_providers::storage::FileStorageProvider
-            .open_reader(&path.0.to_string_lossy())?,
+        &mut diskann_storage::FileStorageProvider.open_reader(&path.0.to_string_lossy())?,
     )?;
     Ok(data)
 }

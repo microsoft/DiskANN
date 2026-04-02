@@ -15,7 +15,6 @@ use diskann::{
     utils::{async_tools, vecid_from_usize, TryIntoVectorId, VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
         graph::{
@@ -30,6 +29,7 @@ use diskann_providers::{
         MAX_MEDOID_SAMPLE_SIZE,
     },
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::io::{read_bin, write_bin};
 use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
@@ -913,7 +913,7 @@ impl StartPoint {
 mod start_point_tests {
     use std::io::Write;
 
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use diskann_utils::io::Metadata;
 
     use super::*;

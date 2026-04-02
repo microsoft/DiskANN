@@ -4,7 +4,7 @@
  */
 use std::io::{Seek, SeekFrom, Write};
 
-use diskann_providers::storage::StorageWriteProvider;
+use diskann_storage::StorageWriteProvider;
 use tracing::info;
 
 /// Sequential cached writes with a generic storage provider with write access.
@@ -114,7 +114,7 @@ where
 
 #[cfg(test)]
 mod cached_writer_test {
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use vfs::OverlayFS;
 
     use super::*;

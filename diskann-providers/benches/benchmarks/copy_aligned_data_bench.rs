@@ -21,10 +21,6 @@ pub const BENCHMARK_ID: &str = "copy_aligned_data";
 
 pub fn benchmark_copy_aligned_data(c: &mut Criterion) {
     let tmp_dir = TempDir::with_prefix(BENCHMARK_ID).expect("Failed to create temporary directory");
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "Use physical file system rather than memory for testing the actual disk read/write"
-    )]
     let storage_provider = VirtualStorageProvider::new_physical(tmp_dir.path());
 
     let num_points = 1_000_000;

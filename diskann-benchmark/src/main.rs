@@ -131,7 +131,7 @@ mod tests {
     use super::*;
 
     use diskann_benchmark_runner::{app::Commands, output::Memory};
-    use diskann_providers::storage::FileStorageProvider;
+    use diskann_storage::FileStorageProvider;
     use diskann_tools::utils::{compute_ground_truth_from_datafiles, GraphDataF32Vector};
     use diskann_vector::distance::Metric;
 

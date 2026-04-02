@@ -13,6 +13,7 @@ license.workspace = true
 byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
 diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
+diskann-storage = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-disk = { workspace = true }
 diskann-utils = { workspace = true }
@@ -41,6 +42,7 @@ vfs = { workspace = true }
 diskann-providers = { workspace = true, default-features = false, features = [
     "virtual_storage",
 ] }
+diskann-storage = { workspace = true, features = ["virtual_storage"] }
 diskann-utils = { workspace = true, features = ["testing"] }
 
 [features]

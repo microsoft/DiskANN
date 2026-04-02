@@ -1,0 +1,32 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+[package]
+name = "diskann-storage"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+prost = "0.14.1"
+thiserror.workspace = true
+vfs = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+vfs.workspace = true
+
+[features]
+default = []
+virtual_storage = ["dep:vfs"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+]

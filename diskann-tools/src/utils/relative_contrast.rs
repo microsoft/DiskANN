@@ -5,7 +5,7 @@
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::model::graph::traits::GraphDataType;
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 use diskann_utils::io::read_bin;
 use rand::Rng;
 
@@ -116,8 +116,8 @@ pub fn compute_relative_contrast<
 
 #[cfg(test)]
 mod relative_contrast_tests {
-    use diskann_providers::storage::{StorageWriteProvider, VirtualStorageProvider};
     use diskann_providers::utils::random;
+    use diskann_storage::{StorageWriteProvider, VirtualStorageProvider};
     use diskann_utils::io::Metadata;
     use diskann_vector::distance::Metric;
     use half::f16;

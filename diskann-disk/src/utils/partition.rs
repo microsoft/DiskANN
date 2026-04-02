@@ -3,7 +3,6 @@
  * Licensed under the MIT license.
  */
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
     utils::{
@@ -11,6 +10,7 @@ use diskann_providers::{
         AsThreadPool, RayonThreadPool, READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use rand::Rng;
 use tracing::info;
 
@@ -425,8 +425,8 @@ fn estimate_cluster_sizes(
 mod partition_test {
     use std::io::Read;
 
-    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
+    use diskann_storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::{MemoryFS, OverlayFS};
 

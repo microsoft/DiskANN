@@ -11,7 +11,7 @@ use diskann_benchmark_runner::{
 };
 #[cfg(feature = "disk-index")]
 use diskann_disk::QuantizationType;
-use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
+use diskann_storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use serde::{Deserialize, Serialize};
 
 use crate::{

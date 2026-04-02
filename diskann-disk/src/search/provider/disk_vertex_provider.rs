@@ -264,14 +264,13 @@ mod disk_vertex_provider_tests {
     use std::sync::Arc;
 
     use diskann::{graph::config, utils::ONE};
-    use diskann_providers::storage::{
-        StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
-    };
     use diskann_providers::{
         model::{graph::traits::GraphDataType, IndexConfiguration},
-        storage::get_disk_index_file,
         test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
         utils::load_metadata_from_file,
+    };
+    use diskann_storage::{
+        get_disk_index_file, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;

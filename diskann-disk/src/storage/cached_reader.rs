@@ -5,7 +5,7 @@
 use std::io::{Read, Seek};
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 use tracing::info;
 
 /// Sequential cached reads with a generic storage provider with read access.
@@ -114,7 +114,7 @@ where
 #[cfg(test)]
 mod cached_reader_test {
 
-    use diskann_providers::storage::{StorageWriteProvider, VirtualStorageProvider};
+    use diskann_storage::{StorageWriteProvider, VirtualStorageProvider};
     use vfs::MemoryFS;
 
     use super::*;

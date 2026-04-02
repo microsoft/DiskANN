@@ -13,7 +13,7 @@ use diskann_benchmark_runner::{
     utils::datatype::{DataType, Type},
     Benchmark, Checkpoint,
 };
-use diskann_providers::storage::FileStorageProvider;
+use diskann_storage::FileStorageProvider;
 use half::f16;
 
 use crate::{

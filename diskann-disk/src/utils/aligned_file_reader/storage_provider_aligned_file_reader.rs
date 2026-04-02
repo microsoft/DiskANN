@@ -6,7 +6,7 @@
 use std::io::Read;
 
 use diskann::ANNResult;
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 use tracing::info;
 
 use super::traits::AlignedFileReader;
@@ -50,7 +50,7 @@ impl AlignedFileReader for StorageProviderAlignedFileReader {
 mod tests {
     use std::io::{Seek, SeekFrom};
 
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
 
     use super::*;

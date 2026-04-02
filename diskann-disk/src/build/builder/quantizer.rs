@@ -4,7 +4,6 @@
  */
 //! Disk index quantizer implementation.
 use diskann::{ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
@@ -18,6 +17,7 @@ use diskann_providers::{
     utils::{BridgeErr, PQPathNames},
 };
 use diskann_quantization::scalar::train::ScalarQuantizationParameters;
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::views::MatrixView;
 use tracing::info;
 

@@ -5,7 +5,6 @@
 use std::mem::{self, size_of};
 
 use diskann::ANNResult;
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
         graph::traits::GraphDataType, IndexConfiguration, GRAPH_SLACK_FACTOR,
@@ -17,6 +16,7 @@ use diskann_providers::{
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::io::read_bin;
 use rand::{seq::SliceRandom, Rng};
 use tracing::info;
@@ -633,14 +633,15 @@ pub(crate) mod disk_index_builder_tests {
         utils::{IntoUsize, VectorRepr, ONE},
         ANNResult,
     };
-    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
         common::AlignedBoxWithSlice,
-        storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
         utils::Timer,
+    };
+    use diskann_storage::{
+        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, VirtualStorageProvider,
     };
     use diskann_utils::test_data_root;
     use diskann_vector::{

@@ -21,6 +21,7 @@ targets = [
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-providers = { workspace = true }
+diskann-storage = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-linalg = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
@@ -58,6 +59,7 @@ diskann-providers = { workspace = true, default-features = false, features = [
     "testing",
     "virtual_storage",
 ] }
+diskann-storage = { workspace = true, features = ["virtual_storage"] }
 diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
 iai-callgrind.workspace = true

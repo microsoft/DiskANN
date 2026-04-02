@@ -2227,7 +2227,7 @@ where
 mod tests {
     use super::*;
     use crate::model::graph::provider::async_::common::TableBasedDeletes;
-    use crate::storage::file_storage_provider::FileStorageProvider;
+    use crate::storage::FileStorageProvider;
 
     #[tokio::test]
     async fn test_data_provider_and_delete_interface() {

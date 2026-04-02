@@ -13,12 +13,12 @@ use diskann::{
     neighbor::{Neighbor, NeighborPriorityQueue},
     utils::VectorRepr,
 };
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::AlignedBoxWithSlice,
     model::graph::traits::GraphDataType,
     utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::{
     io::{read_bin, Metadata},
     views::Matrix,

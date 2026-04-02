@@ -4,8 +4,8 @@
  */
 
 use clap::Parser;
-use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::utils::random;
+use diskann_storage::FileStorageProvider;
 use diskann_tools::utils::{
     init_subscriber, relative_contrast::compute_relative_contrast, CMDResult, DataType,
     GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,

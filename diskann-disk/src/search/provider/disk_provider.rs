@@ -36,14 +36,15 @@ use diskann::{
     },
     ANNError, ANNResult,
 };
-use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
         compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
         pq::quantizer_preprocess, PQData, PQScratch,
     },
-    storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
+    storage::LoadWith,
 };
+use diskann_storage::StorageReadProvider;
+use diskann_storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;
 use tokio::runtime::Runtime;
@@ -1060,9 +1061,6 @@ mod disk_provider_tests {
         utils::IntoUsize,
         ANNErrorKind,
     };
-    use diskann_providers::storage::{
-        DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
-    };
     use diskann_providers::{
         common::AlignedBoxWithSlice,
         test_utils::graph_data_type_utils::{
@@ -1070,6 +1068,7 @@ mod disk_provider_tests {
         },
         utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
     };
+    use diskann_storage::{DynWriteProvider, StorageReadProvider, VirtualStorageProvider};
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};

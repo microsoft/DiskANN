@@ -18,8 +18,8 @@ use diskann_disk::{
     },
     storage::DiskIndexWriter,
 };
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{model::IndexConfiguration, utils::load_metadata_from_file};
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_vector::distance::Metric;
 use opentelemetry::global;
 use opentelemetry::trace::Tracer;

@@ -11,7 +11,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use diskann_providers::storage::StorageReadProvider;
 use diskann_quantization::{
     algorithms::transforms::{DoubleHadamard, TargetDim},
     alloc::GlobalAllocator,
@@ -19,6 +18,7 @@ use diskann_quantization::{
     num::Positive,
     CompressInto,
 };
+use diskann_storage::StorageReadProvider;
 use diskann_utils::io::Metadata;
 use half::f16;
 use rand::{rngs::StdRng, SeedableRng};
@@ -103,7 +103,7 @@ where
 {
     // Load input data
     let input_data = diskann_utils::io::read_bin::<T>(
-        &mut diskann_providers::storage::FileStorageProvider
+        &mut diskann_storage::FileStorageProvider
             .open_reader(input_path)
             .with_context(|| format!("Failed to open {}", input_path))?,
     )

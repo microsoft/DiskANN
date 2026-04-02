@@ -19,12 +19,10 @@ use diskann_disk::{
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
-use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{
-    storage::{
-        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
-    },
-    utils::{create_thread_pool, ParallelIteratorInPool},
+use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool};
+use diskann_storage::{
+    get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
+    StorageReadProvider,
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;

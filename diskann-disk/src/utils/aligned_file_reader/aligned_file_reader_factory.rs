@@ -14,7 +14,7 @@ use super::WindowsAlignedFileReader;
 use crate::utils::aligned_file_reader::traits::AlignedReaderFactory;
 
 #[cfg(any(miri, target_os = "macos"))]
-use diskann_providers::storage::FileStorageProvider;
+use diskann_storage::FileStorageProvider;
 
 pub struct AlignedFileReaderFactory {
     pub file_path: String,

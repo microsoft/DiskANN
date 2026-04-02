@@ -9,7 +9,8 @@ use std::{
 };
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::{storage::FileStorageProvider, utils::file_exists};
+use diskann_providers::utils::file_exists;
+use diskann_storage::FileStorageProvider;
 
 use super::{CheckpointManager, CheckpointRecord, Progress, WorkStage};
 

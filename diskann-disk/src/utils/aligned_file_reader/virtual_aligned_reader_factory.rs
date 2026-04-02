@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use diskann::ANNResult;
-use diskann_providers::storage::VirtualStorageProvider;
+use diskann_storage::VirtualStorageProvider;
 use vfs::{FileSystem, MemoryFS};
 
 use super::{traits::AlignedReaderFactory, StorageProviderAlignedFileReader};

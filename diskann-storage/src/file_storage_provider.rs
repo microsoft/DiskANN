@@ -2,14 +2,23 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
+//! Filesystem-backed storage provider.
+//!
+//! [`FileStorageProvider`] implements both [`StorageReadProvider`] and
+//! [`StorageWriteProvider`] using the local filesystem via [`std::fs`].
+
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Result},
 };
 
-use super::{StorageReadProvider, StorageWriteProvider};
+use crate::{StorageReadProvider, StorageWriteProvider};
 
-/// FileStorage implements both StorageReadProvider and StorageWriteProvider.
+/// Storage provider backed by the local filesystem.
+///
+/// Each `item_identifier` is interpreted as a filesystem path. Readers are
+/// buffered via [`BufReader`] and writers via [`BufWriter`].
 #[derive(Default)]
 pub struct FileStorageProvider;
 
@@ -62,8 +71,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_file_reader() {
-        // Use TempDir for automatic deleting when going out of scope
+    fn read_after_write() {
         let tmp_dir =
             TempDir::with_prefix("test_file_reader").expect("Failed to create temporary directory");
         let file_path = tmp_dir.path().join("test_file_reader.txt");
@@ -76,19 +84,18 @@ mod tests {
         let mut buffer = [0; 5];
 
         reader.seek(SeekFrom::Start(0)).unwrap();
-        reader.read(&mut buffer).unwrap();
+        reader.read_exact(&mut buffer).unwrap();
         assert_eq!(&buffer, b"Hello");
 
         reader.seek(SeekFrom::Start(5)).unwrap();
-        reader.read(&mut buffer).unwrap();
+        reader.read_exact(&mut buffer).unwrap();
         assert_eq!(&buffer, b", wor");
     }
 
     #[test]
-    fn test_file_create_write() {
+    fn create_write_and_append() {
         let storage_provider = FileStorageProvider;
 
-        // Use TempDir for automatic deleting when going out of scope
         let tmp_dir = TempDir::with_prefix("test_file_create_write")
             .expect("Failed to create temporary directory");
         let file_path = tmp_dir.path().join("test_file_create_write.txt");
@@ -126,8 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_storage_exists() {
-        // Use TempDir for automatic deleting when going out of scope
+    fn exists_check() {
         let tmp_dir = TempDir::with_prefix("test_file_storage_exists")
             .expect("Failed to create temporary directory");
         let file_path = tmp_dir.path().join("test_file_storage_exists.txt");
@@ -139,8 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_storage_get_length() {
-        // Use TempDir for automatic deleting when going out of scope
+    fn get_length() {
         let tmp_dir = TempDir::with_prefix("test_file_storage_get_length")
             .expect("Failed to create temporary directory");
         let file_path = tmp_dir.path().join("test_file_storage_get_length.txt");
@@ -150,6 +155,63 @@ mod tests {
         file.write_all(b"Hello, world!").unwrap();
 
         assert_eq!(FileStorageProvider.get_length(file_name).unwrap(), 13);
-        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn delete_removes_file() {
+        let tmp_dir = TempDir::with_prefix("test_file_storage_delete")
+            .expect("Failed to create temporary directory");
+        let file_path = tmp_dir.path().join("to_delete.txt");
+        let file_name = file_path.to_str().unwrap();
+
+        File::create(file_name).unwrap();
+        assert!(FileStorageProvider.exists(file_name));
+
+        FileStorageProvider.delete(file_name).unwrap();
+        assert!(!FileStorageProvider.exists(file_name));
+    }
+
+    #[test]
+    fn create_for_write_truncates_existing() {
+        let tmp_dir =
+            TempDir::with_prefix("test_truncate").expect("Failed to create temporary directory");
+        let file_path = tmp_dir.path().join("truncate.txt");
+        let file_name = file_path.to_str().unwrap();
+
+        // Write long content.
+        {
+            let mut w = FileStorageProvider.create_for_write(file_name).unwrap();
+            w.write_all(b"long initial content that should be truncated")
+                .unwrap();
+            w.flush().unwrap();
+        }
+
+        // Overwrite with short content — must truncate.
+        {
+            let mut w = FileStorageProvider.create_for_write(file_name).unwrap();
+            w.write_all(b"short").unwrap();
+            w.flush().unwrap();
+        }
+
+        let len = FileStorageProvider.get_length(file_name).unwrap();
+        assert_eq!(len, 5, "create_for_write should truncate the file");
+    }
+
+    #[test]
+    fn open_reader_nonexistent_returns_error() {
+        let err = FileStorageProvider.open_reader("/nonexistent/path/file.bin");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn open_writer_nonexistent_returns_error() {
+        let err = FileStorageProvider.open_writer("/nonexistent/path/file.bin");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn delete_nonexistent_returns_error() {
+        let err = FileStorageProvider.delete("/nonexistent/path/file.bin");
+        assert!(err.is_err());
     }
 }

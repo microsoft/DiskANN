@@ -19,11 +19,11 @@ use diskann_disk::{
     storage::DiskIndexWriter,
     QuantizationType,
 };
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{graph::traits::GraphDataType, IndexConfiguration},
     utils::{load_metadata_from_file, Timer},
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_vector::distance::Metric;
 use opentelemetry::global::BoxedSpan;
 #[cfg(feature = "perf_test")]
@@ -187,7 +187,7 @@ where
 #[cfg(test)]
 mod tests {
     use diskann::ANNErrorKind;
-    use diskann_providers::storage::VirtualStorageProvider;
+    use diskann_storage::VirtualStorageProvider;
     use vfs::MemoryFS;
 
     use super::*;

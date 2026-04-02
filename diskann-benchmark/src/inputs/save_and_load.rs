@@ -5,7 +5,7 @@
 use std::{io::Read, mem::size_of, num::NonZeroUsize};
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 
 pub fn get_graph_num_frozen_points(
     storage_provider: &impl StorageReadProvider,

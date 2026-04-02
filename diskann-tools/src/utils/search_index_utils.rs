@@ -6,7 +6,7 @@ use std::{collections::HashSet, fmt, hash::Hash, io::Read, mem::size_of};
 
 use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
-use diskann_providers::storage::StorageReadProvider;
+use diskann_storage::StorageReadProvider;
 use diskann_utils::io::Metadata;
 use tracing::info;
 

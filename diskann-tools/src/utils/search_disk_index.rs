@@ -17,11 +17,12 @@ use diskann_disk::{
         QueryStatistics,
     },
 };
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::graph::traits::GraphDataType,
-    storage::{get_compressed_pq_file, get_pq_pivot_file},
     utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
+};
+use diskann_storage::{
+    get_compressed_pq_file, get_pq_pivot_file, StorageReadProvider, StorageWriteProvider,
 };
 use diskann_utils::{io::write_bin, views::MatrixView};
 use diskann_vector::distance::Metric;

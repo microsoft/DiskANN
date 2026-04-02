@@ -4,7 +4,7 @@
  */
 
 use clap::Parser;
-use diskann_providers::storage::FileStorageProvider;
+use diskann_storage::FileStorageProvider;
 use diskann_tools::utils::{write_random_data, CMDResult, CMDToolError, DataType};
 
 #[derive(Debug, Parser)]

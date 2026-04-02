@@ -13,9 +13,8 @@ use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardUniform};
 
 use diskann::utils::VectorRepr;
-use diskann_providers::storage::FileStorageProvider;
-use diskann_providers::storage::StorageWriteProvider;
 use diskann_providers::utils::{random, SampleVectorReader, SamplingDensity};
+use diskann_storage::{FileStorageProvider, StorageWriteProvider};
 use diskann_tools::utils::DataType;
 use diskann_utils::io::Metadata;
 

@@ -6,7 +6,6 @@
 use std::marker::PhantomData;
 
 use diskann::{utils::VectorRepr, ANNError};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
     model::{
@@ -17,6 +16,7 @@ use diskann_providers::{
     utils::{AsThreadPool, BridgeErr, Timer},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
@@ -186,10 +186,9 @@ mod pq_generation_tests {
     use diskann::ANNError;
     use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::model::GeneratePivotArguments;
-    use diskann_providers::storage::{
-        PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
-    };
+    use diskann_providers::storage::PQStorage;
     use diskann_providers::utils::{create_thread_pool_for_test, AsThreadPool};
+    use diskann_storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,

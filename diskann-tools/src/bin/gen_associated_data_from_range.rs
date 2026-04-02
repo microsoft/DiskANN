@@ -4,7 +4,7 @@
  */
 
 use clap::Parser;
-use diskann_providers::storage::FileStorageProvider;
+use diskann_storage::FileStorageProvider;
 use diskann_tools::utils::{gen_associated_data_from_range, CMDResult};
 
 fn main() -> CMDResult<()> {

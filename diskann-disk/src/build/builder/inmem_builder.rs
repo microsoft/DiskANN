@@ -14,7 +14,6 @@ use diskann::{
     utils::VectorRepr,
     ANNError, ANNResult,
 };
-use diskann_providers::storage::{DynWriteProvider, StorageReadProvider, WriteProviderWrapper};
 use diskann_providers::{
     index::diskann_async,
     model::{
@@ -31,6 +30,7 @@ use diskann_providers::{
         index_storage::load_index, load_fp_index, AsyncIndexMetadata, DiskGraphOnly, SaveWith,
     },
 };
+use diskann_storage::{DynWriteProvider, StorageReadProvider, WriteProviderWrapper};
 use diskann_utils::future::{AsyncFriendly, SendFuture};
 
 use super::quantizer::BuildQuantizer;

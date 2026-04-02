@@ -5,37 +5,40 @@
 
 //! Virtual storage providers for testing.
 //!
-//! This module provides test utilities that allow using in-memory or overlay filesystems
-//! instead of the real filesystem. This is useful for keeping test data in-memory and
-//! avoiding filesystem side-effects during testing.
+//! [`VirtualStorageProvider`] wraps a [`vfs::FileSystem`] implementation so
+//! that tests can run entirely in memory or against an overlay filesystem
+//! without touching the real disk.
 
 use std::{io, io::Result};
 
 use vfs::{MemoryFS, OverlayFS, PhysicalFS, SeekAndRead, SeekAndWrite, filesystem::FileSystem};
 
-use super::{StorageReadProvider, StorageWriteProvider};
+use crate::{StorageReadProvider, StorageWriteProvider};
 
-/// VirtualStorageProvider implements both StorageReadProvider and StorageWriteProvider.
-/// This is a test utility and is not intended for use in production code.  This allows us to
-/// specify alternate filesystems to make testing easier.
+/// Storage provider backed by an arbitrary [`vfs::FileSystem`].
 ///
-/// # Examples:
+/// Use the factory methods [`new_memory`](VirtualStorageProvider::new_memory),
+/// [`new_overlay`](VirtualStorageProvider::new_overlay), or
+/// [`new_physical`](VirtualStorageProvider::new_physical) to construct
+/// instances for different backends.
 ///
-/// Use an in-memory filesystem instead of the normal filesystem to keep all test data in-memory
+/// # Examples
+///
 /// ```
 /// use std::io::Write;
 /// use vfs::FileSystem;
-/// use diskann_providers::storage::VirtualStorageProvider;
+/// use diskann_storage::VirtualStorageProvider;
 ///
 /// let storage_provider = VirtualStorageProvider::new_memory();
 ///
-/// // Create the root directory
+/// // Create the root directory.
 /// storage_provider.filesystem().create_dir("/test_root").expect("Could not create test directory");
 ///
 /// {
-///     // Write test data to the in-memory filesystem inside a scope block so that the writer
-///     // is flushed and disposed before using the storage_provider.
-///     let mut file = storage_provider.filesystem().create_file("/test_root/input_data.bin").expect("Could not create test file");
+///     let mut file = storage_provider
+///         .filesystem()
+///         .create_file("/test_root/input_data.bin")
+///         .expect("Could not create test file");
 ///     file.write_all(b"This is test data").expect("Unable to write test data");
 /// }
 /// ```
@@ -48,6 +51,7 @@ impl<FileSystemType: FileSystem> VirtualStorageProvider<FileSystemType> {
         VirtualStorageProvider { filesystem }
     }
 
+    /// Return `true` if the item identified by `item_identifier` exists.
     pub fn exists(&self, item_identifier: &str) -> bool {
         self.filesystem.metadata(item_identifier).is_ok()
     }
@@ -57,7 +61,7 @@ impl<FileSystemType: FileSystem> VirtualStorageProvider<FileSystemType> {
         &self.filesystem
     }
 
-    /// Consume the storage provider, returning the underlying filesystem.
+    /// Consume the provider, returning the underlying filesystem.
     pub fn take(self) -> FileSystemType {
         self.filesystem
     }
@@ -117,8 +121,8 @@ impl<FileSystemType: FileSystem> StorageWriteProvider for VirtualStorageProvider
 }
 
 impl VirtualStorageProvider<OverlayFS> {
-    /// Create a two-layer overlay filesystem with an in-memory filesystem for writes
-    /// on top of the physical filesystem for reads.
+    /// Create a two-layer overlay filesystem with an in-memory layer for writes
+    /// on top of a physical filesystem for reads.
     pub fn new_overlay<P: AsRef<std::path::Path>>(path: P) -> Self {
         #[allow(clippy::disallowed_methods)]
         let base_filesystem = PhysicalFS::new(path);
@@ -131,21 +135,19 @@ impl VirtualStorageProvider<OverlayFS> {
 }
 
 impl VirtualStorageProvider<MemoryFS> {
-    /// Create a storage provider that uses an in-memory filesystem.
+    /// Create a storage provider backed by a pure in-memory filesystem.
     pub fn new_memory() -> Self {
         let memory_filesystem = MemoryFS::new();
-
         VirtualStorageProvider::new(memory_filesystem)
     }
 }
 
 impl VirtualStorageProvider<PhysicalFS> {
-    /// Create a storage provider that uses the physical filesystem with a custom root path.
-    /// This prevents operations from writing outside of the specified sandbox.
+    /// Create a storage provider that sandboxes physical filesystem access
+    /// to the given root path.
     pub fn new_physical<P: AsRef<std::path::Path>>(path: P) -> Self {
         #[allow(clippy::disallowed_methods)]
         let physical_filesystem = PhysicalFS::new(path);
-
         VirtualStorageProvider::new(physical_filesystem)
     }
 }
@@ -157,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_file_reader() {
+    fn read_after_write_in_memory() {
         let file_name = "/test_file_reader.txt";
         let storage_provider = VirtualStorageProvider::new_memory();
 
@@ -173,17 +175,16 @@ mod tests {
         let mut buffer = [0; 5];
 
         reader.seek(SeekFrom::Start(0)).unwrap();
-        reader.read(&mut buffer).unwrap();
+        reader.read_exact(&mut buffer).unwrap();
         assert_eq!(&buffer, b"Hello");
 
         reader.seek(SeekFrom::Start(5)).unwrap();
-        reader.read(&mut buffer).unwrap();
+        reader.read_exact(&mut buffer).unwrap();
         assert_eq!(&buffer, b", wor");
-        storage_provider.take().remove_file(file_name).unwrap();
     }
 
     #[test]
-    fn test_file_storage_exists() {
+    fn exists_reports_correctly() {
         let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/test_file_storage_exists.txt";
@@ -199,7 +200,6 @@ mod tests {
             .write_all(b"This is the text")
             .expect("Write did not succeed");
 
-        // Make sure the file exists
         assert!(
             storage_provider.exists(file_name),
             "New file does not exist"
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_storage_get_length() {
+    fn get_length_returns_byte_count() {
         let file_name = "/test_file_storage_get_length.txt";
 
         let storage_provider = VirtualStorageProvider::new_memory();
@@ -228,6 +228,67 @@ mod tests {
             .expect("Write did not succeed");
 
         assert_eq!(storage_provider.get_length(file_name).unwrap(), 13);
-        storage_provider.take().remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn create_for_write_replaces_existing() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let path = "/replace_me.bin";
+
+        {
+            let mut w = storage_provider.create_for_write(path).unwrap();
+            w.write_all(b"original content").unwrap();
+            w.flush().unwrap();
+        }
+
+        {
+            let mut w = storage_provider.create_for_write(path).unwrap();
+            w.write_all(b"new").unwrap();
+            w.flush().unwrap();
+        }
+
+        assert_eq!(storage_provider.get_length(path).unwrap(), 3);
+    }
+
+    #[test]
+    fn delete_removes_item() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let path = "/to_delete.bin";
+
+        {
+            let mut w = storage_provider.create_for_write(path).unwrap();
+            w.write_all(b"data").unwrap();
+            w.flush().unwrap();
+        }
+        assert!(storage_provider.exists(path));
+
+        storage_provider.delete(path).unwrap();
+        assert!(!storage_provider.exists(path));
+    }
+
+    #[test]
+    fn open_reader_missing_file_returns_error() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let result = storage_provider.open_reader("/does_not_exist.bin");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn trait_based_read_provider() {
+        let vsp = VirtualStorageProvider::new_memory();
+        {
+            let mut w = vsp.create_for_write("/trait_test.bin").unwrap();
+            w.write_all(b"via trait").unwrap();
+            w.flush().unwrap();
+        }
+
+        fn read_via_trait(provider: &dyn StorageReadProvider<Reader = impl Read + Seek>) {
+            assert!(provider.exists("/trait_test.bin"));
+            assert_eq!(provider.get_length("/trait_test.bin").unwrap(), 9);
+        }
+
+        // We can't use the dyn version with associated types directly, but we
+        // can verify the impl works through a generic function.
+        read_via_trait(&vsp);
     }
 }

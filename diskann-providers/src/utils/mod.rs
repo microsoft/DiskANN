@@ -14,9 +14,7 @@ pub use normalizing_util::{
     normalize_data_file, normalize_data_internal, normalize_data_internal_no_cblas,
 };
 
-#[allow(clippy::module_inception)]
-mod utils;
-pub use utils::DatasetDto;
+pub use diskann_storage::DatasetDto;
 
 mod bridge_error;
 pub use bridge_error::{Bridge, BridgeErr};

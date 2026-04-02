@@ -660,6 +660,7 @@ dependencies = [
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
+ "diskann-storage",
  "diskann-tools",
  "diskann-utils",
  "diskann-vector",
@@ -743,6 +744,7 @@ dependencies = [
  "diskann-platform",
  "diskann-providers",
  "diskann-quantization",
+ "diskann-storage",
  "diskann-utils",
  "diskann-vector",
  "futures-util",
@@ -844,6 +846,7 @@ dependencies = [
  "diskann-linalg",
  "diskann-platform",
  "diskann-quantization",
+ "diskann-storage",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
@@ -893,6 +896,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-storage"
+version = "0.50.0"
+dependencies = [
+ "prost",
+ "tempfile",
+ "thiserror 2.0.17",
+ "vfs",
+]
+
+[[package]]
 name = "diskann-tools"
 version = "0.50.0"
 dependencies = [
@@ -907,6 +920,7 @@ dependencies = [
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
+ "diskann-storage",
  "diskann-utils",
  "diskann-vector",
  "half",

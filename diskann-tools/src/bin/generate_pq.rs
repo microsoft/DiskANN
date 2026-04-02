@@ -4,7 +4,7 @@
  */
 
 use clap::Parser;
-use diskann_providers::storage::FileStorageProvider;
+use diskann_storage::FileStorageProvider;
 use diskann_tools::utils::{
     build_pq, get_num_threads, init_subscriber, BuildPQParameters, CMDToolError, DataType,
     GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,

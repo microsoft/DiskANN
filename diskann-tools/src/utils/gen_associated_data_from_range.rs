@@ -5,7 +5,7 @@
 
 use std::io::Write;
 
-use diskann_providers::storage::StorageWriteProvider;
+use diskann_storage::StorageWriteProvider;
 use diskann_utils::io::Metadata;
 
 use super::CMDResult;
@@ -37,7 +37,7 @@ pub fn gen_associated_data_from_range<S: StorageWriteProvider>(
 mod tests {
     use super::*;
     use byteorder::{LittleEndian, ReadBytesExt};
-    use diskann_providers::storage::{StorageReadProvider, VirtualStorageProvider};
+    use diskann_storage::{StorageReadProvider, VirtualStorageProvider};
 
     #[test]
     fn test_gen_associated_data_from_range() {

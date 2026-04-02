@@ -9,11 +9,11 @@ use std::{
 };
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
     utils::{load_metadata_from_file, AsThreadPool, BridgeErr, ParallelIteratorInPool, Timer},
 };
+use diskann_storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
 use tracing::info;
@@ -275,8 +275,8 @@ mod generator_tests {
     };
 
     use diskann::utils::read_exact_into;
-    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::{create_thread_pool_for_test, save_bytes};
+    use diskann_storage::VirtualStorageProvider;
     use diskann_utils::{
         io::{write_bin, Metadata},
         views::MatrixView,
