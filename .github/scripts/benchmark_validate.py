@@ -192,7 +192,7 @@ THRESHOLDS: dict[str, dict[str, list]] = {
         "search_hops": [1, "LT", ""],
     },
     "search-with-L=200-bw=4": {
-        "latency_95": [10, "LT", ""],
+        "latency_95": [15, "LT", ""],   # wider — p95 latency is noisy on shared runners
         "mean_latency": [10, "LT", ""],
         "mean_io_time": [10, "LT", ""],
         "mean_cpus": [15, "LT", ""],
