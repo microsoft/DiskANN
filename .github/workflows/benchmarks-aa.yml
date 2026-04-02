@@ -21,7 +21,6 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
-  rust_stable: "1.92"
 
 defaults:
   run:
@@ -53,10 +52,10 @@ jobs:
           path: baseline
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
+          toolchain: stable
 
       - name: Cache Rust dependencies (target)
         uses: Swatinem/rust-cache@v2
@@ -141,10 +140,10 @@ jobs:
           path: baseline
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
+          toolchain: stable
 
       - name: Cache Rust dependencies (target)
         uses: Swatinem/rust-cache@v2

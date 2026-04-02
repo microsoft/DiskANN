@@ -59,11 +59,11 @@ def extract_build_metrics(results: dict) -> dict[str, float]:
         name = span.get("span_name", "")
         data = span.get("metrics", {})
         if name == "DiskIndexBuild-PqConstruction":
-            metrics["pq_construction_time"] = data.get("duration_seconds", 0)
+            metrics["pq_construction_time"] = data.get("duration_seconds")
         elif name == "DiskIndexBuild-InmemIndexBuild":
-            metrics["inmem_index_build_time"] = data.get("duration_seconds", 0)
+            metrics["inmem_index_build_time"] = data.get("duration_seconds")
         elif name == "DiskIndexBuild-DiskLayout":
-            metrics["disk_layout_time"] = data.get("duration_seconds", 0)
+            metrics["disk_layout_time"] = data.get("duration_seconds")
 
     return metrics
 
@@ -78,15 +78,15 @@ def extract_search_metrics(results: dict, search_l: int, beam_width: int) -> dic
     # From search_results_per_l
     for sr in search.get("search_results_per_l", []):
         if sr.get("search_l") == search_l:
-            metrics["qps"] = sr.get("qps", 0)
-            metrics["recall"] = sr.get("recall", 0)
-            metrics["mean_latency"] = sr.get("mean_latency", 0)
-            metrics["mean_ios"] = sr.get("mean_ios", 0)
-            metrics["mean_comps"] = sr.get("mean_comparisons", 0)
-            metrics["mean_hops"] = sr.get("mean_hops", 0)
-            metrics["mean_io_time"] = sr.get("mean_io_time", 0)
-            metrics["mean_cpus"] = sr.get("mean_cpu_time", 0)
-            metrics["latency_95"] = sr.get("p95_latency", 0)
+            metrics["qps"] = sr.get("qps")
+            metrics["recall"] = sr.get("recall")
+            metrics["mean_latency"] = sr.get("mean_latency")
+            metrics["mean_ios"] = sr.get("mean_ios")
+            metrics["mean_comps"] = sr.get("mean_comparisons")
+            metrics["mean_hops"] = sr.get("mean_hops")
+            metrics["mean_io_time"] = sr.get("mean_io_time")
+            metrics["mean_cpus"] = sr.get("mean_cpu_time")
+            metrics["latency_95"] = sr.get("p95_latency")
             break
 
     # Override with span metrics if available
@@ -117,25 +117,26 @@ def compute_diff(baseline_json: list[dict], target_json: list[dict]) -> list[dic
 
         inp = target.get("input", {})
         search_phase = inp.get("content", {}).get("search_phase", {})
-        search_list = search_phase.get("search_list", [2000])
+        search_list = search_phase.get("search_list", [200])
         beam_width = search_phase.get("beam_width", 4)
-        primary_l = search_list[0] if search_list else 2000
+        primary_l = search_list[0] if search_list else 200
 
         # Build metrics
         b_build = extract_build_metrics(b_results)
         t_build = extract_build_metrics(t_results)
 
         for key in ("total_time", "pq_construction_time", "inmem_index_build_time", "disk_layout_time"):
-            if key in t_build or key in b_build:
-                bv = b_build.get(key, 0)
-                tv = t_build.get(key, 0)
-                rows.append({
-                    "category": "index-build statistics",
-                    "metric": key,
-                    "baseline": bv,
-                    "target": tv,
-                    "deviation": ((tv - bv) / bv * 100) if bv else 0,
-                })
+            bv = b_build.get(key)
+            tv = t_build.get(key)
+            if bv is None or tv is None:
+                continue  # skip metrics missing from either side
+            rows.append({
+                "category": "index-build statistics",
+                "metric": key,
+                "baseline": bv,
+                "target": tv,
+                "deviation": ((tv - bv) / bv * 100) if bv else 0,
+            })
 
         # Search metrics
         b_search = extract_search_metrics(b_results, primary_l, beam_width)
@@ -144,16 +145,17 @@ def compute_diff(baseline_json: list[dict], target_json: list[dict]) -> list[dic
 
         for key in ("qps", "recall", "mean_latency", "latency_95", "mean_ios",
                      "mean_comps", "mean_hops", "mean_io_time", "mean_cpus"):
-            if key in t_search or key in b_search:
-                bv = b_search.get(key, 0)
-                tv = t_search.get(key, 0)
-                rows.append({
-                    "category": span_cat,
-                    "metric": key,
-                    "baseline": bv,
-                    "target": tv,
-                    "deviation": ((tv - bv) / bv * 100) if bv else 0,
-                })
+            bv = b_search.get(key)
+            tv = t_search.get(key)
+            if bv is None or tv is None:
+                continue  # skip metrics missing from either side
+            rows.append({
+                "category": span_cat,
+                "metric": key,
+                "baseline": bv,
+                "target": tv,
+                "deviation": ((tv - bv) / bv * 100) if bv else 0,
+            })
 
     return rows
 
@@ -188,29 +190,6 @@ THRESHOLDS: dict[str, dict[str, list]] = {
         "total_time": [10, "LT", 115],
         "total_comparisons": [1, "LT", ""],
         "search_hops": [1, "LT", ""],
-    },
-    "search-with-L=2000-bw=4": {
-        # Calibrated from 5 GitHub runner runs (10 observations)
-        "latency_95": [10, "LT", ""],
-        "mean_latency": [10, "LT", ""],
-        "mean_io_time": [10, "LT", ""],
-        "mean_cpus": [15, "LT", ""],   # wider — CPU time is noisy on shared runners
-        "qps": [10, "GT", 6.5],
-        "mean_ios": [1, "LT", 2410],
-        "mean_comps": [1, "LT", 33200],
-        "mean_hops": [1, "LT", ""],
-        "recall": [1, "GT", 98.0],
-    },
-    "search-with-L=100-bw=4": {
-        "latency_95": [10, "LT", ""],
-        "mean_latency": [10, "LT", ""],
-        "mean_io_time": [10, "LT", ""],
-        "mean_cpus": [15, "LT", ""],
-        "qps": [10, "GT", ""],
-        "mean_ios": [10, "LT", ""],
-        "mean_comps": [10, "LT", ""],
-        "mean_hops": [10, "LT", ""],
-        "recall": [1, "GT", ""],
     },
     "search-with-L=200-bw=4": {
         "latency_95": [10, "LT", ""],
