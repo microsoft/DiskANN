@@ -16,11 +16,21 @@ on:
         required: true
         default: 'main'
         type: string
-  push:
+  pull_request:
     branches:
-      - 'user/tianyuanyuan/add-benchmark-pipeline'
+      - main
     paths:
-      - 'diskann-benchmark/perf_test_inputs/**-disk-index.json'
+      - 'diskann/**'
+      - 'diskann-disk/**'
+      - 'diskann-linalg/**'
+      - 'diskann-providers/**'
+      - 'diskann-quantization/**'
+      - 'diskann-vector/**'
+      - 'diskann-wide/**'
+      - 'diskann-utils/**'
+      - 'diskann-platform/**'
+      - 'diskann-label-filter/**'
+      - 'diskann-benchmark/**'
       - '.github/workflows/benchmarks.yml'
       - '.github/scripts/benchmark_validate.py'
 
