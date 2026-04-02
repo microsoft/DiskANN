@@ -2242,4 +2242,166 @@ mod tests {
         assert_message_contains!(msg, "cannot delete start point");
         assert!(!provider.is_deleted(0).unwrap());
     }
+
+    // =========================================================================
+    // DefaultContextProvider / DefaultContextStrategy tests
+    // =========================================================================
+
+    fn create_default_context_provider() -> DefaultContextProvider {
+        DefaultContextProvider::new(create_test_provider())
+    }
+
+    #[test]
+    fn default_context_provider_deref() {
+        let dcp = create_default_context_provider();
+        // Deref should expose the inner Provider's properties.
+        assert_eq!(dcp.dim(), 2);
+        assert_eq!(dcp.max_degree(), 4);
+        assert_eq!(dcp.distance_metric(), Metric::Cosine);
+        // Explicit accessor method should agree.
+        assert_eq!(dcp.provider().dim(), 2);
+    }
+
+    #[test]
+    fn default_context_provider_id_conversion() {
+        use provider::DataProvider;
+
+        let dcp = create_default_context_provider();
+        let ctx = provider::DefaultContext;
+
+        for id in 0u32..4u32 {
+            let internal = dcp.to_internal_id(&ctx, &id).unwrap();
+            assert_eq!(internal, id);
+            let external = dcp.to_external_id(&ctx, internal).unwrap();
+            assert_eq!(external, id);
+        }
+
+        // Unknown IDs produce the expected error variants.
+        let err = dcp.to_internal_id(&ctx, &99).unwrap_err();
+        assert!(matches!(err, InvalidId::External(99)));
+
+        let err = dcp.to_external_id(&ctx, 99).unwrap_err();
+        assert!(matches!(err, InvalidId::Internal(99)));
+    }
+
+    #[test]
+    fn default_context_provider_delete_and_status() {
+        use provider::{Delete, ElementStatus};
+
+        let dcp = create_default_context_provider();
+        let rt = current_thread_runtime();
+        let ctx = provider::DefaultContext;
+
+        // Node 2 starts as valid.
+        let status = rt.block_on(dcp.status_by_internal_id(&ctx, 2)).unwrap();
+        assert_eq!(status, ElementStatus::Valid);
+
+        // Delete it.
+        rt.block_on(dcp.delete(&ctx, &2)).unwrap();
+        let status = rt.block_on(dcp.status_by_internal_id(&ctx, 2)).unwrap();
+        assert_eq!(status, ElementStatus::Deleted);
+
+        // status_by_external_id agrees.
+        let status = rt.block_on(dcp.status_by_external_id(&ctx, &2)).unwrap();
+        assert_eq!(status, ElementStatus::Deleted);
+
+        // Deleting a start point fails.
+        let err = rt.block_on(dcp.delete(&ctx, &0)).unwrap_err();
+        assert!(matches!(err, InvalidId::IsStartPoint(0)));
+
+        // Releasing a start point fails.
+        let err = rt.block_on(dcp.release(&ctx, 0)).unwrap_err();
+        assert!(matches!(err, InvalidId::IsStartPoint(0)));
+
+        // Release a non-start-point node.
+        rt.block_on(dcp.release(&ctx, 3)).unwrap();
+        let err = rt.block_on(dcp.status_by_internal_id(&ctx, 3)).unwrap_err();
+        assert!(matches!(err, InvalidId::Internal(3)));
+
+        // Releasing an already-released node fails.
+        let err = rt.block_on(dcp.release(&ctx, 3)).unwrap_err();
+        assert!(matches!(err, InvalidId::Internal(3)));
+    }
+
+    #[test]
+    fn default_context_provider_set_element() {
+        use provider::{Accessor as _, Guard, SetElement};
+
+        let dcp = create_default_context_provider();
+        let rt = current_thread_runtime();
+        let ctx = provider::DefaultContext;
+
+        let v = vec![0.42f32, 0.58];
+        rt.block_on(async {
+            let guard = dcp.set_element(&ctx, &10, &v).await.unwrap();
+            guard.complete().await;
+        });
+
+        // Verify via inner provider accessor.
+        let mut accessor = super::Accessor::new(dcp.provider());
+        let element = rt.block_on(accessor.get_element(10)).unwrap();
+        assert_eq!(*element, v[..]);
+    }
+
+    #[test]
+    fn default_context_provider_default_accessor() {
+        use provider::{DefaultAccessor, NeighborAccessor};
+
+        let dcp = create_default_context_provider();
+        let na = dcp.default_accessor();
+        let rt = current_thread_runtime();
+
+        // Node 0 has neighbors [1, 2, 3] per create_test_provider.
+        let mut neighbors = AdjacencyList::new();
+        rt.block_on(na.get_neighbors(0, &mut neighbors)).unwrap();
+        assert_eq!(neighbors.as_ref(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn default_context_strategy_default_impl() {
+        let s = DefaultContextStrategy::default();
+        let s2 = DefaultContextStrategy::new();
+        // Both should be identical (inner Strategy is Default).
+        assert_eq!(
+            std::mem::size_of_val(&s),
+            std::mem::size_of_val(&s2),
+        );
+    }
+
+    #[test]
+    fn default_context_strategy_search_accessor() {
+        use glue::SearchStrategy;
+
+        let dcp = create_default_context_provider();
+        let strategy = DefaultContextStrategy::new();
+        let ctx = provider::DefaultContext;
+
+        let accessor = strategy.search_accessor(&dcp, &ctx).unwrap();
+        // The accessor should reference the inner provider.
+        assert_eq!(accessor.provider().dim(), 2);
+    }
+
+    #[test]
+    fn accessor_provider_method() {
+        let provider = create_test_provider();
+        let accessor = Accessor::new(&provider);
+        assert_eq!(accessor.provider().dim(), provider.dim());
+        assert_eq!(
+            accessor.provider().distance_metric(),
+            provider.distance_metric()
+        );
+    }
+
+    #[test]
+    fn cacheable_accessor_round_trip() {
+        use provider::CacheableAccessor;
+
+        let original: &[f32] = &[1.0, 2.0, 3.0];
+
+        let cached = <Accessor<'_> as CacheableAccessor>::as_cached(&original);
+        assert_eq!(*cached, original);
+
+        let restored = <Accessor<'_> as CacheableAccessor>::from_cached(cached);
+        assert_eq!(restored, original);
+    }
 }
