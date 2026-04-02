@@ -984,6 +984,11 @@ pub struct Accessor<'a> {
 }
 
 impl<'a> Accessor<'a> {
+    /// Return the underlying [`Provider`] reference.
+    pub fn provider(&self) -> &Provider {
+        self.provider
+    }
+
     /// Creates an accessor with no flaky behavior (backward-compatible).
     pub fn new(provider: &'a Provider) -> Self {
         Self::new_inner(provider, None)
@@ -1081,6 +1086,24 @@ impl glue::SearchExt for Accessor<'_> {
 }
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
+
+impl provider::CacheableAccessor for Accessor<'_> {
+    type Map = diskann_utils::lifetime::Slice<f32>;
+
+    fn from_cached<'a>(element: &'a [f32]) -> &'a [f32]
+    where
+        Self: 'a,
+    {
+        element
+    }
+
+    fn as_cached<'a, 'b>(element: &'a &'b [f32]) -> &'a &'b [f32]
+    where
+        Self: 'a + 'b,
+    {
+        element
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy {
@@ -1228,6 +1251,329 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
         id: <Provider as provider::DataProvider>::InternalId,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
         provider
+            .terms
+            .get(&id)
+            .map(|v| (*v.data).into())
+            .ok_or(AccessedInvalidId(id))
+    }
+}
+
+// =============================================================================
+// DefaultContext Wrapper
+// =============================================================================
+
+/// A wrapper around [`Provider`] that implements [`DataProvider`] with
+/// [`DefaultContext`] instead of the test-specific [`Context`].
+///
+/// This exists so the test provider can be used with infrastructure in
+/// `diskann-providers` that requires `Context = DefaultContext` (e.g.,
+/// `check_grid_search`).
+///
+/// All methods delegate directly to `Provider` — the context parameter is
+/// ignored, just as it is in `Provider`'s own implementations.
+pub struct DefaultContextProvider {
+    inner: Provider,
+}
+
+impl DefaultContextProvider {
+    /// Create a new wrapper around the given [`Provider`].
+    pub fn new(inner: Provider) -> Self {
+        Self { inner }
+    }
+
+    /// Access the underlying [`Provider`].
+    pub fn provider(&self) -> &Provider {
+        &self.inner
+    }
+}
+
+impl std::ops::Deref for DefaultContextProvider {
+    type Target = Provider;
+    fn deref(&self) -> &Provider {
+        &self.inner
+    }
+}
+
+impl provider::DataProvider for DefaultContextProvider {
+    type Context = provider::DefaultContext;
+    type InternalId = u32;
+    type ExternalId = u32;
+    type Error = InvalidId;
+    type Guard = provider::NoopGuard<u32>;
+
+    fn to_internal_id(
+        &self,
+        _context: &provider::DefaultContext,
+        gid: &u32,
+    ) -> Result<u32, InvalidId> {
+        let valid = self.inner.terms.contains_key(gid);
+        if valid {
+            Ok(*gid)
+        } else {
+            Err(InvalidId::External(*gid))
+        }
+    }
+
+    fn to_external_id(
+        &self,
+        _context: &provider::DefaultContext,
+        id: u32,
+    ) -> Result<u32, InvalidId> {
+        let valid = self.inner.terms.contains_key(&id);
+        if valid {
+            Ok(id)
+        } else {
+            Err(InvalidId::Internal(id))
+        }
+    }
+}
+
+impl provider::Delete for DefaultContextProvider {
+    async fn delete(
+        &self,
+        _context: &provider::DefaultContext,
+        gid: &u32,
+    ) -> Result<(), InvalidId> {
+        if self.inner.is_start_point(*gid) {
+            return Err(InvalidId::IsStartPoint(*gid));
+        }
+
+        match self.inner.terms.entry(*gid) {
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().mark_deleted();
+                Ok(())
+            }
+            Entry::Vacant(_) => Err(InvalidId::External(*gid)),
+        }
+    }
+
+    async fn release(&self, _context: &provider::DefaultContext, id: u32) -> Result<(), InvalidId> {
+        if self.inner.is_start_point(id) {
+            return Err(InvalidId::IsStartPoint(id));
+        }
+
+        if self.inner.terms.remove(&id).is_none() {
+            Err(InvalidId::Internal(id))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn status_by_internal_id(
+        &self,
+        _context: &provider::DefaultContext,
+        id: u32,
+    ) -> Result<provider::ElementStatus, InvalidId> {
+        if self.inner.is_deleted(id)? {
+            Ok(provider::ElementStatus::Deleted)
+        } else {
+            Ok(provider::ElementStatus::Valid)
+        }
+    }
+
+    fn status_by_external_id(
+        &self,
+        context: &provider::DefaultContext,
+        gid: &u32,
+    ) -> impl std::future::Future<Output = Result<provider::ElementStatus, InvalidId>> + Send {
+        self.status_by_internal_id(context, *gid)
+    }
+}
+
+impl provider::SetElement<&[f32]> for DefaultContextProvider {
+    type SetError = ANNError;
+
+    async fn set_element(
+        &self,
+        _context: &provider::DefaultContext,
+        id: &u32,
+        element: &[f32],
+    ) -> Result<provider::NoopGuard<u32>, ANNError> {
+        let ctx = Context::new();
+        self.inner.set_element(&ctx, id, element).await
+    }
+}
+
+impl provider::DefaultAccessor for DefaultContextProvider {
+    type Accessor<'a> = NeighborAccessor<'a>;
+
+    fn default_accessor(&self) -> Self::Accessor<'_> {
+        self.inner.default_accessor()
+    }
+}
+
+/// Strategy adapter for [`DefaultContextProvider`].
+///
+/// Wraps the test [`Strategy`] to work with [`DefaultContextProvider`] instead of
+/// [`Provider`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultContextStrategy {
+    inner: Strategy,
+}
+
+impl DefaultContextStrategy {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl glue::SearchStrategy<DefaultContextProvider, &[f32]> for DefaultContextStrategy {
+    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
+    type SearchAccessor<'a> = Accessor<'a>;
+    type SearchAccessorError = Infallible;
+
+    fn search_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultContextProvider,
+        _context: &'a provider::DefaultContext,
+    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        Ok(Accessor::new(&provider.inner))
+    }
+}
+
+impl glue::DefaultPostProcessor<DefaultContextProvider, &[f32]> for DefaultContextStrategy {
+    default_post_processor!(
+        glue::Pipeline<glue::FilterStartPoints, glue::Pipeline<FilterDeletedIds, glue::CopyIds>>
+    );
+}
+
+impl glue::PruneStrategy<DefaultContextProvider> for DefaultContextStrategy {
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type DistanceComputer = <f32 as VectorRepr>::Distance;
+    type PruneAccessor<'a> = Accessor<'a>;
+    type PruneAccessorError = Infallible;
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        self.inner.create_working_set(capacity)
+    }
+
+    fn prune_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultContextProvider,
+        _context: &'a provider::DefaultContext,
+    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        Ok(Accessor::new(&provider.inner))
+    }
+}
+
+impl glue::InsertStrategy<DefaultContextProvider, &[f32]> for DefaultContextStrategy {
+    type PruneStrategy = Self;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn insert_search_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultContextProvider,
+        _context: &'a provider::DefaultContext,
+    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        Ok(Accessor::new(&provider.inner))
+    }
+}
+
+impl glue::MultiInsertStrategy<DefaultContextProvider, Matrix<f32>> for DefaultContextStrategy {
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
+    type FinishError = Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &DefaultContextProvider,
+        _context: &provider::DefaultContext,
+        batch: &Arc<Matrix<f32>>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        use workingset::map::{Builder, Capacity, Overlay};
+
+        let capacity = if self.inner.working_set_reuse {
+            Capacity::Default
+        } else {
+            Capacity::None
+        };
+
+        std::future::ready(Ok(
+            Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
+        ))
+    }
+}
+
+/// A [`glue::SearchPostProcessStep`] that filters out deleted IDs from the candidate stream.
+///
+/// This is used in [`DefaultContextStrategy`]'s `InplaceDeleteStrategy` implementation,
+/// since `inplace_delete` relies on post-processing to exclude deleted nodes from results.
+#[derive(Default)]
+pub struct FilterDeletedIds;
+
+impl<'a, T> glue::SearchPostProcessStep<Accessor<'a>, T> for FilterDeletedIds
+where
+    T: Copy + Send + Sync,
+    Accessor<'a>: provider::BuildQueryComputer<T> + provider::HasId<Id = u32>,
+{
+    type Error<NextError>
+        = NextError
+    where
+        NextError: crate::error::StandardError;
+
+    type NextAccessor = Accessor<'a>;
+
+    async fn post_process_step<I, B, Next>(
+        &self,
+        next: &Next,
+        accessor: &mut Accessor<'a>,
+        query: T,
+        computer: &<Accessor<'a> as provider::BuildQueryComputer<T>>::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error<Next::Error>>
+    where
+        I: Iterator<Item = crate::neighbor::Neighbor<<Accessor<'a> as provider::HasId>::Id>> + Send,
+        B: crate::graph::SearchOutputBuffer<<Accessor<'a> as provider::HasId>::Id> + Send + ?Sized,
+        Next: glue::SearchPostProcess<Accessor<'a>, T> + Sync,
+    {
+        let filtered = candidates.filter(|n| !accessor.provider.is_deleted(n.id).unwrap_or(false));
+        next.post_process(accessor, query, computer, filtered, output)
+            .await
+    }
+}
+
+impl glue::InplaceDeleteStrategy<DefaultContextProvider> for DefaultContextStrategy {
+    type DeleteElement<'a> = &'a [f32];
+    type DeleteElementGuard = Box<[f32]>;
+    type DeleteElementError = AccessedInvalidId;
+    type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = Accessor<'a>;
+    type SearchStrategy = Self;
+    type SearchPostProcessor = glue::Pipeline<FilterDeletedIds, glue::CopyIds>;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn search_strategy(&self) -> Self::SearchStrategy {
+        *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        glue::Pipeline::new(FilterDeletedIds, glue::CopyIds)
+    }
+
+    async fn get_delete_element<'a>(
+        &'a self,
+        provider: &'a DefaultContextProvider,
+        _context: &'a provider::DefaultContext,
+        id: u32,
+    ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
+        provider
+            .inner
             .terms
             .get(&id)
             .map(|v| (*v.data).into())

@@ -48,6 +48,7 @@ vfs = { workspace = true, optional = true }
 approx.workspace = true
 criterion.workspace = true
 diskann-utils = { workspace = true, features = ["testing"] }
+diskann = { workspace = true, features = ["testing"] }
 iai-callgrind.workspace = true
 itertools.workspace = true
 tempfile.workspace = true

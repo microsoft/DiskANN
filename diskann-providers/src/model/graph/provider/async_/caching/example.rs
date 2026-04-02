@@ -4,16 +4,11 @@
  */
 
 use diskann::{
-    graph::{AdjacencyList, workingset},
+    graph::{AdjacencyList, test::provider as test_provider, workingset},
     provider::{self as core_provider, DefaultContext},
 };
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
-
-use crate::model::graph::provider::async_::{
-    common::FullPrecision,
-    debug_provider::{self, DebugProvider},
-};
 
 use super::{
     bf_cache::{self, Cache},
@@ -179,14 +174,14 @@ where
 // Provider Bridge //
 /////////////////////
 
-impl<'a> cache_provider::AsCacheAccessorFor<'a, debug_provider::FullAccessor<'a>> for ExampleCache {
+impl<'a> cache_provider::AsCacheAccessorFor<'a, test_provider::Accessor<'a>> for ExampleCache {
     type Accessor = CacheAccessor<'a, bf_cache::VecCacher<f32>>;
     type Error = diskann::error::Infallible;
     fn as_cache_accessor_for(
         &'a self,
-        inner: debug_provider::FullAccessor<'a>,
+        inner: test_provider::Accessor<'a>,
     ) -> Result<
-        cache_provider::CachingAccessor<debug_provider::FullAccessor<'a>, Self::Accessor>,
+        cache_provider::CachingAccessor<test_provider::Accessor<'a>, Self::Accessor>,
         Self::Error,
     > {
         let provider = inner.provider();
@@ -205,7 +200,7 @@ type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 type FullAccessorCache<'a> = CacheAccessor<'a, bf_cache::VecCacher<f32>>;
 
 impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, WorkingSet>
-    for debug_provider::FullAccessor<'a>
+    for test_provider::Accessor<'a>
 {
     fn cached_fill<'b, Itr>(
         &'b mut self,
@@ -232,8 +227,14 @@ impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, WorkingSet>
                                 vacant.insert(Self::from_cached(element).into());
                             }
                             None => {
-                                let element =
-                                    self.get_element(i).await.map_err(CachingError::Inner)?;
+                                let element = self.get_element(i).await.map_err(|e| match e {
+                                    test_provider::AccessError::InvalidId(e) => {
+                                        CachingError::Inner(e)
+                                    }
+                                    test_provider::AccessError::Transient(e) => {
+                                        panic!("unexpected transient error: {e}")
+                                    }
+                                })?;
                                 cache
                                     .set_cached(i, Self::as_cached(&element))
                                     .map_err(CachingError::Cache)?;
@@ -270,51 +271,47 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        index::diskann_async::{self, tests as async_tests},
+        index::diskann_async::tests as async_tests,
         model::graph::provider::async_::caching::provider::{AsCacheAccessorFor, CachingProvider},
         utils as crate_utils,
     };
 
     const CTX: &DefaultContext = &DefaultContext;
 
-    fn test_provider(
+    fn make_provider(
         uncacheable: Option<Vec<u32>>,
-    ) -> CachingProvider<DebugProvider, ExampleCache> {
+    ) -> CachingProvider<test_provider::DefaultContextProvider, ExampleCache> {
         let dim = 2;
+        let start_id = u32::MAX;
 
-        let config = debug_provider::DebugConfig {
-            start_id: u32::MAX,
-            start_point: vec![0.0; dim],
-            max_degree: 10,
-            metric: Metric::L2,
-        };
-
-        let table = diskann_async::train_pq(
-            Matrix::new(0.0, 1, dim).as_view(),
-            2.min(dim), // Number of PQ chunks is bounded by the dimension.
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
+        let config = test_provider::Config::new(
+            Metric::L2,
+            10, // max_degree
+            test_provider::StartPoint::new(start_id, vec![0.0; dim]),
         )
         .unwrap();
 
         CachingProvider::new(
-            DebugProvider::new(config, Arc::new(table)).unwrap(),
+            test_provider::DefaultContextProvider::new(test_provider::Provider::new(config)),
             ExampleCache::new(PowerOfTwo::new(1024 * 16).unwrap(), uncacheable),
         )
     }
 
     #[tokio::test]
     async fn basic_operations_happy_path() {
-        let provider = test_provider(None);
+        let provider = make_provider(None);
         let ctx = &DefaultContext;
 
         // Translations do not yet exist.
         assert!(provider.to_external_id(ctx, 0).is_err());
         assert!(provider.to_internal_id(ctx, &0).is_err());
 
-        assert_eq!(provider.inner().data_writes.get(), 0);
+        assert_eq!(provider.inner().metrics().set_vector, 0);
         provider.set_element(CTX, &0, &[1.0, 2.0]).await.unwrap();
-        assert_eq!(provider.inner().data_writes.get(), 1 /* increased */);
+        assert_eq!(
+            provider.inner().metrics().set_vector,
+            1 /* increased */
+        );
 
         assert_eq!(provider.to_external_id(ctx, 0).unwrap(), 0);
         assert_eq!(provider.to_internal_id(ctx, &0).unwrap(), 0);
@@ -322,14 +319,14 @@ mod tests {
         // Retrieval of a valid element.
         let mut accessor = provider
             .cache()
-            .as_cache_accessor_for(debug_provider::FullAccessor::new(provider.inner()))
+            .as_cache_accessor_for(test_provider::Accessor::new(provider.inner()))
             .unwrap();
 
         // Hit served from the underlying provider.
-        assert_eq!(provider.inner().full_reads.get(), 0);
+        // Note: get_vector uses a LocalCounter that flushes on drop, so we track reads
+        // through cache miss counts instead.
         let element = accessor.get_element(0).await.unwrap();
         assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().full_reads.get(), 1);
         assert_eq!(
             accessor.cache().stats.get_local_misses(),
             1, /* increased */
@@ -339,7 +336,6 @@ mod tests {
         // This time, the hit is served from the underlying cache.
         let element = accessor.get_element(0).await.unwrap();
         assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().full_reads.get(), 1);
         assert_eq!(accessor.cache().stats.get_local_misses(), 1);
         assert_eq!(
             accessor.cache().stats.get_local_hits(),
@@ -347,18 +343,21 @@ mod tests {
         );
 
         // Adjacency List from Underlying
-        assert_eq!(provider.inner().neighbor_writes.get(), 0);
+        assert_eq!(
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
+            0
+        );
         accessor.set_neighbors(0, &[1, 2, 3]).await.unwrap();
         assert_eq!(
-            provider.inner().neighbor_writes.get(),
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
             1, /* increased */
         );
 
         let mut list = AdjacencyList::new();
-        assert_eq!(provider.inner().neighbor_reads.get(), 0);
+        assert_eq!(provider.inner().metrics().get_neighbors, 0);
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             1, /* increased */
         );
         assert_eq!(
@@ -372,7 +371,7 @@ mod tests {
         list.clear();
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[1, 2, 3]);
-        assert_eq!(provider.inner().neighbor_reads.get(), 1);
+        assert_eq!(provider.inner().metrics().get_neighbors, 1);
         assert_eq!(accessor.cache().graph.stats().get_local_misses(), 1);
         assert_eq!(
             accessor.cache().graph.stats().get_local_hits(),
@@ -385,7 +384,6 @@ mod tests {
 
         let element = accessor.get_element(0).await.unwrap();
         assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().full_reads.get(), 2 /* increased */,);
         assert_eq!(
             accessor.cache().stats.get_local_misses(),
             2, /* increased */
@@ -395,7 +393,6 @@ mod tests {
         // Once more from the cache.
         let element = accessor.get_element(0).await.unwrap();
         assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().full_reads.get(), 2);
         assert_eq!(accessor.cache().stats.get_local_misses(), 2);
         assert_eq!(
             accessor.cache().stats.get_local_hits(),
@@ -406,7 +403,7 @@ mod tests {
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[1, 2, 3]);
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             2, /* increased */
         );
         assert_eq!(
@@ -420,11 +417,11 @@ mod tests {
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[2, 3, 4]);
         assert_eq!(
-            provider.inner().neighbor_writes.get(),
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
             2, /* increased */
         );
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             3, /* increased */
         );
         assert_eq!(
@@ -438,11 +435,11 @@ mod tests {
         assert_eq!(&*list, &[2, 3, 4, 1]);
 
         assert_eq!(
-            provider.inner().neighbor_writes.get(),
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
             3, /* increased */
         );
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             4, /* increased */
         );
         assert_eq!(
@@ -479,7 +476,6 @@ mod tests {
         // Access the deleted element is still valid.
         let element = accessor.get_element(0).await.unwrap();
         assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().full_reads.get(), 2);
         assert_eq!(accessor.cache().stats.get_local_misses(), 2);
         assert_eq!(
             accessor.cache().stats.get_local_hits(),
@@ -488,8 +484,11 @@ mod tests {
 
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[2, 3, 4, 1]);
-        assert_eq!(provider.inner().neighbor_writes.get(), 3);
-        assert_eq!(provider.inner().neighbor_reads.get(), 4);
+        assert_eq!(
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
+            3
+        );
+        assert_eq!(provider.inner().metrics().get_neighbors, 4);
         assert_eq!(accessor.cache().graph.stats().get_local_misses(), 4);
         assert_eq!(
             accessor.cache().graph.stats().get_local_hits(),
@@ -501,7 +500,6 @@ mod tests {
         assert!(provider.status_by_external_id(CTX, &0).await.is_err());
 
         assert!(accessor.get_element(0).await.is_err());
-        assert_eq!(provider.inner().full_reads.get(), 2);
         assert_eq!(
             accessor.cache().stats.get_local_misses(),
             3 /* increased */
@@ -509,8 +507,11 @@ mod tests {
         assert_eq!(accessor.cache().stats.get_local_hits(), 3);
 
         assert!(accessor.get_neighbors(0, &mut list).await.is_err());
-        assert_eq!(provider.inner().neighbor_writes.get(), 3);
-        assert_eq!(provider.inner().neighbor_reads.get(), 4);
+        assert_eq!(
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
+            3
+        );
+        assert_eq!(provider.inner().metrics().get_neighbors, 4);
         assert_eq!(
             accessor.cache().graph.stats().get_local_misses(),
             5 /* increased */
@@ -540,11 +541,11 @@ mod tests {
         // Test that returning `Uncacheable` for an adjacency list is handled correctly by
         // the provider and a call to `set_neighbors` is not made.
         let uncacheable = u32::MAX;
-        let provider = test_provider(Some(vec![uncacheable]));
+        let provider = make_provider(Some(vec![uncacheable]));
 
         let mut accessor = provider
             .cache()
-            .as_cache_accessor_for(debug_provider::FullAccessor::new(provider.inner()))
+            .as_cache_accessor_for(test_provider::Accessor::new(provider.inner()))
             .unwrap();
 
         provider.set_element(CTX, &0, &[1.0, 2.0]).await.unwrap();
@@ -554,18 +555,21 @@ mod tests {
         //---------------//
 
         // Adjacency List from Underlying
-        assert_eq!(provider.inner().neighbor_writes.get(), 0);
+        assert_eq!(
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
+            0
+        );
         accessor.set_neighbors(0, &[1, 2, 3]).await.unwrap();
         assert_eq!(
-            provider.inner().neighbor_writes.get(),
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
             1, /* increased */
         );
 
         let mut list = AdjacencyList::new();
-        assert_eq!(provider.inner().neighbor_reads.get(), 0);
+        assert_eq!(provider.inner().metrics().get_neighbors, 0);
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             1, /* increased */
         );
         assert_eq!(
@@ -579,7 +583,7 @@ mod tests {
         list.clear();
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[1, 2, 3]);
-        assert_eq!(provider.inner().neighbor_reads.get(), 1);
+        assert_eq!(provider.inner().metrics().get_neighbors, 1);
         assert_eq!(accessor.cache().graph.stats().get_local_misses(), 1);
         assert_eq!(
             accessor.cache().graph.stats().get_local_hits(),
@@ -590,21 +594,24 @@ mod tests {
         // Uncacheable IDs //
         //-----------------//
 
-        assert_eq!(provider.inner().neighbor_writes.get(), 1);
+        assert_eq!(
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
+            1
+        );
         accessor.set_neighbors(uncacheable, &[4, 5]).await.unwrap();
         assert_eq!(
-            provider.inner().neighbor_writes.get(),
+            provider.inner().metrics().set_neighbors + provider.inner().metrics().append_neighbors,
             2, /* increased */
         );
 
         // The retrieval is served by the inner provider.
-        assert_eq!(provider.inner().neighbor_reads.get(), 1);
+        assert_eq!(provider.inner().metrics().get_neighbors, 1);
         accessor
             .get_neighbors(uncacheable, &mut list)
             .await
             .unwrap();
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             2, /* increased */
         );
         assert_eq!(
@@ -615,13 +622,13 @@ mod tests {
         assert_eq!(&*list, &[4, 5]);
 
         // Again, retrieval is served by the inner provider.
-        assert_eq!(provider.inner().neighbor_reads.get(), 2);
+        assert_eq!(provider.inner().metrics().get_neighbors, 2);
         accessor
             .get_neighbors(uncacheable, &mut list)
             .await
             .unwrap();
         assert_eq!(
-            provider.inner().neighbor_reads.get(),
+            provider.inner().metrics().get_neighbors,
             3, /* increased */
         );
         assert_eq!(
@@ -659,24 +666,19 @@ mod tests {
         .build()
         .unwrap();
 
-        let test_config = debug_provider::DebugConfig {
-            start_id,
-            start_point: start_point.clone(),
-            max_degree: index_config.max_degree().get(),
+        let provider_config = test_provider::Config::new(
             metric,
-        };
-
-        let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let table = diskann_async::train_pq(
-            async_tests::squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
         )
         .unwrap();
 
+        let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
+
         let provider = CachingProvider::new(
-            DebugProvider::new(test_config, Arc::new(table)).unwrap(),
+            test_provider::DefaultContextProvider::new(test_provider::Provider::new(
+                provider_config,
+            )),
             ExampleCache::new(cache_size, None),
         );
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
@@ -690,15 +692,19 @@ mod tests {
         assert_eq!(adjacency_lists.len(), num_points);
         assert_eq!(vectors.len(), num_points);
 
-        let strategy = cache_provider::Cached::new(FullPrecision);
+        let strategy = cache_provider::Cached::new(test_provider::DefaultContextStrategy::new());
         async_tests::populate_data(index.provider(), CTX, &vectors).await;
         {
             // Note: Without the fully qualified syntax - this fails to compile.
-            let mut accessor = <cache_provider::Cached<FullPrecision> as SearchStrategy<
-                cache_provider::CachingProvider<debug_provider::DebugProvider, ExampleCache>,
-                &[f32],
-            >>::search_accessor(&strategy, index.provider(), CTX)
-            .unwrap();
+            let mut accessor =
+                <cache_provider::Cached<test_provider::DefaultContextStrategy> as SearchStrategy<
+                    cache_provider::CachingProvider<
+                        test_provider::DefaultContextProvider,
+                        ExampleCache,
+                    >,
+                    &[f32],
+                >>::search_accessor(&strategy, index.provider(), CTX)
+                .unwrap();
             async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
 
             accessor
@@ -728,14 +734,17 @@ mod tests {
         async_tests::check_grid_search(&index, &vectors, &paged_tests, strategy, strategy).await;
     }
 
-    fn check_stats(caching: &CachingProvider<DebugProvider, ExampleCache>) {
+    fn check_stats(caching: &CachingProvider<test_provider::DefaultContextProvider, ExampleCache>) {
         let provider = caching.inner();
         let cache = caching.cache();
 
-        println!("neighbor reads: {}", provider.neighbor_reads.get());
-        println!("neighbor writes: {}", provider.neighbor_writes.get());
-        println!("vector reads: {}", provider.full_reads.get());
-        println!("vector writes: {}", provider.data_writes.get());
+        println!("neighbor reads: {}", provider.metrics().get_neighbors);
+        println!(
+            "neighbor writes: {}",
+            provider.metrics().set_neighbors + provider.metrics().append_neighbors
+        );
+        println!("vector reads: {}", provider.metrics().get_vector);
+        println!("vector writes: {}", provider.metrics().set_vector);
 
         println!("neighbor hits: {}", cache.neighbor_stats.get_hits());
         println!("neighbor misses: {}", cache.neighbor_stats.get_misses());
@@ -744,12 +753,15 @@ mod tests {
 
         // Neighbors
         assert_eq!(
-            provider.neighbor_reads.get(),
+            provider.metrics().get_neighbors,
             cache.neighbor_stats.get_misses()
         );
 
         // Vectors
-        assert_eq!(provider.full_reads.get(), cache.vector_stats.get_misses());
+        assert_eq!(
+            provider.metrics().get_vector,
+            cache.vector_stats.get_misses()
+        );
     }
 
     #[rstest]
@@ -775,15 +787,6 @@ mod tests {
         let num_points = (grid_size).pow(dim as u32);
 
         let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let table = Arc::new(
-            diskann_async::train_pq(
-                async_tests::squish(vectors.iter(), dim).as_view(),
-                2.min(dim),
-                &mut crate::utils::create_rnd_from_seed_in_tests(0),
-                1usize,
-            )
-            .unwrap(),
-        );
 
         let index_config = diskann::graph::config::Builder::new_with(
             max_degree,
@@ -797,12 +800,13 @@ mod tests {
         .build()
         .unwrap();
 
-        let test_config = debug_provider::DebugConfig {
-            start_id,
-            start_point: start_point.clone(),
-            max_degree: index_config.max_degree().get(),
+        let provider_config = test_provider::Config::new(
             metric,
-        };
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
+        )
+        .unwrap();
+
         assert_eq!(vectors.len(), num_points);
 
         // This is a little subtle, but we need `vectors` to contain the start point as
@@ -814,13 +818,15 @@ mod tests {
         // Initialize an index for a new round of building.
         let init_index = || {
             let provider = CachingProvider::new(
-                DebugProvider::new(test_config.clone(), table.clone()).unwrap(),
+                test_provider::DefaultContextProvider::new(test_provider::Provider::new(
+                    provider_config.clone(),
+                )),
                 ExampleCache::new(cache_size, None),
             );
             Arc::new(DiskANNIndex::new(index_config.clone(), provider, None))
         };
 
-        let strategy = cache_provider::Cached::new(FullPrecision);
+        let strategy = cache_provider::Cached::new(test_provider::DefaultContextStrategy::new());
 
         // Build with full-precision single insert
         {
@@ -859,11 +865,10 @@ mod tests {
         // create small index instance
         let metric = Metric::L2;
         let num_points = 4;
-        let strategy = cache_provider::Cached::new(FullPrecision);
+        let strategy = cache_provider::Cached::new(test_provider::DefaultContextStrategy::new());
         let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
         let start_id = num_points as u32;
         let start_point = vec![0.5, 0.5];
-        let dim = start_point.len();
 
         let index_config = diskann::graph::config::Builder::new(
             4, // target_degree
@@ -874,27 +879,19 @@ mod tests {
         .build()
         .unwrap();
 
-        let test_config = debug_provider::DebugConfig {
-            start_id,
-            start_point: start_point.clone(),
-            max_degree: index_config.max_degree().get(),
+        let provider_config = test_provider::Config::new(
             metric,
-        };
-
-        // The contents of the table don't matter for this test because we use full
-        // precision only.
-        let table = diskann_async::train_pq(
-            Matrix::new(0.5, 1, dim).as_view(),
-            dim,
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
         )
         .unwrap();
 
         let index = DiskANNIndex::new(
             index_config,
             CachingProvider::new(
-                DebugProvider::new(test_config, Arc::new(table)).unwrap(),
+                test_provider::DefaultContextProvider::new(test_provider::Provider::new(
+                    provider_config,
+                )),
                 ExampleCache::new(cache_size, None),
             ),
             None,
@@ -918,14 +915,21 @@ mod tests {
         ];
 
         // Note: Without the fully qualified syntax - this fails to compile.
-        let mut accessor = <cache_provider::Cached<FullPrecision> as SearchStrategy<
-            cache_provider::CachingProvider<debug_provider::DebugProvider, ExampleCache>,
-            &[f32],
-        >>::search_accessor(&strategy, index.provider(), CTX)
-        .unwrap();
+        let mut accessor =
+            <cache_provider::Cached<test_provider::DefaultContextStrategy> as SearchStrategy<
+                cache_provider::CachingProvider<
+                    test_provider::DefaultContextProvider,
+                    ExampleCache,
+                >,
+                &[f32],
+            >>::search_accessor(&strategy, index.provider(), CTX)
+            .unwrap();
 
         async_tests::populate_data(index.provider(), CTX, &vectors).await;
         async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
+
+        // Drop the accessor before inplace_delete so the cache is cleanly separated.
+        std::mem::drop(accessor);
 
         index
             .inplace_delete(
@@ -957,6 +961,18 @@ mod tests {
         // and replaced with edges to points 0 and 1
         // vertices 0 and 1 should add an edge pointing to 2.
         // vertex 3 should be dropped
+
+        // Create a fresh accessor to read the post-deletion state.
+        let mut accessor =
+            <cache_provider::Cached<test_provider::DefaultContextStrategy> as SearchStrategy<
+                cache_provider::CachingProvider<
+                    test_provider::DefaultContextProvider,
+                    ExampleCache,
+                >,
+                &[f32],
+            >>::search_accessor(&strategy, index.provider(), CTX)
+            .unwrap();
+
         {
             let mut list = AdjacencyList::new();
             accessor.get_neighbors(4, &mut list).await.unwrap();
