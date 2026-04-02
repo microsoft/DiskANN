@@ -24,7 +24,7 @@
                     "queries": "wikipedia_cohere/wikipedia_query.bin",
                     "groundtruth": "wikipedia_cohere/wikipedia-100K",
                     "search_list": [
-                        2000
+                        200
                     ],
                     "beam_width": 4,
                     "recall_at": 100,

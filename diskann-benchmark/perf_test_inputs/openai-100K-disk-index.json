@@ -24,7 +24,7 @@
                     "queries": "OpenAIArXiv/openai_query.bin",
                     "groundtruth": "OpenAIArXiv/openai-100K",
                     "search_list": [
-                        2000
+                        200
                     ],
                     "beam_width": 4,
                     "recall_at": 100,
