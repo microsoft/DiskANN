@@ -337,3 +337,6 @@ target/
 
 # Ignore local settings for claude code AI agent
 .claude/settings.local.json
+
+# Generated test data from generate_synthetic_labels tests
+rand_labels_50_10K_*.txt
