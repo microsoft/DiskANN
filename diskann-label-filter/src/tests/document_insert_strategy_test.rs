@@ -52,7 +52,7 @@ fn test_search_accessor_creates_wrapped_accessor() {
 
     let result = <DocumentInsertStrategy<Strategy> as SearchStrategy<
         DocumentProvider<Provider, RoaringAttributeStore<u32>>,
-        Document<'_, [f32]>,
+        &Document<'_, [f32]>,
     >>::search_accessor(&strategy, &provider, &context);
 
     assert!(result.is_ok());
@@ -66,7 +66,7 @@ fn test_insert_search_accessor_creates_wrapped_accessor() {
 
     let result = <DocumentInsertStrategy<Strategy> as InsertStrategy<
         DocumentProvider<Provider, RoaringAttributeStore<u32>>,
-        Document<'_, [f32]>,
+        &Document<'_, [f32]>,
     >>::insert_search_accessor(&strategy, &provider, &context);
 
     assert!(result.is_ok());
@@ -98,7 +98,7 @@ fn test_build_query_computer_extracts_vector_from_document() {
     let vector = vec![1.0f32, 2.0, 0.0];
     let doc = Document::new(vector.as_slice(), vec![]);
 
-    let result = <DocumentSearchAccessor<_> as BuildQueryComputer<Document<'_, [f32]>>>::build_query_computer(&doc_accessor, &doc);
+    let result = <DocumentSearchAccessor<_> as BuildQueryComputer<&Document<'_, [f32]>>>::build_query_computer(&doc_accessor, &doc);
 
     assert!(
         result.is_ok(),
