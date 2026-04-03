@@ -157,6 +157,7 @@ jobs:
           for crate in "${crates[@]}"; do
             cargo clippy --locked --package "$crate" \
               --no-default-features \
+              --all-targets \
               --profile ci \
               --no-deps \
               --config "$RUST_CONFIG" \
