@@ -162,10 +162,10 @@ where
     }
 }
 
-impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<'q, Q>> for EncodedDocumentAccessor<IA>
+impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
 where
-    IA: BuildQueryComputer<&'q Q>,
-    Q: ?Sized,
+    IA: BuildQueryComputer<Q::Target>,
+    Q: Reborrow<'q>,
 {
     type QueryComputerError = ANNError;
     type QueryComputer = InlineBetaComputer<IA::QueryComputer>;

@@ -9,6 +9,7 @@ use diskann::neighbor::Neighbor;
 use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
 use diskann::ANNError;
+use diskann_utils::Reborrow;
 use diskann_vector::PreprocessedDistanceFunction;
 use roaring::RoaringTreemap;
 
@@ -37,12 +38,12 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<'q, Q>,
+        &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, &'q Q>,
-    Q: Send + Sync + ?Sized,
+    Strategy: SearchStrategy<DP, Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
@@ -74,12 +75,12 @@ where
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<'q, Q>,
+        &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
-    Q: Send + Sync + ?Sized,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -149,20 +150,20 @@ impl<IPP> FilterResults<IPP> {
     }
 }
 
-impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'q, Q>>
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<&'q Q>,
-    Q: Send + Sync + ?Sized,
-    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
+    IA: BuildQueryComputer<Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
+    IPP: SearchPostProcess<IA, Q::Target> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<'q, Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
+        query: &'q FilteredQuery<Q>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q::Target>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
