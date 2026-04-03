@@ -38,7 +38,7 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
@@ -75,7 +75,7 @@ where
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
@@ -150,7 +150,7 @@ impl<IPP> FilterResults<IPP> {
     }
 }
 
-impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'_, Q>>
     for FilterResults<IPP>
 where
     IA: BuildQueryComputer<Q::Target>,
@@ -162,7 +162,7 @@ where
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<Q>,
+        query: &'q FilteredQuery<'_, Q>,
         computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q::Target>>::QueryComputer>,
         candidates: I,
         output: &mut B,

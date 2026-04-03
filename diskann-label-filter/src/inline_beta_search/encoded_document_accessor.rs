@@ -162,7 +162,7 @@ where
     }
 }
 
-impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
+impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<'_, Q>> for EncodedDocumentAccessor<IA>
 where
     IA: BuildQueryComputer<Q::Target>,
     Q: Reborrow<'q>,
@@ -172,7 +172,7 @@ where
 
     fn build_query_computer(
         &self,
-        from: &'q FilteredQuery<Q>,
+        from: &'q FilteredQuery<'_, Q>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         let inner_computer = self
             .inner_accessor

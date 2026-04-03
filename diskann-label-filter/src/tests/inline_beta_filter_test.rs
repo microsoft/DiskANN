@@ -196,7 +196,7 @@ fn test_post_process_only_passes_matching_candidates_to_inner() {
     let mut output = IdDistance::new(&mut ids, &mut distances);
 
     let query_vec = [0.0f32, 0.0];
-    let filter_query = FilteredQuery::new(&query_vec[..], ast_expr);
+    let filter_query = FilteredQuery::new(&query_vec[..], &ast_expr);
 
     // CopyIds simply copies whatever it receives into the output buffer,
     // so the output reflects exactly what FilterResults lets through.

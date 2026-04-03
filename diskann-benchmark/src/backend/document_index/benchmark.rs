@@ -274,15 +274,15 @@ impl<'a, T> DocumentIndexJob<'a, T> {
 
         let builder = DocumentIndexBuilder::new(
             doc_index.clone(),
-            data_arc.clone(),
-            attributes_arc.clone(),
+            data_arc,
+            attributes_arc,
             DocumentInsertStrategy::new(common::FullPrecision),
         );
         let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
         let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
         let build_results =
             build::build_tracked(builder, parallelism, &rt, Some(&ProgressMeter::new(output)))?;
-        let insert_latencies: Vec<MicroSeconds> = build_results
+        let mut insert_latencies: Vec<MicroSeconds> = build_results
             .take_output()
             .into_iter()
             .map(|r| r.latency)
@@ -291,7 +291,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         let build_time: MicroSeconds = timer.elapsed().into();
         writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
 
-        let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies.clone())?;
+        let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
         // =====================
         // Search Phase
         // =====================
@@ -422,8 +422,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<&'a [T]>>
-        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<&'a [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, &'a [T]>>
+        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -451,7 +451,7 @@ where
         let query_vec = self.queries.row(index);
         let (_, ref ast_expr) = self.predicates[index];
         let strategy = InlineBetaStrategy::new(self.beta, common::FullPrecision);
-        let filtered_query = FilteredQuery::new(query_vec, ast_expr.clone());
+        let filtered_query = FilteredQuery::new(query_vec, ast_expr);
 
         // Use a concrete IdDistance scratch buffer so that both the IDs and distances
         // are captured. Afterwards, the valid IDs are forwarded into the framework buffer.
@@ -631,8 +631,8 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<&'a [T]>>
-        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<&'a [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, &'a [T]>>
+        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
 {
     let searcher = Arc::new(FilteredSearcher {
         index: index.clone(),
