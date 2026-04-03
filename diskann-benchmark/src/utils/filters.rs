@@ -6,7 +6,11 @@
 use bit_set::BitSet;
 use std::fmt::Debug;
 
-use diskann::{graph::index::QueryLabelProvider, utils::VectorId};
+use diskann::{
+    graph::index::{QueryLabelProvider, QueryVisitDecision},
+    neighbor::Neighbor,
+    utils::VectorId,
+};
 use diskann_benchmark_runner::files::InputFile;
 use diskann_label_filter::{
     kv_index::GenericIndex,
@@ -81,6 +85,32 @@ where
     }
 }
 
+/// A bitmap filter wrapper that uses `RejectAndNeedExpand` for rejected nodes.
+///
+/// This enables the exploration queue mechanism in multi-hop search, which is
+/// beneficial for high-selectivity scenarios (when few vectors match the filter).
+#[derive(Debug)]
+pub struct HighSelectivityBitmapFilter(pub BitSet);
+
+impl<T> QueryLabelProvider<T> for HighSelectivityBitmapFilter
+where
+    T: VectorId,
+{
+    fn is_match(&self, vec_id: T) -> bool {
+        self.0.contains(vec_id.into_usize())
+    }
+
+    fn on_visit(&self, neighbor: Neighbor<T>) -> QueryVisitDecision<T> {
+        if self.is_match(neighbor.id) {
+            QueryVisitDecision::Accept(neighbor)
+        } else {
+            // Use RejectAndNeedExpand to enable exploration queue for better
+            // traversal through non-matching nodes in high-selectivity scenarios
+            QueryVisitDecision::RejectAndNeedExpand
+        }
+    }
+}
+
 pub(crate) fn generate_bitmaps(
     query_predicates: &InputFile,
     data_labels: &InputFile,
@@ -114,6 +144,15 @@ where
 
 pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
     Arc::new(BitmapFilter(set))
+}
+
+/// Convert a BitSet to a QueryLabelProvider that uses `RejectAndNeedExpand`.
+///
+/// This enables the exploration queue mechanism for high-selectivity scenarios.
+pub(crate) fn as_high_selectivity_query_label_provider(
+    set: BitSet,
+) -> Arc<dyn QueryLabelProvider<u32>> {
+    Arc::new(HighSelectivityBitmapFilter(set))
 }
 
 #[cfg(test)]

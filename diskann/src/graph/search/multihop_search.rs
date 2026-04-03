@@ -215,19 +215,51 @@ where
     let mut two_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
 
-    while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
+    // Exploration queue: maintains rejected nodes for continued graph traversal
+    // when scratch.best has no more unvisited nodes (important for low match rate scenarios).
+    // Only enabled when we receive RejectAndNeedExpand signals.
+    let l_search = search_params.l_value().get();
+    let exploration_queue_capacity = l_search;
+    let mut exploration_queue: Vec<Neighbor<I>> = Vec::with_capacity(exploration_queue_capacity);
+    // Track which nodes are already in exploration_queue to avoid duplicates
+    let mut exploration_set: HashSet<I> = HashSet::with_capacity(exploration_queue_capacity);
+    // Flag to track if exploration mode is enabled (set when we receive RejectAndNeedExpand)
+    let mut exploration_mode_enabled = false;
+
+    loop {
+        // Check termination conditions
+        if accessor.terminate_early() {
+            break;
+        }
+
         scratch.beam_nodes.clear();
         one_hop_neighbors.clear();
         candidates_two_hop_expansion.clear();
         two_hop_neighbors.clear();
 
-        // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-        // Each of these nodes will be a frontier node.
-        while scratch.beam_nodes.len() < beam_width
-            && let Some(closest_node) = scratch.best.closest_notvisited()
-        {
+        // Fill beam from scratch.best first (matching nodes have priority)
+        while scratch.beam_nodes.len() < beam_width {
+            let Some(closest_node) = scratch.best.closest_notvisited() else {
+                break;
+            };
             search_record.record(closest_node, scratch.hops, scratch.cmps);
             scratch.beam_nodes.push(closest_node.id);
+        }
+
+        // If beam not full and exploration mode is enabled, use exploration nodes
+        // (These are non-matching nodes used for graph traversal only)
+        if exploration_mode_enabled {
+            while scratch.beam_nodes.len() < beam_width {
+                let Some(node) = exploration_queue.pop() else {
+                    break;
+                };
+                scratch.beam_nodes.push(node.id);
+            }
+        }
+
+        // Exit if no nodes to process
+        if scratch.beam_nodes.is_empty() {
+            break;
         }
 
         // compute distances from query to one-hop neighbors, and mark them visited
@@ -248,6 +280,11 @@ where
                 }
                 QueryVisitDecision::Reject => {
                     // Rejected nodes: still add to two-hop expansion so we can traverse through them
+                    candidates_two_hop_expansion.push(neighbor);
+                }
+                QueryVisitDecision::RejectAndNeedExpand => {
+                    // Low match rate detected: enable exploration mode and add to expansion
+                    exploration_mode_enabled = true;
                     candidates_two_hop_expansion.push(neighbor);
                 }
                 QueryVisitDecision::Terminate => {
@@ -295,6 +332,26 @@ where
 
         scratch.cmps += two_hop_neighbors.len() as u32;
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
+
+        // Only add to exploration queue if exploration mode is enabled.
+        // This enables the search to continue exploring the graph even when no matching
+        // nodes are in scratch.best (critical for low match rate scenarios).
+        if exploration_mode_enabled {
+            for candidate in candidates_two_hop_expansion.iter() {
+                if exploration_set.insert(candidate.id) {
+                    exploration_queue.push(*candidate);
+                }
+            }
+
+            // Sort exploration queue by distance (descending order, farthest first)
+            // so pop() returns the closest node (greedy search behavior)
+            exploration_queue.sort_unstable_by(|a, b| {
+                b.distance
+                    .partial_cmp(&a.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            exploration_queue.truncate(exploration_queue_capacity);
+        }
     }
 
     Ok(make_stats(scratch))
