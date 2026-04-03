@@ -135,14 +135,29 @@ mod tests {
 
     #[test]
     fn test_new() {
+        let to_non_negative =
+            |x: f64| -> Result<NonNegativeFinite, InvalidNonNegativeFinite> { x.try_into() };
+        let to_f64 = |x: NonNegativeFinite| -> f64 { x.into() };
+
         assert_eq!(NonNegativeFinite::new(0.0).unwrap().get(), 0.0);
         assert_eq!(NonNegativeFinite::new(-0.0).unwrap().get(), 0.0);
         assert_eq!(NonNegativeFinite::new(0.25).unwrap().get(), 0.25);
+
+        assert_eq!(to_f64(to_non_negative(0.0).unwrap()), 0.0);
+        assert_eq!(to_f64(to_non_negative(-0.0).unwrap()), 0.0);
+        assert_eq!(to_f64(to_non_negative(0.25).unwrap()), 0.25);
+
+        assert_eq!(to_non_negative(0.25).unwrap().to_string(), 0.25.to_string());
 
         assert_eq!(
             NonNegativeFinite::new(-1.0).unwrap_err(),
             InvalidNonNegativeFinite::Negative
         );
+        assert_eq!(
+            to_non_negative(-1.0).unwrap_err(),
+            InvalidNonNegativeFinite::Negative
+        );
+
         assert_eq!(
             NonNegativeFinite::new(f64::INFINITY).unwrap_err(),
             InvalidNonNegativeFinite::NonFinite
