@@ -3,11 +3,69 @@
  * Licensed under the MIT license.
  */
 
+//! The CLI frontend for benchmark applications built with this crate.
+//!
+//! [`App`] provides a [`clap`]-based command line interface that handles input parsing,
+//! benchmark dispatch, and regression checking. Consumers build a binary by registering
+//! [`Input`](crate::Input)s and [`Benchmark`](crate::Benchmark)s, then forwarding to
+//! [`App::parse`] and [`App::run`].
+//!
+//! # Subcommands
+//!
+//! ## Standard Workflow
+//!
+//! * `inputs [NAME]`: List available input kinds, or describe one by name.
+//! * `benchmarks`: List registered benchmarks and their descriptions.
+//! * `skeleton`: Print a skeleton input JSON file.
+//! * `run --input-file <FILE> --output-file <FILE> [--dry-run]`: Run benchmarks.
+//!
+//! ## Regression Checks
+//!
+//! These are accessed via `check <SUBCOMMAND>`:
+//!
+//! * `check skeleton`: Print a skeleton tolerance JSON file.
+//! * `check tolerances [NAME]`: List tolerance kinds, or describe one by name.
+//! * `check verify --tolerances <FILE> --input-file <FILE>`: Validate a tolerance file
+//!   against an input file.
+//! * `check run --tolerances <FILE> --input-file <FILE> --before <FILE> --after <FILE> [--output-file <FILE>]`:
+//!   Run regression checks.
+//!
+//! # Example
+//!
+//! A typical binary using this crate:
+//!
+//! ```rust,no_run
+//! use diskann_benchmark_runner::{App, registry};
+//!
+//! fn main() -> anyhow::Result<()> {
+//!     let mut inputs = registry::Inputs::new();
+//!     // inputs.register::<MyInput>()?;
+//!
+//!     let mut benchmarks = registry::Benchmarks::new();
+//!     // benchmarks.register::<MyBenchmark>("my-bench");
+//!     // benchmarks.register_regression::<MyRegressionBenchmark>("my-regression");
+//!
+//!     let app = App::parse();
+//!     let mut output = diskann_benchmark_runner::output::default();
+//!     app.run(&inputs, &benchmarks, &mut output)
+//! }
+//! ```
+//!
+//! # Regression Workflow
+//!
+//! 1. Run benchmarks twice (e.g. before and after a code change) with `run`, producing
+//!    two output files.
+//! 2. Author a tolerance file describing acceptable variation (use `check skeleton` and
+//!    `check tolerances` for guidance).
+//! 3. Validate the tolerance file with `check verify`.
+//! 4. Compare the two output files with `check run`.
+
 use std::{io::Write, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 
 use crate::{
+    internal,
     jobs::{self, Jobs},
     output::Output,
     registry,
@@ -40,6 +98,45 @@ pub enum Commands {
         #[arg(long, action)]
         dry_run: bool,
     },
+    #[command(subcommand)]
+    Check(Check),
+}
+
+/// Subcommands for regression check operations.
+#[derive(Debug, Subcommand)]
+pub enum Check {
+    /// Provide a skeleton of the overall tolerance files.
+    Skeleton,
+    /// List all the tolerance inputs accepted by the benchmark executable.
+    Tolerances {
+        /// Describe the layout for the named tolerance kind.
+        describe: Option<String>,
+    },
+    /// Verify the tolerance file with the accompanying input file.
+    Verify {
+        /// The tolerance file to check.
+        #[arg(long = "tolerances")]
+        tolerances: PathBuf,
+        /// The benchmark input file used to generate the data that will be compared.
+        #[arg(long = "input-file")]
+        input_file: PathBuf,
+    },
+    /// Run regression checks against before/after output files.
+    Run {
+        /// The tolerance file to check.
+        #[arg(long = "tolerances")]
+        tolerances: PathBuf,
+        /// The benchmark input file used to generate the data that will be compared.
+        #[arg(long = "input-file")]
+        input_file: PathBuf,
+        #[arg(long = "before")]
+        before: PathBuf,
+        #[arg(long = "after")]
+        after: PathBuf,
+        /// Optional path to write the JSON check results.
+        #[arg(long = "output-file")]
+        output_file: Option<PathBuf>,
+    },
 }
 
 /// The CLI used to drive a benchmark application.
@@ -50,7 +147,7 @@ pub struct App {
 }
 
 impl App {
-    /// Construct [`Self`] by parsing commandline arguments from [`std::env::args]`.
+    /// Construct [`Self`] by parsing commandline arguments from [`std::env::args`].
     ///
     /// This simply redirects to [`clap::Parser::parse`] and is provided to allow parsing
     /// without the [`clap::Parser`] trait in scope.
@@ -75,7 +172,7 @@ impl App {
         Self { command }
     }
 
-    /// Run the application using the registered `inputs` and `outputs`.
+    /// Run the application using the registered `inputs` and `benchmarks`.
     pub fn run(
         &self,
         inputs: &registry::Inputs,
@@ -210,8 +307,111 @@ impl App {
                     Checkpoint::new(&serialized, &results, output_file)?.save()?;
                 }
             }
+            // Extensions
+            Commands::Check(check) => return self.check(check, inputs, benchmarks, output),
         };
         Ok(())
+    }
+
+    // Extensions
+    fn check(
+        &self,
+        check: &Check,
+        inputs: &registry::Inputs,
+        benchmarks: &registry::Benchmarks,
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<()> {
+        match check {
+            Check::Skeleton => {
+                let message = "Skeleton tolerance file.\n\n\
+                               Each tolerance is paired with an input that is structurally\n\
+                               matched with an entry in the corresponding `--input-file`.\n\n\
+                               This allow a single tolerance entry to be applied to multiple\n\
+                               benchmark runs as long as this structural mapping is unambiguous.\n";
+
+                writeln!(output, "{}", message)?;
+                writeln!(output, "{}", internal::regression::Raw::example())?;
+                Ok(())
+            }
+            Check::Tolerances { describe } => {
+                let tolerances = benchmarks.tolerances();
+
+                match describe {
+                    Some(name) => match tolerances.get(&**name) {
+                        Some(registered) => {
+                            let repr = internal::regression::RawInner::new(
+                                jobs::Unprocessed::new(
+                                    "".to_string(),
+                                    serde_json::Value::Object(Default::default()),
+                                ),
+                                jobs::Unprocessed::format_input(registered.tolerance)?,
+                            );
+
+                            write!(
+                                output,
+                                "The example JSON representation for \"{}\" is shown below.\n\
+                                 Populate the \"input\" field with a compatible benchmark input.\n\
+                                 Matching will be performed by partial structural map on the input.\n\n",
+                                name
+                            )?;
+                            writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
+                            Ok(())
+                        }
+                        None => {
+                            writeln!(output, "No tolerance input found for \"{}\"", name)?;
+                            Ok(())
+                        }
+                    },
+                    None => {
+                        writeln!(output, "Available tolerance kinds are listed below.")?;
+
+                        // Print the registered tolerance files in alphabetical order.
+                        let mut keys: Vec<_> = tolerances.keys().collect();
+                        keys.sort();
+                        for k in keys {
+                            // This access should not panic - we just obtained all the keys.
+                            let registered = &tolerances[k];
+                            writeln!(output, "    {}", registered.tolerance.tag())?;
+                            for pair in registered.regressions.iter() {
+                                writeln!(
+                                    output,
+                                    "    - \"{}\" => \"{}\"",
+                                    pair.input_tag(),
+                                    pair.name(),
+                                )?;
+                            }
+                        }
+                        Ok(())
+                    }
+                }
+            }
+            Check::Verify {
+                tolerances,
+                input_file,
+            } => {
+                // For verification - we merely check that we can successfully construct
+                // the regression `Checks` struct. It performs all the necessary preflight
+                // checks.
+                let benchmarks = benchmarks.tolerances();
+                let _ =
+                    internal::regression::Checks::new(tolerances, input_file, inputs, &benchmarks)?;
+                Ok(())
+            }
+            Check::Run {
+                tolerances,
+                input_file,
+                before,
+                after,
+                output_file,
+            } => {
+                let registered = benchmarks.tolerances();
+                let checks =
+                    internal::regression::Checks::new(tolerances, input_file, inputs, &registered)?;
+                let jobs = checks.jobs(before, after)?;
+                jobs.run(output, output_file.as_deref())?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -228,8 +428,11 @@ impl App {
 ///
 /// Within the `stdin.txt` command line, there are several special symbols:
 ///
-/// * $INPUT - Resolves to `input.json` in the same directory as the `stdin.txt` file.
-/// * $OUTPUT - Resolves to `output.json` in a temporary directory.
+/// * $INPUT_FILE - Resolves to `input.json` in the same directory as the `stdin.txt` file.
+/// * $OUTPUT_FILE - Resolves to `output.json` in a temporary directory.
+/// * $TOLERANCES_FILE - Resolves to `tolerances.json` in the test directory.
+/// * $REGRESSION_INPUT_FILE - Resolves to `regression_input.json` test directory.
+/// * $CHECK_OUTPUT_FILE - Resolves to `checks.json` in a temporary directory.
 ///
 /// As mentioned - an input JSON file can be included and must be named "input.json" to be
 /// discoverable.
@@ -237,7 +440,7 @@ impl App {
 /// ## Output Files
 ///
 /// Tests should have at least a `stdout.txt` file with the expected outputs for running the
-/// command in `stdin.txt`. If an output JSON file is expected, it should be name `output.json`.
+/// command in `stdin.txt`. If an output JSON file is expected, it should be named `output.json`.
 ///
 /// ## Test Discovery and Running
 ///
@@ -276,6 +479,13 @@ mod tests {
     const STDOUT: &str = "stdout.txt";
     const INPUT_FILE: &str = "input.json";
     const OUTPUT_FILE: &str = "output.json";
+
+    // Regression Extension
+    const TOLERANCES_FILE: &str = "tolerances.json";
+    const REGRESSION_INPUT_FILE: &str = "regression_input.json";
+    const CHECK_OUTPUT_FILE: &str = "checks.json";
+
+    const ALL_GENERATED_OUTPUTS: [&str; 2] = [OUTPUT_FILE, CHECK_OUTPUT_FILE];
 
     // Read the entire contents of a file to a string.
     fn read_to_string<P: AsRef<Path>>(path: P, ctx: &str) -> String {
@@ -327,33 +537,57 @@ mod tests {
             }
         }
 
-        fn parse_stdin(&self, tempdir: &Path) -> App {
+        fn parse_stdin(&self, tempdir: &Path) -> Vec<App> {
             let path = self.dir.join(STDIN);
 
             // Read the standard input file to a string.
             let stdin = read_to_string(&path, "standard input");
 
-            let args: Vec<OsString> = stdin
+            let output: Vec<App> = stdin
+                .lines()
+                .filter_map(|line| {
+                    if line.starts_with('#') || line.is_empty() {
+                        None
+                    } else {
+                        Some(self.parse_line(line, tempdir))
+                    }
+                })
+                .collect();
+
+            if output.is_empty() {
+                panic!("File \"{}/stdin.txt\" has no command!", self.dir.display());
+            }
+
+            output
+        }
+
+        fn parse_line(&self, line: &str, tempdir: &Path) -> App {
+            // Split and resolve special symbols
+            let args: Vec<OsString> = line
                 .split_whitespace()
                 .map(|v| -> OsString { self.resolve(v, tempdir).into() })
                 .collect();
 
-            // Split and resolve special symbols
             App::try_parse_from(std::iter::once(OsString::from("test-app")).chain(args)).unwrap()
         }
 
         fn resolve(&self, s: &str, tempdir: &Path) -> PathBuf {
-            if s == "$INPUT" {
-                self.dir.join(INPUT_FILE)
-            } else if s == "$OUTPUT" {
-                tempdir.join(OUTPUT_FILE)
-            } else {
-                s.into()
+            match s {
+                // Standard workflow
+                "$INPUT" => self.dir.join(INPUT_FILE),
+                "$OUTPUT" => tempdir.join(OUTPUT_FILE),
+                // Regression extension
+                "$TOLERANCES" => self.dir.join(TOLERANCES_FILE),
+                "$REGRESSION_INPUT" => self.dir.join(REGRESSION_INPUT_FILE),
+                "$CHECK_OUTPUT" => tempdir.join(CHECK_OUTPUT_FILE),
+
+                // Catch-all: no interpolation
+                _ => s.into(),
             }
         }
 
         fn run(&self, tempdir: &Path) {
-            let app = self.parse_stdin(tempdir);
+            let apps = self.parse_stdin(tempdir);
 
             // Register inputs
             let mut inputs = registry::Inputs::new();
@@ -363,19 +597,42 @@ mod tests {
             let mut benchmarks = registry::Benchmarks::new();
             crate::test::register_benchmarks(&mut benchmarks);
 
-            // Run app - collecting output into a buffer.
+            // Run each app invocation - collecting the last output into a buffer.
             //
-            // If the app returns an error - format the error to the output buffer as well
-            // using the debug formatting option.
+            // Only the last run is allowed to return an error - if it does, format the
+            // error to the output buffer as well using the debug formatting option.
             let mut buffer = crate::output::Memory::new();
-            if let Err(err) = app.run(&inputs, &benchmarks, &mut buffer) {
-                let mut b: &mut dyn crate::Output = &mut buffer;
-                write!(b, "{:?}", err).unwrap();
+            for (i, app) in apps.iter().enumerate() {
+                let is_last = i + 1 == apps.len();
+
+                // Select where to route the test output.
+                //
+                // Only the last run gets saved. Setup output is discarded — if a setup
+                // command fails, the panic message includes the error.
+                let mut b: &mut dyn crate::Output = if is_last {
+                    &mut buffer
+                } else {
+                    &mut crate::output::Sink::new()
+                };
+
+                if let Err(err) = app.run(&inputs, &benchmarks, b) {
+                    if is_last {
+                        write!(b, "{:?}", err).unwrap();
+                    } else {
+                        panic!(
+                            "App {} of {} failed with error: {:?}",
+                            i + 1,
+                            apps.len(),
+                            err
+                        );
+                    }
+                }
             }
 
             // Check that `stdout` matches
             let stdout: String =
                 ux::normalize(ux::strip_backtrace(buffer.into_inner().try_into().unwrap()));
+            let stdout = ux::scrub_path(stdout, tempdir, "$TEMPDIR");
             let output = self.dir.join(STDOUT);
             if self.overwrite {
                 std::fs::write(output, stdout).unwrap();
@@ -387,60 +644,62 @@ mod tests {
             }
 
             // Check that the output files match.
-            let output_path = tempdir.join(OUTPUT_FILE);
-            let was_output_generated = output_path.is_file();
+            for file in ALL_GENERATED_OUTPUTS {
+                self.check_output_file(tempdir, file);
+            }
+        }
 
-            let expected_output_path = self.dir.join(OUTPUT_FILE);
-            let is_output_expected = expected_output_path.is_file();
+        fn check_output_file(&self, tempdir: &Path, filename: &str) {
+            let generated_path = tempdir.join(filename);
+            let was_generated = generated_path.is_file();
+
+            let expected_path = self.dir.join(filename);
+            let is_expected = expected_path.is_file();
 
             if self.overwrite {
                 // Copy the output file to the destination.
-                if was_output_generated {
+                if was_generated {
                     println!(
-                        "Moving generated output file {:?} to {:?}",
-                        output_path, expected_output_path
+                        "Moving generated file {:?} to {:?}",
+                        generated_path, expected_path
                     );
 
-                    if let Err(err) = std::fs::rename(&output_path, &expected_output_path) {
+                    if let Err(err) = std::fs::rename(&generated_path, &expected_path) {
                         panic!(
-                            "Moving generated output file {:?} to expected location {:?} failed: {}",
-                            output_path, expected_output_path, err
+                            "Moving generated file {:?} to expected location {:?} failed: {}",
+                            generated_path, expected_path, err
                         );
                     }
-                } else if is_output_expected {
-                    println!("Removing outdated output file {:?}", expected_output_path);
-                    if let Err(err) = std::fs::remove_file(&expected_output_path) {
-                        panic!(
-                            "Failed removing outdated output file {:?}: {}",
-                            expected_output_path, err
-                        );
+                } else if is_expected {
+                    println!("Removing outdated file {:?}", expected_path);
+                    if let Err(err) = std::fs::remove_file(&expected_path) {
+                        panic!("Failed removing outdated file {:?}: {}", expected_path, err);
                     }
                 }
             } else {
-                match (was_output_generated, is_output_expected) {
+                match (was_generated, is_expected) {
                     (true, true) => {
-                        let output_contents = read_to_string(output_path, "generated output JSON");
+                        let output_contents = read_to_string(generated_path, "generated");
 
-                        let expected_contents =
-                            read_to_string(expected_output_path, "expected output JSON");
+                        let expected_contents = read_to_string(expected_path, "expected");
 
                         if output_contents != expected_contents {
                             panic!(
-                                "Got:\n\n{}\n\nExpected:\n\n{}\n",
-                                output_contents, expected_contents
+                                "{}: Got:\n\n{}\n\nExpected:\n\n{}\n",
+                                filename, output_contents, expected_contents
                             );
                         }
                     }
                     (true, false) => {
-                        let output_contents = read_to_string(output_path, "generated output JSON");
+                        let output_contents = read_to_string(generated_path, "generated");
 
                         panic!(
-                            "An output JSON was generated when none was expected. Contents:\n\n{}",
-                            output_contents
+                            "{} was generated when none was expected. Contents:\n\n{}",
+                            filename, output_contents
                         );
                     }
                     (false, true) => {
-                        panic!("No output JSON was generated when one was expected");
+                        panic!("{} was not generated when it was expected", filename);
                     }
                     (false, false) => { /* this is okay */ }
                 }
@@ -469,7 +728,12 @@ mod tests {
     }
 
     #[test]
-    fn top_level_tests() {
-        run_all_tests_in("");
+    fn benchmark_tests() {
+        run_all_tests_in("benchmark");
+    }
+
+    #[test]
+    fn regression_tests() {
+        run_all_tests_in("regression");
     }
 }

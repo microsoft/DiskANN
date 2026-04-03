@@ -17,6 +17,15 @@ pub fn normalize(s: String) -> String {
     trimmed.replace("\r\n", "\n")
 }
 
+/// Replace all occurrences of `path` in `s` with `replacement`.
+///
+/// This is useful for scrubbing non-deterministic paths (e.g. temp directories) from test
+/// output before comparison.
+#[doc(hidden)]
+pub fn scrub_path(s: String, path: &std::path::Path, replacement: &str) -> String {
+    s.replace(&path.display().to_string(), replacement)
+}
+
 // There does not appear to be a supported was of checking whether backtraces are
 // enabled without first actually capturing a backtrace.
 static BACKTRACE_ENABLED: LazyLock<bool> = LazyLock::new(|| {

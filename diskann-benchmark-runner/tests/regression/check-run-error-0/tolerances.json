@@ -1,0 +1,31 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "test-input-dim",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "test-input-dim-tolerance",
+        "content": {
+          "succeed": true,
+          "error_in_check": true
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "test-input-types",
+        "content": {
+          "data_type": "int8"
+        }
+      },
+      "tolerance": {
+        "type": "test-input-types-tolerance",
+        "content": {
+          "error_when_checked": false
+        }
+      }
+    }
+  ]
+}

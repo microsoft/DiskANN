@@ -1,0 +1,7 @@
+Check 1 of 3 ("dim-bench") encountered an error:
+simulated check error
+
+Check 3 of 3 ("dim-bench") encountered an error:
+simulated check error
+
+one or more checks failed with errors
