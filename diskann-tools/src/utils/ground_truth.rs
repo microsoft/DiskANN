@@ -93,16 +93,6 @@ pub fn read_labels_and_compute_bitmap(
         base_label_filename
     );
 
-    // Print first few base labels for debugging
-    for (i, label) in base_labels.iter().take(3).enumerate() {
-        tracing::debug!(
-            "Base label sample [{}]: doc_id={}, label={}",
-            i,
-            label.doc_id,
-            label.label
-        );
-    }
-
     // Parse queries and evaluate against labels
     let parsed_queries = read_and_parse_queries(query_label_filename)?;
     tracing::info!(
@@ -110,16 +100,6 @@ pub fn read_labels_and_compute_bitmap(
         parsed_queries.len(),
         query_label_filename
     );
-
-    // Print first few queries for debugging
-    for (i, (query_id, query_expr)) in parsed_queries.iter().take(3).enumerate() {
-        tracing::debug!(
-            "Query sample [{}]: query_id={}, expr={:?}",
-            i,
-            query_id,
-            query_expr
-        );
-    }
 
     // using the global threadpool is fine here
     #[allow(clippy::disallowed_methods)]
@@ -155,17 +135,6 @@ pub fn read_labels_and_compute_bitmap(
         query_bitmaps.len(),
         queries_with_matches
     );
-
-    // Print per-query match counts
-    for (i, bitmap) in query_bitmaps.iter().enumerate() {
-        if i < 10 || bitmap.is_empty() {
-            tracing::debug!(
-                "Query {}: {} base vectors matched the filter",
-                i,
-                bitmap.len()
-            );
-        }
-    }
 
     // If no matches, print more diagnostic info
     if total_matches == 0 {
@@ -333,23 +302,7 @@ pub fn compute_ground_truth_from_datafiles<
         recall_at
     );
     for (query_idx, npq) in ground_truth.iter().enumerate() {
-        let neighbors: Vec<_> = npq.iter().collect();
-        let neighbor_count = neighbors.len();
-
-        if query_idx < 10 {
-            // Print top K IDs and distances for first 10 queries
-            let top_ids: Vec<u32> = neighbors.iter().take(10).map(|n| n.id).collect();
-            let top_dists: Vec<f32> = neighbors.iter().take(10).map(|n| n.distance).collect();
-            tracing::debug!(
-                "Query {}: {} neighbors found. Top IDs: {:?}, Top distances: {:?}",
-                query_idx,
-                neighbor_count,
-                top_ids,
-                top_dists
-            );
-        }
-
-        if neighbor_count == 0 {
+        if npq.size() == 0 {
             tracing::warn!("Query {} has 0 neighbors in ground truth!", query_idx);
         }
     }
