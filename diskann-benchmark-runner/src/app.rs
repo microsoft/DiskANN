@@ -129,8 +129,10 @@ pub enum Check {
         /// The benchmark input file used to generate the data that will be compared.
         #[arg(long = "input-file")]
         input_file: PathBuf,
+        /// The `--output-file` from a benchmark to use as a baseline.
         #[arg(long = "before")]
         before: PathBuf,
+        /// The `--output-file` that will be checked for regression against `before`.
         #[arg(long = "after")]
         after: PathBuf,
         /// Optional path to write the JSON check results.
