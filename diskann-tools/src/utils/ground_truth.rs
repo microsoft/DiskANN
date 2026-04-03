@@ -37,7 +37,7 @@ use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 /// Cartesian product. Non-object labels are evaluated directly.
 fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
     match label {
-        Value::Object(map) => eval_map_recursive(query_expr, &mut map.iter(), Map::new()),
+        Value::Object(map) => eval_map_recursive(query_expr, map.iter(), Map::new()),
         _ => eval_query_expr(query_expr, label),
     }
 }
@@ -51,7 +51,7 @@ fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool 
 /// * When all fields have been consumed, `eval_query_expr` is called on the accumulated object.
 fn eval_map_recursive(
     query_expr: &ASTExpr,
-    map_iter: &mut map::Iter,
+    mut map_iter: map::Iter,
     mut current: Map<String, Value>,
 ) -> bool {
     match map_iter.next() {
@@ -64,7 +64,9 @@ fn eval_map_recursive(
                 for item in arr {
                     let mut branch = current.clone();
                     branch.insert((*key).clone(), item.clone());
-                    if eval_map_recursive(query_expr, map_iter, branch) {
+
+                    // need to clone here because we want to iterate from the next element for each branch
+                    if eval_map_recursive(query_expr, map_iter.clone(), branch) {
                         return true;
                     }
                 }
