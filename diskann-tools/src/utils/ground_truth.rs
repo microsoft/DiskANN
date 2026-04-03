@@ -26,7 +26,7 @@ use diskann_utils::{
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
 use rayon::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::{map, Map, Value};
 
 use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 
@@ -37,10 +37,7 @@ use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 /// Cartesian product. Non-object labels are evaluated directly.
 fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
     match label {
-        Value::Object(map) => {
-            let entries: Vec<(&String, &Value)> = map.iter().collect();
-            eval_map_recursive(query_expr, &entries, Map::new())
-        }
+        Value::Object(map) => eval_map_recursive(query_expr, &mut map.iter(), Map::new()),
         _ => eval_query_expr(query_expr, label),
     }
 }
@@ -54,29 +51,29 @@ fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool 
 /// * When all fields have been consumed, `eval_query_expr` is called on the accumulated object.
 fn eval_map_recursive(
     query_expr: &ASTExpr,
-    entries: &[(&String, &Value)],
+    map_iter: &mut map::Iter,
     mut current: Map<String, Value>,
 ) -> bool {
-    match entries {
-        [] => eval_query_expr(query_expr, &Value::Object(current)),
-        [(key, Value::Array(arr)), rest @ ..] => {
+    match map_iter.next() {
+        None => eval_query_expr(query_expr, &Value::Object(current)),
+        Some((key, Value::Array(arr))) => {
             if arr.is_empty() {
                 // Omit this key, matching the original behaviour for empty arrays.
-                eval_map_recursive(query_expr, rest, current)
+                eval_map_recursive(query_expr, map_iter, current)
             } else {
                 for item in arr {
                     let mut branch = current.clone();
                     branch.insert((*key).clone(), item.clone());
-                    if eval_map_recursive(query_expr, rest, branch) {
+                    if eval_map_recursive(query_expr, map_iter, branch) {
                         return true;
                     }
                 }
                 false
             }
         }
-        [(key, val), rest @ ..] => {
+        Some((key, val)) => {
             current.insert((*key).clone(), (*val).clone());
-            eval_map_recursive(query_expr, rest, current)
+            eval_map_recursive(query_expr, map_iter, current)
         }
     }
 }
