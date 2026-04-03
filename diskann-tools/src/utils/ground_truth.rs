@@ -65,7 +65,7 @@ fn eval_map_recursive(
                     let mut branch = current.clone();
                     branch.insert((*key).clone(), item.clone());
 
-                    // need to clone here because we want to iterate from the next element for each branch
+                    // need to clone here because we want to iterate from same next element for each branch
                     if eval_map_recursive(query_expr, map_iter.clone(), branch) {
                         return true;
                     }
