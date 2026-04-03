@@ -582,7 +582,8 @@ fn build_internal_sq_impl(
         use std::sync::atomic::{AtomicUsize, Ordering};
         let total_edges = AtomicUsize::new(0);
         leaves.par_iter().for_each(|leaf| {
-            let edges = crate::leaf_build::build_leaf_quantized(&qdata, &leaf.indices, config.k);
+            let indices_usize: Vec<usize> = leaf.indices.iter().map(|&i| i as usize).collect();
+            let edges = crate::leaf_build::build_leaf_quantized(&qdata, &indices_usize, config.k);
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
             hash_prune.add_edges_batched(&edges);
         });
@@ -735,10 +736,11 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let total_edges = AtomicUsize::new(0);
 
         leaves.par_iter().for_each(|leaf| {
+            let indices_usize: Vec<usize> = leaf.indices.iter().map(|&i| i as usize).collect();
             let edges = if let Some(ref q) = qdata {
-                leaf_build::build_leaf_quantized(q, &leaf.indices, config.k)
+                leaf_build::build_leaf_quantized(q, &indices_usize, config.k)
             } else {
-                leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, config.metric)
+                leaf_build::build_leaf(data, ndims, &indices_usize, config.k, config.metric)
             };
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
             hash_prune.add_edges_batched(&edges);

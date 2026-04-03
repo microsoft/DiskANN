@@ -32,9 +32,12 @@ fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
 }
 
 /// A leaf partition containing indices into the original dataset.
+///
+/// Uses `u32` instead of `usize` to halve memory on 64-bit platforms.
+/// Sufficient for datasets up to 4 billion points.
 #[derive(Debug, Clone)]
 pub struct Leaf {
-    pub indices: Vec<usize>,
+    pub indices: Vec<u32>,
 }
 
 /// Configuration for RBC partitioning.
@@ -55,7 +58,7 @@ fn partition_assign_quantized(
     points: &[usize],
     leaders: &[usize],
     fanout: usize,
-) -> Vec<Vec<usize>> {
+) -> Vec<Vec<u32>> {
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
@@ -130,11 +133,11 @@ fn partition_assign_quantized(
             }
         });
 
-    let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
     for i in 0..np {
         let row = &assignments[i * num_assign..(i + 1) * num_assign];
         for &li in row {
-            clusters[li as usize].push(i);
+            clusters[li as usize].push(i as u32);
         }
     }
     clusters
@@ -152,7 +155,7 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
     leaders: &[usize],
     fanout: usize,
     metric: diskann_vector::distance::Metric,
-) -> Vec<Vec<usize>> {
+) -> Vec<Vec<u32>> {
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
@@ -286,11 +289,11 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
         });
 
     // Aggregate into per-leader clusters.
-    let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
     for i in 0..np {
         let row = &assignments[i * num_assign..(i + 1) * num_assign];
         for &li in row {
-            clusters[li as usize].push(i);
+            clusters[li as usize].push(i as u32);
         }
     }
     clusters
@@ -300,7 +303,7 @@ fn partition_assign<T: VectorRepr + Send + Sync>(
 /// Used only as a fallback when recursion hits MAX_DEPTH or when a single
 /// merged cluster remains oversized. Not used as a general shortcut — all
 /// oversized clusters go through recursive RBC per the paper.
-fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
+fn force_split(indices: &[u32], c_max: usize) -> Vec<Leaf> {
     indices
         .chunks(c_max)
         .map(|chunk| Leaf {
@@ -316,11 +319,11 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
 /// nearest large cluster by Hamming distance between centroids.
 fn merge_small_quantized(
     qdata: &crate::quantize::QuantizedData,
-    mut clusters: Vec<Vec<usize>>,
+    mut clusters: Vec<Vec<u32>>,
     c_min: usize,
-) -> Vec<Vec<usize>> {
-    let mut large: Vec<Vec<usize>> = Vec::new();
-    let mut smalls: Vec<Vec<usize>> = Vec::new();
+) -> Vec<Vec<u32>> {
+    let mut large: Vec<Vec<u32>> = Vec::new();
+    let mut smalls: Vec<Vec<u32>> = Vec::new();
     for c in clusters.drain(..) {
         if c.len() < c_min && !c.is_empty() { smalls.push(c); }
         else if !c.is_empty() { large.push(c); }
@@ -339,7 +342,7 @@ fn merge_small_quantized(
         let mut centroid = vec![0u64; u64s];
         let mut counts = vec![0u32; u64s * 64];
         for &idx in c {
-            let bits = qdata.get_u64(idx);
+            let bits = qdata.get_u64(idx as usize);
             for (w, &word) in bits.iter().enumerate() {
                 let mut b = word;
                 while b != 0 {
@@ -365,7 +368,7 @@ fn merge_small_quantized(
         let mut small_centroid = vec![0u64; u64s];
         let mut counts = vec![0u32; u64s * 64];
         for &idx in &small {
-            let bits = qdata.get_u64(idx);
+            let bits = qdata.get_u64(idx as usize);
             for (w, &word) in bits.iter().enumerate() {
                 let mut b = word;
                 while b != 0 {
@@ -404,11 +407,11 @@ fn merge_small_quantized(
 fn merge_small_into_nearest<T: VectorRepr>(
     data: &[T],
     ndims: usize,
-    mut clusters: Vec<Vec<usize>>,
+    mut clusters: Vec<Vec<u32>>,
     c_min: usize,
-) -> Vec<Vec<usize>> {
-    let mut large: Vec<Vec<usize>> = Vec::new();
-    let mut smalls: Vec<Vec<usize>> = Vec::new();
+) -> Vec<Vec<u32>> {
+    let mut large: Vec<Vec<u32>> = Vec::new();
+    let mut smalls: Vec<Vec<u32>> = Vec::new();
 
     for c in clusters.drain(..) {
         if c.len() < c_min && !c.is_empty() {
@@ -433,6 +436,7 @@ fn merge_small_into_nearest<T: VectorRepr>(
             let inv = 1.0 / c.len() as f32;
             let mut point_buf = vec![0.0f32; ndims];
             for &idx in c {
+                let idx = idx as usize;
                 T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
                     .expect("f32 conversion");
                 for (cv, &pv) in centroid.iter_mut().zip(point_buf.iter()) {
@@ -452,6 +456,7 @@ fn merge_small_into_nearest<T: VectorRepr>(
         let mut rep_buf = vec![0.0f32; ndims];
         let inv = 1.0 / small.len() as f32;
         for &idx in &small {
+            let idx = idx as usize;
             T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
                 .expect("f32 conversion");
             for d in 0..ndims { rep_buf[d] += point_buf[d]; }
@@ -495,14 +500,15 @@ pub fn partition<T: VectorRepr + Send + Sync>(
 
     if n <= config.c_max {
         return vec![Leaf {
-            indices: indices.to_vec(),
+            indices: indices.iter().map(|&i| i as u32).collect(),
         }];
     }
 
     // For clusters at deep recursion levels or only marginally over c_max,
     // force-split is cheaper than doing another full GEMM + assignment.
     if level >= MAX_DEPTH {
-        return force_split(indices, config.c_max);
+        let indices_u32: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
+        return force_split(&indices_u32, config.c_max);
     }
 
     let fanout = if level < config.fanout.len() {
@@ -517,10 +523,15 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     // Fused GEMM + assignment (avoids materializing full distance matrix).
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
 
-    // Map local indices back to global.
-    let clusters: Vec<Vec<usize>> = clusters_local
+    // Map local indices back to global (u32).
+    let clusters: Vec<Vec<u32>> = clusters_local
         .into_iter()
-        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
+        .map(|local_cluster| {
+            local_cluster
+                .into_iter()
+                .map(|li| indices[li as usize] as u32)
+                .collect()
+        })
         .collect();
 
     // Merge undersized clusters into nearest large cluster by centroid proximity.
@@ -535,9 +546,12 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         if cluster.len() <= config.c_max {
             leaves.push(Leaf { indices: cluster });
         } else {
+            // Convert u32 back to usize for the recursive call.
+            let cluster_usize: Vec<usize> = cluster.iter().map(|&i| i as usize).collect();
             let sub_seed: u64 = rng.random();
             let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
-            let sub_leaves = partition(data, ndims, &cluster, config, level + 1, &mut sub_rng);
+            let sub_leaves =
+                partition(data, ndims, &cluster_usize, config, level + 1, &mut sub_rng);
             leaves.extend(sub_leaves);
         }
     }
@@ -558,7 +572,7 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
 
     if n <= config.c_max {
         return vec![Leaf {
-            indices: indices.to_vec(),
+            indices: indices.iter().map(|&i| i as u32).collect(),
         }];
     }
 
@@ -580,9 +594,14 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
     let assign_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
-    let clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<u32>> = clusters_local
         .into_iter()
-        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
+        .map(|local_cluster| {
+            local_cluster
+                .into_iter()
+                .map(|li| indices[li as usize] as u32)
+                .collect()
+        })
         .collect();
     let map_time = t1.elapsed();
 
@@ -630,8 +649,11 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
                     indices: cluster.clone(),
                 }]
             } else {
+                // Convert u32 back to usize for the recursive call.
+                let cluster_usize: Vec<usize> =
+                    cluster.iter().map(|&i| i as usize).collect();
                 let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
-                partition(data, ndims, cluster, config, 1, &mut sub_rng)
+                partition(data, ndims, &cluster_usize, config, 1, &mut sub_rng)
             }
         })
         .collect();
@@ -653,7 +675,7 @@ pub fn parallel_partition_quantized(
     let n = indices.len();
     if n <= config.c_max {
         return vec![Leaf {
-            indices: indices.to_vec(),
+            indices: indices.iter().map(|&i| i as u32).collect(),
         }];
     }
 
@@ -675,9 +697,14 @@ pub fn parallel_partition_quantized(
     let assign_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
-    let clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<u32>> = clusters_local
         .into_iter()
-        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
+        .map(|local_cluster| {
+            local_cluster
+                .into_iter()
+                .map(|li| indices[li as usize] as u32)
+                .collect()
+        })
         .collect();
     let map_time = t1.elapsed();
 
@@ -717,8 +744,11 @@ pub fn parallel_partition_quantized(
                     indices: cluster.clone(),
                 }]
             } else {
+                // Convert u32 back to usize for the recursive call.
+                let cluster_usize: Vec<usize> =
+                    cluster.iter().map(|&i| i as usize).collect();
                 let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
-                partition_quantized_recursive(qdata, cluster, config, 1, &mut sub_rng)
+                partition_quantized_recursive(qdata, &cluster_usize, config, 1, &mut sub_rng)
             }
         })
         .collect();
@@ -740,11 +770,12 @@ fn partition_quantized_recursive(
     let n = indices.len();
     if n <= config.c_max {
         return vec![Leaf {
-            indices: indices.to_vec(),
+            indices: indices.iter().map(|&i| i as u32).collect(),
         }];
     }
     if level >= MAX_DEPTH {
-        return force_split(indices, config.c_max);
+        let indices_u32: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
+        return force_split(&indices_u32, config.c_max);
     }
 
     let fanout = if level < config.fanout.len() {
@@ -757,9 +788,9 @@ fn partition_quantized_recursive(
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
-    let clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<u32>> = clusters_local
         .into_iter()
-        .map(|lc| lc.into_iter().map(|li| indices[li]).collect())
+        .map(|lc| lc.into_iter().map(|li| indices[li as usize] as u32).collect())
         .collect();
 
     // Merge undersized clusters into nearest large cluster by Hamming distance.
@@ -774,11 +805,13 @@ fn partition_quantized_recursive(
         if cluster.len() <= config.c_max {
             leaves.push(Leaf { indices: cluster });
         } else {
+            // Convert u32 back to usize for the recursive call.
+            let cluster_usize: Vec<usize> = cluster.iter().map(|&i| i as usize).collect();
             let sub_seed: u64 = rng.random();
             let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
             leaves.extend(partition_quantized_recursive(
                 qdata,
-                &cluster,
+                &cluster_usize,
                 config,
                 level + 1,
                 &mut sub_rng,
@@ -1195,7 +1228,7 @@ mod tests {
             );
             // All indices should be valid.
             for &idx in &leaf.indices {
-                assert!(idx < npoints, "index {} out of range", idx);
+                assert!((idx as usize) < npoints, "index {} out of range", idx);
             }
         }
     }
@@ -1273,11 +1306,11 @@ mod tests {
         let leaves = parallel_partition(&data, 4, &indices, &config, 42);
         assert!(!leaves.is_empty());
         // Zero-norm vectors should appear in at least one leaf.
-        let all_indices: std::collections::HashSet<usize> = leaves
+        let all_indices: std::collections::HashSet<u32> = leaves
             .iter()
             .flat_map(|l| l.indices.iter().copied())
             .collect();
-        for i in 0..5 {
+        for i in 0u32..5 {
             assert!(
                 all_indices.contains(&i),
                 "zero-norm point {} missing from all leaves",
