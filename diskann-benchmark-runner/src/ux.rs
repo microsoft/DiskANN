@@ -56,29 +56,36 @@ pub fn strip_backtrace(s: String) -> String {
     // maybe a note
     //
     // ```
-    // Importantly, there is an empty line after the stacktrace is finished.
+    // Importantly, there is an empty line before the stacktrace starts.
     //
     // The loop simply looks for the `Stack backtrace:` line and then ignores lines from
     // that point on until an empty line is observed.
     //
+    // When `Stack backtrace:` is observed and a previous empty line exists - that line is
+    // removed.
+    //
     // This seems to handle cases where printouts have multiple errors just fine.
     let mut in_stacktrace = false;
-    let lines: Vec<_> = s
-        .lines()
-        .filter(|l| {
-            if in_stacktrace {
-                if l.is_empty() {
-                    in_stacktrace = false;
-                }
-                false
-            } else if *l == "Stack backtrace:" {
-                in_stacktrace = true;
-                false
-            } else {
-                true
+    let mut lines = Vec::new();
+    for line in s.lines() {
+        if in_stacktrace {
+            if line.is_empty() {
+                in_stacktrace = false;
+                lines.push(line)
             }
-        })
-        .collect();
+        } else if line == "Stack backtrace:" {
+            in_stacktrace = true;
+
+            // Remove a previous empty line (if any).
+            if let Some(previous) = lines.last() {
+                if previous.is_empty() {
+                    lines.pop();
+                }
+            }
+        } else {
+            lines.push(line);
+        }
+    }
 
     lines.join("\n")
 }
