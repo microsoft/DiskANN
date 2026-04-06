@@ -631,17 +631,17 @@ pub(crate) mod disk_index_builder_tests {
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
-        ANNResult,
+        ANNError, ANNResult,
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
-        common::aligned_alloc,
         storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
         utils::Timer,
     };
+    use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
     use diskann_utils::test_data_root;
     use diskann_vector::{
         distance::Metric::{self, L2},
@@ -1082,7 +1082,11 @@ pub(crate) mod disk_index_builder_tests {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query = aligned_alloc::<G::VectorDataType>(dim, 8)?;
+            let mut query = aligned_slice::<G::VectorDataType>(
+                dim,
+                PowerOfTwo::new(8).map_err(ANNError::log_index_error)?,
+            )
+            .map_err(ANNError::log_index_error)?;
             query[..query_data.len()].copy_from_slice(query_data);
 
             let mut query_stats = QueryStatistics::default();

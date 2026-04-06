@@ -4,10 +4,11 @@
  */
 use criterion::Criterion;
 use diskann_providers::{
-    common::{AlignedSlice, aligned_alloc},
+    common::AlignedSlice,
     model::{NUM_PQ_CENTROIDS, compute_pq_distance},
     utils::{ParallelIteratorInPool, create_thread_pool_for_bench},
 };
+use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
 use rand::Rng;
 use rayon::{prelude::IndexedParallelIterator, slice::ParallelSliceMut};
 
@@ -51,8 +52,11 @@ fn generate_benchmark_data(
         .map(|_| rng.random_range(0..n_pts) as u32)
         .collect();
 
-    let mut query_centroid_l2_distance =
-        aligned_alloc(NUM_PQ_CENTROIDS * num_pq_chunks, 256).unwrap();
+    let mut query_centroid_l2_distance = aligned_slice(
+        NUM_PQ_CENTROIDS * num_pq_chunks,
+        PowerOfTwo::new(256).unwrap(),
+    )
+    .unwrap();
     let vec_256 = (0..NUM_PQ_CENTROIDS)
         .map(|i| i as f32)
         .collect::<Vec<f32>>();

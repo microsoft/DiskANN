@@ -4,12 +4,13 @@
  */
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::{
-    common::{aligned_alloc, AlignedSlice},
-    model::{
-        graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
-        FP_VECTOR_MEM_ALIGN,
-    },
+use diskann_providers::model::{
+    graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
+    FP_VECTOR_MEM_ALIGN,
+};
+use diskann_quantization::{
+    alloc::{aligned_slice, AlignedSlice},
+    num::PowerOfTwo,
 };
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
 
@@ -41,7 +42,11 @@ where
     pub fn new(dimension: usize, capacity: usize) -> ANNResult<Self> {
         Ok(Self {
             mapping: HashMap::new(),
-            vectors: aligned_alloc(capacity * dimension, FP_VECTOR_MEM_ALIGN)?,
+            vectors: aligned_slice(
+                capacity * dimension,
+                PowerOfTwo::new(FP_VECTOR_MEM_ALIGN).map_err(ANNError::log_index_error)?,
+            )
+            .map_err(ANNError::log_index_error)?,
             adjacency_lists: Vec::with_capacity(capacity),
             associated_data: Vec::with_capacity(capacity),
             dimension,

@@ -15,10 +15,10 @@ use diskann::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    common::aligned_alloc,
     model::graph::traits::GraphDataType,
     utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
 };
+use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
 use diskann_utils::{
     io::{read_bin, Metadata},
     views::Matrix,
@@ -478,7 +478,15 @@ where
     let mut aligned_queries = Vec::with_capacity(query_num);
     let mut neighbor_queues: Vec<NeighborPriorityQueue<u32>> = Vec::with_capacity(query_num);
     for query in queries {
-        let mut aligned_query = aligned_alloc(query_aligned_dimmensions, 32)?;
+        let mut aligned_query = aligned_slice(
+            query_aligned_dimmensions,
+            PowerOfTwo::new(32).map_err(|e| CMDToolError {
+                details: e.to_string(),
+            })?,
+        )
+        .map_err(|e| CMDToolError {
+            details: e.to_string(),
+        })?;
         aligned_query[..query.len()].copy_from_slice(query);
         aligned_queries.push(aligned_query);
         neighbor_queues.push(NeighborPriorityQueue::new(recall_at as usize));
@@ -494,7 +502,17 @@ where
     let batch_size = 10_000;
     let mut aligned_data_batch = Vec::with_capacity(batch_size);
     for _ in 0..batch_size {
-        aligned_data_batch.push(aligned_alloc(query_aligned_dimmensions, 32)?);
+        aligned_data_batch.push(
+            aligned_slice(
+                query_aligned_dimmensions,
+                PowerOfTwo::new(32).map_err(|e| CMDToolError {
+                    details: e.to_string(),
+                })?,
+            )
+            .map_err(|e| CMDToolError {
+                details: e.to_string(),
+            })?,
+        );
     }
 
     let pool = create_thread_pool(0)?;
@@ -554,7 +572,15 @@ where
         num_base_points += points;
     }
 
-    let mut aligned_data = aligned_alloc(query_aligned_dimmensions, 32)?;
+    let mut aligned_data = aligned_slice(
+        query_aligned_dimmensions,
+        PowerOfTwo::new(32).map_err(|e| CMDToolError {
+            details: e.to_string(),
+        })?,
+    )
+    .map_err(|e| CMDToolError {
+        details: e.to_string(),
+    })?;
 
     if let Some(insert_iter) = insert_iter {
         for (insert_idx, (data_vector, _associated_data)) in insert_iter.enumerate() {

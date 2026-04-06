@@ -135,7 +135,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use diskann_providers::common::aligned_alloc;
+    use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
     pub const TEST_INDEX_PATH: &str =
         "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
     pub const TRUTH_NODE_DATA_PATH: &str =
@@ -170,7 +170,8 @@ mod tests {
 
         let read_length = 512; // adjust according to your logic
         let num_read = 10;
-        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
+        let mut aligned_mem =
+            aligned_slice::<u8>(read_length * num_read, PowerOfTwo::new(512).unwrap()).unwrap();
 
         // create and add AlignedReads to the vector
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
@@ -213,7 +214,8 @@ mod tests {
 
         let read_length = 512;
         let num_read = MAX_IO_CONCURRENCY * 100; // The LinuxAlignedFileReader batches reads according to MAX_IO_CONCURRENCY.  Make sure we have many batches to handle.
-        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
+        let mut aligned_mem =
+            aligned_slice::<u8>(read_length * num_read, PowerOfTwo::new(512).unwrap()).unwrap();
 
         // create and add AlignedReads to the vector
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
@@ -252,7 +254,8 @@ mod tests {
 
         let read_length = 512; // adjust according to your logic
         let num_sector = 10;
-        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_sector, 512).unwrap();
+        let mut aligned_mem =
+            aligned_slice::<u8>(read_length * num_sector, PowerOfTwo::new(512).unwrap()).unwrap();
 
         // Each slice will be used as the buffer for a read request of a sector.
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();

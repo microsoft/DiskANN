@@ -1063,12 +1063,12 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::{
-        common::aligned_alloc,
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
         utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
     };
+    use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
@@ -1390,7 +1390,8 @@ mod disk_provider_tests {
         let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
             .unwrap()
             .0;
-        let mut aligned_query = aligned_alloc::<f32>(query_vector.len(), 32).unwrap();
+        let mut aligned_query =
+            aligned_slice::<f32>(query_vector.len(), PowerOfTwo::new(32).unwrap()).unwrap();
         aligned_query[..query_vector.len()].copy_from_slice(&query_vector);
 
         let queries: Vec<&mut [f32]> = aligned_query.chunks_mut(params.dim).collect();
@@ -1405,7 +1406,8 @@ mod disk_provider_tests {
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = aligned_alloc::<f32>(query.len() + 1, 32).unwrap();
+                let mut aligned_box =
+                    aligned_slice::<f32>(query.len() + 1, PowerOfTwo::new(32).unwrap()).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);
                 temp.push(0.0);
                 temp.extend_from_slice(query);
@@ -1464,7 +1466,8 @@ mod disk_provider_tests {
         let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
             .unwrap()
             .0;
-        let mut aligned_query = aligned_alloc::<f32>(query_vector.len(), 32).unwrap();
+        let mut aligned_query =
+            aligned_slice::<f32>(query_vector.len(), PowerOfTwo::new(32).unwrap()).unwrap();
         aligned_query[..query_vector.len()].copy_from_slice(&query_vector);
         let queries: Vec<&mut [f32]> = aligned_query.chunks_mut(params.dim).collect();
         let truth_result =
@@ -1476,7 +1479,7 @@ mod disk_provider_tests {
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = aligned_alloc::<f32>(query.len() + 1, 32).unwrap();
+                let mut aligned_box = aligned_slice::<f32>(query.len() + 1, PowerOfTwo::new(32).unwrap()).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);
                 temp.push(0.0);
                 temp.extend_from_slice(query);

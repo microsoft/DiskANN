@@ -8,7 +8,10 @@
 use std::ops::Deref;
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::common::{aligned_alloc, AlignedSlice};
+use diskann_quantization::{
+    alloc::{aligned_slice, AlignedSlice},
+    num::PowerOfTwo,
+};
 
 use crate::{
     data_model::GraphHeader,
@@ -73,10 +76,11 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
 
         Ok(Self {
             sector_reader,
-            sectors_data: aligned_alloc(
+            sectors_data: aligned_slice(
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
-                block_size,
-            )?,
+                PowerOfTwo::new(block_size).map_err(ANNError::log_index_error)?,
+            )
+            .map_err(ANNError::log_index_error)?,
             cur_sector_idx: 0,
             num_nodes_per_sector,
             node_len,
@@ -90,10 +94,11 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     pub fn reconfigure(&mut self, max_n_batch_sector_read: usize) -> ANNResult<()> {
         if max_n_batch_sector_read > self.max_n_batch_sector_read {
             self.max_n_batch_sector_read = max_n_batch_sector_read;
-            self.sectors_data = aligned_alloc(
+            self.sectors_data = aligned_slice(
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
-                self.block_size,
-            )?;
+                PowerOfTwo::new(self.block_size).map_err(ANNError::log_index_error)?,
+            )
+            .map_err(ANNError::log_index_error)?;
         }
         Ok(())
     }
@@ -204,7 +209,7 @@ mod disk_sector_graph_test {
     ) -> DiskSectorGraph<<AlignedFileReaderFactory as AlignedReaderFactory>::AlignedReaderType>
     {
         DiskSectorGraph {
-            sectors_data: aligned_alloc(512, 512).unwrap(),
+            sectors_data: aligned_slice(512, PowerOfTwo::new(512).unwrap()).unwrap(),
             sector_reader,
             cur_sector_idx: 0,
             num_nodes_per_sector,

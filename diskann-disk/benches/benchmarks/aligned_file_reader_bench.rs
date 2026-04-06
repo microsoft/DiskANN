@@ -9,7 +9,7 @@ use diskann_disk::utils::aligned_file_reader::{
     traits::{AlignedFileReader, AlignedReaderFactory},
     AlignedFileReaderFactory, AlignedRead,
 };
-use diskann_providers::common::aligned_alloc;
+use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
 
 pub const TEST_INDEX_PATH: &str =
     "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
@@ -33,7 +33,8 @@ pub fn benchmark_aligned_file_reader(c: &mut Criterion) {
 
     let read_length = 512;
     let num_read = MAX_IO_CONCURRENCY * 100; // The LinuxAlignedFileReader batches reads according to MAX_IO_CONCURRENCY.  Make sure we have many batches to handle.
-    let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
+    let mut aligned_mem =
+        aligned_slice::<u8>(read_length * num_read, PowerOfTwo::new(512).unwrap()).unwrap();
 
     // create and add AlignedReads to the vector
     let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
