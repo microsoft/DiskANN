@@ -63,8 +63,7 @@ pub fn train_pq(
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
     pool: &crate::utils::RayonThreadPool,
-) -> ANNResult<model::pq::FixedChunkPQTable>
-{
+) -> ANNResult<model::pq::FixedChunkPQTable> {
     let dim = data.ncols();
     let pivot_args = model::GeneratePivotArguments::new(
         data.nrows(),

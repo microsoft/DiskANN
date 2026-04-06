@@ -291,13 +291,13 @@ where
 
         let generator = QuantDataGenerator::<
             Data::VectorDataType,
-            PQGeneration<Data::VectorDataType, StorageProvider, &RayonThreadPool>,
+            PQGeneration<Data::VectorDataType, StorageProvider>,
         >::new(
             self.index_writer.get_dataset_file(),
             generator_context,
             &quantizer_context,
         )?;
-        let progress = generator.generate_data(storage_provider, &pool, &self.chunking_config)?;
+        let progress = generator.generate_data(storage_provider, pool, &self.chunking_config)?;
 
         checkpoint_context.update(progress.clone())?;
         if let Progress::Processed(progress_point) = progress {

@@ -14,19 +14,17 @@ use diskann_vector::{Norm, norm::FastL2Norm};
 use rayon::prelude::*;
 use tracing::info;
 
-use super::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool};
-use crate::forward_threadpool;
+use super::{ParallelIteratorInPool, RayonThreadPool};
 
 /// The normalizing_utils derives from the DiskANN c++ utils.
-pub fn normalize_data_file<StorageProvider, Pool>(
+pub fn normalize_data_file<StorageProvider>(
     in_file_name: &str,
     out_file_name: &str,
     storage_provider: &StorageProvider,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()>
 where
     StorageProvider: StorageReadProvider + StorageWriteProvider,
-    Pool: AsThreadPool,
 {
     let mut reader = BufReader::new(storage_provider.open_reader(in_file_name)?);
     let mut writer = BufWriter::new(storage_provider.create_for_write(out_file_name)?);
@@ -42,7 +40,6 @@ where
     let nblks = npts.div_ceil(blk_size);
     info!("# blks: {}", nblks);
 
-    forward_threadpool!(pool = pool);
     for i in 0..nblks {
         let cblk_size = std::cmp::min(npts - i * blk_size, blk_size);
         block_convert(&mut writer, &mut reader, cblk_size, ndims, pool)?;
@@ -84,14 +81,13 @@ fn block_convert<W: Write, R: Read>(
     Ok(())
 }
 
-pub fn normalize_data_internal_no_cblas<Pool: AsThreadPool>(
+pub fn normalize_data_internal_no_cblas(
     data: &mut [f32],
     ndims: usize,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()> {
     let zero_norm: AtomicBool = AtomicBool::new(false);
 
-    forward_threadpool!(pool = pool);
     data.par_chunks_mut(ndims).for_each_in_pool(pool, |chunk| {
         let norm_pt = chunk.iter().map(|val| val * val).sum::<f32>().sqrt();
         if norm_pt != 0.0 {
@@ -110,14 +106,13 @@ pub fn normalize_data_internal_no_cblas<Pool: AsThreadPool>(
     Ok(())
 }
 
-pub fn normalize_data_internal<Pool: AsThreadPool>(
+pub fn normalize_data_internal(
     data: &mut [f32],
     ndims: usize,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()> {
     let zero_norm = AtomicBool::new(false);
 
-    forward_threadpool!(pool = pool);
     data.par_chunks_mut(ndims).for_each_in_pool(pool, |chunk| {
         let norm_pt: f32 = (FastL2Norm).evaluate(&*chunk);
         if norm_pt != 0.0 {

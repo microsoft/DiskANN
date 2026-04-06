@@ -18,11 +18,8 @@ use rand::{
 };
 use rayon::prelude::*;
 
-use super::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool};
-use crate::{
-    forward_threadpool,
-    utils::math_util::{compute_closest_centers, compute_vecs_l2sq},
-};
+use super::{ParallelIteratorInPool, RayonThreadPool};
+use crate::utils::math_util::{compute_closest_centers, compute_vecs_l2sq};
 
 /// Run Lloyds one iteration
 /// Given data in row-major num_points * dim, and centers in row-major
@@ -115,7 +112,7 @@ fn lloyds_iter(
 /// new vec<usize> [num_centers]`, and `closest_center = new size_t[num_points]`
 /// Final centers are output in centers as row-major num_centers * dim.
 #[allow(clippy::too_many_arguments)]
-pub fn run_lloyds<Pool: AsThreadPool>(
+pub fn run_lloyds(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -123,7 +120,7 @@ pub fn run_lloyds<Pool: AsThreadPool>(
     num_centers: usize,
     max_reps: usize,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<(Vec<Vec<usize>>, Vec<u32>, f32)> {
     let mut residual = f32::MAX;
 
@@ -132,7 +129,6 @@ pub fn run_lloyds<Pool: AsThreadPool>(
 
     let mut docs_l2sq = vec![0.0; num_points];
 
-    forward_threadpool!(pool = pool);
     compute_vecs_l2sq(&mut docs_l2sq, data, num_points, dim, pool)?;
 
     let mut old_residual;
@@ -228,7 +224,7 @@ fn select_random_pivots(
 /// If there are are fewer than num_center distinct points, pick all unique points as pivots,
 /// and sample data randomly for the remaining pivots.
 #[allow(clippy::too_many_arguments)]
-pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
+pub fn k_meanspp_selecting_pivots(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -236,7 +232,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
     num_centers: usize,
     rng: &mut impl Rng,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()> {
     if num_points > (1 << 23) {
         return Err(ANNError::log_kmeans_error(format!(
@@ -277,7 +273,6 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
 
     let mut dist = vec![0.0; num_points];
 
-    forward_threadpool!(pool = pool);
     // Calculate the distance between each node and the first pivot and store the result in dist.
     dist.par_iter_mut()
         .enumerate()
@@ -385,7 +380,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
 
 /// k-means algorithm interface
 #[allow(clippy::too_many_arguments)]
-pub fn k_means_clustering<Pool: AsThreadPool>(
+pub fn k_means_clustering(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -394,10 +389,8 @@ pub fn k_means_clustering<Pool: AsThreadPool>(
     max_reps: usize,
     rng: &mut impl Rng,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<(Vec<Vec<usize>>, Vec<u32>, f32)> {
-    forward_threadpool!(pool = pool);
-
     k_meanspp_selecting_pivots(
         data,
         num_points,

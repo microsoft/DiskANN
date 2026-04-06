@@ -57,6 +57,7 @@ pub fn build_pq<Data: GraphDataType>(
     let timer = Timer::new();
     let storage_provider = FileStorageProvider;
     let random_provider = diskann_providers::utils::create_rnd_provider_from_seed(42);
+    let pool = diskann_providers::utils::create_thread_pool(parameters.num_threads)?;
 
     let (mut train_data_vector, num_train, train_dim) = pq_storage
         .get_random_train_data_slice::<Data::VectorDataType, _>(
@@ -78,17 +79,17 @@ pub fn build_pq<Data: GraphDataType>(
         &pq_storage,
         &storage_provider,
         random_provider,
-        parameters.num_threads,
+        &pool,
     )?;
 
-    diskann_providers::model::pq::generate_pq_data_from_pivots::<f32, _, _>(
+    diskann_providers::model::pq::generate_pq_data_from_pivots::<f32, _>(
         NUM_PQ_CENTROIDS,
         num_pq_chunks,
         &mut pq_storage,
         &storage_provider,
         false,
         0,
-        parameters.num_threads,
+        &pool,
     )?;
 
     info!(

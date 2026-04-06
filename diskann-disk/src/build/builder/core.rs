@@ -530,7 +530,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
                     builder.disk_build_param.build_memory_limit().in_bytes() as f64;
                 // calculate how many partitions we need, in order to fit in RAM budget
                 // save id_map for each partition to disk
-                partition_with_ram_budget::<Data::VectorDataType, _, _, _>(
+                partition_with_ram_budget::<Data::VectorDataType, _, _>(
                     &self.dataset_file,
                     builder.index_configuration.dim,
                     sampling_rate,
