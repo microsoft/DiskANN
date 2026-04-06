@@ -31,7 +31,7 @@ diskann-wide = { workspace = true }
 arc-swap.workspace = true
 tracing.workspace = true
 diskann-linalg = { workspace = true }
-diskann = { workspace = true }
+diskann = { workspace = true, features = ["testing"]}
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
