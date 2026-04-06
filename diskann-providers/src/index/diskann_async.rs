@@ -4433,16 +4433,11 @@ pub(crate) mod tests {
         }
 
         let query_count: usize = 1;
-        let mut queries = crate::common::AlignedBoxWithSlice::<half::f16>::new(
-            query_count * VECTORS_DIMENSION,
-            32,
-        )
-        .unwrap();
+        let mut queries =
+            crate::common::aligned_alloc::<half::f16>(query_count * VECTORS_DIMENSION, 32).unwrap();
 
         for i in 0..query_count {
-            for val in queries.as_mut_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION]
-                .iter_mut()
-            {
+            for val in queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION].iter_mut() {
                 *val = half::f16::from_f32(0f32);
             }
         }
@@ -4454,8 +4449,7 @@ pub(crate) mod tests {
         let ctx = DefaultContext;
         let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
         for i in 0..query_count {
-            let query_vector =
-                &queries.as_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
+            let query_vector = &queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);

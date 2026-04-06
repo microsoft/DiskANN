@@ -5,7 +5,10 @@
 
 use diskann::{ANNError, ANNResult};
 
-use crate::{common::AlignedBoxWithSlice, utils::DatasetDto};
+use crate::{
+    common::{AlignedSlice, aligned_alloc},
+    utils::DatasetDto,
+};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -17,7 +20,7 @@ pub struct PQCompressedData {
     pub num_points: usize,
 
     // Compressed data.
-    data: AlignedBoxWithSlice<u8>,
+    data: AlignedSlice<u8>,
 
     // Capacity of the data set.
     capacity: usize,
@@ -30,7 +33,7 @@ impl PQCompressedData {
 
         Ok(Self {
             num_pq_chunks,
-            data: AlignedBoxWithSlice::new(capacity, std::mem::size_of::<u8>())?,
+            data: aligned_alloc(capacity, std::mem::size_of::<u8>())?,
             num_points,
             capacity,
         })
@@ -48,7 +51,7 @@ impl PQCompressedData {
         let start_index = self.num_pq_chunks * vector_id;
         let end_index = start_index + self.num_pq_chunks;
 
-        Ok(&self.data.as_slice()[start_index..end_index])
+        Ok(&self.data[start_index..end_index])
     }
 
     pub fn get_compressed_vector_mut(&mut self, vector_id: usize) -> ANNResult<&mut [u8]> {
@@ -92,7 +95,6 @@ mod tests {
         // Set some data
         pq_compressed_data
             .data
-            .as_mut_slice()
             .clone_from_slice(vec![0, 1, 2, 3, 4, 5].as_slice());
 
         // Test getting a compressed vector

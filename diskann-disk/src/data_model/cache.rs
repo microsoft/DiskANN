@@ -5,7 +5,7 @@
 
 use diskann::{ANNError, ANNResult};
 use diskann_providers::{
-    common::AlignedBoxWithSlice,
+    common::{aligned_alloc, AlignedSlice},
     model::{
         graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
         FP_VECTOR_MEM_ALIGN,
@@ -18,7 +18,7 @@ pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
     mapping: HashMap<Data::VectorIdType, usize>,
 
     // Aligned buffer to store the vectors of cached nodes.
-    vectors: AlignedBoxWithSlice<Data::VectorDataType>,
+    vectors: AlignedSlice<Data::VectorDataType>,
 
     // The cached adjacency lists.
     adjacency_lists: Vec<AdjacencyList<Data::VectorIdType>>,
@@ -41,7 +41,7 @@ where
     pub fn new(dimension: usize, capacity: usize) -> ANNResult<Self> {
         Ok(Self {
             mapping: HashMap::new(),
-            vectors: AlignedBoxWithSlice::new(capacity * dimension, FP_VECTOR_MEM_ALIGN)?,
+            vectors: aligned_alloc(capacity * dimension, FP_VECTOR_MEM_ALIGN)?,
             adjacency_lists: Vec::with_capacity(capacity),
             associated_data: Vec::with_capacity(capacity),
             dimension,

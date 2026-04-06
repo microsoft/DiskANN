@@ -635,7 +635,7 @@ pub(crate) mod disk_index_builder_tests {
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
-        common::AlignedBoxWithSlice,
+        common::aligned_alloc,
         storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
@@ -1082,9 +1082,8 @@ pub(crate) mod disk_index_builder_tests {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query: AlignedBoxWithSlice<G::VectorDataType> =
-                AlignedBoxWithSlice::<G::VectorDataType>::new(dim, 8)?;
-            query.memcpy(query_data)?;
+            let mut query = aligned_alloc::<G::VectorDataType>(dim, 8)?;
+            query[..query_data.len()].copy_from_slice(query_data);
 
             let mut query_stats = QueryStatistics::default();
 

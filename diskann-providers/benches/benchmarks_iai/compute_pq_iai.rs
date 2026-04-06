@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 use diskann_providers::{
-    common::AlignedBoxWithSlice,
+    common::{AlignedSlice, aligned_alloc},
     model::{NUM_PQ_CENTROIDS, compute_pq_distance},
     utils::{ParallelIteratorInPool, create_thread_pool_for_bench},
 };
@@ -20,7 +20,7 @@ iai_callgrind::library_benchmark_group!(
 );
 
 #[iai_callgrind::library_benchmark(setup = generate_benchmark_data)]
-pub fn benchmark_compute_pq_iai(data: (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u8>)) {
+pub fn benchmark_compute_pq_iai(data: (Vec<u32>, AlignedSlice<f32>, Vec<u8>)) {
     let (neighbor_vector_ids, query_centroid_l2_distance, pq_data) = data;
     let mut pq_distance_scratch: Vec<f32> = vec![0.0; MAX_DEGREE];
     let mut pq_coordinate_scratch: Vec<u8> = vec![0; NUM_PQ_CHUNKS * neighbor_vector_ids.len()];
@@ -37,7 +37,7 @@ pub fn benchmark_compute_pq_iai(data: (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u
     .unwrap();
 }
 
-fn generate_benchmark_data() -> (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u8>) {
+fn generate_benchmark_data() -> (Vec<u32>, AlignedSlice<f32>, Vec<u8>) {
     let n_pts = NUM_POINTS;
     let n_nbrs = MAX_DEGREE;
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
@@ -47,7 +47,7 @@ fn generate_benchmark_data() -> (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u8>) {
         .collect();
 
     let mut query_centroid_l2_distance =
-        AlignedBoxWithSlice::new(NUM_PQ_CENTROIDS * NUM_PQ_CHUNKS, 256).unwrap();
+        aligned_alloc(NUM_PQ_CENTROIDS * NUM_PQ_CHUNKS, 256).unwrap();
     let vec_256 = (0..NUM_PQ_CENTROIDS)
         .map(|i| i as f32)
         .collect::<Vec<f32>>();

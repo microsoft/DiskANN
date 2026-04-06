@@ -5,7 +5,7 @@
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
 use diskann::{utils::TryIntoVectorId, ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use diskann_providers::{common::aligned_alloc, model::graph::traits::GraphDataType};
 use hashbrown::HashSet;
 use tracing::info;
 
@@ -51,14 +51,14 @@ where
         // since this is the implementation for the disk vertex provider, there're only two kinds of sector lengths: 4096 and 512.
         // it's okay to hardcoded at this place.
         let buffer_len = GraphHeader::get_size().next_multiple_of(DEFAULT_DISK_SECTOR_LEN);
-        let mut read_buf = AlignedBoxWithSlice::<u8>::new(buffer_len, buffer_len)?;
-        let aligned_read = AlignedRead::new(0_u64, read_buf.as_mut_slice())?;
+        let mut read_buf = aligned_alloc::<u8>(buffer_len, buffer_len)?;
+        let aligned_read = AlignedRead::new(0_u64, &mut read_buf)?;
         self.aligned_reader_factory
             .build()?
             .read(&mut [aligned_read])?;
 
         // Create a GraphHeader from the buffer.
-        GraphHeader::try_from(&read_buf.as_slice()[8..])
+        GraphHeader::try_from(&read_buf[8..])
     }
 
     fn create_vertex_provider(

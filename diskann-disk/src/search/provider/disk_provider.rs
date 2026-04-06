@@ -426,7 +426,6 @@ where
                 .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
-                .as_slice()
                 .to_vec(),
         })
     }
@@ -1064,7 +1063,7 @@ mod disk_provider_tests {
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
     use diskann_providers::{
-        common::AlignedBoxWithSlice,
+        common::aligned_alloc,
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
@@ -1391,12 +1390,10 @@ mod disk_provider_tests {
         let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
             .unwrap()
             .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
+        let mut aligned_query = aligned_alloc::<f32>(query_vector.len(), 32).unwrap();
+        aligned_query[..query_vector.len()].copy_from_slice(&query_vector);
 
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
+        let queries: Vec<&mut [f32]> = aligned_query.chunks_mut(params.dim).collect();
 
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
@@ -1408,12 +1405,12 @@ mod disk_provider_tests {
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
+                let mut aligned_box = aligned_alloc::<f32>(query.len() + 1, 32).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);
                 temp.push(0.0);
                 temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
+                aligned_box[..temp.len()].copy_from_slice(temp.as_slice());
+                let query = &aligned_box[1..];
 
                 let mut query_stats = QueryStatistics::default();
                 let mut indices = vec![0u32; 10];
@@ -1467,11 +1464,9 @@ mod disk_provider_tests {
         let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
             .unwrap()
             .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
+        let mut aligned_query = aligned_alloc::<f32>(query_vector.len(), 32).unwrap();
+        aligned_query[..query_vector.len()].copy_from_slice(&query_vector);
+        let queries: Vec<&mut [f32]> = aligned_query.chunks_mut(params.dim).collect();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
@@ -1481,12 +1476,12 @@ mod disk_provider_tests {
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
+                let mut aligned_box = aligned_alloc::<f32>(query.len() + 1, 32).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);
                 temp.push(0.0);
                 temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
+                aligned_box[..temp.len()].copy_from_slice(temp.as_slice());
+                let query = &aligned_box[1..];
                 let result = params
                     .index_search_engine
                     .search(query, params.k as u32, params.l as u32, beam_width, None, false)

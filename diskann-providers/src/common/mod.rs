@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 mod aligned_allocator;
-pub use aligned_allocator::AlignedBoxWithSlice;
+pub use aligned_allocator::{AlignedSlice, aligned_alloc};
 
 mod minmax_repr;
 pub use minmax_repr::{MinMax4, MinMax8, MinMaxElement};

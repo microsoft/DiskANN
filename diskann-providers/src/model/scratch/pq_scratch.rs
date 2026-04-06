@@ -8,28 +8,28 @@ use std::mem::size_of;
 
 use diskann::{ANNResult, error::IntoANNResult, utils::VectorRepr};
 
-use crate::common::AlignedBoxWithSlice;
+use crate::common::{AlignedSlice, aligned_alloc};
 
 #[derive(Debug)]
 /// PQ scratch
 pub struct PQScratch {
     /// Aligned pq table distance scratch, the length must be at least [256 * NCHUNKS]. 256 is the number of PQ centroids.
     /// This is used to store the distance between each chunk in the query vector to each centroid, which is why the length is num of centroids * num of chunks
-    pub aligned_pqtable_dist_scratch: AlignedBoxWithSlice<f32>,
+    pub aligned_pqtable_dist_scratch: AlignedSlice<f32>,
 
     /// Aligned dist scratch, must be at least diskann MAX_DEGREE
     /// This is used to temporarily save the pq distance between query vector to the candidate vectors.
-    pub aligned_dist_scratch: AlignedBoxWithSlice<f32>,
+    pub aligned_dist_scratch: AlignedSlice<f32>,
 
     /// Aligned pq coord scratch, must be at least [N_CHUNKS * MAX_DEGREE]
     /// This is used to store the pq coordinates of the candidate vectors.
-    pub aligned_pq_coord_scratch: AlignedBoxWithSlice<u8>,
+    pub aligned_pq_coord_scratch: AlignedSlice<u8>,
 
     /// Rotated query. It is initialized as the normalized query vector. Use PQTable.PreprocessQuery to rotate it.
-    pub rotated_query: AlignedBoxWithSlice<f32>,
+    pub rotated_query: AlignedSlice<f32>,
 
     /// Aligned query float. The query vector is normalized with "norm" and stored here.
-    pub aligned_query_float: AlignedBoxWithSlice<f32>,
+    pub aligned_query_float: AlignedSlice<f32>,
 }
 
 impl PQScratch {
@@ -44,13 +44,12 @@ impl PQScratch {
         num_centers: usize,
     ) -> ANNResult<Self> {
         let aligned_pq_coord_scratch =
-            AlignedBoxWithSlice::new(graph_degree * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)?;
+            aligned_alloc(graph_degree * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)?;
         let aligned_pqtable_dist_scratch =
-            AlignedBoxWithSlice::new(num_centers * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)?;
-        let aligned_dist_scratch =
-            AlignedBoxWithSlice::new(graph_degree, PQScratch::ALIGNED_ALLOC_128)?;
-        let aligned_query_float = AlignedBoxWithSlice::new(aligned_dim, 8 * size_of::<f32>())?;
-        let rotated_query = AlignedBoxWithSlice::new(aligned_dim, 8 * size_of::<f32>())?;
+            aligned_alloc(num_centers * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)?;
+        let aligned_dist_scratch = aligned_alloc(graph_degree, PQScratch::ALIGNED_ALLOC_128)?;
+        let aligned_query_float = aligned_alloc(aligned_dim, 8 * size_of::<f32>())?;
+        let rotated_query = aligned_alloc(aligned_dim, 8 * size_of::<f32>())?;
 
         Ok(Self {
             aligned_pqtable_dist_scratch,

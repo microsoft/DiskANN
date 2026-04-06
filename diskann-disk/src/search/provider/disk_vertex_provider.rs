@@ -8,7 +8,7 @@ use std::ptr;
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
 use diskann_providers::{
-    common::AlignedBoxWithSlice,
+    common::{aligned_alloc, AlignedSlice},
     model::{
         graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
         FP_VECTOR_MEM_ALIGN,
@@ -45,7 +45,7 @@ where
     sector_graph: DiskSectorGraph<AlignedReaderType>,
 
     // Aligned fp vector cache
-    aligned_vector_buf: AlignedBoxWithSlice<Data::VectorDataType>,
+    aligned_vector_buf: AlignedSlice<Data::VectorDataType>,
 
     // The cached adjacency list.
     cached_adjacency_list: Vec<AdjacencyList<Data::VectorIdType>>,
@@ -203,7 +203,7 @@ where
             fp_vector_len: (metadata.dims * std::mem::size_of::<Data::VectorDataType>()) as u64,
             sector_graph: DiskSectorGraph::new(sector_reader, header, max_batch_size)?,
 
-            aligned_vector_buf: AlignedBoxWithSlice::new(
+            aligned_vector_buf: aligned_alloc(
                 max_batch_size * memory_aligned_dimension,
                 FP_VECTOR_MEM_ALIGN,
             )?,
@@ -224,7 +224,7 @@ where
             self.cached_adjacency_list.reserve(max_batch_size);
             self.cached_associated_data.reserve(max_batch_size);
             self.loaded_nodes.reserve(max_batch_size);
-            self.aligned_vector_buf = AlignedBoxWithSlice::new(
+            self.aligned_vector_buf = aligned_alloc(
                 max_batch_size * self.memory_aligned_dimension,
                 FP_VECTOR_MEM_ALIGN,
             )?;

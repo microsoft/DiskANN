@@ -772,7 +772,7 @@ mod fixed_chunk_pq_table_test {
     use itertools::iproduct;
 
     use super::*;
-    use crate::{common::AlignedBoxWithSlice, model::NUM_PQ_CENTROIDS, utils::read_bin_from};
+    use crate::{common::aligned_alloc, model::NUM_PQ_CENTROIDS, utils::read_bin_from};
 
     const DIM: usize = 128;
 
@@ -882,11 +882,11 @@ mod fixed_chunk_pq_table_test {
 
         // mock query_centroid_l2_distance, distance from query to each centroid `i` of chunk `j` as `j*NUM_PQ_CENTROIDS + i` for each chunk, just for simple calculation.
         let mut query_centroid_l2_distance =
-            AlignedBoxWithSlice::new(NUM_PQ_CENTROIDS * num_pq_chunks, 256).unwrap();
+            aligned_alloc(NUM_PQ_CENTROIDS * num_pq_chunks, 256).unwrap();
         let distance_vec = (0..NUM_PQ_CENTROIDS * num_pq_chunks)
             .map(|i| i as f32)
             .collect::<Vec<f32>>();
-        query_centroid_l2_distance.memcpy(&distance_vec).unwrap();
+        query_centroid_l2_distance[..distance_vec.len()].copy_from_slice(&distance_vec);
 
         // random nums, mock pq table, size = 17 * 10 = num_pq_chunks * n_pts
         let pq_data: Vec<u8> = vec![

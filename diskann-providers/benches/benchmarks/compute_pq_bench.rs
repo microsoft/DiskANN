@@ -4,7 +4,7 @@
  */
 use criterion::Criterion;
 use diskann_providers::{
-    common::AlignedBoxWithSlice,
+    common::{AlignedSlice, aligned_alloc},
     model::{NUM_PQ_CENTROIDS, compute_pq_distance},
     utils::{ParallelIteratorInPool, create_thread_pool_for_bench},
 };
@@ -44,7 +44,7 @@ fn generate_benchmark_data(
     num_pq_chunks: usize,
     n_pts: usize,
     n_nbrs: usize,
-) -> (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u8>) {
+) -> (Vec<u32>, AlignedSlice<f32>, Vec<u8>) {
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
     // Generate mock input data using thread_rng
     let neighbor_vector_ids: Vec<u32> = (0..n_nbrs)
@@ -52,7 +52,7 @@ fn generate_benchmark_data(
         .collect();
 
     let mut query_centroid_l2_distance =
-        AlignedBoxWithSlice::new(NUM_PQ_CENTROIDS * num_pq_chunks, 256).unwrap();
+        aligned_alloc(NUM_PQ_CENTROIDS * num_pq_chunks, 256).unwrap();
     let vec_256 = (0..NUM_PQ_CENTROIDS)
         .map(|i| i as f32)
         .collect::<Vec<f32>>();

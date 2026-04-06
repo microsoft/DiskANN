@@ -135,7 +135,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use diskann_providers::common::AlignedBoxWithSlice;
+    use diskann_providers::common::aligned_alloc;
     pub const TEST_INDEX_PATH: &str =
         "../test_data/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index";
     pub const TRUTH_NODE_DATA_PATH: &str =
@@ -170,12 +170,10 @@ mod tests {
 
         let read_length = 512; // adjust according to your logic
         let num_read = 10;
-        let mut aligned_mem = AlignedBoxWithSlice::<u8>::new(read_length * num_read, 512).unwrap();
+        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
 
         // create and add AlignedReads to the vector
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
         let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
             .iter_mut()
@@ -215,12 +213,10 @@ mod tests {
 
         let read_length = 512;
         let num_read = MAX_IO_CONCURRENCY * 100; // The LinuxAlignedFileReader batches reads according to MAX_IO_CONCURRENCY.  Make sure we have many batches to handle.
-        let mut aligned_mem = AlignedBoxWithSlice::<u8>::new(read_length * num_read, 512).unwrap();
+        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
 
         // create and add AlignedReads to the vector
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
         // Read the same data from disk over and over again.  We guarantee that it is not all zeros.
         let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
@@ -256,13 +252,10 @@ mod tests {
 
         let read_length = 512; // adjust according to your logic
         let num_sector = 10;
-        let mut aligned_mem =
-            AlignedBoxWithSlice::<u8>::new(read_length * num_sector, 512).unwrap();
+        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_sector, 512).unwrap();
 
         // Each slice will be used as the buffer for a read request of a sector.
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
         let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
             .iter_mut()

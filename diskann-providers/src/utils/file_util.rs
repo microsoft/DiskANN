@@ -19,7 +19,7 @@ use diskann_utils::{io::Metadata, views::Matrix};
 use tracing::info;
 
 use crate::{
-    common::AlignedBoxWithSlice,
+    common::{AlignedSlice, aligned_alloc},
     utils::{DatasetDto, copy_aligned_data},
 };
 
@@ -90,7 +90,7 @@ pub fn copy_aligned_data_from_file<T: Default + Copy + bytemuck::Pod>(
 /// - `bin_file`: A string slice that holds the name of the binary file to be read.
 ///
 /// # Returns
-/// - `ANNResult<(AlignedBoxWithSlice<T>, usize, usize, usize)>`: A result containing a tuple with the aligned data, number of points, dimensions, and rounded dimensions.
+/// - `ANNResult<(AlignedSlice<T>, usize, usize, usize)>`: A result containing a tuple with the aligned data, number of points, dimensions, and rounded dimensions.
 ///
 /// # Errors
 /// - Returns an `ANNError` if there is a file size mismatch or if the requested memory size cannot be allocated.
@@ -101,7 +101,7 @@ pub fn copy_aligned_data_from_file<T: Default + Copy + bytemuck::Pod>(
 pub fn load_aligned_bin<T: Default + Copy + Sized + bytemuck::Pod>(
     storage_provider: &impl StorageReadProvider,
     bin_file: &str,
-) -> ANNResult<(AlignedBoxWithSlice<T>, usize, usize, usize)> {
+) -> ANNResult<(AlignedSlice<T>, usize, usize, usize)> {
     let size_of_t = size_of::<T>();
     let (npts, dim, file_size): (usize, usize, usize);
     {
@@ -139,7 +139,7 @@ pub fn load_aligned_bin<T: Default + Copy + Sized + bytemuck::Pod>(
         )));
     }
 
-    let mut data = AlignedBoxWithSlice::<T>::new(alloc_size, alignment)?;
+    let mut data = aligned_alloc::<T>(alloc_size, alignment)?;
     let dto = DatasetDto {
         data: &mut data,
         rounded_dim,
@@ -335,11 +335,8 @@ mod file_util_test {
         // Create aligned buffer for 2 points, 8 dimensions each, rounded to 8
         let rounded_dim = 8;
         let num_points = 2;
-        let mut dataset = AlignedBoxWithSlice::<f32>::new(
-            num_points * rounded_dim,
-            std::mem::size_of::<f32>() * 8,
-        )
-        .unwrap();
+        let mut dataset =
+            aligned_alloc::<f32>(num_points * rounded_dim, std::mem::size_of::<f32>() * 8).unwrap();
 
         let dto = DatasetDto {
             data: &mut dataset,
@@ -353,14 +350,14 @@ mod file_util_test {
                     .expect("Failed to delete file");
                 assert_eq!(num_points, 2);
                 assert_eq!(dim, 8);
-                assert_eq!(dataset.as_slice().len(), 16);
+                assert_eq!(dataset.len(), 16);
 
                 // Check the first vector: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-                let first_vector = &dataset.as_slice()[0..8];
+                let first_vector = &dataset[0..8];
                 assert_eq!(first_vector, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 
                 // Check the second vector: [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
-                let second_vector = &dataset.as_slice()[8..16];
+                let second_vector = &dataset[8..16];
                 assert_eq!(
                     second_vector,
                     &[9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]

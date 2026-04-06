@@ -54,7 +54,7 @@ mod tests {
     use diskann_utils::test_data_root;
 
     use super::*;
-    use diskann_providers::common::AlignedBoxWithSlice;
+    use diskann_providers::common::aligned_alloc;
 
     fn test_index_path() -> String {
         "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
@@ -78,12 +78,10 @@ mod tests {
 
         let read_length = 512;
         let num_read = 10;
-        let mut aligned_mem = AlignedBoxWithSlice::<u8>::new(read_length * num_read, 512).unwrap();
+        let mut aligned_mem = aligned_alloc::<u8>(read_length * num_read, 512).unwrap();
 
         // create and add AlignedReads to the vector
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
         let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
             .iter_mut()
