@@ -478,15 +478,7 @@ where
     let mut aligned_queries = Vec::with_capacity(query_num);
     let mut neighbor_queues: Vec<NeighborPriorityQueue<u32>> = Vec::with_capacity(query_num);
     for query in queries {
-        let mut aligned_query = aligned_slice(
-            query_aligned_dimmensions,
-            PowerOfTwo::new(32).map_err(|e| CMDToolError {
-                details: e.to_string(),
-            })?,
-        )
-        .map_err(|e| CMDToolError {
-            details: e.to_string(),
-        })?;
+        let mut aligned_query = aligned_slice(query_aligned_dimmensions, PowerOfTwo::new(32)?)?;
         aligned_query[..query.len()].copy_from_slice(query);
         aligned_queries.push(aligned_query);
         neighbor_queues.push(NeighborPriorityQueue::new(recall_at as usize));
@@ -502,17 +494,10 @@ where
     let batch_size = 10_000;
     let mut aligned_data_batch = Vec::with_capacity(batch_size);
     for _ in 0..batch_size {
-        aligned_data_batch.push(
-            aligned_slice(
-                query_aligned_dimmensions,
-                PowerOfTwo::new(32).map_err(|e| CMDToolError {
-                    details: e.to_string(),
-                })?,
-            )
-            .map_err(|e| CMDToolError {
-                details: e.to_string(),
-            })?,
-        );
+        aligned_data_batch.push(aligned_slice(
+            query_aligned_dimmensions,
+            PowerOfTwo::new(32)?,
+        )?);
     }
 
     let pool = create_thread_pool(0)?;
@@ -572,15 +557,7 @@ where
         num_base_points += points;
     }
 
-    let mut aligned_data = aligned_slice(
-        query_aligned_dimmensions,
-        PowerOfTwo::new(32).map_err(|e| CMDToolError {
-            details: e.to_string(),
-        })?,
-    )
-    .map_err(|e| CMDToolError {
-        details: e.to_string(),
-    })?;
+    let mut aligned_data = aligned_slice(query_aligned_dimmensions, PowerOfTwo::new(32)?)?;
 
     if let Some(insert_iter) = insert_iter {
         for (insert_idx, (data_vector, _associated_data)) in insert_iter.enumerate() {

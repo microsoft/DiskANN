@@ -53,6 +53,20 @@ impl From<diskann::ANNError> for CMDToolError {
         }
     }
 }
+impl From<diskann_quantization::alloc::AllocatorError> for CMDToolError {
+    fn from(err: diskann_quantization::alloc::AllocatorError) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
+impl From<diskann_quantization::num::NotPowerOfTwo> for CMDToolError {
+    fn from(err: diskann_quantization::num::NotPowerOfTwo) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
 impl From<diskann_utils::io::ReadBinError> for CMDToolError {
     fn from(err: diskann_utils::io::ReadBinError) -> Self {
         CMDToolError {
