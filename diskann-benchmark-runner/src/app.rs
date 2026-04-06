@@ -430,11 +430,11 @@ impl App {
 ///
 /// Within the `stdin.txt` command line, there are several special symbols:
 ///
-/// * $INPUT_FILE - Resolves to `input.json` in the same directory as the `stdin.txt` file.
-/// * $OUTPUT_FILE - Resolves to `output.json` in a temporary directory.
-/// * $TOLERANCES_FILE - Resolves to `tolerances.json` in the test directory.
-/// * $REGRESSION_INPUT_FILE - Resolves to `regression_input.json` test directory.
-/// * $CHECK_OUTPUT_FILE - Resolves to `checks.json` in a temporary directory.
+/// * $INPUT - Resolves to `input.json` in the same directory as the `stdin.txt` file.
+/// * $OUTPUT - Resolves to `output.json` in a temporary directory.
+/// * $TOLERANCES - Resolves to `tolerances.json` in the test directory.
+/// * $REGRESSION_INPUT - Resolves to `regression_input.json` in the test directory.
+/// * $CHECK_OUTPUT - Resolves to `checks.json` in a temporary directory.
 ///
 /// As mentioned - an input JSON file can be included and must be named "input.json" to be
 /// discoverable.

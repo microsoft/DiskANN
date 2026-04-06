@@ -116,8 +116,8 @@ impl Unprocessed {
 
 /// A partially loaded input file.
 ///
-/// To reach this point, we at least the structure of the input JSON to be correct and
-/// parseable. However, we have not yet mapped the raw JSON of any of the registered inputs.
+/// To reach this point, we require at least the structure of the input JSON to be correct
+/// and parseable. However, we have not yet mapped the raw JSON of any of the registered inputs.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Partial {
     /// Directories to search for input files.
