@@ -10,7 +10,7 @@ pub use file_util::{
 };
 
 #[allow(clippy::module_inception)]
-mod utils;
+pub mod utils;
 pub use utils::DatasetDto;
 
 mod bridge_error;
