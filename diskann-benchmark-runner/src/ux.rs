@@ -24,6 +24,7 @@ pub fn normalize(s: String) -> String {
 #[doc(hidden)]
 pub fn scrub_path(s: String, path: &std::path::Path, replacement: &str) -> String {
     s.replace(&path.display().to_string(), replacement)
+        .replace("\\", "/")
 }
 
 // There does not appear to be a supported was of checking whether backtraces are
