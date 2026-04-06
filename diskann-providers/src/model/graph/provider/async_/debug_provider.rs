@@ -1146,11 +1146,12 @@ mod tests {
         };
 
         let vectors = [vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.0]];
+        let pool = crate::utils::create_thread_pool(1).unwrap();
         let pq_table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut crate::utils::create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
         let provider = DebugProvider::new(debug_config, Arc::new(pq_table)).unwrap();
@@ -1263,11 +1264,12 @@ mod tests {
         assert_eq!(adjacency_lists.len(), num_points);
         assert_eq!(vectors.len(), num_points);
 
+        let pool = crate::utils::create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut crate::utils::create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -1358,11 +1360,12 @@ mod tests {
         // This basically means that we need to be careful with index initialization.
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = crate::utils::create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut crate::utils::create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 

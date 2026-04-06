@@ -58,14 +58,12 @@ pub(crate) fn simplified_builder(
     Ok((config, params))
 }
 
-pub fn train_pq<Pool>(
+pub fn train_pq(
     data: diskann_utils::views::MatrixView<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
-    pool: Pool,
+    pool: &crate::utils::RayonThreadPool,
 ) -> ANNResult<model::pq::FixedChunkPQTable>
-where
-    Pool: crate::utils::AsThreadPool,
 {
     let dim = data.ncols();
     let pivot_args = model::GeneratePivotArguments::new(
@@ -213,7 +211,7 @@ pub(crate) mod tests {
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests, create_thread_pool},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -680,11 +678,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -777,11 +776,12 @@ pub(crate) mod tests {
         // A matrix view of all vectors (including the start point at the end).
         let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             matrix.map(|i| (*i).into()).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -950,7 +950,8 @@ pub(crate) mod tests {
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
             let train_data: diskann_utils::views::Matrix<f32> = squish(data.iter(), dim);
-            train_pq(train_data.as_view(), 2.min(dim), rng, 1usize).unwrap()
+            let pool = create_thread_pool(1).unwrap();
+            train_pq(train_data.as_view(), 2.min(dim), rng, &pool).unwrap()
         };
 
         let index = new_quant_index::<T, _, _>(config, params, table, NoDeletes).unwrap();
@@ -1126,11 +1127,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -1243,11 +1245,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -1401,11 +1404,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xdd81b895605c73d4),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -2826,11 +2830,12 @@ pub(crate) mod tests {
     async fn test_sift_pq_only_build_and_search() {
         let ctx = &DefaultContext;
         let create_fn = |data: Arc<Matrix<f32>>, start_points: &[f32]| {
+            let pool = create_thread_pool(1).unwrap();
             let pq_table = train_pq(
                 data.as_view(),
                 32,
                 &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-                1,
+                &pool,
             )
             .unwrap();
 
@@ -3035,11 +3040,12 @@ pub(crate) mod tests {
         let train_data = diskann_utils::io::read_bin::<f32>(&mut reader).unwrap();
         let (npoints, dim) = (train_data.nrows(), train_data.ncols());
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            1,
+            &pool,
         )
         .unwrap();
 
@@ -4065,11 +4071,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x1234567890abcdef),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -4128,11 +4135,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xfedcba0987654321),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -4196,11 +4204,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xabcdef1234567890),
-            1usize,
+            &pool,
         )
         .unwrap();
 
@@ -4343,11 +4352,12 @@ pub(crate) mod tests {
         adjacency_lists.push((num_points as u32 - 1).into());
         vectors.push(vec![grid_size as f32; dim]);
 
+        let pool = create_thread_pool(1).unwrap();
         let table = train_pq(
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x9876543210fedcba),
-            1usize,
+            &pool,
         )
         .unwrap();
 
