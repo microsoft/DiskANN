@@ -272,7 +272,6 @@ mod tests {
     use crate::{
         index::diskann_async::{self, tests as async_tests},
         model::graph::provider::async_::caching::provider::{AsCacheAccessorFor, CachingProvider},
-        utils as crate_utils,
     };
 
     const CTX: &DefaultContext = &DefaultContext;
@@ -681,12 +680,7 @@ mod tests {
         );
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
-        let adjacency_lists = match dim {
-            1 => crate_utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => crate_utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => crate_utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let adjacency_lists = async_tests::dim_to_grid(dim).neighbors(grid_size);
         assert_eq!(adjacency_lists.len(), num_points);
         assert_eq!(vectors.len(), num_points);
 

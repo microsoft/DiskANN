@@ -42,16 +42,6 @@ pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;
 
-mod generate_structured_data;
-pub use generate_structured_data::{
-    generate_1d_grid_adj_list, generate_1d_grid_vectors_f32, generate_1d_grid_vectors_i8,
-    generate_1d_grid_vectors_u8, generate_3d_grid_vectors_f32, generate_3d_grid_vectors_i8,
-    generate_3d_grid_vectors_u8, generate_4d_grid_adj_list, generate_4d_grid_vectors_f32,
-    generate_4d_grid_vectors_i8, generate_4d_grid_vectors_u8, generate_circle_adj_list,
-    generate_circle_vectors, generate_circle_with_various_radii_vectors,
-    genererate_3d_grid_adj_list, map_ijk_to_grid, map_ijkl_to_grid,
-};
-
 pub mod random;
 pub use random::{
     DEFAULT_SEED_FOR_TESTS, RandomProvider, StandardRng, create_rnd, create_rnd_from_optional_seed,
@@ -62,8 +52,6 @@ pub use random::{
 
 mod vector_data_iterator;
 pub use vector_data_iterator::VectorDataIterator;
-
-pub mod generate_synthetic_labels_utils;
 
 mod storage_utils;
 pub use storage_utils::{

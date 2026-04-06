@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 use clap::Parser;
-use diskann_providers::utils::generate_synthetic_labels_utils::generate_labels;
-use diskann_tools::utils::{CMDResult, CMDToolError};
+use diskann_providers::storage::FileStorageProvider;
+use diskann_tools::utils::{generate_labels, CMDResult, CMDToolError};
 use tracing::{error, info};
 
 #[derive(Debug, Parser)]
@@ -47,11 +47,11 @@ fn main() -> CMDResult<()> {
     );
 
     match generate_labels(
+        &FileStorageProvider,
         &args.output_file,
         &args.distribution_type,
         args.number_of_vectors as usize,
         args.number_of_labels,
-        &mut diskann_providers::utils::create_rnd_from_seed(42),
     ) {
         Ok(_) => {
             info!("Successfully generated labels");

@@ -1125,12 +1125,12 @@ mod tests {
     use crate::{
         index::diskann_async::{
             tests::{
-                GenerateGrid, PagedSearch, check_grid_search, populate_data, populate_graph, squish,
+                GenerateGrid, PagedSearch, check_grid_search, dim_to_grid, populate_data,
+                populate_graph, squish,
             },
             train_pq,
         },
         test_utils::groundtruth,
-        utils,
     };
 
     #[tokio::test]
@@ -1252,12 +1252,7 @@ mod tests {
             metric: Metric::L2,
         };
 
-        let adjacency_lists = match dim {
-            1 => utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let adjacency_lists = dim_to_grid(dim).neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
