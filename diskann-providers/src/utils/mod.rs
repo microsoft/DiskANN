@@ -9,11 +9,6 @@ pub use file_util::{
     open_file_to_write,
 };
 
-mod normalizing_util;
-pub use normalizing_util::{
-    normalize_data_file, normalize_data_internal, normalize_data_internal_no_cblas,
-};
-
 #[allow(clippy::module_inception)]
 mod utils;
 pub use utils::DatasetDto;
