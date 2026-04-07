@@ -864,15 +864,16 @@ mod tests {
         assert_eq!(adjacency_lists.len(), num_points);
         assert_eq!(vectors.len(), num_points);
 
-        let strategy = cache_provider::Cached::new(ExampleStrategy(test_provider::Strategy::new()));
+        let strategy = cache_provider::Cached::new(test_provider::Strategy::new());
         async_tests::populate_data(index.provider(), ctx, &vectors).await;
         {
             // Note: Without the fully qualified syntax - this fails to compile.
-            let mut accessor = <cache_provider::Cached<ExampleStrategy> as SearchStrategy<
-                cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
-                &[f32],
-            >>::search_accessor(&strategy, index.provider(), ctx)
-            .unwrap();
+            let mut accessor =
+                <cache_provider::Cached<test_provider::Strategy> as SearchStrategy<
+                    cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
+                    &[f32],
+                >>::search_accessor(&strategy, index.provider(), ctx)
+                .unwrap();
             async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
 
             accessor
@@ -897,9 +898,16 @@ mod tests {
         });
         paged_tests.push(async_tests::PagedSearch::new(start_point.clone(), gt));
 
-        // Unfortunately - this is needed for the `check_grid_search` test.
         vectors.push(start_point.clone());
-        async_tests::check_grid_search(&index, &vectors, &paged_tests, strategy, strategy).await;
+        async_tests::check_grid_search(
+            &index,
+            &vectors,
+            &paged_tests,
+            u32::MAX,
+            strategy,
+            strategy,
+        )
+        .await;
     }
 
     fn check_stats(caching: &CachingProvider<test_provider::Provider, ExampleCache>) {
@@ -997,7 +1005,7 @@ mod tests {
             Arc::new(DiskANNIndex::new(index_config.clone(), provider, None))
         };
 
-        let strategy = cache_provider::Cached::new(ExampleStrategy(test_provider::Strategy::new()));
+        let strategy = cache_provider::Cached::new(test_provider::Strategy::new());
         let ctx = &Context::new();
 
         // Build with full-precision single insert
@@ -1012,7 +1020,15 @@ mod tests {
 
             check_stats(index.provider());
 
-            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
+            async_tests::check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                start_id as u32,
+                strategy,
+                strategy,
+            )
+            .await;
             check_stats(index.provider());
         }
 
@@ -1027,7 +1043,15 @@ mod tests {
                 .await
                 .unwrap();
 
-            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
+            async_tests::check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                start_id as u32,
+                strategy,
+                strategy,
+            )
+            .await;
             check_stats(index.provider());
         }
     }
@@ -1037,7 +1061,7 @@ mod tests {
         // create small index instance
         let metric = Metric::L2;
         let num_points = 4;
-        let strategy = cache_provider::Cached::new(ExampleStrategy(test_provider::Strategy::new()));
+        let strategy = cache_provider::Cached::new(test_provider::Strategy::new());
         let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
         let start_id = num_points as u32;
         let start_point = vec![0.5, 0.5];
@@ -1097,7 +1121,7 @@ mod tests {
         ];
 
         // Note: Without the fully qualified syntax - this fails to compile.
-        let mut accessor = <cache_provider::Cached<ExampleStrategy> as SearchStrategy<
+        let mut accessor = <cache_provider::Cached<test_provider::Strategy> as SearchStrategy<
             cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
             &[f32],
         >>::search_accessor(&strategy, index.provider(), ctx)

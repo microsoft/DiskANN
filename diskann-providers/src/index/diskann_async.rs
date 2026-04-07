@@ -501,6 +501,7 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         vectors: &[Vec<T>],
         paged_queries: &[PagedSearch<T>],
+        start_point: u32,
         full_strategy: FS,
         quant_strategy: QS,
     ) where
@@ -514,6 +515,14 @@ pub(crate) mod tests {
         // Subtract 1 to compensate for the start point.
         let num_points = vectors.len();
 
+        // let accessor = full_strategy.search_accessor(index.provider(), &Default::default());
+        // let start_ids = accessor.starting_points().await?;
+        // let start_point: u32 = match start_point{
+        //     u32::MAX => {
+        //         full_strategy
+        //     }
+        // }
+        //
         // This tests full precision and quantized searches.
         //
         // This first test checks that we can traverse the entire graph because the
@@ -578,7 +587,7 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
+            if id == start_point {
                 return Err(Box::new("start point should not be returned"));
             }
             if id as usize != num_points - 2 {
@@ -717,6 +726,7 @@ pub(crate) mod tests {
             &index,
             &vectors,
             &paged_tests,
+            (vectors.len() - 1) as u32,
             FullPrecision,
             Hybrid::new(None),
         )
@@ -812,7 +822,15 @@ pub(crate) mod tests {
                     .unwrap();
             }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+            check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                (vectors.len() - 1) as u32,
+                FullPrecision,
+                hybrid,
+            )
+            .await;
         }
 
         // Build with quantized single insert
@@ -823,7 +841,15 @@ pub(crate) mod tests {
                 index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+            check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                (vectors.len() - 1) as u32,
+                FullPrecision,
+                hybrid,
+            )
+            .await;
         }
 
         // Build with full-precision multi-insert
@@ -851,7 +877,15 @@ pub(crate) mod tests {
                     .unwrap();
             }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+            check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                (vectors.len() - 1) as u32,
+                FullPrecision,
+                hybrid,
+            )
+            .await;
         }
 
         // Build with quantized multi-insert
@@ -866,7 +900,15 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+            check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                (vectors.len() - 1) as u32,
+                FullPrecision,
+                hybrid,
+            )
+            .await;
         }
     }
 
