@@ -63,7 +63,6 @@ use futures_util::FutureExt;
 use diskann::{
     ANNResult,
     error::{self as core_error, IntoANNResult, StandardError},
-    graph::test::provider::AccessedInvalidId,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{

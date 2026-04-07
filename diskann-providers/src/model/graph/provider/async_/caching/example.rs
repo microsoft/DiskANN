@@ -4,17 +4,12 @@
  */
 
 use diskann::{
-    error::{Infallible, RankedError, ToRanked, TransientError},
-    graph::{
-        AdjacencyList, glue, test::provider as test_provider, test::provider::Context, workingset,
-    },
+    error::{RankedError, ToRanked, TransientError},
+    graph::{AdjacencyList, test::provider as test_provider, test::provider::Context, workingset},
     provider::{self as core_provider},
-    utils::VectorRepr,
 };
-use diskann_utils::{future::AsyncFriendly, views::Matrix};
+use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
-
-use crate::model::graph::provider::async_::postprocess;
 
 use super::{
     bf_cache::{self, Cache},
@@ -22,8 +17,6 @@ use super::{
     provider::{self as cache_provider, NeighborStatus},
     utils::{CacheKey, Graph, HitStats, KeyGen, LocalStats},
 };
-
-use std::sync::Arc;
 
 ///////////////////
 // Example Cache //
@@ -178,137 +171,6 @@ where
     }
 }
 
-#[derive(Clone, Copy)]
-struct ExampleStrategy(test_provider::Strategy);
-
-impl glue::InsertStrategy<test_provider::Provider, &[f32]> for ExampleStrategy {
-    type PruneStrategy = Self;
-
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
-    }
-
-    fn insert_search_accessor<'a>(
-        &'a self,
-        provider: &'a test_provider::Provider,
-        context: &'a Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        self.0.insert_search_accessor(provider, context)
-    }
-}
-
-impl glue::PruneStrategy<test_provider::Provider> for ExampleStrategy {
-    type WorkingSet =
-        <test_provider::Strategy as glue::PruneStrategy<test_provider::Provider>>::WorkingSet;
-    type DistanceComputer = <f32 as VectorRepr>::Distance;
-    type PruneAccessor<'a> = test_provider::Accessor<'a>;
-    type PruneAccessorError = Infallible;
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        self.0.create_working_set(capacity)
-    }
-
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a test_provider::Provider,
-        context: &'a Context,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        self.0.prune_accessor(provider, context)
-    }
-}
-
-impl glue::SearchStrategy<test_provider::Provider, &[f32]> for ExampleStrategy {
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type SearchAccessor<'a> = test_provider::Accessor<'a>;
-    type SearchAccessorError = Infallible;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a test_provider::Provider,
-        context: &'a Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        self.0.search_accessor(provider, context)
-    }
-}
-
-impl glue::DefaultPostProcessor<test_provider::Provider, &[f32]> for ExampleStrategy {
-    diskann::default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
-}
-
-impl glue::MultiInsertStrategy<test_provider::Provider, Matrix<f32>> for ExampleStrategy {
-    type WorkingSet = <test_provider::Strategy as glue::MultiInsertStrategy<
-        test_provider::Provider,
-        Matrix<f32>,
-    >>::WorkingSet;
-    type Seed = <test_provider::Strategy as glue::MultiInsertStrategy<
-        test_provider::Provider,
-        Matrix<f32>,
-    >>::Seed;
-    type FinishError = Infallible;
-    type InsertStrategy = Self;
-
-    fn insert_strategy(&self) -> Self::InsertStrategy {
-        *self
-    }
-
-    fn finish<Itr>(
-        &self,
-        provider: &test_provider::Provider,
-        ctx: &Context,
-        batch: &Arc<Matrix<f32>>,
-        ids: Itr,
-    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
-    where
-        Itr: ExactSizeIterator<Item = u32> + Send,
-    {
-        self.0.finish(provider, ctx, batch, ids)
-    }
-}
-
-impl glue::InplaceDeleteStrategy<test_provider::Provider> for ExampleStrategy {
-    type DeleteElement<'a> = &'a [f32];
-    type DeleteElementGuard = Box<[f32]>;
-    type DeleteElementError = test_provider::AccessedInvalidId;
-    type PruneStrategy = Self;
-    type DeleteSearchAccessor<'a> = test_provider::Accessor<'a>;
-    type SearchStrategy = Self;
-    type SearchPostProcessor = postprocess::RemoveDeletedIdsAndCopy;
-
-    fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
-    }
-    fn search_strategy(&self) -> Self::SearchStrategy {
-        *self
-    }
-    fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        postprocess::RemoveDeletedIdsAndCopy
-    }
-    async fn get_delete_element<'a>(
-        &'a self,
-        provider: &'a test_provider::Provider,
-        context: &'a Context,
-        id: u32,
-    ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        self.0.get_delete_element(provider, context, id).await
-    }
-}
-
-impl postprocess::DeletionCheck for test_provider::Provider {
-    fn deletion_check(&self, id: u32) -> bool {
-        match self.is_deleted(id) {
-            Ok(is_deleted) => is_deleted,
-            Err(_) => true,
-        }
-    }
-}
-
-impl postprocess::AsDeletionCheck for test_provider::Accessor<'_> {
-    type Checker = test_provider::Provider;
-    fn as_deletion_check(&self) -> &Self::Checker {
-        self.provider()
-    }
-}
-
 /////////////////////
 // Provider Bridge //
 /////////////////////
@@ -417,7 +279,7 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        index::diskann_async::{self, tests as async_tests},
+        index::diskann_async::tests as async_tests,
         model::graph::provider::async_::caching::provider::{AsCacheAccessorFor, CachingProvider},
         utils as crate_utils,
     };
@@ -431,14 +293,6 @@ mod tests {
             Metric::L2,
             10,
             test_provider::StartPoint::new(u32::MAX, vec![0.0; dim]),
-        )
-        .unwrap();
-
-        let table = diskann_async::train_pq(
-            Matrix::new(0.0, 1, dim).as_view(),
-            2.min(dim), // Number of PQ chunks is bounded by the dimension.
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
         )
         .unwrap();
 
@@ -841,13 +695,6 @@ mod tests {
         let ctx = &Context::new();
 
         let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let table = diskann_async::train_pq(
-            async_tests::squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
-        )
-        .unwrap();
 
         let provider = CachingProvider::new(
             test_provider::Provider::new(test_config),
@@ -960,15 +807,6 @@ mod tests {
         let num_points = (grid_size).pow(dim as u32);
 
         let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let table = Arc::new(
-            diskann_async::train_pq(
-                async_tests::squish(vectors.iter(), dim).as_view(),
-                2.min(dim),
-                &mut crate::utils::create_rnd_from_seed_in_tests(0),
-                1usize,
-            )
-            .unwrap(),
-        );
 
         let index_config = diskann::graph::config::Builder::new_with(
             max_degree,
@@ -1065,7 +903,6 @@ mod tests {
         let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
         let start_id = num_points as u32;
         let start_point = vec![0.5, 0.5];
-        let dim = start_point.len();
 
         let index_config = diskann::graph::config::Builder::new(
             4, // target_degree
@@ -1081,16 +918,6 @@ mod tests {
             metric,
             index_config.max_degree().get(),
             test_provider::StartPoint::new(start_id, start_point.clone()),
-        )
-        .unwrap();
-
-        // The contents of the table don't matter for this test because we use full
-        // precision only.
-        let table = diskann_async::train_pq(
-            Matrix::new(0.5, 1, dim).as_view(),
-            dim,
-            &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            1usize,
         )
         .unwrap();
 
