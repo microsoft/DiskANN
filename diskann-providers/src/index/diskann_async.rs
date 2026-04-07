@@ -520,14 +520,7 @@ pub(crate) mod tests {
         let dim = vectors[0].len();
         // Subtract 1 to compensate for the start point.
         let num_points = vectors.len();
-        // let accessor = full_strategy.search_accessor(index.provider(), &Default::default());
-        // let start_ids = accessor.starting_points().await?;
-        // let start_point: u32 = match start_point{
-        //     u32::MAX => {
-        //         full_strategy
-        //     }
-        // }
-        //
+
         // This tests full precision and quantized searches.
         //
         // This first test checks that we can traverse the entire graph because the
