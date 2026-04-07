@@ -173,6 +173,21 @@ float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size
     return (float)result;
 }
 
+float AVX2DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size) const
+{
+#ifdef USE_AVX2
+    return avx2_l2_distance_uint8(a, b, size);
+#else
+    // Fallback to scalar implementation
+    uint32_t result = 0;
+    for (int32_t i = 0; i < (int32_t)size; i++)
+    {
+        result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
+    }
+    return (float)result;
+#endif
+}
+
 #ifndef _WINDOWS
 float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) const
 {
@@ -688,14 +703,16 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
 {
     if (m == diskann::Metric::L2)
     {
-#ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
-                         "Using "
-                         "slow version. "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
-#endif
-        return new diskann::DistanceL2UInt8();
+        if (Avx2SupportedCPU)
+        {
+            diskann::cout << "L2: Using AVX2 distance computation AVX2DistanceL2UInt8" << std::endl;
+            return new diskann::AVX2DistanceL2UInt8();
+        }
+        else
+        {
+            diskann::cout << "L2: AVX2 not supported. Using scalar distance computation DistanceL2UInt8" << std::endl;
+            return new diskann::DistanceL2UInt8();
+        }
     }
     else if (m == diskann::Metric::COSINE)
     {
