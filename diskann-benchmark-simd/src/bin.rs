@@ -41,6 +41,7 @@ mod tests {
             input_file: input_file.to_str().unwrap().into(),
             output_file: output_file.to_str().unwrap().into(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let app = App::from_commands(commands);

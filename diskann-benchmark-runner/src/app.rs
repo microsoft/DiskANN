@@ -15,6 +15,17 @@ use crate::{
     utils::fmt::Banner,
 };
 
+/// Check if we're running in debug mode and error if not allowed.
+fn check_debug_mode(allow_debug: bool) -> anyhow::Result<()> {
+    if cfg!(debug_assertions) && !allow_debug {
+        anyhow::bail!(
+            "Benchmarking in debug mode produces misleading performance results.\n\
+             Please compile in release mode or use the --allow-debug flag to bypass this check."
+        );
+    }
+    Ok(())
+}
+
 /// Parsed command line options.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
@@ -39,6 +50,9 @@ pub enum Commands {
         /// benchmarks.
         #[arg(long, action)]
         dry_run: bool,
+        /// Allow running benchmarks in debug mode (not recommended).
+        #[arg(long, action)]
+        allow_debug: bool,
     },
 }
 
@@ -133,7 +147,11 @@ impl App {
                 input_file,
                 output_file,
                 dry_run,
+                allow_debug,
             } => {
+                // Check for debug mode before running benchmarks.
+                check_debug_mode(*allow_debug)?;
+
                 // Parse and validate the input.
                 let run = Jobs::load(input_file, inputs)?;
                 // Check if we have a match for each benchmark.
