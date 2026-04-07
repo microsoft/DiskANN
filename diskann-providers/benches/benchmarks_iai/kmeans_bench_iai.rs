@@ -3,9 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_providers::utils::{
-    compute_vecs_l2sq, create_thread_pool_for_bench, k_means_clustering,
-};
+use diskann_providers::utils::{RayonThreadPool, compute_vecs_l2sq, k_means_clustering};
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;
@@ -28,7 +26,7 @@ fn setup_data() -> Vec<f32> {
 }
 #[iai_callgrind::library_benchmark(setup = setup_data)]
 pub fn benchmark_kmeans_iai(data: Vec<f32>) {
-    let pool = create_thread_pool_for_bench();
+    let pool = RayonThreadPool::for_bench();
     let centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
 
@@ -43,7 +41,7 @@ pub fn benchmark_kmeans_iai(data: Vec<f32>) {
         MAX_KMEANS_REPS,
         rng,
         &mut false,
-        &pool,
+        pool.as_ref(),
     )
     .unwrap();
 
@@ -60,6 +58,6 @@ pub fn snrm2_benchmark_rust_iai(data: Vec<f32>) {
 /// compute_vecs_l2sq benchmark
 pub fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize) {
     let mut docs_l2sq = vec![0.0; num_points];
-    let pool = create_thread_pool_for_bench();
-    compute_vecs_l2sq(&mut docs_l2sq, data, num_points, dim, &pool).unwrap();
+    let pool = RayonThreadPool::for_bench();
+    compute_vecs_l2sq(&mut docs_l2sq, data, num_points, dim, pool.as_ref()).unwrap();
 }

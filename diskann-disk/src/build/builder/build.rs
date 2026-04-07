@@ -26,7 +26,7 @@ use diskann_providers::{
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, RayonThreadPool, VectorDataIterator,
+        find_medoid_with_sampling, RayonThreadPool, RayonThreadPoolRef, VectorDataIterator,
         MAX_MEDOID_SAMPLE_SIZE,
     },
 };
@@ -225,7 +225,7 @@ where
     async fn build_internal(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
 
-        let pool = create_thread_pool(self.index_configuration.num_threads)?;
+        let pool = RayonThreadPool::new(self.index_configuration.num_threads)?;
 
         info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
@@ -235,10 +235,10 @@ where
             self.index_configuration.num_threads
         );
 
-        self.generate_compressed_data(&pool).await?;
+        self.generate_compressed_data(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(&pool).await?;
+        self.build_inmem_index(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -248,7 +248,7 @@ where
         Ok(())
     }
 
-    async fn generate_compressed_data(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -312,7 +312,7 @@ where
         Ok(())
     }
 
-    async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -326,7 +326,7 @@ where
         }
     }
 
-    async fn build_merged_vamana_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn build_merged_vamana_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let mut workflow = MergedVamanaIndexWorkflow::new(self, pool);
 

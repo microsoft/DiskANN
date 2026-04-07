@@ -61,14 +61,14 @@ impl BuildQuantizer {
                             storage_provider,
                             &mut rnd,
                         )?;
-                    let pool = diskann_providers::utils::create_thread_pool(
+                    let pool = diskann_providers::utils::RayonThreadPool::new(
                         index_configuration.num_threads,
                     )?;
                     train_pq(
                         MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?,
                         num_chunks,
                         &mut rnd,
-                        &pool,
+                        pool.as_ref(),
                     )?
                 };
                 // Save at checkpoint. Note the the compressed data path and pivots path here

@@ -5,7 +5,7 @@
 use diskann_providers::{
     common::AlignedBoxWithSlice,
     model::{NUM_PQ_CENTROIDS, compute_pq_distance},
-    utils::{ParallelIteratorInPool, create_thread_pool_for_bench},
+    utils::{ParallelIteratorInPool, RayonThreadPool},
 };
 use rand::Rng;
 use rayon::{prelude::IndexedParallelIterator, slice::ParallelSliceMut};
@@ -52,11 +52,11 @@ fn generate_benchmark_data() -> (Vec<u32>, AlignedBoxWithSlice<f32>, Vec<u8>) {
         .map(|i| i as f32)
         .collect::<Vec<f32>>();
     // mock query_centroid_l2_distance, distance from query to each centroid i = (i) for each chunk, just for simple calculation.
-    let pool = create_thread_pool_for_bench();
+    let pool = RayonThreadPool::for_bench();
     query_centroid_l2_distance[0..NUM_PQ_CHUNKS * NUM_PQ_CENTROIDS]
         .par_chunks_mut(NUM_PQ_CENTROIDS)
         .enumerate()
-        .for_each_in_pool(&pool, |(_, chunk)| chunk.copy_from_slice(&vec_256));
+        .for_each_in_pool(pool.as_ref(), |(_, chunk)| chunk.copy_from_slice(&vec_256));
 
     let pq_data: Vec<u8> = (0..NUM_PQ_CHUNKS * n_pts)
         .map(|_| rng.random_range(0..256) as u8)

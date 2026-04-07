@@ -289,12 +289,12 @@ mod tests {
             metric: Metric::L2,
         };
 
-        let pool = crate::utils::create_thread_pool(1).unwrap();
+        let pool = crate::utils::RayonThreadPool::new(1).unwrap();
         let table = diskann_async::train_pq(
             Matrix::new(0.0, 1, dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -668,12 +668,12 @@ mod tests {
         };
 
         let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let pool = crate::utils::create_thread_pool(1).unwrap();
+        let pool = crate::utils::RayonThreadPool::new(1).unwrap();
         let table = diskann_async::train_pq(
             async_tests::squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -777,13 +777,13 @@ mod tests {
         let num_points = (grid_size).pow(dim as u32);
 
         let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
-        let pool = crate::utils::create_thread_pool(1).unwrap();
+        let pool = crate::utils::RayonThreadPool::new(1).unwrap();
         let table = Arc::new(
             diskann_async::train_pq(
                 async_tests::squish(vectors.iter(), dim).as_view(),
                 2.min(dim),
                 &mut crate::utils::create_rnd_from_seed_in_tests(0),
-                &pool,
+                pool.as_ref(),
             )
             .unwrap(),
         );
@@ -886,12 +886,12 @@ mod tests {
 
         // The contents of the table don't matter for this test because we use full
         // precision only.
-        let pool = crate::utils::create_thread_pool(1).unwrap();
+        let pool = crate::utils::RayonThreadPool::new(1).unwrap();
         let table = diskann_async::train_pq(
             Matrix::new(0.5, 1, dim).as_view(),
             dim,
             &mut crate::utils::create_rnd_from_seed_in_tests(0),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 

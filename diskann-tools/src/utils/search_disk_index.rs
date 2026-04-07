@@ -21,7 +21,7 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::graph::traits::GraphDataType,
     storage::{get_compressed_pq_file, get_pq_pivot_file},
-    utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
+    utils::{load_aligned_bin, ParallelIteratorInPool, RayonThreadPool},
 };
 use diskann_utils::{io::write_bin, views::MatrixView};
 use diskann_vector::distance::Metric;
@@ -199,7 +199,7 @@ where
 
     let mut best_recall = 0.0;
 
-    let pool = create_thread_pool(parameters.num_threads)?;
+    let pool = RayonThreadPool::new(parameters.num_threads)?;
 
     for (test_id, &l) in parameters.l_vec.iter().enumerate() {
         if l < parameters.recall_at {
@@ -237,7 +237,7 @@ where
 
         let test_start = Instant::now();
         zipped.for_each_in_pool(
-            &pool,
+            pool.as_ref(),
             |(
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,

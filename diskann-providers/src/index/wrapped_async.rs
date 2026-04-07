@@ -438,7 +438,7 @@ mod tests {
             },
         },
         storage::{AsyncIndexMetadata, SaveWith, StorageReadProvider, VirtualStorageProvider},
-        utils::{create_rnd_from_seed_in_tests, create_thread_pool},
+        utils::{RayonThreadPool, create_rnd_from_seed_in_tests},
     };
 
     #[test]
@@ -454,12 +454,12 @@ mod tests {
         };
 
         let pq_bytes = 8;
-        let pool = create_thread_pool(2).unwrap();
+        let pool = RayonThreadPool::new(2).unwrap();
         let pq_table = diskann_async::train_pq(
             train_data.as_view(),
             pq_bytes,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 

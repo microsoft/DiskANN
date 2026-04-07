@@ -137,12 +137,13 @@ mod imp {
                             data.ncols(),
                         )?;
 
-                        let pool = diskann_providers::utils::create_thread_pool(build.num_threads)?;
+                        let pool =
+                            diskann_providers::utils::RayonThreadPool::new(build.num_threads)?;
                         diskann_async::train_pq(
                             train_data.as_view(),
                             self.input.num_pq_chunks,
                             &mut StdRng::seed_from_u64(self.input.seed),
-                            &pool,
+                            pool.as_ref(),
                         )?
                     };
 

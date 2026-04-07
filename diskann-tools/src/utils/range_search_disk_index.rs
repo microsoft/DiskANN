@@ -15,7 +15,7 @@ use diskann_providers::{
         statistics, QueryStatistics,
     },
     storage::{get_disk_index_file, DiskIndexReader, FileStorageProvider},
-    utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
+    utils::{RayonThreadPool, load_aligned_bin, ParallelIteratorInPool},
 };
 use diskann::ANNResult;
 use ordered_float::OrderedFloat;
@@ -136,7 +136,7 @@ where
     let mut best_recall = 0.0;
     let max_search_list_size = index_reader.get_num_points() as u32;
 
-    let pool = create_thread_pool(num_threads)?;
+    let pool = RayonThreadPool::new(num_threads)?;
 
     for (test_id, &l) in l_vec.iter().enumerate() {
         // Assuming `QueryStats` is a struct that you have defined elsewhere
@@ -151,7 +151,7 @@ where
 
         let test_start = Instant::now();
         zipped.for_each_in_pool(
-            &pool,
+            pool.as_ref(),
             |((((res_count, query), query_result_id), query_result_dist), stats)| {
                 let mut associated_data = vec![];
 

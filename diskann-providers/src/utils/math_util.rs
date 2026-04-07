@@ -16,7 +16,7 @@ use rand_distr::StandardNormal;
 use rayon::prelude::*;
 use tracing::info;
 
-use super::{ParallelIteratorInPool, RayonThreadPool};
+use super::{ParallelIteratorInPool, RayonThreadPoolRef};
 
 // This is the chunk size applied when computing the closest centers in a block.
 // The chunk size is the number of points to process in a single iteration to reduce memory usage of
@@ -81,7 +81,7 @@ pub fn compute_vecs_l2sq(
     data: &[f32],
     num_points: usize,
     dim: usize,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if data.len() != num_points * dim {
         return Err(ANNError::log_pq_error(format_args!(
@@ -140,7 +140,7 @@ pub fn compute_closest_centers_in_block(
     center_index: &mut [u32],
     dist_matrix: &mut [f32],
     k: usize,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
@@ -253,7 +253,7 @@ pub fn compute_closest_centers(
     closest_centers_ivf: &mut [u32],
     mut inverted_index: Option<&mut Vec<Vec<usize>>>,
     pts_norms_squared: Option<&[f32]>,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
@@ -335,7 +335,7 @@ pub fn process_residuals(
     num_centers: usize,
     closest_centers: &[u32],
     to_subtract: bool,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) {
     info!(
         "Processing residuals of {} points in {} dimensions using {} centers",
@@ -425,7 +425,7 @@ mod math_util_test {
     use diskann_vector::Half;
 
     use super::*;
-    use crate::utils::create_thread_pool_for_test;
+    use crate::utils::RayonThreadPool;
 
     #[test]
     fn partial_ord_test() {
@@ -461,9 +461,9 @@ mod math_util_test {
         let num_points = 2;
         let dim = 3;
         let mut vecs_l2sq = vec![0.0; num_points];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
 
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, pool.as_ref()).unwrap();
 
         let expected = [14.0, 77.0];
 
@@ -480,8 +480,8 @@ mod math_util_test {
         let num_points = 2;
         let dim = 8;
         let mut vecs_l2sq = vec![0.0; num_points];
-        let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        let pool = RayonThreadPool::for_test();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, pool.as_ref()).unwrap();
 
         let expected = [204.0, 1292.0];
 
@@ -505,10 +505,10 @@ mod math_util_test {
             1.0, 2.0, 3.0, 4.0, 5.0, 21.0, 22.0, 23.0, 24.0, 25.0, 31.0, 32.0, 33.0, 34.0, 35.0,
         ];
         let mut docs_l2sq = vec![0.0; num_points];
-        let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        let pool = RayonThreadPool::for_test();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, pool.as_ref()).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, pool.as_ref()).unwrap();
         let mut center_index = vec![0; num_points];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
         let k = 1;
@@ -524,7 +524,7 @@ mod math_util_test {
             &mut center_index,
             &mut dist_matrix,
             k,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -552,10 +552,10 @@ mod math_util_test {
             46.0, 47.0, 48.0, 49.0, 50.0,
         ];
         let mut docs_l2sq = vec![0.0; num_points];
-        let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        let pool = RayonThreadPool::for_test();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, pool.as_ref()).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, pool.as_ref()).unwrap();
         let k = 2;
         let mut center_index = vec![0; num_points * k];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
@@ -571,7 +571,7 @@ mod math_util_test {
             &mut center_index,
             &mut dist_matrix,
             k,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -601,7 +601,7 @@ mod math_util_test {
 
         let mut closest_centers_ivf = vec![0u32; num_points * k];
         let mut inverted_index: Vec<Vec<usize>> = vec![vec![], vec![]];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         compute_closest_centers(
             &data,
             num_points,
@@ -612,7 +612,7 @@ mod math_util_test {
             &mut closest_centers_ivf,
             Some(&mut inverted_index),
             None,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -633,7 +633,7 @@ mod math_util_test {
         let num_centers = 2;
         let closest_centers = vec![0, 1];
         let to_subtract = true;
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
 
         process_residuals(
             &mut data_load,
@@ -643,7 +643,7 @@ mod math_util_test {
             num_centers,
             &closest_centers,
             to_subtract,
-            &pool,
+            pool.as_ref(),
         );
 
         assert_eq!(data_load, vec![0.5, 0.5, 0.5, 0.5]);

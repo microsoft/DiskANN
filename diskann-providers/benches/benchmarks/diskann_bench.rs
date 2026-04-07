@@ -17,7 +17,7 @@ use diskann_providers::{
         traits::AdHoc,
     },
     storage::FileStorageProvider,
-    utils::{VectorDataIterator, create_thread_pool_for_bench},
+    utils::{RayonThreadPool, VectorDataIterator},
 };
 use diskann_utils::io::read_bin;
 use diskann_vector::distance::Metric;
@@ -60,12 +60,12 @@ async fn test_sift_256_vectors_with_quant_vectors() {
     )
     .unwrap();
 
-    let pool = create_thread_pool_for_bench();
+    let pool = RayonThreadPool::for_bench();
     let pq_chunk_table = diskann_async::train_pq(
         train_data.as_view(),
         32,
         &mut diskann_providers::utils::create_rnd_in_tests(),
-        &pool,
+        pool.as_ref(),
     )
     .unwrap();
 
