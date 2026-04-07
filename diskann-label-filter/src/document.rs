@@ -10,11 +10,11 @@ use diskann_utils::reborrow::Reborrow;
 /// supply diskann with a vector and its attributes
 pub struct Document<'a, V: ?Sized> {
     vector: &'a V,
-    attributes: Vec<Attribute>,
+    attributes: &'a [Attribute],
 }
 
 impl<'a, V: ?Sized> Document<'a, V> {
-    pub fn new(vector: &'a V, attributes: Vec<Attribute>) -> Self {
+    pub fn new(vector: &'a V, attributes: &'a [Attribute]) -> Self {
         Self { vector, attributes }
     }
 
@@ -22,8 +22,8 @@ impl<'a, V: ?Sized> Document<'a, V> {
         self.vector
     }
 
-    pub(crate) fn attributes(&self) -> &Vec<Attribute> {
-        &self.attributes
+    pub(crate) fn attributes(&self) -> &'a [Attribute] {
+        self.attributes
     }
 }
 

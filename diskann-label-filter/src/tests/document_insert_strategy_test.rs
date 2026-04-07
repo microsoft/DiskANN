@@ -96,7 +96,7 @@ fn test_build_query_computer_extracts_vector_from_document() {
     let doc_accessor = DocumentSearchAccessor::new(inner_accessor);
 
     let vector = vec![1.0f32, 2.0, 0.0];
-    let doc = Document::new(vector.as_slice(), vec![]);
+    let doc = Document::new(vector.as_slice(), &[]);
 
     let result = <DocumentSearchAccessor<_> as BuildQueryComputer<&Document<'_, [f32]>>>::build_query_computer(&doc_accessor, &doc);
 

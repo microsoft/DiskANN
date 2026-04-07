@@ -252,8 +252,9 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         // Start points are stored at indices num_vectors..num_vectors+frozen_points
         let medoid_idx = compute_medoid_index(&data)?;
         let start_point_id = num_vectors as u32; // Start points begin at max_points
-        let medoid_attrs = attributes.get(medoid_idx).cloned().unwrap_or_default();
-        attribute_store.set_element(&start_point_id, &medoid_attrs)?;
+        let default_attrs = vec![];
+        let medoid_attrs = attributes.get(medoid_idx).unwrap_or(&default_attrs);
+        attribute_store.set_element(&start_point_id, medoid_attrs)?;
 
         let doc_provider = DocumentProvider::new(inner_provider, attribute_store);
 
@@ -821,13 +822,13 @@ where
     async fn build(&self, range: std::ops::Range<usize>) -> diskann::ANNResult<Self::Output> {
         let ctx = DefaultContext;
         for i in range {
-            let attrs = self.attributes.get(i).cloned().ok_or_else(|| {
+            let attrs = self.attributes.get(i).ok_or_else(|| {
                 ANNError::message(
                     ANNErrorKind::Opaque,
                     format!("Failed to get attributes at index {}", i),
                 )
             })?;
-            let doc = Document::new(self.data.row(i), attrs);
+            let doc = Document::new(self.data.row(i), &attrs);
             self.index
                 .insert(self.strategy, &ctx, &(i as u32), &doc)
                 .await?;
