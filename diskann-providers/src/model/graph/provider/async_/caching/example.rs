@@ -14,6 +14,8 @@ use diskann::{
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
 use diskann_vector::distance::Metric;
 
+use crate::model::graph::provider::async_::postprocess;
+
 use super::{
     bf_cache::{self, Cache},
     error::CacheAccessError,
@@ -270,7 +272,7 @@ impl glue::InplaceDeleteStrategy<test_provider::Provider> for ExampleStrategy {
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = test_provider::Accessor<'a>;
     type SearchStrategy = Self;
-    type SearchPostProcessor = glue::CopyIds;
+    type SearchPostProcessor = postprocess::RemoveDeletedIdsAndCopy;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -279,7 +281,7 @@ impl glue::InplaceDeleteStrategy<test_provider::Provider> for ExampleStrategy {
         *self
     }
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        postprocess::RemoveDeletedIdsAndCopy
     }
     async fn get_delete_element<'a>(
         &'a self,
@@ -288,6 +290,22 @@ impl glue::InplaceDeleteStrategy<test_provider::Provider> for ExampleStrategy {
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
         self.0.get_delete_element(provider, context, id).await
+    }
+}
+
+impl postprocess::DeletionCheck for test_provider::Provider {
+    fn deletion_check(&self, id: u32) -> bool {
+        match self.is_deleted(id) {
+            Ok(is_deleted) => is_deleted,
+            Err(_) => true,
+        }
+    }
+}
+
+impl postprocess::AsDeletionCheck for test_provider::Accessor<'_> {
+    type Checker = test_provider::Provider;
+    fn as_deletion_check(&self) -> &Self::Checker {
+        self.provider()
     }
 }
 
@@ -601,10 +619,7 @@ mod tests {
         accessor.get_neighbors(0, &mut list).await.unwrap();
         assert_eq!(&*list, &[2, 3, 4, 1]);
 
-        assert_eq!(
-            provider.inner().metrics().set_neighbors,
-            2,
-        );
+        assert_eq!(provider.inner().metrics().set_neighbors, 2,);
         assert_eq!(
             provider.inner().metrics().get_neighbors,
             4, /* increased */
@@ -657,10 +672,7 @@ mod tests {
             provider.inner().metrics().get_neighbors,
             4, /* increased */
         );
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            3,
-        );
+        assert_eq!(accessor.cache().graph.stats().get_local_misses(), 3,);
         assert_eq!(
             accessor.cache().graph.stats().get_local_hits(),
             1, /* increased */
@@ -681,10 +693,7 @@ mod tests {
         assert!(accessor.get_neighbors(0, &mut list).await.is_err());
         assert_eq!(provider.inner().metrics().set_neighbors, 2);
         assert_eq!(provider.inner().metrics().get_neighbors, 4);
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            4
-        );
+        assert_eq!(accessor.cache().graph.stats().get_local_misses(), 4);
         assert_eq!(accessor.cache().graph.stats().get_local_hits(), 1);
 
         // Ensure that the stats get properly recorded when the accessor is dropped.
@@ -1023,149 +1032,142 @@ mod tests {
         }
     }
 
-    // TODO: Re-enable once AsDeletionCheck bridge is implemented for test_provider::Accessor
-    // wrapped in CachingAccessor. The inplace_delete algorithm requires RemoveDeletedIdsAndCopy
-    // as the SearchPostProcessor, which depends on AsDeletionCheck — a trait currently only
-    // implemented by diskann-providers' own accessor types (BfTree, FullPrecision, etc.),
-    // not by test_provider::Accessor.
-    //
-    // See plan in session state for the full implementation approach.
-    // #[tokio::test]
-    // async fn test_inplace_delete_2d() {
-    //     // create small index instance
-    //     let metric = Metric::L2;
-    //     let num_points = 4;
-    //     let strategy = cache_provider::Cached::new(ExampleStrategy(test_provider::Strategy::new()));
-    //     let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
-    //     let start_id = num_points as u32;
-    //     let start_point = vec![0.5, 0.5];
-    //     let dim = start_point.len();
-    //
-    //     let index_config = diskann::graph::config::Builder::new(
-    //         4, // target_degree
-    //         diskann::graph::config::MaxDegree::default_slack(),
-    //         10, // l_build
-    //         metric.into(),
-    //     )
-    //     .build()
-    //     .unwrap();
-    //
-    //     let ctx = &Context::new();
-    //     let test_config = test_provider::Config::new(
-    //         metric,
-    //         index_config.max_degree().get(),
-    //         test_provider::StartPoint::new(start_id, start_point.clone()),
-    //     )
-    //     .unwrap();
-    //
-    //     // The contents of the table don't matter for this test because we use full
-    //     // precision only.
-    //     let table = diskann_async::train_pq(
-    //         Matrix::new(0.5, 1, dim).as_view(),
-    //         dim,
-    //         &mut crate::utils::create_rnd_from_seed_in_tests(0),
-    //         1usize,
-    //     )
-    //     .unwrap();
-    //
-    //     let index = DiskANNIndex::new(
-    //         index_config,
-    //         CachingProvider::new(
-    //             test_provider::Provider::new(test_config),
-    //             ExampleCache::new(cache_size, None),
-    //         ),
-    //         None,
-    //     );
-    //
-    //     // vectors are the four corners of a square, with the start point in the middle
-    //     // the middle point forms an edge to each corner, while corners form an edge
-    //     // to their opposite vertex vertically as well as the middle
-    //     let vectors = [
-    //         vec![0.0, 0.0],
-    //         vec![0.0, 1.0],
-    //         vec![1.0, 0.0],
-    //         vec![1.0, 1.0],
-    //     ];
-    //     let adjacency_lists = [
-    //         AdjacencyList::from_iter_untrusted([4, 1]),
-    //         AdjacencyList::from_iter_untrusted([4, 0]),
-    //         AdjacencyList::from_iter_untrusted([4, 3]),
-    //         AdjacencyList::from_iter_untrusted([4, 2]),
-    //         AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
-    //     ];
-    //
-    //     // Note: Without the fully qualified syntax - this fails to compile.
-    //     let mut accessor = <cache_provider::Cached<ExampleStrategy> as SearchStrategy<
-    //         cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
-    //         &[f32],
-    //     >>::search_accessor(&strategy, index.provider(), ctx)
-    //     .unwrap();
-    //
-    //     async_tests::populate_data(index.provider(), ctx, &vectors).await;
-    //     async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
-    //
-    //     index
-    //         .inplace_delete(
-    //             strategy,
-    //             ctx,
-    //             &3, // id to delete
-    //             3,  // num_to_replace
-    //             diskann::graph::InplaceDeleteMethod::VisitedAndTopK {
-    //                 k_value: 4,
-    //                 l_value: 10,
-    //             },
-    //         )
-    //         .await
-    //         .unwrap();
-    //
-    //     // Check that the vertex was marked as deleted.
-    //     assert!(
-    //         index
-    //             .data_provider
-    //             .status_by_internal_id(ctx, 3)
-    //             .await
-    //             .unwrap()
-    //             .is_deleted()
-    //     );
-    //
-    //     // expected outcome:
-    //     // vertex 4 (the start point) has its edge to 3 deleted
-    //     // vertex 2 (the other point with edge pointing to 3) should have its edge to point 3 deleted,
-    //     // and replaced with edges to points 0 and 1
-    //     // vertices 0 and 1 should add an edge pointing to 2.
-    //     // vertex 3 should be dropped
-    //     {
-    //         let mut list = AdjacencyList::new();
-    //         accessor.get_neighbors(4, &mut list).await.unwrap();
-    //         list.sort();
-    //         assert_eq!(&*list, &[0, 1, 2]);
-    //     }
-    //
-    //     {
-    //         let mut list = AdjacencyList::new();
-    //         accessor.get_neighbors(2, &mut list).await.unwrap();
-    //         list.sort();
-    //         assert_eq!(&*list, &[0, 1, 4]);
-    //     }
-    //
-    //     {
-    //         let mut list = AdjacencyList::new();
-    //         accessor.get_neighbors(0, &mut list).await.unwrap();
-    //         list.sort();
-    //         assert_eq!(&*list, &[1, 2, 4]);
-    //     }
-    //
-    //     {
-    //         let mut list = AdjacencyList::new();
-    //         accessor.get_neighbors(1, &mut list).await.unwrap();
-    //         list.sort();
-    //         assert_eq!(&*list, &[0, 2, 4]);
-    //     }
-    //
-    //     {
-    //         let mut list = AdjacencyList::new();
-    //         accessor.get_neighbors(3, &mut list).await.unwrap();
-    //         assert!(list.is_empty());
-    //     }
-    // }
+    #[tokio::test]
+    async fn test_inplace_delete_2d() {
+        // create small index instance
+        let metric = Metric::L2;
+        let num_points = 4;
+        let strategy = cache_provider::Cached::new(ExampleStrategy(test_provider::Strategy::new()));
+        let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
+        let start_id = num_points as u32;
+        let start_point = vec![0.5, 0.5];
+        let dim = start_point.len();
+
+        let index_config = diskann::graph::config::Builder::new(
+            4, // target_degree
+            diskann::graph::config::MaxDegree::default_slack(),
+            10, // l_build
+            metric.into(),
+        )
+        .build()
+        .unwrap();
+
+        let ctx = &Context::new();
+        let test_config = test_provider::Config::new(
+            metric,
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
+        )
+        .unwrap();
+
+        // The contents of the table don't matter for this test because we use full
+        // precision only.
+        let table = diskann_async::train_pq(
+            Matrix::new(0.5, 1, dim).as_view(),
+            dim,
+            &mut crate::utils::create_rnd_from_seed_in_tests(0),
+            1usize,
+        )
+        .unwrap();
+
+        let index = DiskANNIndex::new(
+            index_config,
+            CachingProvider::new(
+                test_provider::Provider::new(test_config),
+                ExampleCache::new(cache_size, None),
+            ),
+            None,
+        );
+
+        // vectors are the four corners of a square, with the start point in the middle
+        // the middle point forms an edge to each corner, while corners form an edge
+        // to their opposite vertex vertically as well as the middle
+        let vectors = [
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+        ];
+        let adjacency_lists = [
+            AdjacencyList::from_iter_untrusted([4, 1]),
+            AdjacencyList::from_iter_untrusted([4, 0]),
+            AdjacencyList::from_iter_untrusted([4, 3]),
+            AdjacencyList::from_iter_untrusted([4, 2]),
+            AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
+        ];
+
+        // Note: Without the fully qualified syntax - this fails to compile.
+        let mut accessor = <cache_provider::Cached<ExampleStrategy> as SearchStrategy<
+            cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
+            &[f32],
+        >>::search_accessor(&strategy, index.provider(), ctx)
+        .unwrap();
+
+        async_tests::populate_data(index.provider(), ctx, &vectors).await;
+        async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
+
+        index
+            .inplace_delete(
+                strategy,
+                ctx,
+                &3, // id to delete
+                3,  // num_to_replace
+                diskann::graph::InplaceDeleteMethod::VisitedAndTopK {
+                    k_value: 4,
+                    l_value: 10,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Check that the vertex was marked as deleted.
+        assert!(
+            index
+                .data_provider
+                .status_by_internal_id(ctx, 3)
+                .await
+                .unwrap()
+                .is_deleted()
+        );
+
+        // expected outcome:
+        // vertex 4 (the start point) has its edge to 3 deleted
+        // vertex 2 (the other point with edge pointing to 3) should have its edge to point 3 deleted,
+        // and replaced with edges to points 0 and 1
+        // vertices 0 and 1 should add an edge pointing to 2.
+        // vertex 3 should be dropped
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(4, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 1, 2]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(2, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 1, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[1, 2, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(1, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 2, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(3, &mut list).await.unwrap();
+            assert!(list.is_empty());
+        }
+    }
 }
