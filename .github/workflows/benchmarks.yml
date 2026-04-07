@@ -31,8 +31,8 @@ on:
       - 'diskann-platform/**'
       - 'diskann-label-filter/**'
       - 'diskann-benchmark/**'
+      - 'diskann-benchmark-runner/**'
       - '.github/workflows/benchmarks.yml'
-      - '.github/scripts/benchmark_validate.py'
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
@@ -124,17 +124,14 @@ jobs:
             --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
 
       - name: Validate benchmark results
+        working-directory: diskann_rust
         run: |
-          python diskann_rust/.github/scripts/benchmark_validate.py \
-            --mode pr \
-            --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
-            --target diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json \
-            --title 'Benchmark Results: Wikipedia-100K Dataset'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            check run \
+            --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
+            --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            --before ../baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
+            --after target/tmp/wikipedia-100K_benchmark_crate_target.json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -214,17 +211,14 @@ jobs:
             --output-file target/tmp/openai-100K_benchmark_crate_target.json
 
       - name: Validate benchmark results
+        working-directory: diskann_rust
         run: |
-          python diskann_rust/.github/scripts/benchmark_validate.py \
-            --mode pr \
-            --baseline baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
-            --target diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json \
-            --title 'Benchmark Results: OpenAI ArXiv 100K Dataset'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            check run \
+            --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
+            --input-file diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
+            --before ../baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
+            --after target/tmp/openai-100K_benchmark_crate_target.json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4

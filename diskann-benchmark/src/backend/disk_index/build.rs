@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use diskann::{
@@ -31,7 +31,7 @@ use crate::{
     inputs::disk::DiskIndexBuild,
 };
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskBuildStats {
     build_time: MicroSeconds,
     span_metrics: serde_json::Value,
@@ -43,6 +43,10 @@ impl DiskBuildStats {
             build_time,
             span_metrics,
         }
+    }
+
+    pub(super) fn build_time_seconds(&self) -> f64 {
+        self.build_time.as_seconds()
     }
 }
 
