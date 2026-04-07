@@ -497,11 +497,17 @@ pub(crate) mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum StartPointExpectation {
+        Filtered(u32),
+        Visible(u32),
+    }
+
     pub(crate) async fn check_grid_search<DP, T, FS, QS>(
         index: &DiskANNIndex<DP>,
         vectors: &[Vec<T>],
         paged_queries: &[PagedSearch<T>],
-        start_point: u32,
+        start_point: StartPointExpectation,
         full_strategy: FS,
         quant_strategy: QS,
     ) where
@@ -514,7 +520,6 @@ pub(crate) mod tests {
         let dim = vectors[0].len();
         // Subtract 1 to compensate for the start point.
         let num_points = vectors.len();
-
         // let accessor = full_strategy.search_accessor(index.provider(), &Default::default());
         // let start_ids = accessor.starting_points().await?;
         // let start_point: u32 = match start_point{
@@ -587,18 +592,33 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id == start_point {
-                return Err(Box::new("start point should not be returned"));
+            match start_point {
+                StartPointExpectation::Filtered(start_point) => {
+                    if id == start_point {
+                        return Err(Box::new("start point should not be returned"));
+                    }
+                    if id as usize == num_points - 2 {
+                        return Err(Box::new(format!(
+                            "expected {} as the nearest id",
+                            num_points - 2
+                        )));
+                    }
+                    if distance != dim as f32 {
+                        return Err(Box::new(format!("nearest distance should be {}", dim)));
+                    }
+                }
+                StartPointExpectation::Visible(start_point) => {
+                    if id != start_point {
+                        return Err(Box::new("start point should be returned"));
+                    }
+                    if distance != 0.0 {
+                        return Err(Box::new(
+                            "nearest distance should be 0 from the start point",
+                        ));
+                    }
+                }
             }
-            if id as usize != num_points - 2 {
-                return Err(Box::new(format!(
-                    "expected {} as the nearest id",
-                    num_points - 2
-                )));
-            }
-            if distance != dim as f32 {
-                return Err(Box::new(format!("nearest distance should be {}", dim)));
-            }
+
             Ok(())
         };
 
@@ -726,7 +746,7 @@ pub(crate) mod tests {
             &index,
             &vectors,
             &paged_tests,
-            (vectors.len() - 1) as u32,
+            StartPointExpectation::Filtered((vectors.len() - 1) as u32),
             FullPrecision,
             Hybrid::new(None),
         )
@@ -826,7 +846,7 @@ pub(crate) mod tests {
                 &index,
                 &vectors,
                 &[],
-                (vectors.len() - 1) as u32,
+                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
                 FullPrecision,
                 hybrid,
             )
@@ -845,7 +865,7 @@ pub(crate) mod tests {
                 &index,
                 &vectors,
                 &[],
-                (vectors.len() - 1) as u32,
+                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
                 FullPrecision,
                 hybrid,
             )
@@ -881,7 +901,7 @@ pub(crate) mod tests {
                 &index,
                 &vectors,
                 &[],
-                (vectors.len() - 1) as u32,
+                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
                 FullPrecision,
                 hybrid,
             )
@@ -904,7 +924,7 @@ pub(crate) mod tests {
                 &index,
                 &vectors,
                 &[],
-                (vectors.len() - 1) as u32,
+                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
                 FullPrecision,
                 hybrid,
             )

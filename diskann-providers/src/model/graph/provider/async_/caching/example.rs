@@ -3,6 +3,13 @@
  * Licensed under the MIT license.
  */
 
+use super::{
+    bf_cache::{self, Cache},
+    error::CacheAccessError,
+    provider::{self as cache_provider, NeighborStatus},
+    utils::{CacheKey, Graph, HitStats, KeyGen, LocalStats},
+};
+use crate::index::diskann_async::tests::StartPointExpectation;
 use diskann::{
     error::{RankedError, ToRanked, TransientError},
     graph::{AdjacencyList, test::provider as test_provider, test::provider::Context, workingset},
@@ -10,13 +17,6 @@ use diskann::{
 };
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
-
-use super::{
-    bf_cache::{self, Cache},
-    error::CacheAccessError,
-    provider::{self as cache_provider, NeighborStatus},
-    utils::{CacheKey, Graph, HitStats, KeyGen, LocalStats},
-};
 
 ///////////////////
 // Example Cache //
@@ -750,7 +750,7 @@ mod tests {
             &index,
             &vectors,
             &paged_tests,
-            u32::MAX,
+            StartPointExpectation::Visible(u32::MAX),
             strategy,
             strategy,
         )
@@ -862,7 +862,7 @@ mod tests {
                 &index,
                 &vectors,
                 &[],
-                start_id as u32,
+                StartPointExpectation::Visible(start_id as u32),
                 strategy,
                 strategy,
             )
@@ -885,7 +885,7 @@ mod tests {
                 &index,
                 &vectors,
                 &[],
-                start_id as u32,
+                StartPointExpectation::Visible(start_id as u32),
                 strategy,
                 strategy,
             )
