@@ -173,6 +173,138 @@ float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size
     return (float)result;
 }
 
+// AVX2 optimized squared L2 distance for uint8
+float AVXDistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size) const
+{
+#ifdef USE_AVX2
+    __m256 sum = _mm256_setzero_ps();
+    const uint8_t *pA = a;
+    const uint8_t *pB = b;
+    uint32_t remaining = size;
+
+    // Process 32 uint8 values at a time with AVX2
+    while (remaining >= 32)
+    {
+        __m256i va = _mm256_loadu_si256((const __m256i *)pA);
+        __m256i vb = _mm256_loadu_si256((const __m256i *)pB);
+        sum = _mm256_add_ps(sum, _mm256_sqrdiff_epu8(va, vb));
+        pA += 32;
+        pB += 32;
+        remaining -= 32;
+    }
+
+    // Process 16 uint8 values with SSE
+    __m128 sum128 = _mm_setzero_ps();
+    while (remaining >= 16)
+    {
+        __m128i va = _mm_loadu_si128((const __m128i *)pA);
+        __m128i vb = _mm_loadu_si128((const __m128i *)pB);
+        sum128 = _mm_add_ps(sum128, _mm_sqrdiff_epu8(va, vb));
+        pA += 16;
+        pB += 16;
+        remaining -= 16;
+    }
+
+    // Scalar tail for remaining elements
+    uint32_t tail_sum = 0;
+    while (remaining > 0)
+    {
+        int32_t diff = (int32_t)*pA - (int32_t)*pB;
+        tail_sum += diff * diff;
+        pA++;
+        pB++;
+        remaining--;
+    }
+
+    // Combine all partial sums
+    float result = _mm256_reduce_add_ps(sum);
+    __m128 sum128_hi = _mm_movehl_ps(sum128, sum128);
+    __m128 sum128_sum = _mm_add_ps(sum128, sum128_hi);
+    sum128_sum = _mm_add_ss(sum128_sum, _mm_shuffle_ps(sum128_sum, sum128_sum, 0x1));
+    result += _mm_cvtss_f32(sum128_sum);
+    result += (float)tail_sum;
+
+    return result;
+#else
+    // Fallback to scalar implementation
+    uint32_t result = 0;
+    for (uint32_t i = 0; i < size; i++)
+    {
+        int32_t diff = (int32_t)a[i] - (int32_t)b[i];
+        result += diff * diff;
+    }
+    return (float)result;
+#endif
+}
+
+// AVX2 optimized cosine distance for uint8
+float AVXDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size) const
+{
+#ifdef USE_AVX2
+    __m256i dp_sum = _mm256_setzero_si256();
+    __m256i sq_a_sum = _mm256_setzero_si256();
+    __m256i sq_b_sum = _mm256_setzero_si256();
+
+    const uint8_t *pA = a;
+    const uint8_t *pB = b;
+    uint32_t remaining = size;
+
+    // Process 32 uint8 values at a time with AVX2
+    while (remaining >= 32)
+    {
+        __m256i va = _mm256_loadu_si256((const __m256i *)pA);
+        __m256i vb = _mm256_loadu_si256((const __m256i *)pB);
+
+        dp_sum = _mm256_add_epi32(dp_sum, _mm256_dp_epu8(va, vb));
+        sq_a_sum = _mm256_add_epi32(sq_a_sum, _mm256_sqr_epu8(va));
+        sq_b_sum = _mm256_add_epi32(sq_b_sum, _mm256_sqr_epu8(vb));
+
+        pA += 32;
+        pB += 32;
+        remaining -= 32;
+    }
+
+    // Horizontal sum of 32-bit integers
+    int32_t scalarProduct = _mm256_reduce_add_epi32(dp_sum);
+    int32_t magA = _mm256_reduce_add_epi32(sq_a_sum);
+    int32_t magB = _mm256_reduce_add_epi32(sq_b_sum);
+
+    // Scalar tail for remaining elements
+    while (remaining > 0)
+    {
+        uint32_t va = *pA;
+        uint32_t vb = *pB;
+        scalarProduct += va * vb;
+        magA += va * va;
+        magB += vb * vb;
+        pA++;
+        pB++;
+        remaining--;
+    }
+
+    // Cosine distance = 1 - cosine_similarity
+    float denom = sqrtf((float)magA) * sqrtf((float)magB);
+    if (denom == 0.0f)
+        return 1.0f;
+    return 1.0f - ((float)scalarProduct / denom);
+#else
+    // Fallback to scalar implementation
+    int32_t magA = 0, magB = 0, scalarProduct = 0;
+    for (uint32_t i = 0; i < size; i++)
+    {
+        uint32_t va = a[i];
+        uint32_t vb = b[i];
+        magA += va * va;
+        magB += vb * vb;
+        scalarProduct += va * vb;
+    }
+    float denom = sqrtf((float)magA) * sqrtf((float)magB);
+    if (denom == 0.0f)
+        return 1.0f;
+    return 1.0f - ((float)scalarProduct / denom);
+#endif
+}
+
 #ifndef _WINDOWS
 float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) const
 {
@@ -688,22 +820,19 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
 {
     if (m == diskann::Metric::L2)
     {
-#ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
-                         "Using "
-                         "slow version. "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
-#endif
+#ifdef USE_AVX2
+        return new diskann::AVXDistanceL2UInt8();
+#else
         return new diskann::DistanceL2UInt8();
+#endif
     }
     else if (m == diskann::Metric::COSINE)
     {
-        diskann::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
-                         "slow version SlowDistanceCosineUint8() "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
+#ifdef USE_AVX2
+        return new diskann::AVXDistanceCosineUInt8();
+#else
         return new diskann::SlowDistanceCosineUInt8();
+#endif
     }
     else
     {

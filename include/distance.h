@@ -158,6 +158,26 @@ class DistanceL2UInt8 : public Distance<uint8_t>
     DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t size) const;
 };
 
+// AVX2 optimized L2 distance for uint8
+class AVXDistanceL2UInt8 : public Distance<uint8_t>
+{
+  public:
+    AVXDistanceL2UInt8() : Distance<uint8_t>(diskann::Metric::L2)
+    {
+    }
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t length) const;
+};
+
+// AVX2 optimized cosine distance for uint8
+class AVXDistanceCosineUInt8 : public Distance<uint8_t>
+{
+  public:
+    AVXDistanceCosineUInt8() : Distance<uint8_t>(diskann::Metric::COSINE)
+    {
+    }
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t length) const;
+};
+
 template <typename T> class DistanceInnerProduct : public Distance<T>
 {
   public:
