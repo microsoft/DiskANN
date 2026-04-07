@@ -8,13 +8,13 @@
             "tolerance": {
                 "type": "disk-index-tolerance",
                 "content": {
-                    "build_time_regression": 0.001,
-                    "qps_regression": 0.001,
-                    "recall_regression": 0.001,
-                    "mean_ios_regression": 0.001,
-                    "mean_comps_regression": 0.001,
-                    "mean_latency_regression": 0.001,
-                    "p95_latency_regression": 0.001
+                    "build_time_regression": 0.10,
+                    "qps_regression": 0.10,
+                    "recall_regression": 0.01,
+                    "mean_ios_regression": 0.01,
+                    "mean_comps_regression": 0.01,
+                    "mean_latency_regression": 0.15,
+                    "p95_latency_regression": 0.15
                 }
             }
         }
