@@ -231,19 +231,20 @@ impl fmt::Display for DiskIndexCheckResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "  Search L={}: {:>15} {:>15} {:>12} {:>12}   {}",
-            self.search_l, "Before", "After", "Change", "Tolerance", "Remark"
+            "  Search L={}: {:>15} {:>15} {:>12} {:>12}   Remark",
+            self.search_l, "Before", "After", "Change", "Tolerance"
         )?;
-        writeln!(
-            f,
-            "  {}",
-            "=".repeat(90)
-        )?;
+        writeln!(f, "  {}", "=".repeat(90))?;
         for c in &self.comparisons {
             writeln!(
                 f,
                 "  {:>20}, {:>14.3}, {:>14.3}, {:>11}, {:>11.1}%,   {}",
-                c.metric, c.before, c.after, c.change_pct, c.tolerance_pct * 100.0, c.remark
+                c.metric,
+                c.before,
+                c.after,
+                c.change_pct,
+                c.tolerance_pct * 100.0,
+                c.remark
             )?;
         }
         Ok(())
@@ -267,7 +268,11 @@ fn check_lower_is_better(
             }
             (
                 format!("{:.3}%", change * 100.0),
-                if ok { String::new() } else { "REGRESSION".to_string() },
+                if ok {
+                    String::new()
+                } else {
+                    "REGRESSION".to_string()
+                },
                 ok,
             )
         }
@@ -306,7 +311,11 @@ fn check_higher_is_better(
             }
             (
                 format!("{:.3}%", change * 100.0),
-                if ok { String::new() } else { "REGRESSION".to_string() },
+                if ok {
+                    String::new()
+                } else {
+                    "REGRESSION".to_string()
+                },
                 ok,
             )
         }
