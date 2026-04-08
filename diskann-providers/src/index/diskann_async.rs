@@ -498,9 +498,9 @@ pub(crate) mod tests {
     }
 
     #[derive(Debug, Clone, Copy)]
-    #[allow(dead_code)] // Visible is used by caching::example tests behind feature bf_tree
     pub(crate) enum StartPointExpectation {
         Filtered(u32),
+        #[cfg(feature = "bf_tree")]
         Visible(u32),
     }
 
@@ -601,6 +601,7 @@ pub(crate) mod tests {
                         return Err(Box::new(format!("nearest distance should be {}", dim)));
                     }
                 }
+                #[cfg(feature = "bf_tree")]
                 StartPointExpectation::Visible(start_point) => {
                     if id != start_point {
                         return Err(Box::new("start point should be returned"));
