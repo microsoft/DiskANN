@@ -1,0 +1,7 @@
+Available tolerance kinds are listed below.
+    test-input-dim-tolerance
+    - "test-input-dim" => "dim-bench"
+    test-input-types-tolerance
+    - "test-input-types" => "type-bench-f32"
+    - "test-input-types" => "type-bench-i8"
+    - "test-input-types" => "exact-type-bench-f32-1000"

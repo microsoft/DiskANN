@@ -1,0 +1,16 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "test-input-dim",
+        "content": {
+          "dim": 128
+        }
+      },
+      "tolerance": {
+        "type": "nonexistent-tolerance",
+        "content": {}
+      }
+    }
+  ]
+}
