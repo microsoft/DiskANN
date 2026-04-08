@@ -609,15 +609,7 @@ mod tests {
         }
 
         fn run(&self, tempdir: &Path) {
-            let mut apps = self.parse_stdin(tempdir);
-
-            // For tests, always allow debug mode to prevent test failures when running
-            // in debug configuration.
-            for app in apps.iter_mut() {
-                if let Commands::Run { allow_debug, .. } = &mut app.command {
-                    *allow_debug = true;
-                }
-            }
+            let apps = self.parse_stdin(tempdir);
 
             // Register inputs
             let mut inputs = registry::Inputs::new();
