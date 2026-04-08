@@ -862,7 +862,7 @@ mod tests {
                 &index,
                 &vectors,
                 &[],
-                StartPointExpectation::Visible(start_id as u32),
+                StartPointExpectation::Visible(start_id),
                 strategy,
                 strategy,
             )
@@ -885,7 +885,7 @@ mod tests {
                 &index,
                 &vectors,
                 &[],
-                StartPointExpectation::Visible(start_id as u32),
+                StartPointExpectation::Visible(start_id),
                 strategy,
                 strategy,
             )
