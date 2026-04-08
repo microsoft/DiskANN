@@ -70,17 +70,12 @@ impl FullReduce {
 ///         K::full_panel / K::remainder_dispatch
 /// ```
 ///
-/// The last A panel may be partial (`rows < A_PANEL`) — the kernel's
-/// `prepare_a` zero-pads it to a full panel so the micro-kernel body is
-/// unchanged. The extra scratch entries are written but ignored by the caller.
-///
 /// # Safety
 ///
 /// * `a_ptr` must be valid for `a_available_rows * k` elements of `K::AElem`.
+/// * `a_available_rows` must be a multiple of `K::A_PANEL`.
 /// * `b_ptr` must be valid for `b_nrows * k` elements of `K::BElem`.
 /// * `scratch` must have length ≥ `a_available_rows` and be initialized by caller.
-///   If `a_available_rows` is not a multiple of `A_PANEL`, up to `A_PANEL - 1`
-///   extra entries past `scratch[a_available_rows - 1]` may be written.
 pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     arch: A,
     a_ptr: *const K::AElem,
@@ -90,8 +85,8 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     k: usize,
     scratch: &mut [f32],
 ) {
-    let a_row_bytes = k * std::mem::size_of::<K::AElem>();
-    let b_row_bytes = k * std::mem::size_of::<K::BElem>();
+    let a_row_bytes = k * std::mem::size_of::<K::APrepared>();
+    let b_row_bytes = k * std::mem::size_of::<K::BPrepared>();
     let plan = FullReduce::new(
         a_row_bytes,
         b_row_bytes,
@@ -107,7 +102,13 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     let b_tile_stride = b_panel_stride * plan.b_panels;
 
     let b_remainder = b_nrows % K::B_PANEL;
-    let a_remainder = a_available_rows % K::A_PANEL;
+
+    assert_eq!(
+        a_available_rows % K::A_PANEL,
+        0,
+        "a_available_rows ({a_available_rows}) must be a multiple of A_PANEL ({})",
+        K::A_PANEL,
+    );
 
     // Kernel owns its staging buffers (identity kernels stay zero-sized).
     let mut kernel = K::new(k);
@@ -116,10 +117,6 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };
     // SAFETY: b_remainder < B_PANEL, so pb_end - b_remainder * k is within allocation.
     let pb_full_end = unsafe { pb_end.sub(b_remainder * k) };
-
-    // End-of-A pointer for detecting the last (potentially partial) A panel.
-    // SAFETY: Caller guarantees a_ptr is valid for a_available_rows * k elements.
-    let pa_end = unsafe { a_ptr.add(a_available_rows * k) };
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
@@ -146,13 +143,7 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3: Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    // Determine A panel row count: partial for the last panel.
-                    let a_rows = if pa_panel.add(a_panel_stride) > pa_end && a_remainder > 0 {
-                        a_remainder
-                    } else {
-                        K::A_PANEL
-                    };
-                    let prepared_a = kernel.prepare_a(arch, pa_panel, a_rows, k);
+                    let prepared_a = kernel.prepare_a(arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4: Micro-panels of `B` (all full, no remainder check).
@@ -175,12 +166,7 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3 (peeled): Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    let a_rows = if pa_panel.add(a_panel_stride) > pa_end && a_remainder > 0 {
-                        a_remainder
-                    } else {
-                        K::A_PANEL
-                    };
-                    let prepared_a = kernel.prepare_a(arch, pa_panel, a_rows, k);
+                    let prepared_a = kernel.prepare_a(arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4 (peeled): Full B-panels in the last tile.
@@ -327,5 +313,31 @@ mod tests {
         // b_panels clamps to 1.
         let plan = FullReduce::new(1024, 64, 16, 4, 100_000, 100);
         assert_eq!(plan.b_panels, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a multiple of A_PANEL")]
+    fn panics_on_unaligned_a_rows() {
+        use super::super::f32::F32Kernel;
+        use diskann_wide::arch::Scalar;
+
+        let k = 4;
+        // 9 is not a multiple of A_PANEL (8).
+        let a = vec![0.0f32; 9 * k];
+        let b = vec![0.0f32; 2 * k];
+        let mut scratch = vec![f32::MIN; 16];
+
+        // SAFETY: pointers and scratch are correctly sized; we expect a panic.
+        unsafe {
+            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+                Scalar::new(),
+                a.as_ptr(),
+                9,
+                b.as_ptr(),
+                2,
+                k,
+                &mut scratch,
+            );
+        }
     }
 }

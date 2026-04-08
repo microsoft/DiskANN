@@ -1,11 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! V3 (AVX2+FMA) f32 micro-kernel (16×4) and V4 delegation.
+//! V3 (AVX2+FMA) f32 micro-kernel (16×4).
 
-use std::marker::PhantomData;
-
-use diskann_wide::arch::x86_64::{V3, V4};
+use diskann_wide::arch::x86_64::V3;
 use diskann_wide::{SIMDMinMax, SIMDMulAdd, SIMDVector};
 
 use super::super::Kernel;
@@ -17,7 +15,7 @@ diskann_wide::alias!(f32s = <V3>::f32x8);
 // SAFETY: F32Kernel's `full_panel` and `remainder_dispatch` only access
 // A_PANEL(16) * k A elements, UNROLL * k B elements, and A_PANEL(16)
 // scratch elements — all within the bounds guaranteed by `tiled_reduce`.
-unsafe impl Kernel<V3> for F32Kernel<V3, 16> {
+unsafe impl Kernel<V3> for F32Kernel<16> {
     type AElem = f32;
     type BElem = f32;
     type APrepared = f32;
@@ -26,18 +24,11 @@ unsafe impl Kernel<V3> for F32Kernel<V3, 16> {
     const B_PANEL: usize = 4;
 
     fn new(_k: usize) -> Self {
-        F32Kernel(PhantomData)
+        F32Kernel
     }
 
     #[inline(always)]
-    unsafe fn prepare_a(
-        &mut self,
-        _arch: V3,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        // Identity: AElem == APrepared, no conversion needed.
+    unsafe fn prepare_a(&mut self, _arch: V3, src: *const f32, _k: usize) -> *const f32 {
         src
     }
 
@@ -70,76 +61,6 @@ unsafe impl Kernel<V3> for F32Kernel<V3, 16> {
     ) {
         // SAFETY: Caller guarantees pointer validity per Kernel<V3> contract.
         unsafe {
-            match remainder {
-                1 => f32_microkernel::<1>(arch, a, b, k, r),
-                2 => f32_microkernel::<2>(arch, a, b, k, r),
-                3 => f32_microkernel::<3>(arch, a, b, k, r),
-                _ => {
-                    debug_assert!(
-                        false,
-                        "unexpected remainder {remainder} for B_PANEL={}",
-                        Self::B_PANEL
-                    )
-                }
-            }
-        }
-    }
-}
-
-// SAFETY: V3 is a strict subset of V4 (AVX-512 ⊇ AVX2+FMA). All V3 intrinsics
-// are valid on V4 hardware. The From<V4> for V3 conversion is zero-cost.
-unsafe impl Kernel<V4> for F32Kernel<V4, 16> {
-    type AElem = f32;
-    type BElem = f32;
-    type APrepared = f32;
-    type BPrepared = f32;
-    const A_PANEL: usize = 16;
-    const B_PANEL: usize = 4;
-
-    fn new(_k: usize) -> Self {
-        F32Kernel(PhantomData)
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_a(
-        &mut self,
-        _arch: V4,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        src
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_b(
-        &mut self,
-        _arch: V4,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        src
-    }
-
-    #[inline(always)]
-    unsafe fn full_panel(arch: V4, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
-        // SAFETY: V3 ⊆ V4; caller guarantees pointer validity per Kernel<V4> contract.
-        unsafe { f32_microkernel::<{ Self::B_PANEL }>(V3::from(arch), a, b, k, r) }
-    }
-
-    #[inline(always)]
-    unsafe fn remainder_dispatch(
-        arch: V4,
-        remainder: usize,
-        a: *const f32,
-        b: *const f32,
-        k: usize,
-        r: *mut f32,
-    ) {
-        // SAFETY: V3 ⊆ V4; caller guarantees pointer validity per Kernel<V4> contract.
-        unsafe {
-            let arch = V3::from(arch);
             match remainder {
                 1 => f32_microkernel::<1>(arch, a, b, k, r),
                 2 => f32_microkernel::<2>(arch, a, b, k, r),
@@ -204,15 +125,14 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
     }
 
     // SAFETY: r points to at least A_PANEL = 16 writable f32s (2 × f32x8).
+    // r + f32s::LANES is within the same A_PANEL-sized scratch region.
     let mut r0 = unsafe { f32s::load_simd(arch, r) };
-    // SAFETY: r + f32s::LANES is within the same A_PANEL-sized scratch region.
     let mut r1 = unsafe { f32s::load_simd(arch, r.add(f32s::LANES)) };
 
     r0 = op(r0, p0.reduce(&op));
     r1 = op(r1, p1.reduce(&op));
 
-    // SAFETY: r points to at least A_PANEL = 16 writable f32s (2 × f32x8).
+    // SAFETY: same as loads — r has A_PANEL writable f32s.
     unsafe { r0.store_simd(r) };
-    // SAFETY: r + f32s::LANES is within the same A_PANEL-sized scratch region.
     unsafe { r1.store_simd(r.add(f32s::LANES)) };
 }

@@ -5,20 +5,19 @@
 //!
 //! Provides:
 //!
-//! - `F32Kernel<A, GROUP>` — marker type selecting the f32 micro-kernel for
-//!   architecture `A` operating on `BlockTransposed<f32, GROUP>` data.
+//! - `F32Kernel<GROUP>` — zero-sized marker type selecting the f32 micro-kernel
+//!   for `BlockTransposed<f32, GROUP>` data.
 //! - [`chamfer_kernel`] — architecture- and GROUP-generic entry point for the
 //!   reducing max-IP GEMM.
 //! - [`MaxSim`](crate::multi_vector::distance::MaxSim) /
-//!   [`Chamfer`](crate::multi_vector::distance::Chamfer) trait implementations,
-//!   generic over GROUP.
+//!   [`Chamfer`](crate::multi_vector::distance::Chamfer) trait implementations
+//!   on [`TransposedQueryRef`](crate::multi_vector::TransposedQueryRef), using
+//!   runtime architecture dispatch.
 //!
 //! # Architecture-specific micro-kernels
 //!
-//! - `v3` (x86_64) — V3 (AVX2+FMA) 16×4 micro-kernel (GROUP=16), also used by V4.
-//! - `scalar` — Emulated 8×2 micro-kernel (GROUP=8), also used by Neon (aarch64).
-
-use std::marker::PhantomData;
+//! - `v3` (x86_64) — V3 (AVX2+FMA) 16×4 micro-kernel (GROUP=16). V4 delegates to V3 at dispatch.
+//! - `scalar` — Emulated 8×2 micro-kernel (GROUP=8). Neon delegates to Scalar at dispatch.
 
 use diskann_wide::Architecture;
 
@@ -35,8 +34,7 @@ pub(super) mod v3;
 
 // ── F32 kernel ───────────────────────────────────────────────────
 
-/// Zero-sized kernel type for f32 micro-kernels on architecture `A` with
-/// block size `GROUP`.
+/// Zero-sized kernel type for f32 micro-kernels with block size `GROUP`.
 ///
 /// Since `AElem == APrepared` and `BElem == BPrepared`, no staging buffers
 /// are needed — [`prepare_a`](Kernel::prepare_a) and
@@ -44,25 +42,7 @@ pub(super) mod v3;
 /// The actual SIMD micro-kernel body is provided by `Kernel<A>`
 /// implementations in architecture-specific submodules (`v3`, `scalar`).
 /// Each implementation sets `A_PANEL = GROUP`.
-pub(crate) struct F32Kernel<A: Architecture, const GROUP: usize>(PhantomData<A>);
-
-/// The natural block-transposed GROUP size for the f32 micro-kernel on the
-/// current platform.
-///
-/// - x86_64 with AVX2+ (V3/V4): 16 (two `f32x8` register tiles).
-/// - Other platforms or x86_64 without AVX2 (Scalar/Neon): 8 (one `f32x8` register tile).
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-#[allow(dead_code)] // used in tests; callers will adopt
-pub(crate) const F32_GROUP: usize = 16;
-
-/// The natural block-transposed GROUP size for the f32 micro-kernel on the
-/// current platform.
-///
-/// - x86_64 with AVX2+ (V3/V4): 16 (two `f32x8` register tiles).
-/// - Other platforms or x86_64 without AVX2 (Scalar/Neon): 8 (one `f32x8` register tile).
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
-#[allow(dead_code)] // used in tests; callers will adopt
-pub(crate) const F32_GROUP: usize = 8;
+pub(crate) struct F32Kernel<const GROUP: usize>;
 
 // ── Public entry point ───────────────────────────────────────────
 
@@ -79,11 +59,11 @@ fn chamfer_kernel_panic() {
 /// a row-major B matrix, writing per-A-row max similarities into `scratch`.
 ///
 /// This is a thin wrapper over the generic `tiled_reduce` loop using the
-/// `F32Kernel<A, GROUP>` micro-kernel for the requested architecture.
+/// `F32Kernel<GROUP>` micro-kernel for the requested architecture.
 ///
 /// # Arguments
 ///
-/// * `arch` - Architecture token (e.g. V3, V4, Scalar, Neon).
+/// * `arch` - Architecture token (must satisfy the `Kernel` where-bound).
 /// * `a` - Block-transposed matrix view with block size `GROUP`.
 /// * `b` - Row-major matrix view.
 /// * `scratch` - Mutable buffer of length [`BlockTransposedRef::available_rows()`].
@@ -99,7 +79,7 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     b: MatRef<'_, Standard<f32>>,
     scratch: &mut [f32],
 ) where
-    F32Kernel<A, GROUP>: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
+    F32Kernel<GROUP>: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
 {
     if scratch.len() != a.available_rows() || a.ncols() != b.vector_dim() {
         chamfer_kernel_panic();
@@ -109,7 +89,7 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     let b_nrows = b.num_vectors();
 
     debug_assert_eq!(
-        <F32Kernel<A, GROUP> as Kernel<A>>::A_PANEL,
+        <F32Kernel<GROUP> as Kernel<A>>::A_PANEL,
         GROUP,
         "F32Kernel A_PANEL must equal GROUP for layout correctness"
     );
@@ -121,7 +101,7 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     // - a.available_rows() is always a multiple of GROUP, and the debug_assert above
     //   verifies A_PANEL == GROUP.
     unsafe {
-        tiled_reduce::<A, F32Kernel<A, GROUP>>(
+        tiled_reduce::<A, F32Kernel<GROUP>>(
             arch,
             a.as_ptr(),
             a.available_rows(),
@@ -133,26 +113,12 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     }
 }
 
-// ── MaxSim / Chamfer trait implementations ───────────────────────
+// ── MaxSim / Chamfer trait implementations (runtime-dispatched) ──
 
-impl<const GROUP: usize>
-    DistanceFunctionMut<BlockTransposedRef<'_, f32, GROUP>, MatRef<'_, Standard<f32>>>
-    for MaxSim<'_>
-where
-    F32Kernel<diskann_wide::arch::Current, GROUP>: Kernel<
-            diskann_wide::arch::Current,
-            AElem = f32,
-            BElem = f32,
-            APrepared = f32,
-            BPrepared = f32,
-        >,
-{
-    #[inline(always)]
-    fn evaluate(
-        &mut self,
-        query: BlockTransposedRef<'_, f32, GROUP>,
-        doc: MatRef<'_, Standard<f32>>,
-    ) {
+use crate::multi_vector::transposed_query::TransposedQueryRef;
+
+impl DistanceFunctionMut<TransposedQueryRef<'_, f32>, MatRef<'_, Standard<f32>>> for MaxSim<'_> {
+    fn evaluate(&mut self, query: TransposedQueryRef<'_, f32>, doc: MatRef<'_, Standard<f32>>) {
         assert!(
             self.size() == query.nrows(),
             "scores buffer not right size: {} != {}",
@@ -161,51 +127,33 @@ where
         );
 
         if doc.num_vectors() == 0 {
-            // No document vectors — fill with MAX (no similarity found).
             self.scores_mut().fill(f32::MAX);
             return;
         }
 
-        let scratch = self.scores_mut();
-        scratch.fill(f32::MIN);
-
-        // Extend scratch to available_rows if needed (scratch may be smaller
-        // than available_rows due to padding).
         let available = query.available_rows();
         let nq = query.nrows();
 
-        if available == nq {
-            // No padding — scratch is exactly the right size.
-            chamfer_kernel(diskann_wide::ARCH, query, doc, scratch);
-        } else {
-            // Padding rows exist — need a larger scratch buffer.
-            let mut padded_scratch = vec![f32::MIN; available];
-            chamfer_kernel(diskann_wide::ARCH, query, doc, &mut padded_scratch);
-            scratch.copy_from_slice(&padded_scratch[..nq]);
-        }
+        let mut padded_scratch = vec![f32::MIN; available];
 
-        // The kernel wrote max inner products (positive = more similar).
-        // DiskANN convention: negate so that lower = better (distance semantics).
+        diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunner {
+            tq: query,
+            doc,
+            scratch: &mut padded_scratch,
+        });
+
+        let scratch = self.scores_mut();
+        scratch.copy_from_slice(&padded_scratch[..nq]);
+
+        // Negate: DiskANN convention, lower = better.
         for s in scratch.iter_mut() {
             *s = -*s;
         }
     }
 }
 
-impl<const GROUP: usize>
-    PureDistanceFunction<BlockTransposedRef<'_, f32, GROUP>, MatRef<'_, Standard<f32>>, f32>
-    for Chamfer
-where
-    F32Kernel<diskann_wide::arch::Current, GROUP>: Kernel<
-            diskann_wide::arch::Current,
-            AElem = f32,
-            BElem = f32,
-            APrepared = f32,
-            BPrepared = f32,
-        >,
-{
-    #[inline(always)]
-    fn evaluate(query: BlockTransposedRef<'_, f32, GROUP>, doc: MatRef<'_, Standard<f32>>) -> f32 {
+impl PureDistanceFunction<TransposedQueryRef<'_, f32>, MatRef<'_, Standard<f32>>, f32> for Chamfer {
+    fn evaluate(query: TransposedQueryRef<'_, f32>, doc: MatRef<'_, Standard<f32>>) -> f32 {
         if doc.num_vectors() == 0 {
             return 0.0;
         }
@@ -214,9 +162,13 @@ where
         let nq = query.nrows();
 
         let mut scratch = vec![f32::MIN; available];
-        chamfer_kernel(diskann_wide::ARCH, query, doc, &mut scratch);
 
-        // Sum negated max similarities to get Chamfer distance.
+        diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunner {
+            tq: query,
+            doc,
+            scratch: &mut scratch,
+        });
+
         scratch.iter().take(nq).map(|&s| -s).sum()
     }
 }
@@ -224,10 +176,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multi_vector::BlockTransposed;
     use crate::multi_vector::distance::QueryMatRef;
-
-    use super::F32_GROUP as GROUP;
+    use crate::multi_vector::transposed_query::transpose_query;
 
     /// Helper to create a MatRef from raw data.
     fn make_query_mat(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, Standard<f32>> {
@@ -274,9 +224,9 @@ mod tests {
             let simple_query: QueryMatRef<_> = query_mat.into();
             let expected = Chamfer::evaluate(simple_query, doc);
 
-            // Block-transposed query
-            let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
-            let actual = Chamfer::evaluate(bt.as_view(), doc);
+            // Runtime-dispatched transposed query
+            let tq = transpose_query(query_mat.as_matrix_view());
+            let actual = Chamfer::evaluate(tq.as_ref(), doc);
 
             assert!(
                 (actual - expected).abs() < 1e-2,
@@ -301,12 +251,12 @@ mod tests {
                 .unwrap()
                 .evaluate(simple_query, doc);
 
-            // Block-transposed query
-            let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
+            // Runtime-dispatched transposed query
+            let tq = transpose_query(query_mat.as_matrix_view());
             let mut actual_scores = vec![0.0f32; nq];
             MaxSim::new(&mut actual_scores)
                 .unwrap()
-                .evaluate(bt.as_view(), doc);
+                .evaluate(tq.as_ref(), doc);
 
             for i in 0..nq {
                 assert!(
@@ -323,10 +273,10 @@ mod tests {
     fn chamfer_with_zero_docs_returns_zero() {
         let query_data = [1.0f32, 0.0, 0.0, 1.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
+        let tq = transpose_query(query_mat.as_matrix_view());
 
         let doc = make_query_mat(&[], 0, 2);
-        let result = Chamfer::evaluate(bt.as_view(), doc);
+        let result = Chamfer::evaluate(tq.as_ref(), doc);
         assert_eq!(result, 0.0);
     }
 
@@ -335,13 +285,11 @@ mod tests {
     fn max_sim_panics_on_size_mismatch() {
         let query_data = [1.0f32, 2.0, 3.0, 4.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
+        let tq = transpose_query(query_mat.as_matrix_view());
 
         let doc = make_query_mat(&[1.0, 1.0], 1, 2);
         let mut scores = vec![0.0f32; 3]; // Wrong size
-        MaxSim::new(&mut scores)
-            .unwrap()
-            .evaluate(bt.as_view(), doc);
+        MaxSim::new(&mut scores).unwrap().evaluate(tq.as_ref(), doc);
     }
 
     #[test]
@@ -356,8 +304,8 @@ mod tests {
         let simple_query: QueryMatRef<_> = query_mat.into();
         let expected = Chamfer::evaluate(simple_query, doc);
 
-        let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
-        let actual = Chamfer::evaluate(bt.as_view(), doc);
+        let tq = transpose_query(query_mat.as_matrix_view());
+        let actual = Chamfer::evaluate(tq.as_ref(), doc);
 
         assert!(
             (actual - expected).abs() < 1e-6,
@@ -369,13 +317,11 @@ mod tests {
     fn max_sim_with_zero_docs() {
         let query_data = [1.0f32, 0.0, 0.0, 1.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let bt = BlockTransposed::<f32, GROUP>::from_matrix_view(query_mat.as_matrix_view());
+        let tq = transpose_query(query_mat.as_matrix_view());
 
         let doc = make_query_mat(&[], 0, 2);
         let mut scores = vec![0.0f32; 2];
-        MaxSim::new(&mut scores)
-            .unwrap()
-            .evaluate(bt.as_view(), doc);
+        MaxSim::new(&mut scores).unwrap().evaluate(tq.as_ref(), doc);
 
         // With zero docs the kernel fills f32::MIN then negates → f32::MAX.
         for &s in &scores {

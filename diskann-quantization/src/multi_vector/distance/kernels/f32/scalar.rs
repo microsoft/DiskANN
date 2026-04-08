@@ -1,18 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Scalar (emulated) f32 micro-kernel (8×2) and Neon delegation.
+//! Scalar (emulated) f32 micro-kernel (8×2).
 //!
-//! Uses `Emulated<f32, 8>` for arithmetic — 8 multiply-accumulate operations
-//! per inner iteration, 8 scalar comparisons per `max_simd`. Geometry is
-//! A_PANEL=8 (1 × f32x8), B_PANEL=2 (matching the `Strategy2x1` pattern used
-//! by scalar distance functions elsewhere in the codebase).
+//! Uses [`Emulated<f32, 8>`](diskann_wide::Emulated) (aliased as `f32x8`) for
+//! arithmetic — 8 multiply-accumulate operations per inner iteration, 8 scalar
+//! comparisons per `max_simd`. Geometry is A_PANEL=8 (1 × f32x8), B_PANEL=2
+//! (matching the `Strategy2x1` pattern used by scalar distance functions
+//! elsewhere in the codebase).
 //!
 //! The inner loop uses separate multiply and add (`a * b + acc`) instead of
 //! `mul_add_simd` to avoid calling into libm's software `fma()` routine on
 //! x86-64 targets without hardware FMA support.
-
-use std::marker::PhantomData;
 
 use diskann_wide::arch::Scalar;
 use diskann_wide::{SIMDMinMax, SIMDVector};
@@ -26,7 +25,7 @@ diskann_wide::alias!(f32s = <Scalar>::f32x8);
 // SAFETY: F32Kernel's `full_panel` and `remainder_dispatch` only access
 // A_PANEL(8) * k A elements, UNROLL * k B elements, and A_PANEL(8)
 // scratch elements — all within the bounds guaranteed by `tiled_reduce`.
-unsafe impl Kernel<Scalar> for F32Kernel<Scalar, 8> {
+unsafe impl Kernel<Scalar> for F32Kernel<8> {
     type AElem = f32;
     type BElem = f32;
     type APrepared = f32;
@@ -35,17 +34,11 @@ unsafe impl Kernel<Scalar> for F32Kernel<Scalar, 8> {
     const B_PANEL: usize = 2;
 
     fn new(_k: usize) -> Self {
-        F32Kernel(PhantomData)
+        F32Kernel
     }
 
     #[inline(always)]
-    unsafe fn prepare_a(
-        &mut self,
-        _arch: Scalar,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
+    unsafe fn prepare_a(&mut self, _arch: Scalar, src: *const f32, _k: usize) -> *const f32 {
         src
     }
 
@@ -77,80 +70,6 @@ unsafe impl Kernel<Scalar> for F32Kernel<Scalar, 8> {
     ) {
         // SAFETY: Caller guarantees pointer validity per Kernel<Scalar> contract.
         unsafe {
-            match remainder {
-                1 => scalar_f32_microkernel::<1>(arch, a, b, k, r),
-                _ => {
-                    debug_assert!(
-                        false,
-                        "unexpected remainder {remainder} for B_PANEL={}",
-                        Self::B_PANEL
-                    )
-                }
-            }
-        }
-    }
-}
-
-// ── Neon delegation ──────────────────────────────────────────────
-
-#[cfg(target_arch = "aarch64")]
-use diskann_wide::arch::aarch64::Neon;
-
-// SAFETY: Delegates to the scalar microkernel via the zero-cost From<Neon> for Scalar
-// conversion. The scalar emulated path is always correct.
-#[cfg(target_arch = "aarch64")]
-unsafe impl Kernel<Neon> for F32Kernel<Neon, 8> {
-    type AElem = f32;
-    type BElem = f32;
-    type APrepared = f32;
-    type BPrepared = f32;
-    const A_PANEL: usize = 8;
-    const B_PANEL: usize = 2;
-
-    fn new(_k: usize) -> Self {
-        F32Kernel(PhantomData)
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_a(
-        &mut self,
-        _arch: Neon,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        src
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_b(
-        &mut self,
-        _arch: Neon,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        src
-    }
-
-    #[inline(always)]
-    unsafe fn full_panel(arch: Neon, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
-        // SAFETY: Caller guarantees pointer validity; Scalar::from(Neon) is safe.
-        unsafe { scalar_f32_microkernel::<{ Self::B_PANEL }>(Scalar::from(arch), a, b, k, r) }
-    }
-
-    #[inline(always)]
-    unsafe fn remainder_dispatch(
-        arch: Neon,
-        remainder: usize,
-        a: *const f32,
-        b: *const f32,
-        k: usize,
-        r: *mut f32,
-    ) {
-        // SAFETY: Caller guarantees pointer validity; Scalar::from(Neon) is safe.
-        unsafe {
-            let arch = Scalar::from(arch);
             match remainder {
                 1 => scalar_f32_microkernel::<1>(arch, a, b, k, r),
                 _ => {
@@ -216,6 +135,6 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
 
     r0 = op(r0, p0.reduce(&op));
 
-    // SAFETY: r points to at least A_PANEL = 8 writable f32s (1 × f32x8).
+    // SAFETY: same as load — r has A_PANEL writable f32s.
     unsafe { r0.store_simd(r) };
 }
