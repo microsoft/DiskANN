@@ -1,0 +1,4 @@
+while processing tolerance input 1 of 1
+
+Caused by:
+    Unrecognized tolerance tag: "nonexistent-tolerance"

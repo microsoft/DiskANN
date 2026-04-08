@@ -3,13 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, Benchmark, DynBenchmark},
-    dispatcher::FailureScore,
+    benchmark::{self, Benchmark, Regression},
+    dispatcher::{FailureScore, MatchScore},
     input, Any, Checkpoint, Input, Output,
 };
 
@@ -40,8 +40,6 @@ impl Inputs {
     where
         T: Input + 'static,
     {
-        use std::collections::hash_map::Entry;
-
         let tag = T::tag();
         match self.inputs.entry(tag) {
             Entry::Vacant(entry) => {
@@ -71,9 +69,29 @@ impl Default for Inputs {
 }
 
 /// A registered benchmark entry: a name paired with a type-erased benchmark.
-struct RegisteredBenchmark {
+pub(crate) struct RegisteredBenchmark {
     name: String,
-    benchmark: Box<dyn DynBenchmark>,
+    benchmark: Box<dyn benchmark::internal::Benchmark>,
+}
+
+impl std::fmt::Debug for RegisteredBenchmark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let benchmark = Capture(&*self.benchmark, None);
+        f.debug_struct("RegisteredBenchmark")
+            .field("name", &self.name)
+            .field("benchmark", &benchmark)
+            .finish()
+    }
+}
+
+impl RegisteredBenchmark {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn benchmark(&self) -> &dyn benchmark::internal::Benchmark {
+        &*self.benchmark
+    }
 }
 
 /// A collection of registered benchmarks.
@@ -96,7 +114,7 @@ impl Benchmarks {
     {
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
-            benchmark: Box::new(benchmark::Wrapper::<T>::new()),
+            benchmark: Box::new(benchmark::internal::Wrapper::<T>::new()),
         });
     }
 
@@ -185,6 +203,58 @@ impl Benchmarks {
             .min_by_key(|(_, score)| *score)
             .map(|(entry, _)| entry)
     }
+
+    //-------------------//
+    // Regression Checks //
+    //-------------------//
+
+    /// Register a regression-checkable benchmark with the associated name.
+    ///
+    /// Upon registration, the associated [`Regression::Tolerances`] input and the benchmark
+    /// itself will be reachable via [`Check`](crate::app::Check).
+    pub fn register_regression<T>(&mut self, name: impl Into<String>)
+    where
+        T: Regression + 'static,
+    {
+        let registered = benchmark::internal::Wrapper::<T, _>::new_with(
+            benchmark::internal::WithRegression::<T>::new(),
+        );
+        self.benchmarks.push(RegisteredBenchmark {
+            name: name.into(),
+            benchmark: Box::new(registered),
+        });
+    }
+
+    /// Return a collection of all tolerance related inputs, keyed by the input tag type
+    /// of the tolerance.
+    pub(crate) fn tolerances(&self) -> HashMap<&'static str, RegisteredTolerance<'_>> {
+        let mut tolerances = HashMap::<&'static str, RegisteredTolerance<'_>>::new();
+        for b in self.benchmarks.iter() {
+            if let Some(regression) = b.benchmark.as_regression() {
+                // If a tolerance input already exists - then simply add this benchmark
+                // to the list of benchmarks associated with the tolerance.
+                //
+                // Otherwise, create a new entry.
+                let t = regression.tolerance();
+                let packaged = RegressionBenchmark {
+                    benchmark: b,
+                    regression,
+                };
+
+                match tolerances.entry(t.tag()) {
+                    Entry::Occupied(occupied) => occupied.into_mut().regressions.push(packaged),
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(RegisteredTolerance {
+                            tolerance: input::Registered(t),
+                            regressions: vec![packaged],
+                        });
+                    }
+                }
+            }
+        }
+
+        tolerances
+    }
 }
 
 impl Default for Benchmarks {
@@ -211,10 +281,60 @@ impl Mismatch {
     }
 }
 
-/// Helper to capture a `DynBenchmark::description` call into a `String` via `Display`.
-struct Capture<'a>(&'a dyn DynBenchmark, Option<&'a Any>);
+//----------//
+// Internal //
+//----------//
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RegressionBenchmark<'a> {
+    benchmark: &'a RegisteredBenchmark,
+    regression: &'a dyn benchmark::internal::Regression,
+}
+
+impl RegressionBenchmark<'_> {
+    pub(crate) fn name(&self) -> &str {
+        self.benchmark.name()
+    }
+
+    pub(crate) fn input_tag(&self) -> &'static str {
+        self.regression.input_tag()
+    }
+
+    pub(crate) fn try_match(&self, input: &Any) -> Result<MatchScore, FailureScore> {
+        self.benchmark.benchmark().try_match(input)
+    }
+
+    pub(crate) fn check(
+        &self,
+        tolerance: &Any,
+        input: &Any,
+        before: &serde_json::Value,
+        after: &serde_json::Value,
+    ) -> anyhow::Result<benchmark::internal::CheckedPassFail> {
+        self.regression.check(tolerance, input, before, after)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RegisteredTolerance<'a> {
+    /// The tolerance parser.
+    pub(crate) tolerance: input::Registered<'a>,
+
+    /// A single tolerance input can apply to multiple benchmarks. This field records all
+    /// such benchmarks that are available in the registry that use this tolerance.
+    pub(crate) regressions: Vec<RegressionBenchmark<'a>>,
+}
+
+/// Helper to capture a `Benchmark::description` call into a `String` via `Display`.
+struct Capture<'a>(&'a dyn benchmark::internal::Benchmark, Option<&'a Any>);
 
 impl std::fmt::Display for Capture<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.description(f, self.1)
+    }
+}
+
+impl std::fmt::Debug for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.description(f, self.1)
     }

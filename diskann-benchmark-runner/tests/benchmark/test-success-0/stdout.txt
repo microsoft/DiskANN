@@ -2,7 +2,7 @@
 # Running Job 1 of 4 #
 ######################
 
-dim bench: None
+simple bench: None
 
 ######################
 # Running Job 2 of 4 #

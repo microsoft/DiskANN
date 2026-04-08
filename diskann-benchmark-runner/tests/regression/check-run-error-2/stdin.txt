@@ -1,0 +1,5 @@
+# Setup: generate output from a valid regression-capable float32 input.
+run --input-file $INPUT --output-file $OUTPUT
+
+# Test: the regression input has drifted to float64, so no registered regression benchmark matches it.
+check run --tolerances $TOLERANCES --input-file $REGRESSION_INPUT --before $OUTPUT --after $OUTPUT

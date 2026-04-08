@@ -5,5 +5,7 @@ Registered Benchmarks:
         int8
     exact-type-bench-f32-1000: tag "test-input-types"
         float32, dim=1000
+    simple-bench: tag "test-input-dim"
+        dim=None only
     dim-bench: tag "test-input-dim"
         matches all

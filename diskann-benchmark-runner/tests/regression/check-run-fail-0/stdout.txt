@@ -1,0 +1,4 @@
+Check 1 of 2 ("dim-bench") FAILED:
+we didn't do it!
+
+one or more regression checks failed

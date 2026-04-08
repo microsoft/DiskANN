@@ -5,8 +5,9 @@
 
 //! A moderately functional utility for making simple benchmarking CLI applications.
 
-mod benchmark;
+pub mod benchmark;
 mod checker;
+mod internal;
 mod jobs;
 mod result;
 

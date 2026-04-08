@@ -8,39 +8,22 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    benchmark::{PassFail, Regression},
     dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
-    registry,
     utils::datatype::{DataType, Type},
     Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
 };
 
-/////////
-// API //
-/////////
-
-pub fn register_inputs(inputs: &mut registry::Inputs) -> anyhow::Result<()> {
-    inputs.register::<TypeInput>()?;
-    inputs.register::<DimInput>()?;
-    Ok(())
-}
-
-pub fn register_benchmarks(benchmarks: &mut registry::Benchmarks) {
-    benchmarks.register::<TypeBench<f32>>("type-bench-f32");
-    benchmarks.register::<TypeBench<i8>>("type-bench-i8");
-    benchmarks.register::<ExactTypeBench<f32, 1000>>("exact-type-bench-f32-1000");
-    benchmarks.register::<DimBench>("dim-bench");
-}
-
-////////////
-// Inputs //
-////////////
+///////////
+// Input //
+///////////
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TypeInput {
-    pub(crate) data_type: DataType,
-    pub(crate) dim: usize,
+    pub(super) data_type: DataType,
+    pub(super) dim: usize,
     // Should we return an error when `check_deserialization` is called?
-    pub(crate) error_when_checked: bool,
+    pub(super) error_when_checked: bool,
     // A flag to verify that [`CheckDeserialization`] has run.
     #[serde(skip)]
     pub(crate) checked: bool,
@@ -54,6 +37,10 @@ impl TypeInput {
             error_when_checked,
             checked: false,
         }
+    }
+
+    fn run(&self) -> &'static str {
+        self.data_type.as_str()
     }
 }
 
@@ -89,37 +76,49 @@ impl CheckDeserialization for TypeInput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DimInput {
-    pub(crate) dim: Option<usize>,
+///////////////
+// Tolerance //
+///////////////
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct Tolerance {
+    // Should we return an error when `check_deserialization` is called?
+    pub(super) error_when_checked: bool,
+
+    // A flag to verify that [`CheckDeserialization`] has run.
+    #[serde(skip)]
+    pub(crate) checked: bool,
 }
 
-impl DimInput {
-    pub(crate) fn new(dim: Option<usize>) -> Self {
-        Self { dim }
-    }
-}
-
-impl Input for DimInput {
+impl Input for Tolerance {
     fn tag() -> &'static str {
-        "test-input-dim"
+        "test-input-types-tolerance"
     }
 
     fn try_deserialize(
         serialized: &serde_json::Value,
         checker: &mut Checker,
     ) -> anyhow::Result<Any> {
-        checker.any(DimInput::deserialize(serialized)?)
+        checker.any(Self::deserialize(serialized)?)
     }
 
     fn example() -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(DimInput::new(Some(128)))?)
+        let this = Self {
+            error_when_checked: false,
+            checked: false,
+        };
+        Ok(serde_json::to_value(this)?)
     }
 }
 
-impl CheckDeserialization for DimInput {
+impl CheckDeserialization for Tolerance {
     fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        Ok(())
+        if self.error_when_checked {
+            Err(anyhow::anyhow!("test input erroring when checked"))
+        } else {
+            self.checked = true;
+            Ok(())
+        }
     }
 }
 
@@ -128,7 +127,7 @@ impl CheckDeserialization for DimInput {
 ////////////////
 
 #[derive(Debug)]
-struct TypeBench<T>(std::marker::PhantomData<T>);
+pub(super) struct TypeBench<T>(std::marker::PhantomData<T>);
 
 impl<T> Benchmark for TypeBench<T>
 where
@@ -136,7 +135,7 @@ where
     Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
 {
     type Input = TypeInput;
-    type Output = &'static str;
+    type Output = String;
 
     fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
         // Try to match based on data type.
@@ -153,14 +152,42 @@ where
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        write!(output, "hello: {}", input.data_type.as_str())?;
-        checkpoint.checkpoint(input.data_type.as_str())?;
-        Ok(input.data_type.as_str())
+        let result = input.run().to_string();
+        write!(output, "hello: {}", result)?;
+        checkpoint.checkpoint(&result)?;
+        Ok(result)
+    }
+}
+
+impl<T> Regression for TypeBench<T>
+where
+    T: 'static,
+    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+{
+    type Tolerances = Tolerance;
+    type Pass = DataType;
+    type Fail = DataType;
+
+    fn check(
+        _tolerance: &Tolerance,
+        input: &TypeInput,
+        before: &String,
+        after: &String,
+    ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
+        // This check here mainly serves to verify that the before and after results were
+        // propagated correctly.
+        //
+        // Really, this is a unit test masquerading behind an integration test.
+        let expected = input.run();
+        assert_eq!(*before, expected);
+        assert_eq!(*after, expected);
+
+        Ok(PassFail::Pass(input.data_type))
     }
 }
 
 #[derive(Debug)]
-struct ExactTypeBench<T, const N: usize>(std::marker::PhantomData<T>);
+pub(super) struct ExactTypeBench<T, const N: usize>(std::marker::PhantomData<T>);
 
 impl<T, const N: usize> Benchmark for ExactTypeBench<T, N>
 where
@@ -216,31 +243,31 @@ where
     }
 }
 
-#[derive(Debug)]
-struct DimBench;
+impl<T, const N: usize> Regression for ExactTypeBench<T, N>
+where
+    T: 'static,
+    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+{
+    type Tolerances = Tolerance;
+    type Pass = String;
+    type Fail = String;
 
-impl Benchmark for DimBench {
-    type Input = DimInput;
-    type Output = usize;
+    fn check(
+        _tolerance: &Tolerance,
+        input: &TypeInput,
+        before: &String,
+        after: &String,
+    ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
+        // Verify correct dispatch: ExactTypeBench produces a different output format than
+        // TypeBench. If the wrong benchmark was dispatched, the assertion below will catch
+        // it.
+        let expected = format!("hello<{}>: {}", N, input.data_type.as_str());
+        assert_eq!(*before, expected);
+        assert_eq!(*after, expected);
 
-    fn try_match(_input: &DimInput) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(0))
-    }
-
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&DimInput>) -> std::fmt::Result {
-        if input.is_some() {
-            write!(f, "perfect match")
-        } else {
-            write!(f, "matches all")
-        }
-    }
-
-    fn run(
-        input: &DimInput,
-        _checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> anyhow::Result<Self::Output> {
-        write!(output, "dim bench: {:?}", input.dim)?;
-        Ok(input.dim.unwrap_or(usize::MAX))
+        Ok(PassFail::Pass(format!(
+            "exact match dim={} type={}",
+            N, input.data_type
+        )))
     }
 }
