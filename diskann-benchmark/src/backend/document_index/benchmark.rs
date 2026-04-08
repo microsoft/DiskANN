@@ -828,7 +828,7 @@ where
                     format!("Failed to get attributes at index {}", i),
                 )
             })?;
-            let doc = Document::new(self.data.row(i), &attrs);
+            let doc = Document::new(self.data.row(i), attrs);
             self.index
                 .insert(self.strategy, &ctx, &(i as u32), &doc)
                 .await?;
