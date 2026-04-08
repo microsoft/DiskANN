@@ -4,7 +4,7 @@
  */
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
-use diskann::{utils::TryIntoVectorId, ANNError, ANNResult};
+use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
 use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
 use hashbrown::HashSet;
 use tracing::info;
@@ -219,7 +219,12 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         let adjacency_list = vertex_provider.get_adjacency_list(node)?;
         let associated_data = vertex_provider.get_associated_data(node)?;
 
-        cache.insert(node, vector, adjacency_list.clone(), *associated_data)
+        cache.insert(
+            node,
+            vector,
+            AdjacencyList::from_iter_untrusted(adjacency_list.iter().copied()),
+            *associated_data,
+        )
     }
 }
 

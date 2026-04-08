@@ -383,12 +383,6 @@ impl ANNError {
         Self::new(ANNErrorKind::TryFromSliceError, err)
     }
 
-    #[track_caller]
-    #[inline(never)]
-    pub fn log_adjacency_list_conversion_error(err: String) -> Self {
-        Self::message(ANNErrorKind::AdjacencyListConversionError, err)
-    }
-
     /// Create, log and return Serde error.
     #[track_caller]
     #[inline(never)]
@@ -1293,14 +1287,6 @@ Caused by:
         let err_msg = "Lock poison error";
         let ann_err = ANNError::log_lock_poison_error(err_msg.to_string());
         assert_eq!(ANNErrorKind::LockPoisonError, ann_err.kind());
-        assert!(ann_err.to_string().contains(err_msg));
-    }
-
-    #[test]
-    fn test_log_adjacency_list_conversion_error() {
-        let err_msg = "error message";
-        let ann_err = ANNError::log_adjacency_list_conversion_error(err_msg.to_string());
-        assert_eq!(ANNErrorKind::AdjacencyListConversionError, ann_err.kind());
         assert!(ann_err.to_string().contains(err_msg));
     }
 

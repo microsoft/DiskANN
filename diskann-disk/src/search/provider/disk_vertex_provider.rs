@@ -9,10 +9,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
 use diskann_providers::{
     common::AlignedBoxWithSlice,
-    model::{
-        graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
-        FP_VECTOR_MEM_ALIGN,
-    },
+    model::{graph::traits::GraphDataType, FP_VECTOR_MEM_ALIGN},
 };
 use hashbrown::HashMap;
 
@@ -48,7 +45,7 @@ where
     aligned_vector_buf: AlignedBoxWithSlice<Data::VectorDataType>,
 
     // The cached adjacency list.
-    cached_adjacency_list: Vec<AdjacencyList<Data::VectorIdType>>,
+    cached_adjacency_list: Vec<Vec<Data::VectorIdType>>,
 
     // The cached associated data.
     cached_associated_data: Vec<Data::AssociatedDataType>,
@@ -93,7 +90,7 @@ where
     fn get_adjacency_list(
         &self,
         vertex_id: &Data::VectorIdType,
-    ) -> ANNResult<&AdjacencyList<Data::VectorIdType>> {
+    ) -> ANNResult<&[Data::VectorIdType]> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_adjacency_list[local_offset.vec_idx]),
             None => Err(ANNError::log_get_vertex_data_error(
@@ -146,9 +143,28 @@ where
         let neighbor_and_data_buf =
             &self.sector_graph.node_disk_buf(idx, *vertex_id)[self.fp_vector_len as usize..];
         let num_neighbors = LittleEndian::read_u32(&neighbor_and_data_buf[0..4]) as usize;
-        let neighbor_buf = &neighbor_and_data_buf[..4 + num_neighbors * 4];
-        let adjacency_list = AdjacencyList::try_from(neighbor_buf)?;
-        self.cached_adjacency_list.push(adjacency_list);
+        match neighbor_and_data_buf.get(4..4 + num_neighbors * 4) {
+            Some(buf) => {
+                let mut adjacency_list = vec![Default::default(); num_neighbors];
+
+                // `copy_from_slice` cannot panic: we sized `adjacency_list` correctly.
+                bytemuck::must_cast_slice_mut::<_, u8>(&mut adjacency_list).copy_from_slice(buf);
+                self.cached_adjacency_list.push(adjacency_list);
+            }
+            None => {
+                return Err(ANNError::message(
+                    diskann::ANNErrorKind::SerdeError,
+                    format!(
+                        "malformed length for vertex {} \
+                       - reported neighbors is {} ({} bytes) which exceeds the buffer length {}",
+                        vertex_id,
+                        num_neighbors,
+                        4 * num_neighbors + 4,
+                        neighbor_and_data_buf.len()
+                    ),
+                ));
+            }
+        }
 
         let data_end: usize = (self.node_len - self.fp_vector_len) as usize;
         let associated_data = bincode::deserialize(
