@@ -4,7 +4,7 @@
  */
 
 use bit_set::BitSet;
-use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels, ASTExpr};
+use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels};
 
 use std::{io::Write, mem::size_of, str::FromStr};
 
@@ -26,59 +26,8 @@ use diskann_utils::{
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
 use rayon::prelude::*;
-use serde_json::{map, Map, Value};
 
 use crate::utils::{search_index_utils, CMDResult, CMDToolError};
-
-/// Evaluates a query expression against a label, expanding array-valued fields by recursion.
-///
-/// For each key in the JSON object, if the value is an array the expression is evaluated
-/// against one element at a time (any-match semantics) without materialising the full
-/// Cartesian product. Non-object labels are evaluated directly.
-fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
-    match label {
-        Value::Object(map) => eval_map_recursive(query_expr, map.iter(), Map::new()),
-        _ => eval_query_expr(query_expr, label),
-    }
-}
-
-/// Walk `entries` one field at a time, accumulating scalar values into `current`.
-///
-/// * Scalar fields are inserted directly and the walk continues with the remaining entries.
-/// * Array fields branch once per element; evaluation short-circuits on the first branch
-///   that returns `true`.
-/// * An empty array is treated as an absent field (preserving the previous behaviour).
-/// * When all fields have been consumed, `eval_query_expr` is called on the accumulated object.
-fn eval_map_recursive(
-    query_expr: &ASTExpr,
-    mut map_iter: map::Iter,
-    mut current: Map<String, Value>,
-) -> bool {
-    match map_iter.next() {
-        None => eval_query_expr(query_expr, &Value::Object(current)),
-        Some((key, Value::Array(arr))) => {
-            if arr.is_empty() {
-                // Omit this key, matching the original behaviour for empty arrays.
-                eval_map_recursive(query_expr, map_iter, current)
-            } else {
-                for item in arr {
-                    let mut branch = current.clone();
-                    branch.insert((*key).clone(), item.clone());
-
-                    // need to clone here because we want to iterate from same next element for each branch
-                    if eval_map_recursive(query_expr, map_iter.clone(), branch) {
-                        return true;
-                    }
-                }
-                false
-            }
-        }
-        Some((key, val)) => {
-            current.insert((*key).clone(), (*val).clone());
-            eval_map_recursive(query_expr, map_iter, current)
-        }
-    }
-}
 
 pub fn read_labels_and_compute_bitmap(
     base_label_filename: &str,
@@ -86,19 +35,9 @@ pub fn read_labels_and_compute_bitmap(
 ) -> CMDResult<Vec<BitSet>> {
     // Read base labels
     let base_labels = read_baselabels(base_label_filename)?;
-    tracing::info!(
-        "Loaded {} base labels from {}",
-        base_labels.len(),
-        base_label_filename
-    );
 
     // Parse queries and evaluate against labels
     let parsed_queries = read_and_parse_queries(query_label_filename)?;
-    tracing::info!(
-        "Loaded {} queries from {}",
-        parsed_queries.len(),
-        query_label_filename
-    );
 
     // using the global threadpool is fine here
     #[allow(clippy::disallowed_methods)]
@@ -107,50 +46,13 @@ pub fn read_labels_and_compute_bitmap(
         .map(|(_query_id, query_expr)| {
             let mut bitmap = BitSet::new();
             for base_label in base_labels.iter() {
-                // Handle case where base_label.label is an array - check if any element matches
-                // Also expand array-valued fields within objects (e.g., {"country": ["AU", "NZ"]})
-                let matches = if let Some(array) = base_label.label.as_array() {
-                    array
-                        .iter()
-                        .any(|item| eval_query_with_array_expansion(query_expr, item))
-                } else {
-                    eval_query_with_array_expansion(query_expr, &base_label.label)
-                };
-
-                if matches {
+                if eval_query_expr(query_expr, &base_label.label) {
                     bitmap.insert(base_label.doc_id);
                 }
             }
             bitmap
         })
         .collect();
-
-    // Debug: Print match statistics for each query
-    let total_matches: usize = query_bitmaps.iter().map(|b| b.len()).sum();
-    let queries_with_matches = query_bitmaps.iter().filter(|b| !b.is_empty()).count();
-    tracing::info!(
-        "Filter matching summary: {} total matches across {} queries ({} queries have matches)",
-        total_matches,
-        query_bitmaps.len(),
-        queries_with_matches
-    );
-
-    // If no matches, print more diagnostic info
-    if total_matches == 0 {
-        tracing::warn!("WARNING: No base vectors matched any query filters!");
-        tracing::warn!(
-            "This could indicate a format mismatch between base labels and query filters."
-        );
-
-        // Try to identify what keys exist in base labels vs queries
-        if let Some(first_label) = base_labels.first() {
-            tracing::warn!(
-                "First base label (full): doc_id={}, label={}",
-                first_label.doc_id,
-                first_label.label
-            );
-        }
-    }
 
     Ok(query_bitmaps)
 }
@@ -293,31 +195,6 @@ pub fn compute_ground_truth_from_datafiles<
     let (ground_truth, id_to_associated_data) = ground_truth_result?;
 
     assert_ne!(ground_truth.len(), 0, "No ground-truth results computed");
-
-    // Debug: Print top K matches for each query
-    tracing::info!(
-        "Ground truth computed for {} queries with recall_at={}",
-        ground_truth.len(),
-        recall_at
-    );
-    for (query_idx, npq) in ground_truth.iter().enumerate() {
-        if npq.size() == 0 {
-            tracing::warn!("Query {} has 0 neighbors in ground truth!", query_idx);
-        }
-    }
-
-    // Summary stats
-    let total_neighbors: usize = ground_truth.iter().map(|npq| npq.iter().count()).sum();
-    let queries_with_neighbors = ground_truth
-        .iter()
-        .filter(|npq| npq.iter().count() > 0)
-        .count();
-    tracing::info!(
-        "Ground truth summary: {} total neighbors, {} queries have neighbors, {} queries have 0 neighbors",
-        total_neighbors,
-        queries_with_neighbors,
-        ground_truth.len() - queries_with_neighbors
-    );
 
     if has_vector_filters || has_query_bitmaps {
         let ground_truth_collection = ground_truth
