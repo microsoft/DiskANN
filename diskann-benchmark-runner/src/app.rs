@@ -377,19 +377,8 @@ mod tests {
 
             // For tests, always allow debug mode to prevent test failures when running
             // in debug configuration.
-            if let Commands::Run {
-                input_file,
-                output_file,
-                dry_run,
-                allow_debug: _,
-            } = app.command
-            {
-                app.command = Commands::Run {
-                    input_file,
-                    output_file,
-                    dry_run,
-                    allow_debug: true,
-                };
+            if let Commands::Run { allow_debug, .. } = &mut app.command {
+                *allow_debug = true;
             }
 
             // Register inputs
