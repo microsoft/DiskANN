@@ -497,8 +497,12 @@ pub(crate) mod tests {
         }
     }
 
-    /// The StartPointExpectation allows for provider flexibility for whether or not the start_points
-    /// are included in their results
+    /// Controls how [`check_grid_search`] validates the start point in search results.
+    ///
+    /// * `Filtered` — the provider excludes the start point from results; the checker
+    ///   asserts it does **not** appear.
+    /// * `Visible` — the start point is a regular data point; the checker asserts it
+    ///   **is** the nearest result (distance 0).
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum StartPointExpectation {
         Filtered(u32),
