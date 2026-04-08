@@ -986,7 +986,7 @@ pub struct Accessor<'a> {
 
 impl<'a> Accessor<'a> {
     /// Return the underlying [`Provider`] reference.
-    pub fn provider(&self) -> &Provider {
+    pub fn provider(&self) -> &'a Provider {
         self.provider
     }
 
