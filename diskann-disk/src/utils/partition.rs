@@ -7,10 +7,12 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
     utils::{
-        compute_closest_centers, gen_random_slice, k_meanspp_selecting_pivots, run_lloyds,
-        AsThreadPool, RayonThreadPool, READ_WRITE_BLOCK_SIZE,
+        compute_closest_centers, gen_random_slice, AsThreadPool, RayonThreadPool,
+        READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_quantization::algorithms::kmeans::{lloyds::lloyds, plusplus::kmeans_plusplus_into};
+use diskann_utils::views::MatrixBase;
 use rand::Rng;
 use tracing::info;
 
@@ -121,27 +123,21 @@ where
 
         // Process Global k-means for kmeans_partitioning Step
         info!("Processing global k-means (kmeans_partitioning Step)");
-        k_meanspp_selecting_pivots(
-            &train_data_float,
-            num_train,
-            train_dim,
-            &mut pivot_data,
-            num_parts,
-            rng,
-            &mut (false),
-            pool,
-        )?;
-
-        run_lloyds(
-            &train_data_float,
-            num_train,
-            train_dim,
-            &mut pivot_data,
-            num_parts,
-            MAX_K_MEANS_REPS,
-            &mut (false),
-            pool,
-        )?;
+        {
+            let data_view = MatrixBase::try_from(train_data_float.as_slice(), num_train, train_dim)
+                .map_err(|_| {
+                    ANNError::log_index_error("invalid dimensions for k-means training data")
+                })?;
+            let mut centers = MatrixBase::try_from(pivot_data.as_mut_slice(), num_parts, train_dim)
+                .map_err(|_| {
+                    ANNError::log_index_error(
+                        "invalid dimensions for k-means initial cluster centers",
+                    )
+                })?;
+            kmeans_plusplus_into(centers.as_mut_view(), data_view, rng)
+                .map_err(|e| ANNError::log_pq_error(e.to_string()))?;
+            lloyds(data_view, centers.as_mut_view(), MAX_K_MEANS_REPS);
+        }
 
         // now pivots are ready. need to stream base points and assign them to closest clusters.
 
