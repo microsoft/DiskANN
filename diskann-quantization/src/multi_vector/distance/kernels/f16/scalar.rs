@@ -17,8 +17,8 @@ use super::F16Kernel;
 
 // ── Kernel<Scalar> ──────────────────────────────────────────────
 
-// SAFETY: prepare_a / prepare_b convert f16→f32 into self-owned buffers sized
-// to A_PANEL*k / B_PANEL*k (allocated in `new`). full_panel and
+// SAFETY: prepare_a / prepare_b convert f16→f32 into caller-provided buffers
+// sized to A_PANEL*k / B_PANEL*k (allocated in `new_buffers`). full_panel and
 // remainder_dispatch delegate to scalar_f32_microkernel which reads within
 // A_PANEL*k + B_PANEL*k prepared elements and writes A_PANEL scratch f32s —
 // all within caller-guaranteed bounds.
@@ -30,24 +30,29 @@ unsafe impl Kernel<Scalar> for F16Kernel<8> {
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;
 
-    fn new(k: usize) -> Self {
-        F16Kernel {
-            a_buf: vec![0.0f32; Self::A_PANEL * k],
-            b_buf: vec![0.0f32; Self::B_PANEL * k],
-        }
+    fn new_buffers(k: usize) -> (Vec<f32>, Vec<f32>) {
+        (
+            vec![0.0f32; Self::A_PANEL * k],
+            vec![0.0f32; Self::B_PANEL * k],
+        )
     }
 
     #[inline(always)]
-    unsafe fn prepare_a(&mut self, _arch: Scalar, src: *const half::f16, _k: usize) -> *const f32 {
+    unsafe fn prepare_a(
+        buf: &mut [f32],
+        _arch: Scalar,
+        src: *const half::f16,
+        _k: usize,
+    ) -> *const f32 {
         // SAFETY: Caller guarantees src points to A_PANEL * k contiguous f16 values.
-        let src_slice = unsafe { std::slice::from_raw_parts(src, self.a_buf.len()) };
-        self.a_buf.as_mut_slice().cast_from_slice(src_slice);
-        self.a_buf.as_ptr()
+        let src_slice = unsafe { std::slice::from_raw_parts(src, buf.len()) };
+        buf.cast_from_slice(src_slice);
+        buf.as_ptr()
     }
 
     #[inline(always)]
     unsafe fn prepare_b(
-        &mut self,
+        buf: &mut [f32],
         _arch: Scalar,
         src: *const half::f16,
         rows: usize,
@@ -56,8 +61,8 @@ unsafe impl Kernel<Scalar> for F16Kernel<8> {
         let count = rows * k;
         // SAFETY: Caller guarantees src points to rows * k contiguous f16 values.
         let src_slice = unsafe { std::slice::from_raw_parts(src, count) };
-        self.b_buf[..count].cast_from_slice(src_slice);
-        self.b_buf.as_ptr()
+        buf[..count].cast_from_slice(src_slice);
+        buf.as_ptr()
     }
 
     #[inline(always)]

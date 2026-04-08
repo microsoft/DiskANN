@@ -99,15 +99,22 @@ fn l1_b_tile_budget() -> usize {
 ///
 /// `prepare_a` and `prepare_b` allow kernels to convert or repack panel data
 /// before the micro-kernel. Identity kernels (`AElem == APrepared`) may return
-/// `src` directly; converting kernels stage into self-owned buffers allocated
-/// in [`new`](Self::new).
+/// `src` directly; converting kernels stage into caller-provided
+/// `&mut [APrepared]` / `&mut [BPrepared]` buffers allocated via
+/// [`new_buffers`](Self::new_buffers).
+///
+/// The staging buffers are split into independent `Vec<APrepared>` and
+/// `Vec<BPrepared>` so that the tiling loop can borrow them independently,
+/// avoiding Stacked Borrows violations when `prepare_b`'s mutable borrow
+/// overlaps with a pointer returned by `prepare_a`.
 ///
 /// # Safety
 ///
 /// Implementors must ensure that:
 /// - `prepare_a` / `prepare_b` read only within the documented `src` bounds,
 ///   and any returned pointer is valid for the corresponding `PANEL * k` reads.
-/// - `prepare_b` must not write to the A staging buffer.
+/// - `prepare_a` must only write to its `buf`; `prepare_b` must only write to
+///   its `buf`.
 /// - `full_panel` and `remainder_dispatch` only read/write within the bounds
 ///   described by their pointer arguments and the `k` / panel-size contracts.
 pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
@@ -125,12 +132,11 @@ pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
     /// Number of B rows processed per micro-kernel invocation.
     const B_PANEL: usize;
 
-    /// Construct a new kernel instance, allocating any staging buffers needed
-    /// for the contraction dimension `k`.
+    /// Allocate staging buffers for the contraction dimension `k`.
     ///
     /// Identity kernels (where `AElem == APrepared` and `BElem == BPrepared`)
-    /// should remain zero-sized and ignore `k`.
-    fn new(k: usize) -> Self;
+    /// return empty `Vec`s and ignore `k`.
+    fn new_buffers(k: usize) -> (Vec<Self::APrepared>, Vec<Self::BPrepared>);
 
     /// Prepare one full A micro-panel for the micro-kernel.
     ///
@@ -144,7 +150,7 @@ pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
     /// * The returned pointer must be valid for `A_PANEL * k` reads of
     ///   `APrepared`.
     unsafe fn prepare_a(
-        &mut self,
+        buf: &mut [Self::APrepared],
         arch: A,
         src: *const Self::AElem,
         k: usize,
@@ -164,7 +170,7 @@ pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
     /// * `rows` must be in `1..=B_PANEL`.
     /// * The returned pointer must be valid for `rows * k` reads of `BPrepared`.
     unsafe fn prepare_b(
-        &mut self,
+        buf: &mut [Self::BPrepared],
         arch: A,
         src: *const Self::BElem,
         rows: usize,
@@ -212,6 +218,105 @@ pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
 use crate::multi_vector::transposed_query::TransposedQueryRef;
 use crate::multi_vector::{MatRef, Standard};
 
+/// Implement [`Target<Arch, ()>`](diskann_wide::arch::Target) for a chamfer
+/// kernel runner struct.
+///
+/// Stamps out one `Target` impl per supported architecture (Scalar, V3, V4,
+/// Neon) with the correct GROUP↔architecture pairing:
+///
+/// | Architecture | GROUP | Delegation |
+/// |---|---|---|
+/// | Scalar | 8 | direct |
+/// | V3 (x86_64) | 16 | direct |
+/// | V4 (x86_64) | 16 | V4 → V3 |
+/// | Neon (aarch64) | 8 | Neon → Scalar |
+///
+/// # Arguments
+///
+/// * `$runner` — the runner struct name (e.g. `ChamferKernelRunner`)
+/// * `$kernel_fn` — path to the entry-point function (e.g. `f32::chamfer_kernel`)
+macro_rules! impl_chamfer_runner {
+    ($runner:ident, $kernel_fn:expr) => {
+        impl diskann_wide::arch::Target<diskann_wide::arch::Scalar, ()> for $runner<'_, '_, '_> {
+            fn run(self, arch: diskann_wide::arch::Scalar) {
+                match self.tq {
+                    TransposedQueryRef::Group8(bt) => {
+                        $kernel_fn(arch, bt, self.doc, self.scratch);
+                    }
+                    TransposedQueryRef::Group16(_) => {
+                        unreachable!(concat!(
+                            stringify!($runner),
+                            ": Scalar arch should not have Group16 transposed query"
+                        ));
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V3, ()>
+            for $runner<'_, '_, '_>
+        {
+            fn run(self, arch: diskann_wide::arch::x86_64::V3) {
+                match self.tq {
+                    TransposedQueryRef::Group16(bt) => {
+                        $kernel_fn(arch, bt, self.doc, self.scratch);
+                    }
+                    TransposedQueryRef::Group8(_) => {
+                        unreachable!(concat!(
+                            stringify!($runner),
+                            ": V3 arch should not have Group8 transposed query"
+                        ));
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V4, ()>
+            for $runner<'_, '_, '_>
+        {
+            fn run(self, arch: diskann_wide::arch::x86_64::V4) {
+                // V4 delegates to V3 — the V3 micro-kernel is valid on V4 hardware.
+                let arch = diskann_wide::arch::x86_64::V3::from(arch);
+                match self.tq {
+                    TransposedQueryRef::Group16(bt) => {
+                        $kernel_fn(arch, bt, self.doc, self.scratch);
+                    }
+                    TransposedQueryRef::Group8(_) => {
+                        unreachable!(concat!(
+                            stringify!($runner),
+                            ": V4 arch should not have Group8 transposed query"
+                        ));
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        impl diskann_wide::arch::Target<diskann_wide::arch::aarch64::Neon, ()>
+            for $runner<'_, '_, '_>
+        {
+            fn run(self, arch: diskann_wide::arch::aarch64::Neon) {
+                // Neon delegates to Scalar — the scalar micro-kernel is valid on Neon
+                // hardware. TODO: add a Neon-native micro-kernel.
+                let arch = diskann_wide::arch::Scalar::from(arch);
+                match self.tq {
+                    TransposedQueryRef::Group8(bt) => {
+                        $kernel_fn(arch, bt, self.doc, self.scratch);
+                    }
+                    TransposedQueryRef::Group16(_) => {
+                        unreachable!(concat!(
+                            stringify!($runner),
+                            ": Neon arch should not have Group16 transposed query"
+                        ));
+                    }
+                }
+            }
+        }
+    };
+}
+
 /// Bundles the arguments for a runtime-dispatched f32 chamfer kernel call.
 ///
 /// Implements [`Target`](diskann_wide::arch::Target) for each supported
@@ -232,73 +337,7 @@ pub(crate) struct ChamferKernelRunner<'a, 'b, 'c> {
     pub scratch: &'c mut [f32],
 }
 
-impl diskann_wide::arch::Target<diskann_wide::arch::Scalar, ()>
-    for ChamferKernelRunner<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::Scalar) {
-        match self.tq {
-            TransposedQueryRef::Group8(bt) => {
-                f32::chamfer_kernel(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group16(_) => {
-                unreachable!("Scalar arch should not have Group16 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V3, ()>
-    for ChamferKernelRunner<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::x86_64::V3) {
-        match self.tq {
-            TransposedQueryRef::Group16(bt) => {
-                f32::chamfer_kernel(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group8(_) => {
-                unreachable!("V3 arch should not have Group8 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V4, ()>
-    for ChamferKernelRunner<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::x86_64::V4) {
-        // V4 delegates to V3 — the V3 micro-kernel is valid on V4 hardware.
-        let arch = diskann_wide::arch::x86_64::V3::from(arch);
-        match self.tq {
-            TransposedQueryRef::Group16(bt) => {
-                f32::chamfer_kernel(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group8(_) => {
-                unreachable!("V4 arch should not have Group8 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::aarch64::Neon, ()>
-    for ChamferKernelRunner<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::aarch64::Neon) {
-        // Neon delegates to Scalar — the scalar micro-kernel is valid on Neon hardware.
-        // TODO: add a Neon-native micro-kernel.
-        let arch = diskann_wide::arch::Scalar::from(arch);
-        match self.tq {
-            TransposedQueryRef::Group8(bt) => {
-                f32::chamfer_kernel(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group16(_) => {
-                unreachable!("Neon arch should not have Group16 transposed query");
-            }
-        }
-    }
-}
+impl_chamfer_runner!(ChamferKernelRunner, f32::chamfer_kernel);
 
 /// Bundles the arguments for a runtime-dispatched f16 chamfer kernel call.
 ///
@@ -309,70 +348,4 @@ pub(crate) struct ChamferKernelRunnerF16<'a, 'b, 'c> {
     pub scratch: &'c mut [f32],
 }
 
-impl diskann_wide::arch::Target<diskann_wide::arch::Scalar, ()>
-    for ChamferKernelRunnerF16<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::Scalar) {
-        match self.tq {
-            TransposedQueryRef::Group8(bt) => {
-                f16::chamfer_kernel_f16(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group16(_) => {
-                unreachable!("Scalar arch should not have Group16 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V3, ()>
-    for ChamferKernelRunnerF16<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::x86_64::V3) {
-        match self.tq {
-            TransposedQueryRef::Group16(bt) => {
-                f16::chamfer_kernel_f16(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group8(_) => {
-                unreachable!("V3 arch should not have Group8 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::x86_64::V4, ()>
-    for ChamferKernelRunnerF16<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::x86_64::V4) {
-        // V4 delegates to V3 — the V3 micro-kernel is valid on V4 hardware.
-        let arch = diskann_wide::arch::x86_64::V3::from(arch);
-        match self.tq {
-            TransposedQueryRef::Group16(bt) => {
-                f16::chamfer_kernel_f16(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group8(_) => {
-                unreachable!("V4 arch should not have Group8 transposed query");
-            }
-        }
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl diskann_wide::arch::Target<diskann_wide::arch::aarch64::Neon, ()>
-    for ChamferKernelRunnerF16<'_, '_, '_>
-{
-    fn run(self, arch: diskann_wide::arch::aarch64::Neon) {
-        // Neon delegates to Scalar — the scalar micro-kernel is valid on Neon hardware.
-        // TODO: add a Neon-native micro-kernel.
-        let arch = diskann_wide::arch::Scalar::from(arch);
-        match self.tq {
-            TransposedQueryRef::Group8(bt) => {
-                f16::chamfer_kernel_f16(arch, bt, self.doc, self.scratch);
-            }
-            TransposedQueryRef::Group16(_) => {
-                unreachable!("Neon arch should not have Group16 transposed query");
-            }
-        }
-    }
-}
+impl_chamfer_runner!(ChamferKernelRunnerF16, f16::chamfer_kernel_f16);

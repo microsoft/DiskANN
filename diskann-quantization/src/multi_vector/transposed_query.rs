@@ -152,173 +152,105 @@ pub fn transpose_query_f16(query: MatrixView<'_, half::f16>) -> TransposedQuery<
 
 // ── Allocating transpose dispatcher ──────────────────────────────
 
+/// Implement [`Target1`](diskann_wide::arch::Target1) for a transpose
+/// dispatcher struct, mapping each architecture to the correct `GROUP`:
+///
+/// | Architecture | GROUP |
+/// |---|---|
+/// | Scalar | 8 |
+/// | V3 / V4 (x86_64) | 16 |
+/// | Neon (aarch64) | 8 |
+macro_rules! impl_transpose_target {
+    ($dispatcher:ident, $elem:ty) => {
+        impl
+            diskann_wide::arch::Target1<
+                diskann_wide::arch::Scalar,
+                TransposedQuery<$elem>,
+                MatrixView<'_, $elem>,
+            > for $dispatcher
+        {
+            fn run(
+                self,
+                _arch: diskann_wide::arch::Scalar,
+                query: MatrixView<'_, $elem>,
+            ) -> TransposedQuery<$elem> {
+                TransposedQuery::Group8(BlockTransposed::<$elem, 8>::from_matrix_view(query))
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        impl
+            diskann_wide::arch::Target1<
+                diskann_wide::arch::x86_64::V3,
+                TransposedQuery<$elem>,
+                MatrixView<'_, $elem>,
+            > for $dispatcher
+        {
+            fn run(
+                self,
+                _arch: diskann_wide::arch::x86_64::V3,
+                query: MatrixView<'_, $elem>,
+            ) -> TransposedQuery<$elem> {
+                TransposedQuery::Group16(BlockTransposed::<$elem, 16>::from_matrix_view(query))
+            }
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        impl
+            diskann_wide::arch::Target1<
+                diskann_wide::arch::x86_64::V4,
+                TransposedQuery<$elem>,
+                MatrixView<'_, $elem>,
+            > for $dispatcher
+        {
+            fn run(
+                self,
+                _arch: diskann_wide::arch::x86_64::V4,
+                query: MatrixView<'_, $elem>,
+            ) -> TransposedQuery<$elem> {
+                TransposedQuery::Group16(BlockTransposed::<$elem, 16>::from_matrix_view(query))
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        impl
+            diskann_wide::arch::Target1<
+                diskann_wide::arch::aarch64::Neon,
+                TransposedQuery<$elem>,
+                MatrixView<'_, $elem>,
+            > for $dispatcher
+        {
+            fn run(
+                self,
+                _arch: diskann_wide::arch::aarch64::Neon,
+                query: MatrixView<'_, $elem>,
+            ) -> TransposedQuery<$elem> {
+                TransposedQuery::Group8(BlockTransposed::<$elem, 8>::from_matrix_view(query))
+            }
+        }
+    };
+}
+
 #[derive(Clone, Copy)]
 struct TransposeF32;
 
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::Scalar,
-        TransposedQuery<f32>,
-        MatrixView<'_, f32>,
-    > for TransposeF32
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::Scalar,
-        query: MatrixView<'_, f32>,
-    ) -> TransposedQuery<f32> {
-        TransposedQuery::Group8(BlockTransposed::<f32, 8>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::x86_64::V3,
-        TransposedQuery<f32>,
-        MatrixView<'_, f32>,
-    > for TransposeF32
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::x86_64::V3,
-        query: MatrixView<'_, f32>,
-    ) -> TransposedQuery<f32> {
-        TransposedQuery::Group16(BlockTransposed::<f32, 16>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::x86_64::V4,
-        TransposedQuery<f32>,
-        MatrixView<'_, f32>,
-    > for TransposeF32
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::x86_64::V4,
-        query: MatrixView<'_, f32>,
-    ) -> TransposedQuery<f32> {
-        TransposedQuery::Group16(BlockTransposed::<f32, 16>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::aarch64::Neon,
-        TransposedQuery<f32>,
-        MatrixView<'_, f32>,
-    > for TransposeF32
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::aarch64::Neon,
-        query: MatrixView<'_, f32>,
-    ) -> TransposedQuery<f32> {
-        TransposedQuery::Group8(BlockTransposed::<f32, 8>::from_matrix_view(query))
-    }
-}
+impl_transpose_target!(TransposeF32, f32);
 
 // ── Allocating transpose dispatcher (f16) ────────────────────────
 
 #[derive(Clone, Copy)]
 struct TransposeF16;
 
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::Scalar,
-        TransposedQuery<half::f16>,
-        MatrixView<'_, half::f16>,
-    > for TransposeF16
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::Scalar,
-        query: MatrixView<'_, half::f16>,
-    ) -> TransposedQuery<half::f16> {
-        TransposedQuery::Group8(BlockTransposed::<half::f16, 8>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::x86_64::V3,
-        TransposedQuery<half::f16>,
-        MatrixView<'_, half::f16>,
-    > for TransposeF16
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::x86_64::V3,
-        query: MatrixView<'_, half::f16>,
-    ) -> TransposedQuery<half::f16> {
-        TransposedQuery::Group16(BlockTransposed::<half::f16, 16>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::x86_64::V4,
-        TransposedQuery<half::f16>,
-        MatrixView<'_, half::f16>,
-    > for TransposeF16
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::x86_64::V4,
-        query: MatrixView<'_, half::f16>,
-    ) -> TransposedQuery<half::f16> {
-        TransposedQuery::Group16(BlockTransposed::<half::f16, 16>::from_matrix_view(query))
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl
-    diskann_wide::arch::Target1<
-        diskann_wide::arch::aarch64::Neon,
-        TransposedQuery<half::f16>,
-        MatrixView<'_, half::f16>,
-    > for TransposeF16
-{
-    fn run(
-        self,
-        _arch: diskann_wide::arch::aarch64::Neon,
-        query: MatrixView<'_, half::f16>,
-    ) -> TransposedQuery<half::f16> {
-        TransposedQuery::Group8(BlockTransposed::<half::f16, 8>::from_matrix_view(query))
-    }
-}
+impl_transpose_target!(TransposeF16, half::f16);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_f32_view(nrows: usize, ncols: usize) -> (Vec<f32>, MatrixView<'static, f32>) {
-        let data = vec![1.0f32; nrows * ncols];
-        // SAFETY: we leak a clone of the vec so the slice lives for 'static.
-        let slice: &'static [f32] = Vec::leak(data.clone());
-        let view = MatrixView::try_from(slice, nrows, ncols).unwrap();
-        (data, view)
-    }
-
-    fn make_f16_view(
-        nrows: usize,
-        ncols: usize,
-    ) -> (Vec<half::f16>, MatrixView<'static, half::f16>) {
-        let data = vec![half::f16::from_f32(1.0); nrows * ncols];
-        let slice: &'static [half::f16] = Vec::leak(data.clone());
-        let view = MatrixView::try_from(slice, nrows, ncols).unwrap();
-        (data, view)
-    }
-
     #[test]
     fn transpose_query_dimensions() {
-        let (_data, view) = make_f32_view(5, 8);
+        let data = vec![1.0f32; 5 * 8];
+        let view = MatrixView::try_from(data.as_slice(), 5, 8).unwrap();
         let tq = transpose_query(view);
 
         assert_eq!(tq.nrows(), 5);
@@ -329,7 +261,8 @@ mod tests {
 
     #[test]
     fn transpose_query_as_ref_preserves_dimensions() {
-        let (_data, view) = make_f32_view(5, 8);
+        let data = vec![1.0f32; 5 * 8];
+        let view = MatrixView::try_from(data.as_slice(), 5, 8).unwrap();
         let tq = transpose_query(view);
         let tq_ref = tq.as_ref();
 
@@ -340,7 +273,8 @@ mod tests {
 
     #[test]
     fn transpose_query_f16_dimensions() {
-        let (_data, view) = make_f16_view(5, 8);
+        let data = vec![diskann_wide::cast_f32_to_f16(1.0); 5 * 8];
+        let view = MatrixView::try_from(data.as_slice(), 5, 8).unwrap();
         let tq = transpose_query_f16(view);
 
         assert_eq!(tq.nrows(), 5);
@@ -351,7 +285,8 @@ mod tests {
 
     #[test]
     fn transpose_query_f16_as_ref_preserves_dimensions() {
-        let (_data, view) = make_f16_view(5, 8);
+        let data = vec![diskann_wide::cast_f32_to_f16(1.0); 5 * 8];
+        let view = MatrixView::try_from(data.as_slice(), 5, 8).unwrap();
         let tq = transpose_query_f16(view);
         let tq_ref = tq.as_ref();
 
@@ -362,7 +297,8 @@ mod tests {
 
     #[test]
     fn transpose_query_single_vector() {
-        let (_data, view) = make_f32_view(1, 4);
+        let data = vec![1.0f32; 4];
+        let view = MatrixView::try_from(data.as_slice(), 1, 4).unwrap();
         let tq = transpose_query(view);
 
         assert_eq!(tq.nrows(), 1);
@@ -372,7 +308,8 @@ mod tests {
 
     #[test]
     fn transpose_query_ref_is_copy() {
-        let (_data, view) = make_f32_view(3, 4);
+        let data = vec![1.0f32; 3 * 4];
+        let view = MatrixView::try_from(data.as_slice(), 3, 4).unwrap();
         let tq = transpose_query(view);
         let r1 = tq.as_ref();
         let r2 = r1;

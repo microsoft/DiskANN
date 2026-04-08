@@ -23,18 +23,18 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
     const A_PANEL: usize = 16;
     const B_PANEL: usize = 4;
 
-    fn new(_k: usize) -> Self {
-        F32Kernel
+    fn new_buffers(_k: usize) -> (Vec<f32>, Vec<f32>) {
+        (Vec::new(), Vec::new())
     }
 
     #[inline(always)]
-    unsafe fn prepare_a(&mut self, _arch: V3, src: *const f32, _k: usize) -> *const f32 {
+    unsafe fn prepare_a(_buf: &mut [f32], _arch: V3, src: *const f32, _k: usize) -> *const f32 {
         src
     }
 
     #[inline(always)]
     unsafe fn prepare_b(
-        &mut self,
+        _buf: &mut [f32],
         _arch: V3,
         src: *const f32,
         _rows: usize,
@@ -125,14 +125,15 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
     }
 
     // SAFETY: r points to at least A_PANEL = 16 writable f32s (2 × f32x8).
-    // r + f32s::LANES is within the same A_PANEL-sized scratch region.
     let mut r0 = unsafe { f32s::load_simd(arch, r) };
+    // SAFETY: r + f32s::LANES is within the same A_PANEL-sized scratch region.
     let mut r1 = unsafe { f32s::load_simd(arch, r.add(f32s::LANES)) };
 
     r0 = op(r0, p0.reduce(&op));
     r1 = op(r1, p1.reduce(&op));
 
-    // SAFETY: same as loads — r has A_PANEL writable f32s.
+    // SAFETY: r points to at least A_PANEL writable f32s (same region as loads above).
     unsafe { r0.store_simd(r) };
+    // SAFETY: r + LANES is within the same A_PANEL-sized scratch region.
     unsafe { r1.store_simd(r.add(f32s::LANES)) };
 }

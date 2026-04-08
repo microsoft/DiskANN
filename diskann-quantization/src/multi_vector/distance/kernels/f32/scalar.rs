@@ -33,18 +33,18 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;
 
-    fn new(_k: usize) -> Self {
-        F32Kernel
+    fn new_buffers(_k: usize) -> (Vec<f32>, Vec<f32>) {
+        (Vec::new(), Vec::new())
     }
 
     #[inline(always)]
-    unsafe fn prepare_a(&mut self, _arch: Scalar, src: *const f32, _k: usize) -> *const f32 {
+    unsafe fn prepare_a(_buf: &mut [f32], _arch: Scalar, src: *const f32, _k: usize) -> *const f32 {
         src
     }
 
     #[inline(always)]
     unsafe fn prepare_b(
-        &mut self,
+        _buf: &mut [f32],
         _arch: Scalar,
         src: *const f32,
         _rows: usize,

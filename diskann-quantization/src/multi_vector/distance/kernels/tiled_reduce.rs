@@ -97,7 +97,6 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     );
 
     let a_panel_stride = K::A_PANEL * k;
-    let a_tile_stride = a_panel_stride * plan.a_panels;
     let b_panel_stride = K::B_PANEL * k;
     let b_tile_stride = b_panel_stride * plan.b_panels;
 
@@ -110,8 +109,10 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
         K::A_PANEL,
     );
 
-    // Kernel owns its staging buffers (identity kernels stay zero-sized).
-    let mut kernel = K::new(k);
+    // Staging buffers are split into independent A and B halves so the tiling
+    // loop can borrow them independently — `prepare_a(&mut a_buf)` and
+    // `prepare_b(&mut b_buf)` never alias. Identity kernels return empty Vecs.
+    let (mut a_buf, mut b_buf) = K::new_buffers(k);
 
     // SAFETY: Caller guarantees b_ptr is valid for b_nrows * k elements.
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };
@@ -120,15 +121,17 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
-        let a_total = a_available_rows * k;
-        let mut a_offset: usize = 0;
-        let mut pr_tile = scratch.as_mut_ptr();
+        let a_tile_rows = K::A_PANEL * plan.a_panels;
+        let mut rows_done: usize = 0;
 
         // Loop 1: Tiles of `A`.
-        while a_offset < a_total {
-            let remaining_a = a_total - a_offset;
-            let pa_tile = a_ptr.add(a_offset);
-            let pa_tile_end = pa_tile.add(a_tile_stride.min(remaining_a));
+        while rows_done < a_available_rows {
+            let tile_rows = a_tile_rows.min(a_available_rows - rows_done);
+            let pa_tile = a_ptr.add(rows_done * k);
+            let pa_tile_end = pa_tile.add(tile_rows * k);
+            // SAFETY: rows_done < a_available_rows (loop condition), so the
+            // pointer is in-bounds.
+            let pr_tile = scratch.as_mut_ptr().add(rows_done);
 
             let mut pb_tile = b_ptr;
 
@@ -143,12 +146,12 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3: Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    let prepared_a = kernel.prepare_a(arch, pa_panel, k);
+                    let prepared_a = K::prepare_a(&mut a_buf, arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4: Micro-panels of `B` (all full, no remainder check).
                     while pb_panel < pb_tile_end {
-                        let prepared_b = kernel.prepare_b(arch, pb_panel, K::B_PANEL, k);
+                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, K::B_PANEL, k);
                         K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
                         pb_panel = pb_panel.add(b_panel_stride);
                     }
@@ -166,19 +169,19 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
                 // Loop 3 (peeled): Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    let prepared_a = kernel.prepare_a(arch, pa_panel, k);
+                    let prepared_a = K::prepare_a(&mut a_buf, arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4 (peeled): Full B-panels in the last tile.
                     while pb_panel < pb_full_end {
-                        let prepared_b = kernel.prepare_b(arch, pb_panel, K::B_PANEL, k);
+                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, K::B_PANEL, k);
                         K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
                         pb_panel = pb_panel.add(b_panel_stride);
                     }
 
                     // Remainder dispatch: 1..(B_PANEL-1) leftover B-rows.
                     if b_remainder > 0 {
-                        let prepared_b = kernel.prepare_b(arch, pb_panel, b_remainder, k);
+                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, b_remainder, k);
                         K::remainder_dispatch(
                             arch,
                             b_remainder,
@@ -194,8 +197,7 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
                 }
             }
 
-            a_offset += a_tile_stride;
-            pr_tile = pr_tile.add(K::A_PANEL * plan.a_panels);
+            rows_done += tile_rows;
         }
     }
 }

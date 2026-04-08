@@ -41,15 +41,10 @@ mod v3;
 ///
 /// Both A and B sides store [`half::f16`] values. The
 /// [`prepare_a`](Kernel::prepare_a) / [`prepare_b`](Kernel::prepare_b)
-/// hooks convert to f32 into kernel-owned staging buffers allocated once in
-/// [`Kernel::new`]. The micro-kernel itself is the same f32 SIMD arithmetic
-/// used by [`F32Kernel`](super::f32::F32Kernel).
-pub(crate) struct F16Kernel<const GROUP: usize> {
-    /// Staging buffer for one A panel: `A_PANEL * k` f32 values.
-    pub(super) a_buf: Vec<f32>,
-    /// Staging buffer for one B panel: `B_PANEL * k` f32 values.
-    pub(super) b_buf: Vec<f32>,
-}
+/// hooks convert to f32 into caller-provided staging buffers allocated via
+/// [`Kernel::new_buffers`]. The micro-kernel itself is the same f32 SIMD
+/// arithmetic used by [`F32Kernel`](super::f32::F32Kernel).
+pub(crate) struct F16Kernel<const GROUP: usize>;
 
 // ── Public entry point ───────────────────────────────────────────
 
@@ -209,7 +204,7 @@ mod tests {
     /// Generate deterministic test data as f16.
     fn make_test_data(len: usize, ceil: usize, shift: usize) -> Vec<half::f16> {
         (0..len)
-            .map(|v| half::f16::from_f32(((v + shift) % ceil) as f32))
+            .map(|v| diskann_wide::cast_f32_to_f16(((v + shift) % ceil) as f32))
             .collect()
     }
 
@@ -296,10 +291,10 @@ mod tests {
     #[test]
     fn chamfer_with_zero_docs_returns_zero() {
         let query_data = [
-            half::f16::from_f32(1.0),
-            half::f16::from_f32(0.0),
-            half::f16::from_f32(0.0),
-            half::f16::from_f32(1.0),
+            diskann_wide::cast_f32_to_f16(1.0),
+            diskann_wide::cast_f32_to_f16(0.0),
+            diskann_wide::cast_f32_to_f16(0.0),
+            diskann_wide::cast_f32_to_f16(1.0),
         ];
         let query_mat = make_query_mat(&query_data, 2, 2);
         let tq = transpose_query_f16(query_mat.as_matrix_view());
@@ -313,15 +308,18 @@ mod tests {
     #[should_panic(expected = "scores buffer not right size")]
     fn max_sim_panics_on_size_mismatch() {
         let query_data = [
-            half::f16::from_f32(1.0),
-            half::f16::from_f32(2.0),
-            half::f16::from_f32(3.0),
-            half::f16::from_f32(4.0),
+            diskann_wide::cast_f32_to_f16(1.0),
+            diskann_wide::cast_f32_to_f16(2.0),
+            diskann_wide::cast_f32_to_f16(3.0),
+            diskann_wide::cast_f32_to_f16(4.0),
         ];
         let query_mat = make_query_mat(&query_data, 2, 2);
         let tq = transpose_query_f16(query_mat.as_matrix_view());
 
-        let doc_data = [half::f16::from_f32(1.0), half::f16::from_f32(1.0)];
+        let doc_data = [
+            diskann_wide::cast_f32_to_f16(1.0),
+            diskann_wide::cast_f32_to_f16(1.0),
+        ];
         let doc = make_query_mat(&doc_data, 1, 2);
         let mut scores = vec![0.0f32; 3]; // Wrong size
         MaxSim::new(&mut scores).unwrap().evaluate(tq.as_ref(), doc);
@@ -331,12 +329,15 @@ mod tests {
     fn negative_values_propagate() {
         // Hand-crafted negative vectors: query = [[-1, -2], [-3, -4]], doc = [[-1, 0]]
         let query_data = [
-            half::f16::from_f32(-1.0),
-            half::f16::from_f32(-2.0),
-            half::f16::from_f32(-3.0),
-            half::f16::from_f32(-4.0),
+            diskann_wide::cast_f32_to_f16(-1.0),
+            diskann_wide::cast_f32_to_f16(-2.0),
+            diskann_wide::cast_f32_to_f16(-3.0),
+            diskann_wide::cast_f32_to_f16(-4.0),
         ];
-        let doc_data = [half::f16::from_f32(-1.0), half::f16::from_f32(0.0)];
+        let doc_data = [
+            diskann_wide::cast_f32_to_f16(-1.0),
+            diskann_wide::cast_f32_to_f16(0.0),
+        ];
 
         let query_mat = make_query_mat(&query_data, 2, 2);
         let doc = make_query_mat(&doc_data, 1, 2);
@@ -356,10 +357,10 @@ mod tests {
     #[test]
     fn max_sim_with_zero_docs() {
         let query_data = [
-            half::f16::from_f32(1.0),
-            half::f16::from_f32(0.0),
-            half::f16::from_f32(0.0),
-            half::f16::from_f32(1.0),
+            diskann_wide::cast_f32_to_f16(1.0),
+            diskann_wide::cast_f32_to_f16(0.0),
+            diskann_wide::cast_f32_to_f16(0.0),
+            diskann_wide::cast_f32_to_f16(1.0),
         ];
         let query_mat = make_query_mat(&query_data, 2, 2);
         let tq = transpose_query_f16(query_mat.as_matrix_view());
@@ -381,8 +382,14 @@ mod tests {
     /// Chamfer returns negated distance: sum of (-IP) = -11.
     #[test]
     fn f16_known_exact_result() {
-        let query_data = [half::f16::from_f32(1.0), half::f16::from_f32(2.0)];
-        let doc_data = [half::f16::from_f32(3.0), half::f16::from_f32(4.0)];
+        let query_data = [
+            diskann_wide::cast_f32_to_f16(1.0),
+            diskann_wide::cast_f32_to_f16(2.0),
+        ];
+        let doc_data = [
+            diskann_wide::cast_f32_to_f16(3.0),
+            diskann_wide::cast_f32_to_f16(4.0),
+        ];
 
         let query_mat = make_query_mat(&query_data, 1, 2);
         let doc = make_query_mat(&doc_data, 1, 2);
