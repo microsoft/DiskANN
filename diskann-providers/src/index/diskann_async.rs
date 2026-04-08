@@ -497,6 +497,8 @@ pub(crate) mod tests {
         }
     }
 
+    /// The StartPointExpectation allows for provider flexibility for whether or not the start_points
+    /// are included in their results
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum StartPointExpectation {
         Filtered(u32),
