@@ -894,10 +894,26 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use rand::Rng;
+                    use rand_distr::StandardNormal;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors: Vec<Vec<$T>> = (0..num)
+                        .map(|_| {
+                            let f32_vec: Vec<f32> =
+                                (0..dim).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+                            let norm = f32_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                            let scale = radius / norm;
+                            f32_vec
+                                .into_iter()
+                                .map(|x| {
+                                    let scaled = x * scale;
+                                    // For unsigned types, ensure non-negative values
+                                    let val = if scaled < 0.0 { -scaled } else { scaled };
+                                    val as $T
+                                })
+                                .collect()
+                        })
+                        .collect();
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];

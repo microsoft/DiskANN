@@ -6,8 +6,8 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use diskann_providers::{storage::StorageWriteProvider, utils::math_util};
-use diskann_utils::io::Metadata;
+use diskann_providers::{storage::StorageWriteProvider, utils::create_rnd_from_seed};
+use diskann_utils::{io::Metadata, sampling::WithApproximateNorm};
 use diskann_vector::Half;
 
 use crate::utils::{CMDResult, CMDToolError, DataType};
@@ -171,13 +171,9 @@ fn write_random_vector_block<
 ) -> CMDResult<()> {
     let mut found_nonzero = false;
 
-    let vectors = math_util::generate_vectors_with_norm(
-        number_of_points as usize,
-        number_of_dimensions,
-        radius,
-        &mut diskann_providers::utils::create_rnd_from_seed(0),
-    )?;
-    for vector in vectors {
+    let mut rng = create_rnd_from_seed(0);
+    for _ in 0..number_of_points as usize {
+        let vector = f32::with_approximate_norm(number_of_dimensions, radius, &mut rng);
         // Check for non-zero after casting to final numeric types.  Do not short-circuit
         // evaluate to ensure we always write the data.
         found_nonzero |= write_method(writer, &vector)?;
