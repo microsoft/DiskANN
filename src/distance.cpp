@@ -701,16 +701,18 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
 
 template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
 {
+    diskann::cout << "[DEBUG] get_distance_function<uint8_t> called, metric=" << static_cast<int>(m)
+                  << ", Avx2SupportedCPU=" << (Avx2SupportedCPU ? "true" : "false") << std::endl;
     if (m == diskann::Metric::L2)
     {
         if (Avx2SupportedCPU)
         {
-            diskann::cout << "L2: Using AVX2 distance computation AVX2DistanceL2UInt8" << std::endl;
+            diskann::cout << "[DEBUG] L2: Creating AVX2DistanceL2UInt8 (AVX2 ENABLED)" << std::endl;
             return new diskann::AVX2DistanceL2UInt8();
         }
         else
         {
-            diskann::cout << "L2: AVX2 not supported. Using scalar distance computation DistanceL2UInt8" << std::endl;
+            diskann::cout << "[DEBUG] L2: Creating DistanceL2UInt8 (AVX2 NOT SUPPORTED)" << std::endl;
             return new diskann::DistanceL2UInt8();
         }
     }

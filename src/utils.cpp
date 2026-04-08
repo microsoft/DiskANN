@@ -52,17 +52,33 @@ bool cpuHasAvx2Support()
     int cpuInfo[4];
     __cpuid(cpuInfo, 0);
     int n = cpuInfo[0];
+    printf("[DEBUG] cpuHasAvx2Support: CPUID max leaf = %d\n", n);
     if (n >= 7)
     {
         __cpuidex(cpuInfo, 7, 0);
         static int avx2Mask = 0x20;
-        return (cpuInfo[1] & avx2Mask) > 0;
+        bool hasAvx2 = (cpuInfo[1] & avx2Mask) > 0;
+        printf("[DEBUG] cpuHasAvx2Support: cpuInfo[1]=0x%08X, avx2Mask=0x%02X, hasAvx2=%s\n",
+               cpuInfo[1], avx2Mask, hasAvx2 ? "true" : "false");
+        return hasAvx2;
     }
+    printf("[DEBUG] cpuHasAvx2Support: CPUID leaf < 7, returning false\n");
     return false;
 }
 
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
+
+namespace {
+    struct AvxLogPrinter {
+        AvxLogPrinter() {
+            printf("[DEBUG] DiskANN CPU Support: AvxSupportedCPU=%s, Avx2SupportedCPU=%s\n",
+                   AvxSupportedCPU ? "true" : "false",
+                   Avx2SupportedCPU ? "true" : "false");
+        }
+    };
+    static AvxLogPrinter s_avxLogPrinter;
+}
 
 #else
 
