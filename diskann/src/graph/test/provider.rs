@@ -19,9 +19,10 @@ use thiserror::Error;
 use crate::{
     ANNError, ANNResult, default_post_processor,
     error::{Infallible, RankedError, ToRanked, TransientError, message},
-    graph::{AdjacencyList, glue, test::synthetic, workingset},
+    graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
-    provider,
+    neighbor::Neighbor,
+    provider::{self, BuildQueryComputer},
     utils::VectorRepr,
 };
 
@@ -1223,6 +1224,38 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     }
 }
 
+/// A [`glue::SearchPostProcess`] that filters out deleted IDs during
+/// inplace-delete search, mirroring the behavior of
+/// `diskann_providers::postprocess::RemoveDeletedIdsAndCopy` without depending on that crate.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FilterDeletedCopyIds;
+
+impl<'a, 'b> glue::SearchPostProcess<Accessor<'a>, &'b [f32]> for FilterDeletedCopyIds {
+    type Error = std::convert::Infallible;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut Accessor<'a>,
+        _query: &'b [f32],
+        _computer: &<Accessor<'a> as BuildQueryComputer<&'b [f32]>>::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        let count = output.extend(candidates.filter_map(|n| {
+            if accessor.provider().is_deleted(n.id).unwrap_or(true) {
+                None
+            } else {
+                Some((n.id, n.distance))
+            }
+        }));
+        std::future::ready(Ok(count))
+    }
+}
+
 impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElement<'a> = &'a [f32];
     type DeleteElementGuard = Box<[f32]>;
@@ -1230,7 +1263,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
-    type SearchPostProcessor = glue::CopyIds;
+    type SearchPostProcessor = FilterDeletedCopyIds;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
