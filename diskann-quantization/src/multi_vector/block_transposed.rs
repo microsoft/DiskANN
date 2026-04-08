@@ -1011,6 +1011,17 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     }
 }
 
+impl<'a, T, const GROUP: usize, const PACK: usize> diskann_utils::Reborrow<'a>
+    for BlockTransposed<T, GROUP, PACK>
+where
+    T: Copy,
+{
+    type Target = BlockTransposedRef<'a, T, GROUP, PACK>;
+    fn reborrow(&'a self) -> Self::Target {
+        self.as_view()
+    }
+}
+
 // ── BlockTransposed (owned) ──────────────────────────────────────
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {

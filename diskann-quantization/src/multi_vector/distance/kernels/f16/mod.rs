@@ -22,14 +22,22 @@
 //!
 //! [`CastFromSlice`]: diskann_vector::conversion::CastFromSlice
 
-use diskann_wide::Architecture;
+use diskann_wide::{
+    Architecture,
+    arch::{
+        Scalar, Target, Target1, Target2, Target3,
+        x86_64::{V3, V4},
+    },
+};
+
+use diskann_utils::Reborrow;
 
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
 use super::Kernel;
 use super::tiled_reduce::tiled_reduce;
 use crate::multi_vector::distance::{Chamfer, MaxSim};
-use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
+use crate::multi_vector::{BlockTransposed, BlockTransposedRef, MatRef, Standard};
 
 mod scalar;
 #[cfg(target_arch = "x86_64")]
@@ -91,11 +99,12 @@ pub(crate) fn chamfer_kernel_f16<A: Architecture, const GROUP: usize>(
     let k = a.ncols();
     let b_nrows = b.num_vectors();
 
-    debug_assert_eq!(
-        <F16Kernel<GROUP> as Kernel<A>>::A_PANEL,
-        GROUP,
-        "F16Kernel A_PANEL must equal GROUP for layout correctness"
-    );
+    const {
+        assert!(
+            <F16Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP,
+            "F16Kernel A_PANEL must equal GROUP for layout correctness"
+        )
+    };
 
     // SAFETY:
     // - a.as_ptr() is valid for a.available_rows() * k elements of f16.
@@ -113,6 +122,30 @@ pub(crate) fn chamfer_kernel_f16<A: Architecture, const GROUP: usize>(
             k,
             scratch,
         );
+    }
+}
+
+impl<A, const GROUP: usize>
+    Target3<
+        A,
+        (),
+        BlockTransposedRef<'_, half::f16, GROUP>,
+        MatRef<'_, Standard<half::f16>>,
+        &mut [f32],
+    > for F16Kernel<GROUP>
+where
+    A: Architecture,
+    Self: Kernel<A, AElem = half::f16, BElem = half::f16, APrepared = f32, BPrepared = f32>,
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: A,
+        lhs: BlockTransposedRef<'_, half::f16, GROUP>,
+        rhs: MatRef<'_, Standard<half::f16>>,
+        scratch: &mut [f32],
+    ) {
+        chamfer_kernel_f16(arch, lhs, rhs, scratch)
     }
 }
 
@@ -160,11 +193,19 @@ impl DistanceFunctionMut<TransposedQueryRef<'_, half::f16>, MatRef<'_, Standard<
     }
 }
 
-impl PureDistanceFunction<TransposedQueryRef<'_, half::f16>, MatRef<'_, Standard<half::f16>>, f32>
+impl<A, const GROUP: usize>
+    Target2<A, f32, BlockTransposedRef<'_, half::f16, GROUP>, MatRef<'_, Standard<half::f16>>>
     for Chamfer
+where
+    A: Architecture,
+    F16Kernel<GROUP>:
+        Kernel<A, AElem = half::f16, BElem = half::f16, APrepared = f32, BPrepared = f32>,
 {
-    fn evaluate(
-        query: TransposedQueryRef<'_, half::f16>,
+    #[inline(always)]
+    fn run(
+        self,
+        arch: A,
+        query: BlockTransposedRef<'_, half::f16, GROUP>,
         doc: MatRef<'_, Standard<half::f16>>,
     ) -> f32 {
         if doc.num_vectors() == 0 {
@@ -173,18 +214,99 @@ impl PureDistanceFunction<TransposedQueryRef<'_, half::f16>, MatRef<'_, Standard
 
         let available = query.available_rows();
         let nq = query.nrows();
-
         let mut scratch = vec![f32::MIN; available];
 
-        diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunnerF16 {
-            tq: query,
-            doc,
-            scratch: &mut scratch,
-        });
+        arch.run3(F16Kernel::<GROUP>, query, doc, scratch.as_mut_slice());
 
         scratch.iter().take(nq).map(|&s| -s).sum()
     }
 }
+
+pub struct QueryComputer<T> {
+    inner: Box<dyn DynQueryComputer<T>>,
+}
+
+impl QueryComputer<half::f16> {
+    pub fn new(query: MatRef<'_, Standard<half::f16>>) -> Self {
+        diskann_wide::arch::dispatch1_no_features(Build, query)
+    }
+}
+
+trait DynQueryComputer<T: Copy> {
+    fn evaluate(&self, rhs: MatRef<'_, Standard<T>>) -> f32;
+}
+
+struct Impl<A, T> {
+    prepared: T,
+    arch: A,
+}
+
+impl<A, T> DynQueryComputer<half::f16> for Impl<A, T>
+where
+    A: Architecture,
+    T: for<'a> Reborrow<'a>,
+    Chamfer: for<'a> Target2<A, f32, <T as Reborrow<'a>>::Target, MatRef<'a, Standard<half::f16>>>,
+{
+    fn evaluate(&self, rhs: MatRef<'_, Standard<half::f16>>) -> f32 {
+        self.arch.run2(Chamfer, self.prepared.reborrow(), rhs)
+    }
+}
+
+struct Build;
+
+impl Target1<Scalar, QueryComputer<half::f16>, MatRef<'_, Standard<half::f16>>> for Build {
+    #[inline(always)]
+    fn run(self, arch: Scalar, m: MatRef<'_, Standard<half::f16>>) -> QueryComputer<half::f16> {
+        let prepared = BlockTransposed::<_, 8>::from_matrix_view(m.as_matrix_view());
+        let inner = Box::new(Impl { prepared, arch });
+        QueryComputer { inner }
+    }
+}
+
+impl Target1<V3, QueryComputer<half::f16>, MatRef<'_, Standard<half::f16>>> for Build {
+    #[inline(always)]
+    fn run(self, arch: V3, m: MatRef<'_, Standard<half::f16>>) -> QueryComputer<half::f16> {
+        let prepared = BlockTransposed::<_, 16>::from_matrix_view(m.as_matrix_view());
+        let inner = Box::new(Impl { prepared, arch });
+        QueryComputer { inner }
+    }
+}
+
+impl Target1<V4, QueryComputer<half::f16>, MatRef<'_, Standard<half::f16>>> for Build {
+    #[inline(always)]
+    fn run(self, arch: V4, m: MatRef<'_, Standard<half::f16>>) -> QueryComputer<half::f16> {
+        let prepared = BlockTransposed::<_, 16>::from_matrix_view(m.as_matrix_view());
+        let arch: V3 = arch.retarget();
+        let inner = Box::new(Impl { prepared, arch });
+        QueryComputer { inner }
+    }
+}
+
+// impl PureDistanceFunction<TransposedQueryRef<'_, half::f16>, MatRef<'_, Standard<half::f16>>, f32>
+//     for Chamfer
+// {
+//     fn evaluate(
+//         query: TransposedQueryRef<'_, half::f16>,
+//         doc: MatRef<'_, Standard<half::f16>>,
+//     ) -> f32 {
+//         if doc.num_vectors() == 0 {
+//             return 0.0;
+//         }
+//
+//         let available = query.available_rows();
+//         let nq = query.nrows();
+//
+//         let mut scratch = vec![f32::MIN; available];
+//
+//         diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunnerF16 {
+//             tq: query,
+//             doc,
+//             scratch: &mut scratch,
+//         });
+//
+//         scratch.iter().take(nq).map(|&s| -s).sum()
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
