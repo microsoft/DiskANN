@@ -18,11 +18,11 @@ use thiserror::Error;
 
 use crate::{
     ANNError, ANNResult, default_post_processor,
-    error::{Infallible, RankedError, ToRanked, TransientError, message},
+    error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
     graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
     neighbor::Neighbor,
-    provider::{self, BuildQueryComputer},
+    provider,
     utils::VectorRepr,
 };
 
@@ -1224,35 +1224,41 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     }
 }
 
-/// A [`glue::SearchPostProcess`] that filters out deleted IDs during
-/// inplace-delete search, mirroring the behavior of
-/// `diskann_providers::postprocess::RemoveDeletedIdsAndCopy` without depending on that crate.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FilterDeletedCopyIds;
+/// A [`glue::SearchPostProcessStep`] for [`Accessor`] that removes deleted IDs from the
+/// candidate stream.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilterDeleted;
 
-impl<'a, 'b> glue::SearchPostProcess<Accessor<'a>, &'b [f32]> for FilterDeletedCopyIds {
-    type Error = std::convert::Infallible;
+impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
+    type Error<NextError>
+        = NextError
+    where
+        NextError: StandardError;
 
-    fn post_process<I, B>(
+    type NextAccessor = Accessor<'a>;
+
+    fn post_process_step<I, B, Next>(
         &self,
+        next: &Next,
         accessor: &mut Accessor<'a>,
-        _query: &'b [f32],
-        _computer: &<Accessor<'a> as BuildQueryComputer<&'b [f32]>>::QueryComputer,
+        query: &'b [f32],
+        computer: &<f32 as VectorRepr>::QueryDistance,
         candidates: I,
         output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+        Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
     {
-        let count = output.extend(candidates.filter_map(|n| {
-            if accessor.provider().is_deleted(n.id).unwrap_or(true) {
-                None
-            } else {
-                Some((n.id, n.distance))
-            }
-        }));
-        std::future::ready(Ok(count))
+        let provider = accessor.provider;
+        next.post_process(
+            accessor,
+            query,
+            computer,
+            candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
+            output,
+        )
     }
 }
 
@@ -1263,7 +1269,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
-    type SearchPostProcessor = FilterDeletedCopyIds;
+    type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -1274,7 +1280,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        glue::Pipeline::new(FilterDeleted, glue::CopyIds)
     }
 
     async fn get_delete_element<'a>(
