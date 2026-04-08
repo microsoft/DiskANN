@@ -332,226 +332,229 @@ mod tests {
 
         assert_eq!(provider.to_external_id(ctx, 0).unwrap(), 0);
         assert_eq!(provider.to_internal_id(ctx, &0).unwrap(), 0);
+        {
+            // Retrieval of a valid element.
+            let mut accessor = make_accessor(&provider);
 
-        // Retrieval of a valid element.
-        let mut accessor = make_accessor(&provider);
-
-        // Hit served from the underlying provider.
-        assert_eq!(provider.inner().metrics().get_vector, 0);
-        let element = accessor.get_element(0).await.unwrap();
-        assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(
-            accessor.cache().stats.get_local_misses(),
-            1, /* increased */
-        );
-        assert_eq!(accessor.cache().stats.get_local_hits(), 0);
-        drop(accessor);
+            // Hit served from the underlying provider.
+            assert_eq!(provider.inner().metrics().get_vector, 0);
+            let element = accessor.get_element(0).await.unwrap();
+            assert_eq!(element, &[1.0, 2.0]);
+            assert_eq!(
+                accessor.cache().stats.get_local_misses(),
+                1, /* increased */
+            );
+            assert_eq!(accessor.cache().stats.get_local_hits(), 0);
+        }
         assert_eq!(provider.inner().metrics().get_vector, 1);
+        {
+            let mut accessor = make_accessor(&provider);
 
-        let mut accessor = make_accessor(&provider);
-
-        // This time, the hit is served from the underlying cache.
-        let element = accessor.get_element(0).await.unwrap();
-        assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(accessor.cache().stats.get_local_misses(), 0);
-        assert_eq!(
-            accessor.cache().stats.get_local_hits(),
-            1, /* increased */
-        );
-
-        drop(accessor);
+            // This time, the hit is served from the underlying cache.
+            let element = accessor.get_element(0).await.unwrap();
+            assert_eq!(element, &[1.0, 2.0]);
+            assert_eq!(accessor.cache().stats.get_local_misses(), 0);
+            assert_eq!(
+                accessor.cache().stats.get_local_hits(),
+                1, /* increased */
+            );
+        }
         assert_eq!(provider.inner().metrics().get_vector, 1);
-
-        let mut accessor = make_accessor(&provider);
-
-        // Adjacency List from Underlying
-        assert_eq!(provider.inner().metrics().set_neighbors, 0);
-        accessor.set_neighbors(0, &[1, 2, 3]).await.unwrap();
-        assert_eq!(
-            provider.inner().metrics().set_neighbors,
-            1, /* increased */
-        );
 
         let mut list = AdjacencyList::new();
-        assert_eq!(provider.inner().metrics().get_neighbors, 0);
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            1, /* increased */
-        );
-        assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
-        assert_eq!(&*list, &[1, 2, 3]);
 
-        drop(accessor);
+        {
+            let mut accessor = make_accessor(&provider);
+
+            // Adjacency List from Underlying
+            assert_eq!(provider.inner().metrics().set_neighbors, 0);
+            accessor.set_neighbors(0, &[1, 2, 3]).await.unwrap();
+            assert_eq!(
+                provider.inner().metrics().set_neighbors,
+                1, /* increased */
+            );
+
+            assert_eq!(provider.inner().metrics().get_neighbors, 0);
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_misses(),
+                1, /* increased */
+            );
+            assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
+            assert_eq!(&*list, &[1, 2, 3]);
+        }
+
         assert_eq!(
             provider.inner().metrics().get_neighbors,
             1, /* increased */
         );
 
-        let mut accessor = make_accessor(&provider);
+        {
+            let mut accessor = make_accessor(&provider);
 
-        // Adjacency List From Cache
-        list.clear();
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(&*list, &[1, 2, 3]);
-        assert_eq!(accessor.cache().graph.stats().get_local_misses(), 0);
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_hits(),
-            1, /* increased */
-        );
+            // Adjacency List From Cache
+            list.clear();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(&*list, &[1, 2, 3]);
+            assert_eq!(accessor.cache().graph.stats().get_local_misses(), 0);
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_hits(),
+                1, /* increased */
+            );
+        }
 
-        drop(accessor);
         assert_eq!(provider.inner().metrics().get_neighbors, 1);
 
-        let mut accessor = make_accessor(&provider);
+        {
+            let mut accessor = make_accessor(&provider);
 
-        // If we invalidate the key - these elements should be retrieved from the backing
-        // provider instead.
-        provider.cache().invalidate(0);
+            // If we invalidate the key - these elements should be retrieved from the backing
+            // provider instead.
+            provider.cache().invalidate(0);
 
-        let element = accessor.get_element(0).await.unwrap();
-        assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(
-            accessor.cache().stats.get_local_misses(),
-            1, /* increased */
-        );
-        assert_eq!(accessor.cache().stats.get_local_hits(), 0);
+            let element = accessor.get_element(0).await.unwrap();
+            assert_eq!(element, &[1.0, 2.0]);
+            assert_eq!(
+                accessor.cache().stats.get_local_misses(),
+                1, /* increased */
+            );
+            assert_eq!(accessor.cache().stats.get_local_hits(), 0);
+        }
 
-        drop(accessor);
         assert_eq!(
             provider.inner().metrics().get_vector,
             2, /* increased */
         );
 
-        let mut accessor = make_accessor(&provider);
+        {
+            let mut accessor = make_accessor(&provider);
 
-        // Once more from the cache.
-        let element = accessor.get_element(0).await.unwrap();
-        assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(accessor.cache().stats.get_local_misses(), 0);
-        assert_eq!(
-            accessor.cache().stats.get_local_hits(),
-            1, /* increased */
-        );
-        drop(accessor);
+            // Once more from the cache.
+            let element = accessor.get_element(0).await.unwrap();
+            assert_eq!(element, &[1.0, 2.0]);
+            assert_eq!(accessor.cache().stats.get_local_misses(), 0);
+            assert_eq!(
+                accessor.cache().stats.get_local_hits(),
+                1, /* increased */
+            );
+        }
 
         assert_eq!(provider.inner().metrics().get_vector, 2);
 
-        let mut accessor = make_accessor(&provider);
-        list.clear();
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(&*list, &[1, 2, 3]);
-        assert_eq!(
-            provider.inner().metrics().get_neighbors,
-            2, /* increased */
-        );
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            1, /* increased */
-        );
-        assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
+        {
+            let mut accessor = make_accessor(&provider);
+            list.clear();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(&*list, &[1, 2, 3]);
+            assert_eq!(
+                provider.inner().metrics().get_neighbors,
+                2, /* increased */
+            );
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_misses(),
+                1, /* increased */
+            );
+            assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
 
-        // Setting adjacency lists invalidates the cache.
-        accessor.set_neighbors(0, &[2, 3, 4]).await.unwrap();
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(&*list, &[2, 3, 4]);
-        assert_eq!(
-            provider.inner().metrics().set_neighbors,
-            2, /* increased */
-        );
-        assert_eq!(
-            provider.inner().metrics().get_neighbors,
-            3, /* increased */
-        );
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            2, /* increased */
-        );
-        assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
+            // Setting adjacency lists invalidates the cache.
+            accessor.set_neighbors(0, &[2, 3, 4]).await.unwrap();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(&*list, &[2, 3, 4]);
+            assert_eq!(
+                provider.inner().metrics().set_neighbors,
+                2, /* increased */
+            );
+            assert_eq!(
+                provider.inner().metrics().get_neighbors,
+                3, /* increased */
+            );
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_misses(),
+                2, /* increased */
+            );
+            assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
 
-        accessor.append_vector(0, &[1]).await.unwrap();
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(&*list, &[2, 3, 4, 1]);
+            accessor.append_vector(0, &[1]).await.unwrap();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(&*list, &[2, 3, 4, 1]);
 
-        assert_eq!(provider.inner().metrics().set_neighbors, 2,);
-        assert_eq!(
-            provider.inner().metrics().get_neighbors,
-            4, /* increased */
-        );
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_misses(),
-            3, /* increased */
-        );
-        assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
+            assert_eq!(provider.inner().metrics().set_neighbors, 2,);
+            assert_eq!(
+                provider.inner().metrics().get_neighbors,
+                4, /* increased */
+            );
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_misses(),
+                3, /* increased */
+            );
+            assert_eq!(accessor.cache().graph.stats().get_local_hits(), 0);
 
-        // Deletion.
-        assert_eq!(
-            provider.status_by_internal_id(ctx, 0).await.unwrap(),
-            core_provider::ElementStatus::Valid
-        );
-        assert_eq!(
-            provider.status_by_external_id(ctx, &0).await.unwrap(),
-            core_provider::ElementStatus::Valid
-        );
-        assert!(provider.status_by_internal_id(ctx, 1).await.is_err());
-        assert!(provider.status_by_external_id(ctx, &1).await.is_err());
+            // Deletion.
+            assert_eq!(
+                provider.status_by_internal_id(ctx, 0).await.unwrap(),
+                core_provider::ElementStatus::Valid
+            );
+            assert_eq!(
+                provider.status_by_external_id(ctx, &0).await.unwrap(),
+                core_provider::ElementStatus::Valid
+            );
+            assert!(provider.status_by_internal_id(ctx, 1).await.is_err());
+            assert!(provider.status_by_external_id(ctx, &1).await.is_err());
 
-        provider.delete(ctx, &0).await.unwrap();
+            provider.delete(ctx, &0).await.unwrap();
 
-        assert_eq!(
-            provider.status_by_internal_id(ctx, 0).await.unwrap(),
-            core_provider::ElementStatus::Deleted
-        );
-        assert_eq!(
-            provider.status_by_external_id(ctx, &0).await.unwrap(),
-            core_provider::ElementStatus::Deleted
-        );
-        assert!(provider.status_by_internal_id(ctx, 1).await.is_err());
-        assert!(provider.status_by_external_id(ctx, &1).await.is_err());
+            assert_eq!(
+                provider.status_by_internal_id(ctx, 0).await.unwrap(),
+                core_provider::ElementStatus::Deleted
+            );
+            assert_eq!(
+                provider.status_by_external_id(ctx, &0).await.unwrap(),
+                core_provider::ElementStatus::Deleted
+            );
+            assert!(provider.status_by_internal_id(ctx, 1).await.is_err());
+            assert!(provider.status_by_external_id(ctx, &1).await.is_err());
 
-        // Access the deleted element is still valid.
-        let element = accessor.get_element(0).await.unwrap();
-        assert_eq!(element, &[1.0, 2.0]);
-        assert_eq!(provider.inner().metrics().get_vector, 2);
-        assert_eq!(accessor.cache().stats.get_local_misses(), 0);
-        assert_eq!(
-            accessor.cache().stats.get_local_hits(),
-            1, /* increased */
-        );
+            // Access the deleted element is still valid.
+            let element = accessor.get_element(0).await.unwrap();
+            assert_eq!(element, &[1.0, 2.0]);
+            assert_eq!(provider.inner().metrics().get_vector, 2);
+            assert_eq!(accessor.cache().stats.get_local_misses(), 0);
+            assert_eq!(
+                accessor.cache().stats.get_local_hits(),
+                1, /* increased */
+            );
 
-        accessor.get_neighbors(0, &mut list).await.unwrap();
-        assert_eq!(&*list, &[2, 3, 4, 1]);
-        assert_eq!(provider.inner().metrics().set_neighbors, 2);
-        assert_eq!(
-            provider.inner().metrics().get_neighbors,
-            4, /* increased */
-        );
-        assert_eq!(accessor.cache().graph.stats().get_local_misses(), 3,);
-        assert_eq!(
-            accessor.cache().graph.stats().get_local_hits(),
-            1, /* increased */
-        );
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            assert_eq!(&*list, &[2, 3, 4, 1]);
+            assert_eq!(provider.inner().metrics().set_neighbors, 2);
+            assert_eq!(
+                provider.inner().metrics().get_neighbors,
+                4, /* increased */
+            );
+            assert_eq!(accessor.cache().graph.stats().get_local_misses(), 3,);
+            assert_eq!(
+                accessor.cache().graph.stats().get_local_hits(),
+                1, /* increased */
+            );
 
-        provider.release(ctx, 0).await.unwrap();
-        assert!(provider.status_by_internal_id(ctx, 0).await.is_err());
-        assert!(provider.status_by_external_id(ctx, &0).await.is_err());
+            provider.release(ctx, 0).await.unwrap();
+            assert!(provider.status_by_internal_id(ctx, 0).await.is_err());
+            assert!(provider.status_by_external_id(ctx, &0).await.is_err());
 
-        assert!(accessor.get_element(0).await.is_err());
-        assert_eq!(provider.inner().metrics().get_vector, 2);
-        assert_eq!(
-            accessor.cache().stats.get_local_misses(),
-            1 /* increased */
-        );
-        assert_eq!(accessor.cache().stats.get_local_hits(), 1);
+            assert!(accessor.get_element(0).await.is_err());
+            assert_eq!(provider.inner().metrics().get_vector, 2);
+            assert_eq!(
+                accessor.cache().stats.get_local_misses(),
+                1 /* increased */
+            );
+            assert_eq!(accessor.cache().stats.get_local_hits(), 1);
 
-        assert!(accessor.get_neighbors(0, &mut list).await.is_err());
-        assert_eq!(provider.inner().metrics().set_neighbors, 2);
-        assert_eq!(provider.inner().metrics().get_neighbors, 4);
-        assert_eq!(accessor.cache().graph.stats().get_local_misses(), 4);
-        assert_eq!(accessor.cache().graph.stats().get_local_hits(), 1);
-
-        // Ensure that the stats get properly recorded when the accessor is dropped.
-        std::mem::drop(accessor);
+            assert!(accessor.get_neighbors(0, &mut list).await.is_err());
+            assert_eq!(provider.inner().metrics().set_neighbors, 2);
+            assert_eq!(provider.inner().metrics().get_neighbors, 4);
+            assert_eq!(accessor.cache().graph.stats().get_local_misses(), 4);
+            assert_eq!(accessor.cache().graph.stats().get_local_hits(), 1);
+        }
 
         // Global stats accumulate across all accessors created during the test.
         assert_eq!(provider.cache().vector_stats.get_hits(), 3);
