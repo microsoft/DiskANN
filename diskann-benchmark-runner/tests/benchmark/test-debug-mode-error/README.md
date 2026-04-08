@@ -4,4 +4,5 @@ This test verifies that running benchmarks in debug mode without the `--allow-de
 
 The test intentionally omits the `--allow-debug` flag to ensure the debug mode check fires and blocks execution with an appropriate error message.
 
-This test only runs when `cfg!(debug_assertions)` is true (i.e., in debug builds).
+- **In debug builds**: The debug mode check fires and blocks execution with an error message (validated against `stdout.txt`)
+- **In release builds**: No debug assertions, so the benchmark runs normally with empty jobs (validated against `stdout_release.txt`)
