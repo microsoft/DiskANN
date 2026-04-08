@@ -908,8 +908,7 @@ pub(crate) mod tests {
                                 .map(|x| {
                                     let scaled = x * scale;
                                     // For unsigned types, ensure non-negative values
-                                    let val = if scaled < 0.0 { -scaled } else { scaled };
-                                    val as $T
+                                    scaled.abs() as $T
                                 })
                                 .collect()
                         })
