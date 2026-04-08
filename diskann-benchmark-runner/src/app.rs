@@ -149,9 +149,6 @@ impl App {
                 dry_run,
                 allow_debug,
             } => {
-                // Check for debug mode before running benchmarks.
-                check_debug_mode(*allow_debug)?;
-
                 // Parse and validate the input.
                 let run = Jobs::load(input_file, inputs)?;
                 // Check if we have a match for each benchmark.
@@ -190,6 +187,11 @@ impl App {
                     )?;
                     return Ok(());
                 }
+
+                // Check for debug mode before running benchmarks.
+                // This check is placed after the dry-run early return since dry-run doesn't
+                // actually execute benchmarks and thus won't produce misleading performance results.
+                check_debug_mode(*allow_debug)?;
 
                 // The collection of output results for each run.
                 let mut results = Vec::<serde_json::Value>::new();
