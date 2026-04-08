@@ -498,6 +498,7 @@ pub(crate) mod tests {
     }
 
     #[derive(Debug, Clone, Copy)]
+    #[allow(dead_code)] // Visible is used by caching::example tests behind feature bf_tree
     pub(crate) enum StartPointExpectation {
         Filtered(u32),
         Visible(u32),
