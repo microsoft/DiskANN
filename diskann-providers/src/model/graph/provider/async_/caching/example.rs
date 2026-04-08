@@ -257,24 +257,6 @@ impl<'a> cache_provider::CachedFill<AccessorCache<'a>, WorkingSet> for test_prov
     }
 }
 
-use crate::model::graph::provider::async_::postprocess;
-
-impl postprocess::DeletionCheck for diskann::graph::test::provider::Provider {
-    fn deletion_check(&self, id: u32) -> bool {
-        match self.is_deleted(id) {
-            Ok(is_deleted) => is_deleted,
-            Err(_) => true,
-        }
-    }
-}
-
-impl postprocess::AsDeletionCheck for diskann::graph::test::provider::Accessor<'_> {
-    type Checker = diskann::graph::test::provider::Provider;
-    fn as_deletion_check(&self) -> &Self::Checker {
-        self.provider()
-    }
-}
-
 ///////////
 // Tests //
 ///////////
