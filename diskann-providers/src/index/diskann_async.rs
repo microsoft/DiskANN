@@ -590,7 +590,7 @@ pub(crate) mod tests {
                     if id == start_point {
                         return Err(Box::new("start point should not be returned"));
                     }
-                    if id as usize == num_points - 2 {
+                    if id as usize != num_points - 2 {
                         return Err(Box::new(format!(
                             "expected {} as the nearest id",
                             num_points - 2
