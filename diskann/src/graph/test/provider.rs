@@ -393,7 +393,7 @@ impl Provider {
     /// If `id` is present but not marked deleted, returns `false`.
     ///
     /// An error is returned if `id` is not present in the provider.
-    pub fn is_deleted(&self, id: u32) -> Result<bool, InvalidId> {
+    fn is_deleted(&self, id: u32) -> Result<bool, InvalidId> {
         if let Some(term) = self.terms.get(&id) {
             Ok(term.is_deleted())
         } else {
