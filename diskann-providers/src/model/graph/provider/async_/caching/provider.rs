@@ -774,16 +774,6 @@ where
     }
 }
 
-impl<A, C> super::super::postprocess::AsDeletionCheck for CachingAccessor<A, C>
-where
-    A: super::super::postprocess::AsDeletionCheck,
-{
-    type Checker = A::Checker;
-    fn as_deletion_check(&self) -> &Self::Checker {
-        self.inner.as_deletion_check()
-    }
-}
-
 impl<T, A, C> BuildQueryComputer<T> for CachingAccessor<A, C>
 where
     A: BuildQueryComputer<T> + CacheableAccessor,
