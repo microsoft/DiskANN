@@ -336,9 +336,34 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         Some(self.get_unchecked(current))
     }
 
+    /// Like [`closest_notvisited`](Self::closest_notvisited), but ignores the `search_param_l`
+    /// bound and considers all entries in the queue. Use this for resizable/unbounded queues
+    /// (e.g. two-queue filtered search) where exploration should not be capped at L.
+    pub fn closest_notvisited_unbounded(&mut self) -> Option<Neighbor<I>> {
+        if !self.has_notvisited_node_unbounded() {
+            return None;
+        }
+
+        let current = self.cursor;
+        self.set_visited(current, true);
+
+        self.cursor += 1;
+        while self.cursor < self.size && self.get_visited(self.cursor) {
+            self.cursor += 1;
+        }
+
+        Some(self.get_unchecked(current))
+    }
+
     /// Whether there is notvisited node or not
     pub fn has_notvisited_node(&self) -> bool {
         self.cursor < self.search_param_l.min(self.size)
+    }
+
+    /// Like [`has_notvisited_node`](Self::has_notvisited_node), but ignores the `search_param_l`
+    /// bound and checks all entries in the queue.
+    pub fn has_notvisited_node_unbounded(&self) -> bool {
+        self.cursor < self.size
     }
 
     /// Get the size of the NeighborPriorityQueue

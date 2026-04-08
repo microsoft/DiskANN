@@ -6,12 +6,14 @@
 pub mod knn;
 pub mod multihop;
 pub mod range;
+pub mod two_queue;
 
 pub mod strategy;
 
 pub use knn::KNN;
 pub use multihop::MultiHop;
 pub use range::Range;
+pub use two_queue::TwoQueue;
 
 pub use strategy::Strategy;
 

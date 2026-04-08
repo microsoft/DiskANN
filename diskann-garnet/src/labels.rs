@@ -123,6 +123,59 @@ impl QueryLabelProvider<u32> for GarnetQueryLabelProvider {
     }
 }
 
+/// Per-candidate filter provider that delegates to a Garnet FFI callback.
+///
+/// Unlike [`GarnetQueryLabelProvider`] which uses a pre-computed bitmap,
+/// this provider evaluates each candidate by calling back into C# where
+/// the filter expression is evaluated against the candidate's attributes.
+///
+/// The filter callback is responsible for looking up any needed attributes
+#[derive(Debug)]
+pub struct GarnetFilterProvider {
+    context_id: u64,
+    filter_callback: unsafe extern "C" fn(context: u64, internal_id: u32) -> u8,
+}
+
+// Safety: filter_callback is a function pointer, which is Send + Sync.
+unsafe impl Send for GarnetFilterProvider {}
+unsafe impl Sync for GarnetFilterProvider {}
+
+impl GarnetFilterProvider {
+    /// Create a new `GarnetFilterProvider` from a non-null filter callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `context_id` - Garnet execution context ID passed through to the callback.
+    /// * `filter_callback` - FFI callback obtained by unwrapping a [`FilterCandidateCallback`].
+    pub fn new(
+        context_id: u64,
+        filter_callback: unsafe extern "C" fn(context: u64, internal_id: u32) -> u8,
+    ) -> Self {
+        Self {
+            context_id,
+            filter_callback,
+        }
+    }
+}
+
+impl QueryLabelProvider<u32> for GarnetFilterProvider {
+    fn is_match(&self, vec_id: u32) -> bool {
+        unsafe { (self.filter_callback)(self.context_id, vec_id) != 0 }
+    }
+}
+
+/// Unified filter for Garnet vector search.
+///
+/// Wraps the two filter modes supported by Garnet:
+/// - **Bitmap**: pre-computed dense bitmap
+/// - **Callback**: per-candidate FFI callback for expression evaluation
+pub enum GarnetFilter {
+    /// Pre-computed bitmap filter with beta distance adjustment.
+    Bitmap(GarnetQueryLabelProvider, f32),
+    /// Per-candidate FFI callback filter with effort cap.
+    Callback(GarnetFilterProvider, usize),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

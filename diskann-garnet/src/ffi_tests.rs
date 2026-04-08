@@ -51,6 +51,7 @@ mod tests {
                 callbacks.write_callback(),
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
+                callbacks.filter_callback(),
             )
         };
 

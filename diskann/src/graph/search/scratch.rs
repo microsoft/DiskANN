@@ -7,7 +7,7 @@
 
 //! Scratch space for in-memory index based search
 
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 
 use crate::{
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -67,6 +67,11 @@ where
     /// Only used during range search
     pub in_range: Vec<Neighbor<I>>,
 
+    /// Filtered results for two-queue search.
+    /// Max-heap of filter-passing neighbors (worst/largest distance on top for pruning).
+    /// Only used during two-queue filtered search.
+    pub filtered_results: BinaryHeap<Neighbor<I>>,
+
     /// A tracker for how many hops we have taken during the current search
     pub hops: u32,
 
@@ -113,7 +118,7 @@ where
             None => HashSet::new(),
         };
 
-        let best = match nbest {
+        let best: NeighborPriorityQueue<I> = match nbest {
             PriorityQueueConfiguration::Fixed(capacity) => NeighborPriorityQueue::new(capacity),
             PriorityQueueConfiguration::Resizable(capacity) => {
                 NeighborPriorityQueue::auto_resizable_with_search_param_l(capacity)
@@ -126,6 +131,7 @@ where
             id_scratch: Vec::new(),
             beam_nodes: Vec::new(),
             in_range: Vec::new(),
+            filtered_results: BinaryHeap::new(),
             range_frontier: VecDeque::new(),
             hops: 0,
             cmps: 0,
@@ -150,6 +156,7 @@ where
         self.id_scratch.clear();
         self.beam_nodes.clear();
         self.in_range.clear();
+        self.filtered_results.clear();
         self.range_frontier.clear();
 
         self.hops = 0;

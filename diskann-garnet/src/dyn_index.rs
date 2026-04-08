@@ -6,7 +6,7 @@
 use crate::{
     SearchResults,
     garnet::{Context, GarnetId},
-    labels::GarnetQueryLabelProvider,
+    labels::GarnetFilter,
     provider::{self, GarnetProvider},
 };
 use diskann::{
@@ -33,7 +33,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<&GarnetFilter>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -42,7 +42,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<&GarnetFilter>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -82,15 +82,26 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<&GarnetFilter>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let query = bytemuck::cast_slice::<u8, T>(data);
-        if let Some((labels, beta)) = filter {
-            let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), beta);
-            self.search(*params, &beta_filter, context, query, output)
-        } else {
-            self.search(*params, &FullPrecision, context, query, output)
+
+        match filter {
+            Some(GarnetFilter::Callback(provider, max_effort)) => {
+                let ef = params.l_value().get();
+                let effort_cap = std::cmp::max(ef, *max_effort);
+                let two_queue = search::TwoQueueSearch::new(*params, provider, effort_cap);
+                let result = self.search(two_queue, &FullPrecision, context, query, output)?;
+                Ok(result.stats)
+            }
+            Some(GarnetFilter::Bitmap(labels, beta)) => {
+                let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), *beta);
+                self.search(*params, &beta_filter, context, query, output)
+            }
+            None => {
+                self.search(*params, &FullPrecision, context, query, output)
+            }
         }
     }
 
@@ -99,7 +110,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<&GarnetFilter>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -112,7 +123,6 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
                 context,
             )?;
 
-        // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = rt.block_on(accessor.get_element(iid))?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
