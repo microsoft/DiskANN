@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+//! SIMD distance kernel benchmarks with regression detection.
+
 use std::{io::Write, num::NonZeroUsize};
 
 use diskann_utils::views::{Matrix, MatrixView};
@@ -18,10 +20,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_benchmark_runner::{
+    benchmark::{PassFail, Regression},
     describeln,
     dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
     utils::{
         datatype::{self, DataType},
+        num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
     Any, Benchmark, CheckDeserialization, Checker, Input,
@@ -74,7 +78,7 @@ impl std::fmt::Display for SimilarityMeasure {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Arch {
+enum Arch {
     #[serde(rename = "x86-64-v4")]
     #[allow(non_camel_case_types)]
     X86_64_V4,
@@ -99,21 +103,21 @@ impl std::fmt::Display for Arch {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Run {
-    pub(crate) distance: SimilarityMeasure,
-    pub(crate) dim: NonZeroUsize,
-    pub(crate) num_points: NonZeroUsize,
-    pub(crate) loops_per_measurement: NonZeroUsize,
-    pub(crate) num_measurements: NonZeroUsize,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Run {
+    distance: SimilarityMeasure,
+    dim: NonZeroUsize,
+    num_points: NonZeroUsize,
+    loops_per_measurement: NonZeroUsize,
+    num_measurements: NonZeroUsize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimdOp {
-    pub(crate) query_type: DataType,
-    pub(crate) data_type: DataType,
-    pub(crate) arch: Arch,
-    pub(crate) runs: Vec<Run>,
+    query_type: DataType,
+    data_type: DataType,
+    arch: Arch,
+    runs: Vec<Run>,
 }
 
 impl CheckDeserialization for SimdOp {
@@ -198,6 +202,103 @@ impl Input for SimdOp {
     }
 }
 
+//////////////////////
+// Regression Check //
+//////////////////////
+
+/// Tolerance thresholds for SIMD benchmark regression detection.
+///
+/// Each field specifies the maximum allowed relative increase in the corresponding metric.
+/// For example, a value of `0.10` means a 10% increase is tolerated.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SimdTolerance {
+    min_time_regression: NonNegativeFinite,
+}
+
+impl CheckDeserialization for SimdTolerance {
+    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+}
+
+impl Input for SimdTolerance {
+    fn tag() -> &'static str {
+        "simd-tolerance"
+    }
+
+    fn try_deserialize(
+        serialized: &serde_json::Value,
+        checker: &mut Checker,
+    ) -> anyhow::Result<Any> {
+        checker.any(Self::deserialize(serialized)?)
+    }
+
+    fn example() -> anyhow::Result<serde_json::Value> {
+        const EXAMPLE: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
+            Ok(v) => v,
+            Err(_) => panic!("use a non-negative finite please"),
+        };
+
+        Ok(serde_json::to_value(SimdTolerance {
+            min_time_regression: EXAMPLE,
+        })?)
+    }
+}
+
+/// Per-run comparison result showing before/after percentile differences.
+#[derive(Debug, Serialize)]
+struct Comparison {
+    run: Run,
+    tolerance: SimdTolerance,
+    before_min: f64,
+    after_min: f64,
+}
+
+/// Aggregated result of the regression check across all runs.
+#[derive(Debug, Serialize)]
+struct CheckResult {
+    checks: Vec<Comparison>,
+}
+
+impl std::fmt::Display for CheckResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header = [
+            "Distance",
+            "Dim",
+            "Min Before (ns)",
+            "Min After (ns)",
+            "Change (%)",
+            "Remark",
+        ];
+
+        let mut table = diskann_benchmark_runner::utils::fmt::Table::new(header, self.checks.len());
+
+        for (i, c) in self.checks.iter().enumerate() {
+            let mut row = table.row(i);
+            let change = relative_change(c.before_min, c.after_min);
+
+            row.insert(c.run.distance, 0);
+            row.insert(c.run.dim, 1);
+            row.insert(format!("{:.3}", c.before_min), 2);
+            row.insert(format!("{:.3}", c.after_min), 3);
+            match change {
+                Ok(change) => {
+                    row.insert(format!("{:.3} %", change * 100.0), 4);
+                    if change > c.tolerance.min_time_regression.get() {
+                        row.insert("FAIL", 5);
+                    }
+                }
+                Err(err) => {
+                    row.insert("invalid", 4);
+                    row.insert(err, 5);
+                }
+            }
+        }
+
+        table.fmt(f)
+    }
+}
+
 ////////////////////////////
 // Benchmark Registration //
 ////////////////////////////
@@ -205,10 +306,10 @@ impl Input for SimdOp {
 macro_rules! register {
     ($arch:literal, $dispatcher:ident, $name:literal, $($kernel:tt)*) => {
         #[cfg(target_arch = $arch)]
-        $dispatcher.register::<$($kernel)*>($name)
+        $dispatcher.register_regression::<$($kernel)*>($name)
     };
     ($dispatcher:ident, $name:literal, $($kernel:tt)*) => {
-        $dispatcher.register::<$($kernel)*>($name)
+        $dispatcher.register_regression::<$($kernel)*>($name)
     };
 }
 
@@ -553,6 +654,72 @@ where
     }
 }
 
+impl<A, Q, D> Regression for Kernel<A, Q, D>
+where
+    datatype::Type<Q>: DispatchRule<datatype::DataType>,
+    datatype::Type<D>: DispatchRule<datatype::DataType>,
+    Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
+    Kernel<A, Q, D>: RunBenchmark,
+{
+    type Tolerances = SimdTolerance;
+    type Pass = CheckResult;
+    type Fail = CheckResult;
+
+    fn check(
+        tolerance: &SimdTolerance,
+        _input: &SimdOp,
+        before: &Vec<RunResult>,
+        after: &Vec<RunResult>,
+    ) -> anyhow::Result<PassFail<CheckResult, CheckResult>> {
+        anyhow::ensure!(
+            before.len() == after.len(),
+            "before has {} runs but after has {}",
+            before.len(),
+            after.len(),
+        );
+
+        let mut passed = true;
+        let checks: Vec<Comparison> = std::iter::zip(before.iter(), after.iter())
+            .enumerate()
+            .map(|(i, (b, a))| {
+                anyhow::ensure!(b.run == a.run, "run {i} mismatched");
+
+                let computations_per_latency = b.computations_per_latency() as f64;
+
+                let before_min = b.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
+                let after_min = a.percentiles.minimum.as_f64() * 1000.0 / computations_per_latency;
+
+                let comparison = Comparison {
+                    run: b.run.clone(),
+                    tolerance: *tolerance,
+                    before_min,
+                    after_min,
+                };
+
+                // Determine whether or not we pass.
+                match relative_change(before_min, after_min) {
+                    Ok(change) => {
+                        if change > tolerance.min_time_regression.get() {
+                            passed = false;
+                        }
+                    }
+                    Err(_) => passed = false,
+                };
+
+                Ok(comparison)
+            })
+            .collect::<anyhow::Result<Vec<Comparison>>>()?;
+
+        let check = CheckResult { checks };
+
+        if passed {
+            Ok(PassFail::Pass(check))
+        } else {
+            Ok(PassFail::Fail(check))
+        }
+    }
+}
+
 ///////////////
 // Benchmark //
 ///////////////
@@ -561,14 +728,20 @@ trait RunBenchmark {
     fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error>;
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RunResult {
-    /// The setup
+    /// The configuration for this run.
     run: Run,
     /// The latencies of individual runs.
     latencies: Vec<MicroSeconds>,
     /// Latency percentiles.
     percentiles: percentiles::Percentiles<MicroSeconds>,
+}
+
+impl RunResult {
+    fn computations_per_latency(&self) -> usize {
+        self.run.num_points.get() * self.run.loops_per_measurement.get()
+    }
 }
 
 impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
@@ -600,8 +773,7 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
                 .unwrap_or(MicroSeconds::new(u64::MAX));
             let mean_latency = r.percentiles.mean;
 
-            let computations_per_latency: f64 =
-                (r.run.num_points.get() * r.run.loops_per_measurement.get()) as f64;
+            let computations_per_latency = r.computations_per_latency() as f64;
 
             // Convert time from micro-seconds to nano-seconds.
             let min_time = min_latency.as_f64() / computations_per_latency * 1000.0;
@@ -1010,5 +1182,156 @@ mod reference {
         }
 
         (r.xy / (r.xnorm.sqrt() * r.ynorm.sqrt())).clamp(-1.0, 1.0)
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann_benchmark_runner::{
+        benchmark::{PassFail, Regression},
+        utils::percentiles::compute_percentiles,
+    };
+
+    fn tiny_run(distance: SimilarityMeasure) -> Run {
+        Run {
+            distance,
+            dim: NonZeroUsize::new(8).unwrap(),
+            num_points: NonZeroUsize::new(1).unwrap(),
+            loops_per_measurement: NonZeroUsize::new(1).unwrap(),
+            num_measurements: NonZeroUsize::new(1).unwrap(),
+        }
+    }
+
+    fn tiny_op() -> SimdOp {
+        SimdOp {
+            query_type: DataType::Float32,
+            data_type: DataType::Float32,
+            arch: Arch::Scalar,
+            runs: vec![tiny_run(SimilarityMeasure::SquaredL2)],
+        }
+    }
+
+    fn tiny_result(distance: SimilarityMeasure, minimum: u64) -> RunResult {
+        let run = tiny_run(distance);
+        let minimum = MicroSeconds::new(minimum);
+        let mut latencies = vec![minimum];
+        let percentiles = compute_percentiles(&mut latencies).unwrap();
+        RunResult {
+            run,
+            latencies,
+            percentiles,
+        }
+    }
+
+    fn tolerance(limit: f64) -> SimdTolerance {
+        SimdTolerance {
+            min_time_regression: NonNegativeFinite::new(limit).unwrap(),
+        }
+    }
+
+    #[test]
+    fn check_rejects_mismatched_runs() {
+        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+
+        let err = Bench::check(
+            &tolerance(0.0),
+            &tiny_op(),
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+            &vec![tiny_result(SimilarityMeasure::Cosine, 100)],
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "run 0 mismatched");
+    }
+
+    #[test]
+    fn check_allows_negative_relative_change() {
+        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+
+        let result = Bench::check(
+            &tolerance(0.0),
+            &tiny_op(),
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 95)],
+        )
+        .unwrap();
+
+        assert!(matches!(result, PassFail::Pass(_)));
+    }
+
+    #[test]
+    fn check_passes_on_tolerance_boundary() {
+        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+
+        let result = Bench::check(
+            &tolerance(0.05),
+            &tiny_op(),
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 105)],
+        )
+        .unwrap();
+
+        assert!(matches!(result, PassFail::Pass(_)));
+    }
+
+    #[test]
+    fn check_fails_above_tolerance_boundary() {
+        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+
+        let result = Bench::check(
+            &tolerance(0.05),
+            &tiny_op(),
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 106)],
+        )
+        .unwrap();
+
+        assert!(matches!(result, PassFail::Fail(_)));
+    }
+
+    #[test]
+    fn check_result_display_includes_failure_details() {
+        let check = CheckResult {
+            checks: vec![Comparison {
+                run: tiny_run(SimilarityMeasure::SquaredL2),
+                tolerance: tolerance(0.05),
+                before_min: 100.0,
+                after_min: 106.0,
+            }],
+        };
+
+        let rendered = check.to_string();
+        assert!(rendered.contains("Distance"), "rendered = {rendered}");
+        assert!(rendered.contains("squared_l2"), "rendered = {rendered}");
+        assert!(rendered.contains("100.000"), "rendered = {rendered}");
+        assert!(rendered.contains("106.000"), "rendered = {rendered}");
+        assert!(rendered.contains("6.000 %"), "rendered = {rendered}");
+        assert!(rendered.contains("FAIL"), "rendered = {rendered}");
+    }
+
+    // If a "before" value is 0, we should fail with an error because this means the
+    // measurement was too fast for us to obtain a reliable signal, so we *could* be letting
+    // a regression through.
+    //
+    // We require at least a non-zero value.
+    #[test]
+    fn zero_values_rejected() {
+        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+
+        let result = Bench::check(
+            &tolerance(0.05),
+            &tiny_op(),
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
+            &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
+        )
+        .unwrap();
+
+        assert!(matches!(result, PassFail::Fail(_)));
     }
 }

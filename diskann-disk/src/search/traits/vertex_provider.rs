@@ -4,7 +4,7 @@
  */
 
 use diskann::ANNResult;
-use diskann_providers::model::graph::{graph_data_model::AdjacencyList, traits::GraphDataType};
+use diskann_providers::model::graph::traits::GraphDataType;
 
 /// `VertexProvider` is a trait that abstracts the access to Vertex data.
 ///
@@ -41,11 +41,11 @@ pub trait VertexProvider<Data: GraphDataType>: Send + Sync {
     ///
     /// # Returns
     ///
-    /// `ANNResult<&[Data::AdjacencyListType]>`: An `ANNResult` that wraps the reference to the adjacency list.
+    /// `ANNResult<&[Data::VectorIdType]>`: An `ANNResult` that wraps the reference to the adjacency list.
     fn get_adjacency_list(
         &self,
         vertex_id: &Data::VectorIdType,
-    ) -> ANNResult<&AdjacencyList<Data::VectorIdType>>;
+    ) -> ANNResult<&[Data::VectorIdType]>;
 
     // Gets the associated data for a given vertex id.
     ///
