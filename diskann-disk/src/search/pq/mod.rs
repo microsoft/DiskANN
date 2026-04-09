@@ -8,9 +8,7 @@
 mod pq_scratch;
 pub use pq_scratch::PQScratch;
 
-pub(crate) mod pq_dataset;
-pub use pq_dataset::PQData;
-pub use pq_dataset::PQTable;
+pub(crate) use crate::storage::quant::pq::PQData;
 
 mod quantizer_preprocess;
 pub use quantizer_preprocess::quantizer_preprocess;

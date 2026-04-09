@@ -9,8 +9,8 @@ use diskann_vector::distance::Metric;
 use diskann_providers::model::compute_pq_distance;
 use diskann_providers::utils::BridgeErr;
 
-use super::pq_dataset::PQTable;
 use super::{PQData, PQScratch};
+use crate::storage::quant::pq::pq_dataset::PQTable;
 
 /// Preprocesses the query vector for PQ distance calculations.
 /// This function rotates the query vector and prepares the PQ table distances
