@@ -37,6 +37,37 @@ permissions:
   contents: read
 
 jobs:
+  # Branch-protection gate
+  #
+  # How it works:
+  #
+  # * If All upstream jobs succeed the `if` condition is `false` and this job is *skipped*.
+  #   GitHub treats a skipped required check as passing.
+  #
+  #   See: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks
+  #
+  # * If Any upstream job fails or is cancelled the `if` condition is `true`.
+  #   This job runs and exits 1, blocking the merge.
+  #
+  # All check-in blocking gates should be added to the `needs` list.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    needs:
+      - basics
+      - codeql
+      - baseline
+      - sde
+      - test-workspace
+      - test-workspace-features
+      - coverage
+    if: ${{ cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure') }}
+    steps:
+      - name: Gate failure
+        run: |
+          echo "::error::One or more required CI jobs failed or were cancelled."
+          exit 1
+
   # Basic checks that must pass before we kick off more expensive tests.
   basics:
     name: basic checks
