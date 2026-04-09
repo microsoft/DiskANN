@@ -736,13 +736,13 @@ mod tests {
 
         // Test with the zero query.
         let query = vec![0.0; dim];
-        let gt = diskann::graph::test::search_utils::groundtruth(corpus.as_view(), &query, |a, b| {
+        let gt = crate::test_utils::groundtruth(corpus.as_view(), &query, |a, b| {
             SquaredL2::evaluate(a, b)
         });
         paged_tests.push(async_tests::PagedSearch::new(query, gt));
 
         // Test with the start point to ensure it is filtered out.
-        let gt = diskann::graph::test::search_utils::groundtruth(corpus.as_view(), &start_point, |a, b| {
+        let gt = crate::test_utils::groundtruth(corpus.as_view(), &start_point, |a, b| {
             SquaredL2::evaluate(a, b)
         });
         paged_tests.push(async_tests::PagedSearch::new(start_point.clone(), gt));

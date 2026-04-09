@@ -472,9 +472,8 @@ fn even_filtering_multihop() {
         .unwrap();
 
     // Verify each result matches the groundtruth (filtered to even IDs).
-    for i in 0..stats.result_count as usize {
-        let n = neighbors[i];
-        match search_utils::is_match(&gt_clone, n, 0.0) {
+    for (i, n) in neighbors.iter().enumerate().take(stats.result_count as usize) {
+        match search_utils::is_match(&gt_clone, *n, 0.0) {
             Some(position) => {
                 gt_clone.remove(position);
             }

@@ -166,7 +166,7 @@ pub(crate) mod tests {
     use std::{
         marker::PhantomData,
         num::{NonZeroU32, NonZeroUsize},
-        sync::{Arc, Mutex},
+        sync::Arc,
     };
 
     use crate::storage::VirtualStorageProvider;
@@ -178,8 +178,8 @@ pub(crate) mod tests {
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
                 SearchStrategy,
             },
-            index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
-            search::{Knn, Range},
+            index::{PartitionedNeighbors, QueryLabelProvider},
+            search::Range,
             search_output_buffer,
         },
         neighbor::Neighbor,
@@ -209,11 +209,10 @@ pub(crate) mod tests {
             layers::BetaFilter,
         },
         storage::StorageReadProvider,
+        test_utils::{
+            assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
+        },
         utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
-    };
-
-    use diskann::graph::test::search_utils::{
-        assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -365,54 +364,6 @@ pub(crate) mod tests {
             .search(
                 graph_search,
                 &strategy,
-                &parameters.context,
-                query,
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        // Loop over the requested number of results to check, invoking the checker closure.
-        //
-        // If the checker closure detects an error, embed that error in a more descriptive
-        // formatted panic.
-        for i in 0..parameters.to_check {
-            println!("{ids:?}");
-            if let Err(message) = checker(i, (ids[i], distances[i])) {
-                panic!(
-                    "Check failed for result {} with error: {}. Query = {:?}. Result: ({}, {})",
-                    i, message, query, ids[i], distances[i]
-                );
-            }
-        }
-    }
-
-    /// Check the contents of a single search for the query.
-    ///
-    /// # Arguments
-    async fn test_multihop_search<DP, S, Q, Checker>(
-        index: &DiskANNIndex<DP>,
-        parameters: &SearchParameters<DP::Context>,
-        strategy: &S,
-        query: Q,
-        mut checker: Checker,
-        filter: &dyn QueryLabelProvider<DP::InternalId>,
-    ) where
-        DP: DataProvider<InternalId = u32>,
-        S: DefaultSearchStrategy<DP, Q>,
-        Q: Copy + std::fmt::Debug + Send + Sync,
-        Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
-    {
-        let mut ids = vec![0; parameters.search_k];
-        let mut distances = vec![0.0; parameters.search_k];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        let search_params = Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, filter);
-        index
-            .search(
-                multihop,
-                strategy,
                 &parameters.context,
                 query,
                 &mut result_output_buffer,
