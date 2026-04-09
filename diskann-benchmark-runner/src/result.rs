@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde::{ser::SerializeSeq, Serialize, Serializer};
+use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 
 /// A helper to generate incremental snapshots of data while a benchmark is progressing.
 ///
@@ -111,6 +111,19 @@ where
     serde_json::to_writer_pretty(buffer, object)?;
     std::fs::rename(&temp, path)?;
     Ok(())
+}
+
+/// A utility for loading results previously saved via [`Checkpoint::checkpoint`].
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct RawResult {
+    pub(crate) input: serde_json::Value,
+    pub(crate) results: serde_json::Value,
+}
+
+impl RawResult {
+    pub(crate) fn load(path: &Path) -> anyhow::Result<Vec<Self>> {
+        crate::internal::load_from_disk(path)
+    }
 }
 
 ////////////////////////////
