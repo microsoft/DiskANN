@@ -7,14 +7,11 @@ use std::ptr;
 
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
-use diskann_providers::{
-    common::AlignedBoxWithSlice,
-    model::{graph::traits::GraphDataType, FP_VECTOR_MEM_ALIGN},
-};
+use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
 use hashbrown::HashMap;
 
 use crate::{
-    data_model::GraphHeader,
+    data_model::{GraphHeader, FP_VECTOR_MEM_ALIGN},
     search::{provider::disk_sector_graph::DiskSectorGraph, traits::VertexProvider},
     utils::aligned_file_reader::traits::AlignedFileReader,
 };

@@ -4,11 +4,10 @@
  */
 
 use diskann::{graph::AdjacencyList, ANNError, ANNResult};
-use diskann_providers::{
-    common::AlignedBoxWithSlice,
-    model::{graph::traits::GraphDataType, FP_VECTOR_MEM_ALIGN},
-};
+use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
+
+use super::FP_VECTOR_MEM_ALIGN;
 
 pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
     // Maintains the mapping of vector_id to index in the global cached nodes list.

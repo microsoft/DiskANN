@@ -8,7 +8,7 @@ use core::fmt::Debug;
 use diskann::{ANNError, ANNResult};
 use diskann_quantization::product::TransposedTable;
 
-use crate::model::{FixedChunkPQTable, PQCompressedData};
+use diskann_providers::model::{FixedChunkPQTable, PQCompressedData};
 
 /// Behind the scenes, we can use either the [`FixedChunkPQTable`] or a
 /// [`diskann_quantization::product::TransposedTable`]. The [`TrasposedTable`] is much faster

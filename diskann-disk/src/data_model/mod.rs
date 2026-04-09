@@ -14,3 +14,5 @@ pub use graph_header::GraphHeader;
 
 mod cache;
 pub use cache::{Cache, CachingStrategy};
+
+pub const FP_VECTOR_MEM_ALIGN: usize = 32;

@@ -40,10 +40,11 @@ use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
         compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
-        pq::quantizer_preprocess, PQData, PQScratch,
     },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+
+use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;
 use tokio::runtime::Runtime;
