@@ -1069,7 +1069,7 @@ mod disk_provider_tests {
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
-        utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
+        utils::{load_aligned_bin, PQPathNames, ParallelIteratorInPool, RayonThreadPool},
     };
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
@@ -1402,12 +1402,12 @@ mod disk_provider_tests {
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
 
-        let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let pool = RayonThreadPool::new(params.thread_num.into_usize()).unwrap();
         // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
             .par_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
                 let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);
@@ -1475,12 +1475,12 @@ mod disk_provider_tests {
             .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
-        let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
+        let pool = RayonThreadPool::new(params.thread_num.into_usize()).unwrap();
         // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
             .par_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
                 let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
                 let mut temp = Vec::with_capacity(query.len() + 1);

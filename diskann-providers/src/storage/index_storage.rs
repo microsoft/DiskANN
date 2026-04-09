@@ -233,7 +233,7 @@ mod tests {
             common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
             inmem::{self},
         },
-        utils::create_rnd_from_seed_in_tests,
+        utils::{RayonThreadPool, create_rnd_from_seed_in_tests},
     };
 
     async fn build_index<DP, S>(
@@ -273,11 +273,12 @@ mod tests {
         };
 
         let pq_bytes = 8;
+        let pool = RayonThreadPool::new(2).unwrap();
         let pq_table = diskann_async::train_pq(
             train_data.as_view(),
             pq_bytes,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            2,
+            pool.as_ref(),
         )
         .unwrap();
 

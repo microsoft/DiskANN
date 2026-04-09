@@ -10,9 +10,8 @@ use std::{
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{load_metadata_from_file, AsThreadPool, BridgeErr, ParallelIteratorInPool, Timer},
+use diskann_providers::utils::{
+    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -99,15 +98,14 @@ where
     /// 4. Processes data in blocks of size given by chunking_config.data_compression_chunk_vector_count = 50_000
     /// 5. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
     /// 6. Writes compressed blocks to the output file.
-    pub fn generate_data<Storage, Pool>(
+    pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
-        pool: &Pool,                // Thread pool for parallel processing
+        pool: RayonThreadPoolRef<'_>, // Thread pool for parallel processing
         chunking_config: &ChunkingConfig, // Configuration for batching and checkpoint handling
     ) -> ANNResult<Progress>
     where
         Storage: StorageReadProvider + StorageWriteProvider,
-        Pool: AsThreadPool,
     {
         let timer = Timer::new();
 
@@ -157,7 +155,6 @@ where
 
         let mut compressed_buffer = vec![0_u8; block_size * compressed_size];
 
-        forward_threadpool!(pool = pool: Pool);
         //Every block has size exactly block_size, except for potentially the last one
         let action = |block_index| -> ANNResult<()> {
             let start_index: usize = offset + block_index * block_size;
@@ -276,7 +273,7 @@ mod generator_tests {
 
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::utils::{create_thread_pool_for_test, save_bytes};
+    use diskann_providers::utils::{save_bytes, RayonThreadPool};
     use diskann_utils::{
         io::{write_bin, Metadata},
         views::MatrixView,
@@ -421,7 +418,7 @@ mod generator_tests {
         QuantDataGenerator<f32, DummyCompressor>,
         Result<Progress, ANNError>,
     ) {
-        let pool: diskann_providers::utils::RayonThreadPool = create_thread_pool_for_test();
+        let pool: diskann_providers::utils::RayonThreadPool = RayonThreadPool::for_test();
         // Create generator
         let context = GeneratorContext::new(offset, compressed_path.clone());
         let generator = QuantDataGenerator::<f32, DummyCompressor>::new(
@@ -431,7 +428,7 @@ mod generator_tests {
         )
         .unwrap();
         // Run generator
-        let result = generator.generate_data(storage_provider, &&pool, chunking_config);
+        let result = generator.generate_data(storage_provider, pool.as_ref(), chunking_config);
         (generator, result)
     }
 

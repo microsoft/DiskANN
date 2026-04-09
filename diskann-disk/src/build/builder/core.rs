@@ -13,7 +13,7 @@ use diskann_providers::{
     },
     storage::PQStorage,
     utils::{
-        load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
+        load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
     },
 };
@@ -470,7 +470,7 @@ pub(crate) fn determine_build_strategy<Data: GraphDataType>(
 }
 
 pub(crate) struct MergedVamanaIndexWorkflow<'a> {
-    pool: &'a RayonThreadPool,
+    pool: RayonThreadPoolRef<'a>,
     rng: diskann_providers::utils::StandardRng,
     dataset_file: String,
     max_degree: u32,
@@ -480,7 +480,7 @@ pub(crate) struct MergedVamanaIndexWorkflow<'a> {
 impl<'a> MergedVamanaIndexWorkflow<'a> {
     pub(crate) fn new<Data, StorageProvider>(
         builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        pool: &'a RayonThreadPool,
+        pool: RayonThreadPoolRef<'a>,
     ) -> Self
     where
         Data: GraphDataType<VectorIdType = u32>,
@@ -530,7 +530,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
                     builder.disk_build_param.build_memory_limit().in_bytes() as f64;
                 // calculate how many partitions we need, in order to fit in RAM budget
                 // save id_map for each partition to disk
-                partition_with_ram_budget::<Data::VectorDataType, _, _, _>(
+                partition_with_ram_budget::<Data::VectorDataType, _, _>(
                     &self.dataset_file,
                     builder.index_configuration.dim,
                     sampling_rate,

@@ -30,11 +30,10 @@ use rayon::prelude::*;
 use tracing::info;
 
 use crate::{
-    forward_threadpool,
     model::GeneratePivotArguments,
     storage::PQStorage,
     utils::{
-        AsThreadPool, BridgeErr, ParallelIteratorInPool, RandomProvider, Timer,
+        BridgeErr, ParallelIteratorInPool, RandomProvider, RayonThreadPoolRef, Timer,
         create_rnd_provider_from_seed, k_means_clustering, run_lloyds,
     },
 };
@@ -69,18 +68,17 @@ where
 /// k-means in each chunk to compute the PQ pivots and stores in bin format in
 /// file pq_pivots_path as a s num_centers*dim floating point binary file
 /// PQ pivot table layout: {pivot offsets data: METADATA_SIZE}{pivot vector:[dim; num_centroid]}{centroid vector:[dim; 1]}{chunk offsets:[chunk_num+1; 1]}
-pub fn generate_pq_pivots<Storage, Random, Pool>(
+pub fn generate_pq_pivots<Storage, Random>(
     parameters: GeneratePivotArguments,
     train_data: &mut [f32],
     pq_storage: &PQStorage,
     storage_provider: &Storage,
     random_provider: RandomProvider<Random>,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
     Storage: StorageWriteProvider + StorageReadProvider,
     Random: Rng,
-    Pool: AsThreadPool,
 {
     if pq_storage.pivot_data_exist(storage_provider) {
         let (file_num_centers, file_dim) =
@@ -108,7 +106,6 @@ where
         &mut chunk_offsets,
     );
 
-    forward_threadpool!(pool = pool);
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
         parameters.max_k_means_reps(),
@@ -156,7 +153,7 @@ where
 ///
 /// Result is stored in the `full_pivot_data`, which must be of size `num_centers * dim`.
 #[allow(clippy::too_many_arguments)]
-pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
+pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     parameters: &GeneratePivotArguments,
     train_data_slice: &[T],
     centroid: &mut [f32],
@@ -164,7 +161,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
     full_pivot_data: &mut [f32],
     rng: &mut (impl Rng + ?Sized),
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if full_pivot_data.len() != parameters.num_centers() * parameters.dim() {
         return Err(ANNError::log_pq_error(
@@ -213,7 +210,6 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
     // Calculate the chunk offsets
     calculate_chunk_offsets(parameters.dim(), parameters.num_pq_chunks(), offsets);
 
-    forward_threadpool!(pool = pool);
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
         parameters.max_k_means_reps(),
@@ -292,17 +288,16 @@ fn copy_chunk_centroids_to_full_table(
 /// {centroid vector:[dim; 1]}
 /// {chunk offsets:[chunk_num+1; 1]}
 #[allow(dead_code)] // keeping this for now since we may not want to delete this feature
-fn generate_optimized_pq_pivots<Storage, Pool>(
+fn generate_optimized_pq_pivots<Storage>(
     parameters: GeneratePivotArguments,
     train_data: &mut [f32],
     pq_storage: &PQStorage,
     storage_provider: &Storage,
     rng: &mut impl Rng,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
     Storage: StorageWriteProvider + StorageReadProvider,
-    Pool: AsThreadPool,
 {
     if pq_storage.pivot_data_exist(storage_provider) {
         let (file_num_centers, file_dim) =
@@ -349,7 +344,6 @@ where
     let mut vt_matrix: Vec<f32> = vec![0.0; parameters.dim() * parameters.dim()];
     let mut singular_values: Vec<f32> = vec![0.0; parameters.dim()];
 
-    forward_threadpool!(pool = pool);
     for iteration_number in 0..MAX_OPQ_ITERATIONS {
         // Transform the training data by the rotation matrix.
         diskann_linalg::sgemm(
@@ -446,7 +440,7 @@ where
 /// made for code clarity reasons and is unlikely to be reused.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn opq_quantize_all_chunks<Pool: AsThreadPool>(
+fn opq_quantize_all_chunks(
     parameters: &GeneratePivotArguments,
     chunk_offsets: &[usize],
     full_pivot_data: &mut [f32],
@@ -454,10 +448,8 @@ fn opq_quantize_all_chunks<Pool: AsThreadPool>(
     quantized_data_results: &mut [f32],
     rotation_iteration_number: usize,
     rng: &mut impl Rng,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
-    forward_threadpool!(pool = pool);
-
     for chunk_index in 0..parameters.num_pq_chunks() {
         let chunk_end_offset = chunk_offsets[chunk_index + 1];
         let chunk_start_offset = chunk_offsets[chunk_index];
@@ -678,19 +670,18 @@ where
 /// It will start from the start_vector_id and compress the data_file in chunks.
 /// It validates the existing compressed data_file is consistent with the start_vector_id.
 #[allow(clippy::too_many_arguments)]
-pub fn generate_pq_data_from_pivots<T, Storage, Pool>(
+pub fn generate_pq_data_from_pivots<T, Storage>(
     num_centers: usize,
     num_pq_chunks: usize,
     pq_storage: &mut PQStorage,
     storage_provider: &Storage,
     use_opq: bool,
     offset: usize,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
     T: Copy + VectorRepr,
     Storage: StorageWriteProvider + StorageReadProvider,
-    Pool: AsThreadPool,
 {
     let timer = Timer::new();
 
@@ -777,7 +768,6 @@ where
 
     let mut buffer = vec![0.0; full_dim * block_size];
 
-    forward_threadpool!(pool = pool);
     for block_index in 0..num_blocks {
         let start_index: usize = offset + block_index * block_size;
         let end_index: usize = std::cmp::min(start_index + block_size, num_points);
@@ -952,17 +942,14 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
 /// PQ pivots computed earlier, partition the co-ordinates into
 /// `num_pq_chunks`, and find the closest pivots for each point in each chunk.
 /// This API doesn't involve reading/writing to disk and is used for in-memory.
-pub fn generate_pq_data_from_pivots_from_membuf_batch<
-    T: Copy + Sync + Into<f32>,
-    Pool: AsThreadPool,
->(
+pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>>(
     parameters: &GeneratePivotArguments,
     vector_data: &[T],
     pivot_data: &[f32],
     centroid: &[f32],
     offsets: &[usize],
     pq_out: &mut [u8],
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     // Perform minimal error checking at this level, mainly on the sizes of `vector_data`
     // and `pq_out`.
@@ -984,8 +971,6 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<
     }
     let translate_to_center = parameters.translate_to_center();
     let centroid_option: Option<&[f32]> = translate_to_center.then_some(centroid);
-
-    forward_threadpool!(pool = pool);
 
     pq_out
         .par_chunks_mut(num_pq_chunks)
@@ -1020,7 +1005,7 @@ mod pq_test {
             FixedChunkPQTable,
             pq::{METADATA_SIZE, debug},
         },
-        utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
+        utils::{ParallelIteratorInPool, RayonThreadPool, read_bin_from},
     };
 
     #[test]
@@ -1055,14 +1040,14 @@ mod pq_test {
             2.1f32, 2.1f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32,
             100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
         ];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         generate_pq_pivots(
             GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
             &mut train_data,
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -1116,14 +1101,14 @@ mod pq_test {
             2.1f32, 2.1f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32,
             100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
         ];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         generate_optimized_pq_pivots(
             GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
             &mut train_data,
             &pq_storage,
             &storage_provider,
             &mut crate::utils::create_rnd_in_tests(),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -1178,7 +1163,7 @@ mod pq_test {
         let mut full_pivot_data: Vec<f32> = vec![0.0; num_centers * dim];
         let mut centroids: Vec<f32> = vec![0.0; dim];
         let mut offsets: Vec<usize> = vec![0; num_pq_chunks + 1];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         let result = generate_pq_pivots_from_membuf(
             &GeneratePivotArguments::new(
                 num_train,
@@ -1195,7 +1180,7 @@ mod pq_test {
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result.is_ok());
@@ -1217,7 +1202,7 @@ mod pq_test {
         let max_k_means_reps = 10;
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         let result = generate_pq_pivots(
             GeneratePivotArguments::new(
                 num_train,
@@ -1232,7 +1217,7 @@ mod pq_test {
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
-            &pool,
+            pool.as_ref(),
         );
 
         // still succeed without training data
@@ -1267,24 +1252,24 @@ mod pq_test {
         let pq_compressed_vectors_path = "/generate_pq_data_from_pivots_test.bin";
         let mut pq_storage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         generate_pq_pivots(
             GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
             &mut train_data,
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
-        generate_pq_data_from_pivots::<f32, _, _>(
+        generate_pq_data_from_pivots::<f32, _>(
             2,
             2,
             &mut pq_storage,
             &storage_provider,
             false,
             0,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
         let compressed = read_bin_from::<u8>(
@@ -1328,7 +1313,7 @@ mod pq_test {
         let mut centroids: Vec<f32> = vec![f32::MAX; dim];
         let mut offsets: Vec<usize> = vec![usize::MAX; num_pq_chunks + 1];
         let mut pivot_data: Vec<f32> = vec![f32::MAX; num_centers * dim];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         generate_pq_pivots_from_membuf(
             &GeneratePivotArguments::new(
                 num_train,
@@ -1345,7 +1330,7 @@ mod pq_test {
             &mut pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -1401,7 +1386,7 @@ mod pq_test {
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let mut pq_storage: PQStorage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         // use original function to generate pq pivots and pq data
 
         let (mut full_data_vector, num_train, train_dim) = pq_storage
@@ -1426,18 +1411,18 @@ mod pq_test {
             &pq_storage,
             &storage_provider,
             crate::utils::create_rnd_provider_from_seed_in_tests(42),
-            &pool,
+            pool.as_ref(),
         )
         .expect("Failed to generate pivots");
 
-        generate_pq_data_from_pivots::<f32, _, _>(
+        generate_pq_data_from_pivots::<f32, _>(
             NUM_PQ_CENTROIDS,
             num_pq_chunks,
             &mut pq_storage,
             &storage_provider,
             false,
             0,
-            &pool,
+            pool.as_ref(),
         )
         .expect("Failed to generate quantized data");
 
@@ -1463,7 +1448,7 @@ mod pq_test {
         membuf_pq_data
             .par_chunks_mut(num_pq_chunks)
             .enumerate()
-            .for_each_in_pool(&pool, |(i, membuf_slice)| {
+            .for_each_in_pool(pool.as_ref(), |(i, membuf_slice)| {
                 generate_pq_data_from_pivots_from_membuf(
                     &full_data_vector[train_dim * i..train_dim * (i + 1)],
                     &full_pivot_data,
@@ -1602,7 +1587,7 @@ mod pq_test {
         let mut full_pivot_data: Vec<f32> = vec![0.0; NUM_PQ_CENTROIDS * dim];
         let mut centroids: Vec<f32> = vec![0.0; dim];
         let mut offsets: Vec<usize> = vec![0; num_pq_chunks + 1];
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         let result = generate_pq_pivots_from_membuf(
             &GeneratePivotArguments::new(
                 npts,
@@ -1619,7 +1604,7 @@ mod pq_test {
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         );
         assert!(result.is_ok());
 
@@ -1649,16 +1634,16 @@ mod pq_test {
         let mut pq_storage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
 
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
 
-        generate_pq_data_from_pivots::<f32, _, _>(
+        generate_pq_data_from_pivots::<f32, _>(
             NUM_PQ_CENTROIDS,
             1,
             &mut pq_storage,
             &storage_provider,
             false,
             0,
-            &pool,
+            pool.as_ref(),
         )
         .expect("Failed to generate quantized data");
 
@@ -1770,7 +1755,7 @@ mod pq_test {
             make_zero_mean,
         )
         .unwrap();
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
 
         generate_pq_pivots_from_membuf(
             &pivot_args,
@@ -1780,7 +1765,7 @@ mod pq_test {
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -1804,7 +1789,7 @@ mod pq_test {
         )
         .unwrap();
 
-        let pool = create_thread_pool_for_test();
+        let pool = RayonThreadPool::for_test();
         let mut pq_data: Vec<u8> = vec![0; num_pq_chunks * train_size];
         generate_pq_data_from_pivots_from_membuf_batch(
             &pivot_args,
@@ -1813,7 +1798,7 @@ mod pq_test {
             &centroid,
             &offsets,
             &mut pq_data,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
