@@ -75,7 +75,8 @@ use crate::{
 
 /// Check if we're running in debug mode and error if not allowed.
 fn check_debug_mode(allow_debug: bool) -> anyhow::Result<()> {
-    if cfg!(debug_assertions) && !allow_debug {
+    // Unit tests are treated as debug mode to ensure consistent behavior across builds.
+    if cfg!(any(test, debug_assertions)) && !allow_debug {
         anyhow::bail!(
             "Benchmarking in debug mode produces misleading performance results.\n\
              Please compile in release mode or use the --allow-debug flag to bypass this check."
