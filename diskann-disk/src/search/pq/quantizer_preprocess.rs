@@ -6,11 +6,11 @@
 use diskann::ANNResult;
 use diskann_vector::distance::Metric;
 
-use super::fixed_chunk_pq_table::compute_pq_distance;
-use crate::{
-    model::{PQData, PQScratch, pq::pq_dataset::PQTable},
-    utils::BridgeErr,
-};
+use diskann_providers::model::compute_pq_distance;
+use diskann_providers::utils::BridgeErr;
+
+use super::pq_dataset::PQTable;
+use super::{PQData, PQScratch};
 
 /// Preprocesses the query vector for PQ distance calculations.
 /// This function rotates the query vector and prepares the PQ table distances
