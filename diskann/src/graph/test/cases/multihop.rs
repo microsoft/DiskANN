@@ -130,6 +130,9 @@ struct CallbackFilter {
 
 #[derive(Debug, Clone, Default)]
 struct CallbackMetrics {
+    total_visits: usize,
+    rejected_count: usize,
+    adjusted_count: usize,
     visited_ids: Vec<u32>,
 }
 
@@ -150,6 +153,13 @@ impl CallbackFilter {
             .visited_ids
             .clone()
     }
+
+    fn metrics(&self) -> CallbackMetrics {
+        self.metrics
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone()
+    }
 }
 
 impl QueryLabelProvider<u32> for CallbackFilter {
@@ -159,12 +169,15 @@ impl QueryLabelProvider<u32> for CallbackFilter {
 
     fn on_visit(&self, neighbor: Neighbor<u32>) -> QueryVisitDecision<u32> {
         let mut metrics = self.metrics.lock().expect("mutex should not be poisoned");
+        metrics.total_visits += 1;
         metrics.visited_ids.push(neighbor.id);
 
         if neighbor.id == self.blocked {
+            metrics.rejected_count += 1;
             return QueryVisitDecision::Reject;
         }
         if neighbor.id == self.adjusted {
+            metrics.adjusted_count += 1;
             let adjusted = Neighbor::new(neighbor.id, neighbor.distance * self.adjustment_factor);
             return QueryVisitDecision::Accept(adjusted);
         }
@@ -473,4 +486,118 @@ fn even_filtering_multihop() {
             }
         }
     }
+}
+
+#[test]
+fn callback_enforces_filtering() {
+    let rt = current_thread_runtime();
+    let grid = Grid::Three;
+    let grid_size = 5;
+    let num_points = grid.num_points(grid_size);
+    let index = setup_grid_index(grid_size);
+
+    let query = vec![grid_size as f32; 3];
+
+    // Compute brute-force groundtruth for validation.
+    let data = grid.data(grid_size);
+    let baseline_gt = {
+        let mut gt = search_utils::groundtruth(data.as_view(), &query, |a, b| {
+            SquaredL2::evaluate(a, b)
+        });
+        gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
+        gt
+    };
+
+    let blocked = (num_points - 2) as u32;
+    let adjusted = (num_points - 1) as u32;
+
+    assert!(
+        baseline_gt.iter().any(|n| n.id == blocked),
+        "blocked candidate must exist in groundtruth"
+    );
+
+    let baseline_adjusted_distance = baseline_gt
+        .iter()
+        .find(|n| n.id == adjusted)
+        .expect("adjusted node should exist in groundtruth")
+        .distance;
+
+    let k = 20;
+    let l = 40;
+    let to_check = 10;
+    let filter = CallbackFilter::new(blocked, adjusted, 0.5);
+
+    let search_params = Knn::new_default(k, l).unwrap();
+    let multihop = MultihopSearch::new(search_params, &filter);
+
+    let mut ids = vec![0u32; k];
+    let mut distances = vec![0.0f32; k];
+    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+    let stats = rt
+        .block_on(index.search(
+            multihop,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut buffer,
+        ))
+        .unwrap();
+
+    let callback_metrics = filter.metrics();
+
+    // Validate enough results were returned.
+    assert!(
+        stats.result_count >= to_check as u32,
+        "expected at least {} results, got {}",
+        to_check, stats.result_count
+    );
+
+    // Validate callback was invoked and tracked the blocked candidate.
+    assert!(
+        callback_metrics.total_visits > 0,
+        "callback should have been invoked at least once"
+    );
+    assert!(
+        filter.hits().contains(&blocked),
+        "callback must evaluate the blocked candidate (visited {} candidates)",
+        callback_metrics.total_visits
+    );
+    assert_eq!(
+        callback_metrics.rejected_count, 1,
+        "exactly one candidate (blocked={}) should be rejected",
+        blocked
+    );
+
+    // Validate blocked candidate is excluded from results.
+    let produced = stats.result_count as usize;
+    let inspected = produced.min(to_check);
+    assert!(
+        !ids.iter().take(inspected).any(|&id| id == blocked),
+        "blocked candidate {} should not appear in final results (found in: {:?})",
+        blocked,
+        &ids[..inspected]
+    );
+
+    // Validate distance adjustment was applied.
+    assert!(
+        callback_metrics.adjusted_count >= 1,
+        "adjusted candidate {} should have been visited",
+        adjusted
+    );
+
+    let adjusted_idx = ids
+        .iter()
+        .take(inspected)
+        .position(|&id| id == adjusted)
+        .expect("adjusted candidate should be present in results");
+    let expected_distance = baseline_adjusted_distance * 0.5;
+    assert!(
+        (distances[adjusted_idx] - expected_distance).abs() < 1e-5,
+        "callback should adjust distances before ranking: \
+         expected {:.6}, got {:.6} (baseline: {:.6}, factor: 0.5)",
+        expected_distance,
+        distances[adjusted_idx],
+        baseline_adjusted_distance
+    );
 }
