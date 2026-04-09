@@ -205,7 +205,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 9,
+      "num_results": 10,
       "query": [
         5.0,
         5.0,
@@ -249,8 +249,8 @@
           11.0
         ],
         [
-          0,
-          0.0
+          122,
+          11.0
         ]
       ]
     },
@@ -268,7 +268,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 9,
+      "num_results": 10,
       "query": [
         5.0,
         5.0,
@@ -312,8 +312,8 @@
           11.0
         ],
         [
-          0,
-          0.0
+          122,
+          11.0
         ]
       ]
     },
@@ -331,7 +331,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 9,
+      "num_results": 10,
       "query": [
         5.0,
         5.0,
@@ -375,8 +375,8 @@
           11.0
         ],
         [
-          0,
-          0.0
+          122,
+          11.0
         ]
       ]
     }

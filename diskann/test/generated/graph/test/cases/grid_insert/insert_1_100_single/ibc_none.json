@@ -93,7 +93,7 @@
           "set_neighbors": 247,
           "set_vector": 100
         },
-        "num_results": 9,
+        "num_results": 10,
         "query": [
           100.0
         ],
@@ -135,8 +135,8 @@
             81.0
           ],
           [
-            0,
-            0.0
+            90,
+            100.0
           ]
         ]
       }
