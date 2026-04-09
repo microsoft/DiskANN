@@ -11,6 +11,9 @@
 pub mod partition;
 pub use partition::partition_with_ram_budget;
 
+pub mod kmeans;
+pub use kmeans::{compute_vecs_l2sq, k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
+
 pub mod instrumentation;
 
 pub mod aligned_file_reader;

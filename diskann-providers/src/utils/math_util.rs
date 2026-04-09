@@ -75,9 +75,21 @@ impl PartialEq for PivotContainer {
 
 impl Eq for PivotContainer {}
 
+/// The implementation of computing L2-squared norm of a vector
+fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
+    let start = index * dim;
+    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr().add(start), dim) };
+    let mut sum_squared = 0.0;
+    for &value in slice {
+        sum_squared += value * value;
+    }
+
+    sum_squared
+}
+
 /// Compute L2-squared norms of data stored in row-major num_points * dim,
 /// need to be pre-allocated
-pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
+fn compute_vecs_l2sq<Pool: AsThreadPool>(
     vecs_l2sq: &mut [f32],
     data: &[f32],
     num_points: usize,
@@ -108,18 +120,6 @@ pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
     }
 
     Ok(())
-}
-
-/// The implementation of computing L2-squared norm of a vector
-pub fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
-    let start = index * dim;
-    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr().add(start), dim) };
-    let mut sum_squared = 0.0;
-    for &value in slice {
-        sum_squared += value * value;
-    }
-
-    sum_squared
 }
 
 /// Calculate k closest centers to data of num_points * dim (row-major)
