@@ -209,10 +209,11 @@ pub(crate) mod tests {
             layers::BetaFilter,
         },
         storage::StorageReadProvider,
-        test_utils::{
-            assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
-        },
         utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+    };
+
+    use diskann::graph::test::search_utils::{
+        assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -1211,97 +1212,6 @@ pub(crate) mod tests {
     async fn test_even_filtering_beta() {
         let filter = Arc::new(EvenFilter);
         test_beta_filtering(filter, 3, 7).await;
-    }
-
-    /////////////////////////
-    // Multi-Hop Filtering //
-    /////////////////////////
-
-    async fn test_multihop_filtering(
-        filter: &dyn QueryLabelProvider<u32>,
-        dim: usize,
-        grid_size: usize,
-    ) {
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        assert_eq!(adjacency_lists.len(), num_points);
-        assert_eq!(vectors.len(), num_points);
-
-        // Append an additional item to the input vectors for the start point.
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim), // Number of PQ chunks is bounded by the dimension.
-            &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let corpus: diskann_utils::views::Matrix<f32> =
-            squish(vectors.iter().take(num_points), dim);
-        let query = vec![grid_size as f32; dim];
-
-        // The strategy we use here for checking is that we pull in a lot of neighbors and
-        // then walk through the list, verifying monotonicity and that the filter was
-        // applied properly.
-        let parameters = SearchParameters {
-            context: DefaultContext,
-            search_l: 40,
-            search_k: 20,
-            to_check: 20,
-        };
-
-        // Compute the raw groundtruth, then screen out any points that don't match the filter
-        let gt = {
-            let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
-            gt.retain(|n| filter.is_match(n.id));
-            gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
-            gt
-        };
-
-        // Clone the base groundtruth so we don't need to recompute every time.
-        let mut gt_clone = gt.clone();
-        let strategy = FullPrecision;
-
-        test_multihop_search(
-            &index,
-            &parameters,
-            &strategy.clone(),
-            query.as_slice(),
-            |_, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
-                if let Some(position) = is_match(&gt_clone, Neighbor::new(id, distance), 0.0) {
-                    gt_clone.remove(position);
-                    Ok(())
-                } else {
-                    if id.into_usize() == num_points + 1 {
-                        return Err(Box::new("The start point should not be returned"));
-                    }
-                    Err(Box::new("mismatch"))
-                }
-            },
-            filter,
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn test_even_filtering_multihop() {
-        test_multihop_filtering(&EvenFilter, 3, 7).await;
     }
 
     /// Metrics tracked by [`CallbackFilter`] for test validation.

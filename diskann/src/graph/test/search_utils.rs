@@ -3,15 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use diskann::neighbor::Neighbor;
+//! Test utilities for verifying search results against brute-force groundtruth.
+
+use crate::neighbor::Neighbor;
 use diskann_utils::views::MatrixView;
 
 /// Compute the ground truth for a small dataset.
 ///
-/// Counter intuitively, this function puts nearest neighbors **at the end** of the
+/// Counter-intuitively, this function puts nearest neighbors **at the end** of the
 /// vector rather than the beginning.
 ///
-/// This allows filtering by `is_match` to be much more efficient because it decreases
+/// This allows filtering by [`is_match`] to be much more efficient because it decreases
 /// the number of elements that have to be moved.
 pub fn groundtruth<T, F>(data: MatrixView<T>, query: &[T], f: F) -> Vec<Neighbor<u32>>
 where
@@ -33,15 +35,13 @@ where
 ///
 /// # Panics
 ///
-/// Panics if the `neighbor.id` cannot be found in `groundtruth`.
-#[cfg(test)]
+/// Panics if `neighbor.id` cannot be found in `groundtruth`.
 pub fn is_match(
     groundtruth: &[Neighbor<u32>],
     neighbor: Neighbor<u32>,
     margin: f32,
 ) -> Option<usize> {
     for i in (0..groundtruth.len()).rev() {
-        // Check if the distance matches.
         let gt = groundtruth[i];
         if (gt.distance - neighbor.distance).abs() > margin {
             return None;
@@ -56,7 +56,7 @@ pub fn is_match(
     );
 }
 
-/// Asserts that the top-k results exactly match the ground truth
+/// Asserts that the top-k results exactly match the ground truth.
 ///
 /// For each of the top-k results, this function verifies that both the distance and ID
 /// match exactly with what's expected in the ground truth.
@@ -82,11 +82,10 @@ pub fn assert_top_k_exactly_match(
     }
 }
 
-/// Asserts that the range results exactly match the ground truth
+/// Asserts that the range results exactly match the ground truth.
 ///
 /// For each of the range results, this function verifies that both the distance and ID
 /// match exactly with what's expected in the ground truth.
-#[cfg(test)]
 pub fn assert_range_results_exactly_match(
     query_id: usize,
     gt: &[Neighbor<u32>],

@@ -19,7 +19,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use diskann_vector::distance::Metric;
+use diskann_vector::{PureDistanceFunction, distance::{Metric, SquaredL2}};
 
 use crate::{
     graph::{
@@ -27,9 +27,9 @@ use crate::{
         index::{QueryLabelProvider, QueryVisitDecision},
         search::{Knn, MultihopSearch},
         search_output_buffer,
-        test::{provider as test_provider, synthetic::Grid},
+        test::{provider as test_provider, search_utils, synthetic::Grid},
     },
-    neighbor::Neighbor,
+    neighbor::{BackInserter, Neighbor},
     test::tokio::current_thread_runtime,
 };
 
@@ -418,4 +418,59 @@ fn terminate_stops_traversal() {
         "search should have terminated early, got {} visits",
         filter.visit_count()
     );
+}
+
+#[test]
+fn even_filtering_multihop() {
+    let rt = current_thread_runtime();
+    let grid = Grid::Three;
+    let grid_size = 7;
+    let index = setup_grid_index(grid_size);
+
+    let query = vec![grid_size as f32; 3];
+    let filter = EvenFilter;
+
+    // Compute brute-force groundtruth, filtered to even IDs only.
+    let data = grid.data(grid_size);
+    let gt = {
+        let mut gt =
+            search_utils::groundtruth(data.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
+        gt.retain(|n| filter.is_match(n.id));
+        gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
+        gt
+    };
+
+    let k = 20;
+    let l = 40;
+    let mut gt_clone = gt.clone();
+
+    let search_params = Knn::new_default(k, l).unwrap();
+    let multihop = MultihopSearch::new(search_params, &filter);
+
+    let mut neighbors = vec![Neighbor::<u32>::default(); k];
+    let stats = rt
+        .block_on(index.search(
+            multihop,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut BackInserter::new(&mut neighbors),
+        ))
+        .unwrap();
+
+    // Verify each result matches the groundtruth (filtered to even IDs).
+    for i in 0..stats.result_count as usize {
+        let n = neighbors[i];
+        match search_utils::is_match(&gt_clone, n, 0.0) {
+            Some(position) => {
+                gt_clone.remove(position);
+            }
+            None => {
+                panic!(
+                    "result {} (id={}, dist={}) does not match groundtruth",
+                    i, n.id, n.distance
+                );
+            }
+        }
+    }
 }
