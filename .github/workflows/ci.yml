@@ -19,6 +19,7 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
   # The features we want to explicitly test. For example, the `flatbuffers-build` feature
   # of `diskann-quantization` requires additional setup and so must not be included by default.
   DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
