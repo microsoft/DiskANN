@@ -1,5 +1,5 @@
 # Setup: generate the output file from the benchmark inputs.
-run --input-file $INPUT --output-file $OUTPUT
+run --input-file $INPUT --output-file $OUTPUT --allow-debug
 
 # Test: run regression checks using the generated output as both before and after.
 check run --tolerances $TOLERANCES --input-file $INPUT --before $OUTPUT --after $OUTPUT --output-file $CHECK_OUTPUT

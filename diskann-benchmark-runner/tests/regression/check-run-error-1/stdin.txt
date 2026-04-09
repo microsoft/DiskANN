@@ -1,5 +1,5 @@
 # Setup: generate output from the 2-job input file.
-run --input-file $INPUT --output-file $OUTPUT
+run --input-file $INPUT --output-file $OUTPUT --allow-debug
 
 # Test: check run uses $REGRESSION_INPUT (1 job) but $OUTPUT has 2 entries → length mismatch.
 check run --tolerances $TOLERANCES --input-file $REGRESSION_INPUT --before $OUTPUT --after $OUTPUT

@@ -73,6 +73,18 @@ use crate::{
     utils::fmt::Banner,
 };
 
+/// Check if we're running in debug mode and error if not allowed.
+fn check_debug_mode(allow_debug: bool) -> anyhow::Result<()> {
+    // Unit tests are treated as debug mode to ensure consistent behavior across builds.
+    if cfg!(any(test, debug_assertions)) && !allow_debug {
+        anyhow::bail!(
+            "Benchmarking in debug mode produces misleading performance results.\n\
+             Please compile in release mode or use the --allow-debug flag to bypass this check."
+        );
+    }
+    Ok(())
+}
+
 /// Parsed command line options.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
@@ -97,6 +109,9 @@ pub enum Commands {
         /// benchmarks.
         #[arg(long, action)]
         dry_run: bool,
+        /// Allow running benchmarks in debug mode (not recommended).
+        #[arg(long, action)]
+        allow_debug: bool,
     },
     #[command(subcommand)]
     Check(Check),
@@ -232,6 +247,7 @@ impl App {
                 input_file,
                 output_file,
                 dry_run,
+                allow_debug,
             } => {
                 // Parse and validate the input.
                 let run = Jobs::load(input_file, inputs)?;
@@ -271,6 +287,11 @@ impl App {
                     )?;
                     return Ok(());
                 }
+
+                // Check for debug mode before running benchmarks.
+                // This check is placed after the dry-run early return since dry-run doesn't
+                // actually execute benchmarks and thus won't produce misleading performance results.
+                check_debug_mode(*allow_debug)?;
 
                 // The collection of output results for each run.
                 let mut results = Vec::<serde_json::Value>::new();
