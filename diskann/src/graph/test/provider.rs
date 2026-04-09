@@ -1146,7 +1146,7 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
-    default_post_processor!(glue::CopyIds);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {

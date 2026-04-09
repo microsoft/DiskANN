@@ -9,7 +9,6 @@ use super::{
     provider::{self as cache_provider, NeighborStatus},
     utils::{CacheKey, Graph, HitStats, KeyGen, LocalStats},
 };
-use crate::index::diskann_async::tests::StartPointExpectation;
 use diskann::{
     error::{RankedError, ToRanked, TransientError},
     graph::{AdjacencyList, test::provider as test_provider, test::provider::Context, workingset},
@@ -749,15 +748,7 @@ mod tests {
         paged_tests.push(async_tests::PagedSearch::new(start_point.clone(), gt));
 
         vectors.push(start_point.clone());
-        async_tests::check_grid_search(
-            &index,
-            &vectors,
-            &paged_tests,
-            StartPointExpectation::Visible(u32::MAX),
-            strategy,
-            strategy,
-        )
-        .await;
+        async_tests::check_grid_search(&index, &vectors, &paged_tests, strategy, strategy).await;
     }
 
     fn check_stats(caching: &CachingProvider<test_provider::Provider, ExampleCache>) {
@@ -795,7 +786,6 @@ mod tests {
         let dim = dim_and_size.0;
         let grid_size = dim_and_size.1;
         let l = 10;
-        let start_id = u32::MAX;
         let start_point = vec![grid_size as f32; dim];
         let metric = Metric::L2;
         let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
@@ -861,15 +851,7 @@ mod tests {
 
             check_stats(index.provider());
 
-            async_tests::check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Visible(start_id),
-                strategy,
-                strategy,
-            )
-            .await;
+            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
             check_stats(index.provider());
         }
 
@@ -884,15 +866,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            async_tests::check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Visible(start_id),
-                strategy,
-                strategy,
-            )
-            .await;
+            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
             check_stats(index.provider());
         }
     }

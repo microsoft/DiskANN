@@ -497,24 +497,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// Controls how [`check_grid_search`] validates the start point in search results.
-    ///
-    /// * `Filtered` — the provider excludes the start point from results; the checker
-    ///   asserts it does **not** appear.
-    /// * `Visible` — the start point is a regular data point; the checker asserts it
-    ///   **is** the nearest result (distance 0).
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) enum StartPointExpectation {
-        Filtered(u32),
-        #[cfg(feature = "bf_tree")]
-        Visible(u32),
-    }
-
     pub(crate) async fn check_grid_search<DP, T, FS, QS>(
         index: &DiskANNIndex<DP>,
         vectors: &[Vec<T>],
         paged_queries: &[PagedSearch<T>],
-        start_point: StartPointExpectation,
         full_strategy: FS,
         quant_strategy: QS,
     ) where
@@ -592,34 +578,15 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            match start_point {
-                StartPointExpectation::Filtered(start_point) => {
-                    if id == start_point {
-                        return Err(Box::new("start point should not be returned"));
-                    }
-                    if id as usize != num_points - 2 {
-                        return Err(Box::new(format!(
-                            "expected {} as the nearest id",
-                            num_points - 2
-                        )));
-                    }
-                    if distance != dim as f32 {
-                        return Err(Box::new(format!("nearest distance should be {}", dim)));
-                    }
-                }
-                #[cfg(feature = "bf_tree")]
-                StartPointExpectation::Visible(start_point) => {
-                    if id != start_point {
-                        return Err(Box::new("start point should be returned"));
-                    }
-                    if distance != 0.0 {
-                        return Err(Box::new(
-                            "nearest distance should be 0 from the start point",
-                        ));
-                    }
-                }
+            if id as usize != num_points - 2 {
+                return Err(Box::new(format!(
+                    "expected {} as the nearest id",
+                    num_points - 2
+                )));
             }
-
+            if distance != dim as f32 {
+                return Err(Box::new(format!("nearest distance should be {}", dim)));
+            }
             Ok(())
         };
 
@@ -747,7 +714,6 @@ pub(crate) mod tests {
             &index,
             &vectors,
             &paged_tests,
-            StartPointExpectation::Filtered((vectors.len() - 1) as u32),
             FullPrecision,
             Hybrid::new(None),
         )
@@ -843,15 +809,7 @@ pub(crate) mod tests {
                     .unwrap();
             }
 
-            check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
-                FullPrecision,
-                hybrid,
-            )
-            .await;
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
 
         // Build with quantized single insert
@@ -862,15 +820,7 @@ pub(crate) mod tests {
                 index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
 
-            check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
-                FullPrecision,
-                hybrid,
-            )
-            .await;
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
 
         // Build with full-precision multi-insert
@@ -898,15 +848,7 @@ pub(crate) mod tests {
                     .unwrap();
             }
 
-            check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
-                FullPrecision,
-                hybrid,
-            )
-            .await;
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
 
         // Build with quantized multi-insert
@@ -921,15 +863,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
 
-            check_grid_search(
-                &index,
-                &vectors,
-                &[],
-                StartPointExpectation::Filtered((vectors.len() - 1) as u32),
-                FullPrecision,
-                hybrid,
-            )
-            .await;
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
     }
 
