@@ -562,7 +562,7 @@ pub unsafe extern "C" fn search_vector(
             labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
             max_filtering_effort,
         ))
-    } else if !bitmap_data.is_null() && bitmap_len > 0 {
+    } else if max_filtering_effort == 0 && !bitmap_data.is_null() && bitmap_len > 0 {
         Some(labels::GarnetFilter::Bitmap(
             unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) },
             FILTER_BETA,
@@ -627,12 +627,14 @@ pub unsafe extern "C" fn search_element(
         Err(_) => return -1,
     };
 
-    let garnet_filter = if max_filtering_effort > 0 {
+    let garnet_filter = if max_filtering_effort > 0 && bitmap_len == 0 {
+        // Only use callback filter when both effort > 0 AND no bitmap exists.
+        // TODO: C# should sets max_filtering_effort = 0 for unfiltered.
         Some(labels::GarnetFilter::Callback(
             labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
             max_filtering_effort,
         ))
-    } else if !bitmap_data.is_null() && bitmap_len > 0 {
+    } else if max_filtering_effort == 0 && !bitmap_data.is_null() && bitmap_len > 0 {
         Some(labels::GarnetFilter::Bitmap(
             unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) },
             FILTER_BETA,

@@ -13,6 +13,8 @@
 //! Convergence occurs when enough filtered results are found and the closest
 //! unexplored candidate is worse than the worst filtered result.
 
+use std::cmp::Reverse;
+
 use diskann_utils::Reborrow;
 use diskann_utils::future::SendFuture;
 use diskann_vector::PreprocessedDistanceFunction;
@@ -28,7 +30,6 @@ use crate::{
         },
         search::{
             record::NoopSearchRecord,
-            scratch::PriorityQueueConfiguration,
         },
         search_output_buffer::SearchOutputBuffer,
     },
@@ -119,12 +120,9 @@ where
                 .into_ann_result()?;
             let computer = accessor.build_query_computer(query).into_ann_result()?;
 
-            // Use resizable queue so exploration is unbounded — filtered search
-            // may need to visit many nodes before finding enough matches.
-            let mut scratch = SearchScratch::new(
-                PriorityQueueConfiguration::Resizable(self.inner.l_value().get()),
-                None,
-            );
+            // Two-queue search uses its own BinaryHeap for exploration,
+            // so skip allocating the NeighborPriorityQueue.
+            let mut scratch = SearchScratch::new_two_queue(self.inner.l_value().get());
 
             let (stats, termination) = two_queue_search_internal(
                 index.max_degree_with_slack(),
@@ -167,6 +165,8 @@ where
 ///
 /// Performs filtered search by exploring all neighbors for graph traversal
 /// but maintaining a separate sorted results list for filter-passing nodes.
+/// Uses a `BinaryHeap` min-heap for the explore queue instead of
+/// `NeighborPriorityQueue`, which avoids unbounded sorted-array growth.
 /// Convergence is based on the quality of filtered results.
 pub(crate) async fn two_queue_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
@@ -183,7 +183,6 @@ where
 {
     let beam_width = search_params.inner.beam_width().get();
     let k = search_params.inner.k_value().get();
-    let explore_ef = search_params.inner.l_value().get();
     let result_cap = k * 10;
     let max_candidates = search_params.max_candidates;
     let filter = search_params.filter;
@@ -206,7 +205,7 @@ where
                 .escalate("start point retrieval must succeed")?;
             let dist = computer.evaluate_similarity(element.reborrow());
             let neighbor = Neighbor::new(id, dist);
-            scratch.best.insert(neighbor);
+            scratch.candidates.push(Reverse(neighbor));
             scratch.cmps += 1;
 
             // Check filter on start point
@@ -221,17 +220,25 @@ where
 
     let mut termination = TwoQueueTermination::Exhausted;
 
-    while scratch.best.has_notvisited_node_unbounded() {
-        if scratch.hops as usize >= max_candidates {
+    while !scratch.candidates.is_empty() {
+        // Allow extended exploration when we haven't found enough filtered results.
+        // At low selectivity, the fixed max_candidates budget may not be sufficient
+        // to find k matches. Allow up to 2x the budget when starved for results.
+        let effective_limit = if scratch.filtered_results.len() < k {
+            max_candidates * 2
+        } else {
+            max_candidates
+        };
+        if scratch.hops as usize >= effective_limit {
             termination = TwoQueueTermination::MaxCandidates;
             break;
         }
 
-        // Pop closest unvisited nodes (beam)
+        // Pop closest candidate nodes (beam)
         scratch.beam_nodes.clear();
         beam_dists.clear();
         while scratch.beam_nodes.len() < beam_width
-            && let Some(closest_node) = scratch.best.closest_notvisited_unbounded()
+            && let Some(Reverse(closest_node)) = scratch.candidates.pop()
         {
             search_record.record(closest_node, scratch.hops, scratch.cmps);
             scratch.beam_nodes.push(closest_node.id);
@@ -259,11 +266,14 @@ where
             .await?;
 
         // Insert neighbors into explore queue, guarded by worst filtered result.
-        // Only add if distance is better than worst result or explore queue is still small.
-        let worst_dist = &scratch.filtered_results.peek().map_or(f32::MAX, |n| n.distance);
+        // Keep exploration broad until we have enough filtered results (result_cap).
+        // At low selectivity, premature pruning based on distance prevents the search
+        // from reaching graph regions that contain filter-matching vectors.
+        let worst_dist = scratch.filtered_results.peek().map_or(f32::MAX, |n| n.distance);
+        let have_enough = scratch.filtered_results.len() >= result_cap;
         for &neighbor in &neighbors {
-            if neighbor.distance < *worst_dist || scratch.best.size() < explore_ef {
-                scratch.best.insert(neighbor);
+            if neighbor.distance < worst_dist || !have_enough {
+                scratch.candidates.push(Reverse(neighbor));
             }
         }
 

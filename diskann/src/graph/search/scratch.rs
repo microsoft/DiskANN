@@ -7,6 +7,7 @@
 
 //! Scratch space for in-memory index based search
 
+use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
 use crate::{
@@ -72,6 +73,11 @@ where
     /// Only used during two-queue filtered search.
     pub filtered_results: BinaryHeap<Neighbor<I>>,
 
+    /// Min-heap of explore candidates for two-queue filtered search.
+    /// Wrapping in `Reverse` makes the standard max-heap behave as a min-heap
+    /// (closest distance first). Only used during two-queue filtered search.
+    pub candidates: BinaryHeap<Reverse<Neighbor<I>>>,
+
     /// A tracker for how many hops we have taken during the current search
     pub hops: u32,
 
@@ -132,6 +138,36 @@ where
             beam_nodes: Vec::new(),
             in_range: Vec::new(),
             filtered_results: BinaryHeap::new(),
+            candidates: BinaryHeap::new(),
+            range_frontier: VecDeque::new(),
+            hops: 0,
+            cmps: 0,
+        }
+    }
+
+    /// Create a new `SearchScratch` for two-queue filtered search.
+    ///
+    /// This initializes the `candidates` min-heap and `filtered_results` max-heap
+    /// used by the two-queue search path. The `best` priority queue is set to a
+    /// minimal zero-capacity queue since it is unused by two-queue search.
+    ///
+    /// # Parameters
+    ///
+    /// * `explore_ef`: Capacity hint for the candidates min-heap.
+    /// * `size_hint`: Optional hint for the capacity of the visited set.
+    pub fn new_two_queue(result_size: usize, explore_ef: usize, size_hint: Option<usize>) -> Self {
+        let visited = match size_hint {
+            Some(size_hint) => HashSet::with_capacity(size_hint),
+            None => HashSet::new(),
+        };
+        Self {
+            best: NeighborPriorityQueue::new(0),
+            visited,
+            id_scratch: Vec::new(),
+            beam_nodes: Vec::new(),
+            in_range: Vec::new(),
+            filtered_results: BinaryHeap::with_capacity(result_size),
+            candidates: BinaryHeap::with_capacity(explore_ef),
             range_frontier: VecDeque::new(),
             hops: 0,
             cmps: 0,
@@ -157,6 +193,7 @@ where
         self.beam_nodes.clear();
         self.in_range.clear();
         self.filtered_results.clear();
+        self.candidates.clear();
         self.range_frontier.clear();
 
         self.hops = 0;
