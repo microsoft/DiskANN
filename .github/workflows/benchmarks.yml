@@ -51,15 +51,27 @@ permissions:
   pull-requests: write  # Required for posting PR comments
 
 jobs:
-  # Macro benchmark: Wikipedia-100K dataset
-  macro-benchmark-wikipedia-100K:
-    name: Macro Benchmark - Wikipedia 100K
+  # Macro benchmark: compare current branch against baseline
+  macro-benchmark:
+    name: Macro Benchmark - ${{ matrix.dataset }}
     runs-on: ubuntu-latest
     # TODO: For production benchmarks, consider using a self-hosted runner with:
     # - NVMe storage for consistent I/O performance
     # - CPU pinning (taskset) for reduced variance
     # - Dedicated hardware to avoid noisy neighbor effects
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dataset: wikipedia-100K
+            config: wikipedia-100K-disk-index.json
+            archive: wikipedia-100K.tar.gz
+            data_dir: wikipedia_cohere
+          - dataset: openai-100K
+            config: openai-100K-disk-index.json
+            archive: openai-100K.tar.gz
+            data_dir: OpenAIArXiv
 
     steps:
       - name: Checkout current branch
@@ -97,31 +109,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openssl libssl-dev pkg-config
 
-      # Download pre-packaged Wikipedia-100K dataset from GitHub Release
-      # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
+      # Download pre-packaged dataset from GitHub Release
       # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Download wikipedia-100K dataset
+      - name: Download ${{ matrix.dataset }} dataset
         run: |
           mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o wikipedia-100K.tar.gz https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/wikipedia-100K.tar.gz
-          tar xzf wikipedia-100K.tar.gz -C diskann_rust/target/tmp/
-          cp -r diskann_rust/target/tmp/wikipedia_cohere baseline/target/tmp/
+          curl -L -o ${{ matrix.archive }} https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/${{ matrix.archive }}
+          tar xzf ${{ matrix.archive }} -C diskann_rust/target/tmp/
+          cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
 
       - name: Run baseline benchmark
         working-directory: baseline
         run: |
-          # Note: For accurate benchmarks, consider using CPU pinning on self-hosted runners:
-          # sudo taskset -c 0,2,4,6 ionice -c 1 -n 0 cargo run ...
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
-            --output-file target/tmp/wikipedia-100K_benchmark_crate_baseline.json
+            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
 
       - name: Run current branch benchmark
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
-            --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
+            run --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
 
       - name: Validate benchmark results
         working-directory: diskann_rust
@@ -129,103 +138,16 @@ jobs:
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
             --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
-            --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
-            --before ../baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
-            --after target/tmp/wikipedia-100K_benchmark_crate_target.json
+            --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
+            --before ../baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json \
+            --after target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()  # Upload even if validation fails
         with:
-          name: benchmark-results-wikipedia-100K
+          name: benchmark-results-${{ matrix.dataset }}
           path: |
-            diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json
-            baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json
-          retention-days: 30
-
-  # Macro benchmark: OpenAI ArXiv dataset
-  macro-benchmark-oai-large:
-    name: Macro Benchmark - OAI ArXiv 100K
-    runs-on: ubuntu-latest
-    # TODO: For production benchmarks, consider using a self-hosted runner
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout current branch
-        uses: actions/checkout@v4
-        with:
-          path: diskann_rust
-          lfs: true
-
-      - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.baseline_ref || 'main' }}
-          path: baseline
-          lfs: true
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-
-      - name: Cache Rust dependencies (current)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: diskann_rust -> target
-          key: benchmark-current
-
-      - name: Cache Rust dependencies (baseline)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: baseline -> target
-          key: benchmark-baseline
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openssl libssl-dev pkg-config
-
-      # Download pre-packaged OpenAI ArXiv 100K dataset from GitHub Release
-      # Dataset: 100K OpenAI embeddings of ArXiv papers (1536-dim, float32, euclidean distance)
-      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Download openai-100K dataset
-        run: |
-          mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o openai-100K.tar.gz https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/openai-100K.tar.gz
-          tar xzf openai-100K.tar.gz -C diskann_rust/target/tmp/
-          cp -r diskann_rust/target/tmp/OpenAIArXiv baseline/target/tmp/
-
-      - name: Run baseline benchmark
-        working-directory: baseline
-        run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
-            --output-file target/tmp/openai-100K_benchmark_crate_baseline.json
-
-      - name: Run current branch benchmark
-        working-directory: diskann_rust
-        run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
-            --output-file target/tmp/openai-100K_benchmark_crate_target.json
-
-      - name: Validate benchmark results
-        working-directory: diskann_rust
-        run: |
-          cargo run -p diskann-benchmark --features disk-index --release -- \
-            check run \
-            --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
-            --input-file diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
-            --before ../baseline/target/tmp/openai-100K_benchmark_crate_baseline.json \
-            --after target/tmp/openai-100K_benchmark_crate_target.json
-
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        if: always()  # Upload even if validation fails
-        with:
-          name: benchmark-results-openai-100K
-          path: |
-            diskann_rust/target/tmp/openai-100K_benchmark_crate_target.json
-            baseline/target/tmp/openai-100K_benchmark_crate_baseline.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
+            baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
           retention-days: 30

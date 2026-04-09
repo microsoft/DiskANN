@@ -13,11 +13,11 @@
                     "distance": "inner_product",
                     "dim": 768,
                     "max_degree": 59,
-                    "l_build": 72,
-                    "num_threads": 4,
+                    "l_build": 80,
+                    "num_threads": 8,
                     "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 192,
-                    "quantization_type": "FP",
+                    "quantization_type": "SQ_1_2.0",
                     "save_path": "wikipedia_100k_benchmark_index"
                 },
                 "search_phase": {
