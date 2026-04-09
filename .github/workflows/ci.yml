@@ -23,9 +23,6 @@ env:
   # of `diskann-quantization` requires additional setup and so must not be included by default.
   DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
 
-  # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.92"
-
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
   SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
 
@@ -56,10 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
@@ -83,10 +79,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
@@ -104,10 +99,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
@@ -130,10 +124,9 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -180,10 +173,8 @@ jobs:
         with:
           languages: rust
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.rust_stable }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -201,10 +192,9 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - name: Install Rust ${{ env.rust_stable }}
+  #     - name: Install Rust
   #       uses: dtolnay/rust-toolchain@master
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
+  #
   #     - uses: Swatinem/rust-cache@v2
   #     - name: "doc --workspace --no-deps"
   #       run: cargo doc --workspace --no-deps --document-private-items
@@ -241,10 +231,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.rust_stable }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -304,10 +292,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.rust_stable }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -357,10 +343,8 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.rust_stable }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -391,10 +375,8 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.rust_stable }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -424,10 +406,9 @@ jobs:
           lfs: true
           fetch-depth: 0
 
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
