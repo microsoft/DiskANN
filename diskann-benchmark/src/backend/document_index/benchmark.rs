@@ -48,9 +48,12 @@ use diskann_label_filter::{
     ASTExpr,
 };
 
-use diskann_providers::model::graph::provider::async_::{
-    common::{self, NoStore, TableBasedDeletes},
-    inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
+use diskann_providers::{
+    model::graph::provider::async_::{
+        common::{self, NoStore, TableBasedDeletes},
+        inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
+    },
+    utils::Timer,
 };
 use diskann_utils::views::Matrix;
 use diskann_utils::views::MatrixView;
@@ -267,7 +270,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             "Building index with {} vectors using {} threads...",
             num_vectors, build.num_threads
         )?;
-        let timer = std::time::Instant::now();
+        let timer = Timer::new();
 
         let rt = tokio::runtime(build.num_threads)?;
         let data_arc = Arc::new(data);
@@ -291,6 +294,11 @@ impl<'a, T> DocumentIndexJob<'a, T> {
 
         let build_time: MicroSeconds = timer.elapsed().into();
         writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
+        writeln!(
+            output,
+            "  Peak memory usage: {:.3} GB",
+            timer.get_peak_memory_usage()
+        )?;
 
         let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
         // =====================
