@@ -94,7 +94,10 @@ impl TerminatingFilter {
     }
 
     fn hits(&self) -> Vec<u32> {
-        self.hits.lock().expect("mutex should not be poisoned").clone()
+        self.hits
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone()
     }
 }
 
@@ -141,7 +144,11 @@ impl CallbackFilter {
     }
 
     fn hits(&self) -> Vec<u32> {
-        self.metrics.lock().expect("mutex should not be poisoned").visited_ids.clone()
+        self.metrics
+            .lock()
+            .expect("mutex should not be poisoned")
+            .visited_ids
+            .clone()
     }
 }
 
@@ -345,8 +352,14 @@ fn distance_adjustment_affects_ranking() {
         ))
         .unwrap();
 
-    assert!(baseline_stats.result_count > 0, "baseline should have results");
-    assert!(adjusted_stats.result_count > 0, "adjusted should have results");
+    assert!(
+        baseline_stats.result_count > 0,
+        "baseline should have results"
+    );
+    assert!(
+        adjusted_stats.result_count > 0,
+        "adjusted should have results"
+    );
 
     let boosted_in_baseline = baseline_ids
         .iter()
@@ -362,8 +375,7 @@ fn distance_adjustment_affects_ranking() {
             boosted_in_adjusted.is_some(),
             "boosted point should appear in adjusted results when visited"
         );
-        if let (Some(baseline_pos), Some(adjusted_pos)) =
-            (boosted_in_baseline, boosted_in_adjusted)
+        if let (Some(baseline_pos), Some(adjusted_pos)) = (boosted_in_baseline, boosted_in_adjusted)
         {
             assert!(
                 adjusted_pos <= baseline_pos,
