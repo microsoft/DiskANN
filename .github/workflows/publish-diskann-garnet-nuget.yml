@@ -7,6 +7,9 @@ on:
   push:
     tags:
       - "diskann-garnet-v*"
+    # TODO: Remove before merging — temporary trigger for testing
+    branches:
+      - "tiagonapoli/publish-diskann-garnet-workflow"
 
 env:
   RUST_BACKTRACE: 1
