@@ -5,6 +5,9 @@
 #![warn(missing_debug_implementations, missing_docs)]
 
 //! K-means clustering implementation for disk index partitioning.
+//!
+//! This module provides the k-means++ pivot selection algorithm and Lloyd's
+//! algorithm iteration, used for partitioning datasets during disk index construction.
 
 use std::cmp::min;
 
@@ -391,7 +394,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
             return Err(ANNError::log_kmeans_error(
                 "Prefix sum should not be greater than sum.
             If the for loop above ran to conclusion without break,
-            prefix_sum shoule be equal to sum"
+            prefix_sum should be equal to sum"
                     .to_string(),
             ));
         }
