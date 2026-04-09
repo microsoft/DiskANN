@@ -15,6 +15,12 @@ use diskann_utils::io::Metadata;
 
 use crate::{model::graph::traits::AdHoc, utils::load_metadata_from_file};
 
+/// Default buffer size for save operations (16 MB).
+///
+/// This larger buffer reduces the number of system calls during serialization,
+/// improving write throughput especially for large graphs and data files.
+const SAVE_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
 /// These traits are meant for IO purposes and are not meant as general access traits for
@@ -100,6 +106,23 @@ pub(crate) trait GetAdjacencyList {
     /// Retrieve the data stored at index `i`.
     fn get_adjacency_list(&self, i: usize) -> ANNResult<Self::Item<'_>>;
 
+    /// Retrieve the data stored at index `i` into a pre-allocated buffer.
+    ///
+    /// This method allows callers to reuse a buffer across multiple calls,
+    /// avoiding per-call memory allocation overhead. The buffer is cleared
+    /// before being populated with the adjacency list data.
+    ///
+    /// Default implementation falls back to `get_adjacency_list` and copies.
+    fn get_adjacency_list_into(&self, i: usize, buffer: &mut Vec<Self::Element>) -> ANNResult<()>
+    where
+        Self::Element: Clone,
+    {
+        buffer.clear();
+        let list = self.get_adjacency_list(i)?;
+        buffer.extend_from_slice(&list);
+        Ok(())
+    }
+
     /// Return the total number of elements contained in `self`.
     fn total(&self) -> usize;
 
@@ -183,7 +206,9 @@ where
     let total = data.total();
     let dim = data.dim();
 
-    let mut writer = provider.create_for_write(path)?;
+    let file = provider.create_for_write(path)?;
+    // Use 16 MB buffer for efficient I/O
+    let mut writer = BufWriter::with_capacity(SAVE_BUFFER_SIZE, file);
     let mut points_written: u32 = 0;
     Metadata::new(points_written, dim)?.write(&mut writer)?;
 
@@ -338,37 +363,38 @@ where
 {
     let file = provider.create_for_write(path)?;
 
-    let mut out = BufWriter::new(file);
+    // Use 16 MB buffer to reduce system call overhead
+    let mut out = BufWriter::with_capacity(SAVE_BUFFER_SIZE, file);
 
     let mut index_size: u64 = 24;
     let mut observed_max_degree: u32 = 0;
 
     out.write_all(&index_size.to_le_bytes())?;
-    out.write_all(&observed_max_degree.to_le_bytes())?; // Will be updated later with correct max_degree
+    out.write_all(&observed_max_degree.to_le_bytes())?;
     out.write_all(&start_point.to_le_bytes())?;
-
     out.write_all(&graph.additional_points().to_le_bytes())?;
+
     let total = graph.total();
 
-    for i in 0..total {
-        let binding = graph.get_adjacency_list(i)?;
-        let neighbors: &[u32] = &binding;
-        let num_neighbors: u32 = neighbors.len() as u32;
+    // Pre-allocate a reusable buffer for adjacency lists
+    let initial_capacity = graph.max_degree().map(|d| d as usize).unwrap_or(128);
+    let mut neighbor_buffer: Vec<u32> = Vec::with_capacity(initial_capacity);
 
-        // Write the number of neighbors as a `u32`.
+    for i in 0..total {
+        // Reuse buffer to avoid per-vertex allocation overhead
+        graph.get_adjacency_list_into(i, &mut neighbor_buffer)?;
+        let num_neighbors: u32 = neighbor_buffer.len() as u32;
+
         out.write_all(&num_neighbors.to_le_bytes())?;
 
-        // Write all the neighbors, applying transformation if provided.
-        neighbors
-            .iter()
-            .copied()
-            .try_for_each(|n| out.write_all(&n.to_le_bytes()))?;
+        // Bulk write using bytemuck for zero-copy conversion
+        let neighbor_bytes: &[u8] = bytemuck::must_cast_slice(&neighbor_buffer);
+        out.write_all(neighbor_bytes)?;
 
         observed_max_degree = observed_max_degree.max(num_neighbors);
-        index_size += (std::mem::size_of::<u32>() * (1 + neighbors.len())) as u64;
+        index_size += (std::mem::size_of::<u32>() * (1 + neighbor_buffer.len())) as u64;
     }
 
-    // Use configured max degree if provided, otherwise use observed
     let max_degree = graph.max_degree().unwrap_or(observed_max_degree);
 
     // Finish up by writing the observed index size and max degree.

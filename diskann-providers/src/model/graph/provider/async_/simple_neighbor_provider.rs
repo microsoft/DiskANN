@@ -288,6 +288,27 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync<u32> {
         Ok(list)
     }
 
+    /// Optimized version that reuses a pre-allocated buffer to avoid per-call allocation.
+    ///
+    /// This directly copies the adjacency list into the provided buffer, avoiding the
+    /// intermediate `AdjacencyList` allocation that `get_adjacency_list` requires.
+    fn get_adjacency_list_into(&self, i: usize, buffer: &mut Vec<u32>) -> ANNResult<()> {
+        #[cfg(test)]
+        self.num_get_calls.increment();
+
+        // Lint: We don't have a good way of recovering from lock poisoning anyways.
+        #[allow(clippy::unwrap_used)]
+        let _guard = self.locks[i].read().unwrap();
+
+        // SAFETY: We are holding the read lock for `i`.
+        let list = unsafe { self.get_slice(i) };
+
+        // Reuse buffer: clear and copy data directly
+        buffer.clear();
+        buffer.extend_from_slice(list);
+        Ok(())
+    }
+
     fn total(&self) -> usize {
         self.locks.len()
     }
@@ -344,6 +365,32 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
         }
 
         Ok(list)
+    }
+
+    /// Optimized version that reuses a pre-allocated buffer to avoid per-call allocation.
+    ///
+    /// This directly reads neighbors into the buffer and performs the start point remapping
+    /// in-place, avoiding the intermediate `AdjacencyList` allocation.
+    fn get_adjacency_list_into(&self, i: usize, buffer: &mut Vec<u32>) -> ANNResult<()> {
+        // Lint: We don't have a good way of recovering from lock poisoning anyways.
+        #[allow(clippy::unwrap_used)]
+        let _guard = self.provider.locks[i].read().unwrap();
+
+        // SAFETY: We are holding the read lock for `i`.
+        let list = unsafe { self.provider.get_slice(i) };
+
+        // Reuse buffer: clear and copy data directly
+        buffer.clear();
+        buffer.extend_from_slice(list);
+
+        // Remap the in-memory start point to the actual start point
+        for id in buffer.iter_mut() {
+            if *id == self.inmem_start_point {
+                *id = self.actual_start_point;
+            }
+        }
+
+        Ok(())
     }
 
     fn total(&self) -> usize {
