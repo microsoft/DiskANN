@@ -499,7 +499,6 @@ mod tests {
     // Expected I/O files.
     const STDIN: &str = "stdin.txt";
     const STDOUT: &str = "stdout.txt";
-    const STDOUT_RELEASE: &str = "stdout_release.txt";
     const INPUT_FILE: &str = "input.json";
     const OUTPUT_FILE: &str = "output.json";
 
@@ -656,19 +655,7 @@ mod tests {
             let stdout: String =
                 ux::normalize(ux::strip_backtrace(buffer.into_inner().try_into().unwrap()));
             let stdout = ux::scrub_path(stdout, tempdir, "$TEMPDIR");
-
-            let output = if cfg!(debug_assertions) {
-                self.dir.join(STDOUT)
-            } else {
-                // In release mode, prefer stdout_release.txt if it exists, otherwise fall back to stdout.txt
-                let release_stdout = self.dir.join(STDOUT_RELEASE);
-                if release_stdout.exists() {
-                    release_stdout
-                } else {
-                    self.dir.join(STDOUT)
-                }
-            };
-
+            let output = self.dir.join(STDOUT);
             if self.overwrite {
                 std::fs::write(output, stdout).unwrap();
             } else {
