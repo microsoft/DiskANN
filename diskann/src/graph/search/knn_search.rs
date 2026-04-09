@@ -21,7 +21,6 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     provider::{BuildQueryComputer, DataProvider},
-    utils::IntoUsize,
 };
 
 /// Error type for [`Knn`] parameter validation.
