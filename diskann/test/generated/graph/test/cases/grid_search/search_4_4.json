@@ -197,7 +197,7 @@
     {
       "beam_width": 1,
       "comparisons": 30,
-      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "description": "With a query of all `size`s, the start point is filtered by default and should not appear in results.",
       "grid_dims": 4,
       "grid_size": 4,
       "hops": 11,
@@ -208,7 +208,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 10,
+      "num_results": 9,
       "query": [
         4.0,
         4.0,
@@ -216,10 +216,6 @@
         4.0
       ],
       "results": [
-        [
-          4294967295,
-          0.0
-        ],
         [
           255,
           4.0
@@ -255,13 +251,17 @@
         [
           250,
           10.0
+        ],
+        [
+          0,
+          0.0
         ]
       ]
     },
     {
       "beam_width": 2,
       "comparisons": 30,
-      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "description": "With a query of all `size`s, the start point is filtered by default and should not appear in results.",
       "grid_dims": 4,
       "grid_size": 4,
       "hops": 11,
@@ -272,7 +272,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 10,
+      "num_results": 9,
       "query": [
         4.0,
         4.0,
@@ -280,10 +280,6 @@
         4.0
       ],
       "results": [
-        [
-          4294967295,
-          0.0
-        ],
         [
           255,
           4.0
@@ -319,13 +315,17 @@
         [
           250,
           10.0
+        ],
+        [
+          0,
+          0.0
         ]
       ]
     },
     {
       "beam_width": 4,
       "comparisons": 30,
-      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "description": "With a query of all `size`s, the start point is filtered by default and should not appear in results.",
       "grid_dims": 4,
       "grid_size": 4,
       "hops": 11,
@@ -336,7 +336,7 @@
         "set_neighbors": 0,
         "set_vector": 0
       },
-      "num_results": 10,
+      "num_results": 9,
       "query": [
         4.0,
         4.0,
@@ -344,10 +344,6 @@
         4.0
       ],
       "results": [
-        [
-          4294967295,
-          0.0
-        ],
         [
           255,
           4.0
@@ -383,6 +379,10 @@
         [
           250,
           10.0
+        ],
+        [
+          0,
+          0.0
         ]
       ]
     }
