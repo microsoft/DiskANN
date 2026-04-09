@@ -641,11 +641,22 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
     double full_index_ram = estimate_ram_usage(base_num, (uint32_t)base_dim, sizeof(T), R);
 
-    // TODO: Make this honest when there is filter support
-    if (full_index_ram < ram_budget * 1024 * 1024 * 1024)
+    // Force single-shard build for filtered indices to ensure all labels have medoids.
+    // Sharding filtered indices causes labels to be distributed across shards, leading to
+    // missing labels in _labels_to_medoids.txt for some shards.
+    if (full_index_ram < ram_budget * 1024 * 1024 * 1024 || use_filters)
     {
-        diskann::cout << "Full index fits in RAM budget, should consume at most "
-                      << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
+        if (use_filters && full_index_ram >= ram_budget * 1024 * 1024 * 1024)
+        {
+            diskann::cout << "Filtered index requested. Sharding disabled for filtered indices. "
+                          << "Building single-pass with estimated RAM: "
+                          << full_index_ram / (1024 * 1024 * 1024) << " GiBs" << std::endl;
+        }
+        else
+        {
+            diskann::cout << "Full index fits in RAM budget, should consume at most "
+                          << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
+        }
 
         bool is_diverse_index = false;
         if (seller_file_path != nullptr && !std::string(seller_file_path).empty())
