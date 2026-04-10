@@ -153,6 +153,7 @@ where
     ///
     /// # Parameters
     ///
+    /// * `result_size`: Capacity hint for the filtered_results max-heap.
     /// * `explore_ef`: Capacity hint for the candidates min-heap.
     /// * `size_hint`: Optional hint for the capacity of the visited set.
     pub fn new_two_queue(result_size: usize, explore_ef: usize, size_hint: Option<usize>) -> Self {

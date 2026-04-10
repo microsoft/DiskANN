@@ -7,8 +7,8 @@
 //!
 //! This search uses the standard `ExpandBeam` graph traversal but maintains
 //! two separate queues:
-//! - `scratch.best` (resizable): all discovered neighbors for graph exploration
-//! - `scratch.filtered_results`: only neighbors passing the filter predicate
+//! - `scratch.candidates` (min-heap): explore queue ordered by distance, closest first
+//! - `scratch.filtered_results` (max-heap): only neighbors passing the filter predicate
 //!
 //! Convergence occurs when enough filtered results are found and the closest
 //! unexplored candidate is worse than the worst filtered result.
@@ -124,8 +124,8 @@ where
 
             let k = self.inner.k_value().get();
 
-            // Two-queue search uses its own BinaryHeap for exploration,
-            // so skip allocating the NeighborPriorityQueue.
+            // Two-queue search uses its own BinaryHeap-based candidates/filtered_results,
+            // so the NeighborPriorityQueue (best) is set to zero capacity.
             let mut scratch = SearchScratch::new_two_queue(
                 k * self.resut_size_factor,
                 self.inner.l_value().get(),
@@ -171,9 +171,9 @@ where
 /// Internal two-queue search implementation.
 ///
 /// Performs filtered search by exploring all neighbors for graph traversal
-/// but maintaining a separate sorted results list for filter-passing nodes.
-/// Uses a `BinaryHeap` min-heap for the explore queue instead of
-/// `NeighborPriorityQueue`, which avoids unbounded sorted-array growth.
+/// but maintaining a separate max-heap of filter-passing results.
+/// Uses a `BinaryHeap<Reverse<Neighbor>>` min-heap for the explore queue,
+/// which avoids unbounded sorted-array growth.
 /// Convergence is based on the quality of filtered results.
 pub(crate) async fn two_queue_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
@@ -190,7 +190,7 @@ where
 {
     let beam_width = search_params.inner.beam_width().get();
     let k = search_params.inner.k_value().get();
-    let result_cap = k * 10;
+    let result_cap = k * search_params.resut_size_factor;
     let max_candidates = search_params.max_candidates;
     let filter = search_params.filter;
 
