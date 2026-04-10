@@ -4,7 +4,6 @@
  */
 #![warn(missing_debug_implementations, missing_docs)]
 
-<<<<<<<< HEAD:diskann-disk/src/utils/math_util.rs
 //! Mathematical utilities for distance computations and center finding.
 //!
 //! This module contains optimized functions for computing squared L2 norms,
@@ -327,18 +326,6 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
     }
     Ok(())
 }
-========
-//! Mathematical utilities for processing residuals and generating random vectors
-
-use diskann::{ANNError, ANNResult};
-use num_traits::FromPrimitive;
-use rand::Rng;
-use rand_distr::StandardNormal;
-use rayon::prelude::*;
-use tracing::info;
-
-use super::{ParallelIteratorInPool, RayonThreadPool};
->>>>>>>> origin/main:diskann-providers/src/utils/math_util.rs
 
 #[cfg(test)]
 mod math_util_test {
@@ -348,7 +335,6 @@ mod math_util_test {
     use diskann_providers::utils::create_thread_pool_for_test;
 
     #[test]
-<<<<<<<< HEAD:diskann-disk/src/utils/math_util.rs
     fn partial_ord_test() {
         let pviot1 = PivotContainer {
             piv_id: 2,
@@ -543,146 +529,5 @@ mod math_util_test {
             vec.sort_unstable();
         }
         assert_eq!(inverted_index, vec![vec![0, 1], vec![2, 3]]);
-========
-    fn process_residuals_test() {
-        let mut data_load = vec![1.0, 2.0, 3.0, 4.0];
-        let num_points = 2;
-        let dim = 2;
-        let cur_pivot_data = vec![0.5, 1.5, 2.5, 3.5];
-        let num_centers = 2;
-        let closest_centers = vec![0, 1];
-        let to_subtract = true;
-        let pool = create_thread_pool_for_test();
-
-        process_residuals(
-            &mut data_load,
-            num_points,
-            dim,
-            &cur_pivot_data,
-            num_centers,
-            &closest_centers,
-            to_subtract,
-            &pool,
-        );
-
-        assert_eq!(data_load, vec![0.5, 0.5, 0.5, 0.5]);
-    }
-
-    #[test]
-    fn test_generate_vectors_with_norm_u8() {
-        let num = 1;
-        let dimension = 2;
-        let norm = 5.0;
-
-        let result = generate_vectors_with_norm::<u8>(
-            num,
-            dimension,
-            norm,
-            &mut crate::utils::create_rnd_in_tests(),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), num);
-        for vec in result.iter() {
-            assert_eq!(vec.len(), dimension);
-
-            let actual_norm_sq = vec
-                .iter()
-                .fold(0.0, |acc, &x| acc + (x as f32) * (x as f32));
-            let actual_norm = actual_norm_sq.sqrt();
-
-            assert_abs_diff_eq!(actual_norm, norm, epsilon = 1.0); // There will be a significant loss of precision when converting f32 to u8
-        }
-    }
-
-    #[test]
-    fn test_generate_vectors_with_norm_f32() {
-        let num = 3;
-        let dimension = 384;
-        let norm = 10000.0;
-
-        let result = generate_vectors_with_norm::<f32>(
-            num,
-            dimension,
-            norm,
-            &mut crate::utils::create_rnd_in_tests(),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), num);
-        for vec in result.iter() {
-            assert_eq!(vec.len(), dimension);
-
-            let actual_norm = vec.iter().fold(0.0, |acc, &x| acc + x * x).sqrt();
-
-            assert_abs_diff_eq!(actual_norm, norm, epsilon = 0.01);
-        }
-    }
-
-    #[test]
-    fn test_generate_vectors_with_norm_f16() {
-        let num = 1;
-        let dimension = 128;
-        let norm = 500.0;
-
-        let result = generate_vectors_with_norm::<Half>(
-            num,
-            dimension,
-            norm,
-            &mut crate::utils::create_rnd_in_tests(),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), num);
-        for vec in result.iter() {
-            assert_eq!(vec.len(), dimension);
-
-            let actual_norm = vec
-                .iter()
-                .fold(0.0, |acc, &x| acc + x.to_f32() * x.to_f32())
-                .sqrt();
-
-            assert_abs_diff_eq!(actual_norm, norm, epsilon = 0.1);
-        }
-    }
-
-    #[test]
-    fn test_generate_vectors_with_norm_i8() {
-        let num = 1;
-        let dimension = 8;
-        let norm = 127.0;
-
-        let result = generate_vectors_with_norm::<i8>(
-            num,
-            dimension,
-            norm,
-            &mut crate::utils::create_rnd_in_tests(),
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), num);
-        for vec in result.iter() {
-            assert_eq!(vec.len(), dimension);
-
-            let actual_norm_sq = vec
-                .iter()
-                .fold(0.0, |acc, &x| acc + (x as f32) * (x as f32));
-            let actual_norm = actual_norm_sq.sqrt();
-
-            assert_abs_diff_eq!(actual_norm, norm, epsilon = 8.0); // There will be a significant loss of precision when converting f32 to i8
-        }
-    }
-
-    #[test]
-    fn test_convert_usize_to_u64() {
-        assert_eq!(convert_usize_to_u64(0), 0);
-        assert_eq!(convert_usize_to_u64(1), 1);
-        assert_eq!(convert_usize_to_u64(2), 2);
-    }
-
-    #[test]
-    fn test_convert_usize_max_to_u64() {
-        convert_usize_to_u64(usize::MAX);
->>>>>>>> origin/main:diskann-providers/src/utils/math_util.rs
     }
 }

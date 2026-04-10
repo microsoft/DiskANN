@@ -882,29 +882,6 @@ pub(crate) mod tests {
         ) -> Vec<Vec<Self>>;
     }
 
-    /// Cast a normalized f32 value to the target element type, matching the semantics of
-    /// the original `generate_vector_with_norm` in `math_util.rs`:
-    /// - For signed/floating types: direct truncating cast
-    /// - For unsigned types: take absolute value first, then truncating cast
-    trait CastSphericalF32: Sized {
-        fn cast_spherical_f32(value: f32) -> Self;
-    }
-    impl CastSphericalF32 for f32 {
-        fn cast_spherical_f32(value: f32) -> Self {
-            value
-        }
-    }
-    impl CastSphericalF32 for i8 {
-        fn cast_spherical_f32(value: f32) -> Self {
-            value as i8
-        }
-    }
-    impl CastSphericalF32 for u8 {
-        fn cast_spherical_f32(value: f32) -> Self {
-            value.abs() as u8
-        }
-    }
-
     macro_rules! impl_generate_spherical_data {
         ($T:ty) => {
             impl GenerateSphericalData for $T {
@@ -914,22 +891,10 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use rand::Rng;
-                    use rand_distr::StandardNormal;
+                    use crate::utils::math_util;
 
-                    let mut vectors: Vec<Vec<$T>> = (0..num)
-                        .map(|_| {
-                            let f32_vec: Vec<f32> = (0..dim)
-                                .map(|_| rng.sample::<f32, _>(StandardNormal))
-                                .collect();
-                            let norm = f32_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                            let scale = radius / norm;
-                            f32_vec
-                                .into_iter()
-                                .map(|x| <$T>::cast_spherical_f32(x * scale))
-                                .collect()
-                        })
-                        .collect();
+                    let mut vectors =
+                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
