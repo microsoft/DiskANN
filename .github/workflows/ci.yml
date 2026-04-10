@@ -39,17 +39,25 @@ permissions:
 jobs:
   # Branch-protection gate
   #
+  # Add "CI gate" as the sole required status check in branch protection.
+  #
   # How it works:
   #
-  # * If All upstream jobs succeed the `if` condition is `false` and this job is *skipped*.
-  #   GitHub treats a skipped required check as passing.
+  # * If no upstream job fails or is cancelled, the `if` condition is `false`
+  #   and this job is *skipped*. GitHub treats a skipped required check as
+  #   passing.
+  #
+  #   Note: jobs that are conditionally skipped (e.g. `coverage` excludes
+  #   Dependabot) are neither failed nor cancelled, so the gate will still
+  #   pass. This is intentional -- conditional skips represent expected
+  #   behavior, not failures.
   #
   #   See: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks
   #
-  # * If Any upstream job fails or is cancelled the `if` condition is `true`.
+  # * If any upstream job fails or is cancelled, the `if` condition is `true`.
   #   This job runs and exits 1, blocking the merge.
   #
-  # All check-in blocking gates should be added to the `needs` list.
+  # All merge-blocking jobs should be listed in `needs` below.
   ci-gate:
     name: CI gate
     runs-on: ubuntu-latest
@@ -58,6 +66,7 @@ jobs:
       - clippy-default-features
       - clippy-features
       - clippy-no-default-features
+      - basics
       - codeql
       - baseline
       - sde
