@@ -45,6 +45,7 @@ pub mod encoded_attribute_provider {
     pub mod encoded_attribute_accessor;
     pub(crate) mod encoded_filter_expr;
     pub mod roaring_attribute_store;
+    pub(crate) mod serialization;
 }
 
 pub mod tests {
@@ -58,6 +59,8 @@ pub mod tests {
     pub mod inline_beta_filter_test;
     #[cfg(test)]
     pub mod roaring_attribute_store_test;
+    #[cfg(test)]
+    pub mod serialization_test;
 }
 
 pub mod attribute;

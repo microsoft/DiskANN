@@ -54,6 +54,14 @@ where
         self.index.clone()
     }
 
+    pub(crate) fn get_index_for_serialization(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
+        self.index.clone()
+    }
+
+    pub(crate) fn get_inv_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<u64>>> {
+        self.inv_index.clone()
+    }
+
     pub(crate) fn attribute_map(&self) -> Arc<RwLock<AttributeEncoder>> {
         self.attribute_map.clone()
     }

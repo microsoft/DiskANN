@@ -33,13 +33,11 @@ impl InternalAttribute {
     }
 
     /// Get the field name
-    #[expect(dead_code, reason = "Callers will be added in the next PR")]
     pub(crate) fn field_name(&self) -> &str {
         &self.field_name
     }
 
     /// Get the attribute value
-    #[expect(dead_code, reason = "Callers will be added in the next PR")]
     pub(crate) fn attr_value(&self) -> &AttributeValue {
         &self.attr_value
     }
@@ -96,20 +94,34 @@ impl AttributeEncoder {
     }
 
     ///Return the number of entries in the attribute map.
-    #[expect(dead_code, reason = "Will be used in the next PR")]
     pub(crate) fn len(&self) -> usize {
         self.attribute_index.len()
     }
 
-    /// Apply a function to each entry in the attribute map
-    /// This allows iteration over the internal attribute mappings
-    #[expect(dead_code, reason = "Will be used in the next PR")]
-    pub(crate) fn for_each<F>(&self, mut func: F)
+    /// Apply a function to each entry in the attribute map.
+    ///
+    /// Iteration stops on the first error returned by `func`.
+    pub(crate) fn for_each<E, F>(&self, mut func: F) -> Result<(), E>
     where
-        F: FnMut(&InternalAttribute, u64),
+        F: FnMut(&InternalAttribute, u64) -> Result<(), E>,
     {
         for (attr, &id) in &self.attribute_index {
-            func(attr, id);
+            func(attr, id)?;
+        }
+        Ok(())
+    }
+
+    /// Insert an attribute with a specific pre-assigned id.
+    ///
+    /// If the attribute already exists in the map its stored id is kept unchanged.
+    /// `running_index` is advanced past `id` if necessary so that future plain
+    /// `insert` calls still assign unique ids.
+    pub(crate) fn insert_with_id(&mut self, attribute: &Attribute, id: u64) {
+        self.attribute_index
+            .entry(InternalAttribute::new(attribute))
+            .or_insert(id);
+        if id >= self.running_index {
+            self.running_index = id + 1;
         }
     }
 }
