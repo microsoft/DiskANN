@@ -25,12 +25,6 @@ pub use rayon_util::{
 mod timer;
 pub use timer::Timer;
 
-mod kmeans;
-pub use kmeans::{
-    compute_closest_centers, compute_closest_centers_in_block, compute_vec_l2sq, compute_vecs_l2sq,
-    k_means_clustering, k_meanspp_selecting_pivots, process_residuals, run_lloyds,
-};
-
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;
 

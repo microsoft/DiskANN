@@ -21,7 +21,6 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     provider::{BuildQueryComputer, DataProvider},
-    utils::IntoUsize,
 };
 
 /// Error type for [`Knn`] parameter validation.
@@ -212,13 +211,7 @@ where
                 .await?;
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(self.l_value.get().into_usize()),
-                    output,
-                )
+                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -294,16 +287,7 @@ where
                 .await?;
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch
-                        .best
-                        .iter()
-                        .take(self.inner.l_value.get().into_usize()),
-                    output,
-                )
+                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 

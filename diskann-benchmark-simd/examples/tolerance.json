@@ -1,0 +1,16 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "simd-op",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "simd-tolerance",
+        "content": {
+          "min_time_regression": 0.05
+        }
+      }
+    }
+  ]
+}

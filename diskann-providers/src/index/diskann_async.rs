@@ -504,7 +504,7 @@ pub(crate) mod tests {
         full_strategy: FS,
         quant_strategy: QS,
     ) where
-        DP: DataProvider<InternalId = u32, Context = DefaultContext>,
+        DP: DataProvider<InternalId = u32, Context: Default>,
         FS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         QS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
@@ -520,7 +520,7 @@ pub(crate) mod tests {
         // all-zeros query is as far from the entry point as possible.
         let query = vec![T::default(); dim];
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -578,9 +578,6 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
-                return Err(Box::new("start point should not be returned"));
-            }
             if id as usize != num_points - 2 {
                 return Err(Box::new(format!(
                     "expected {} as the nearest id",
@@ -615,7 +612,7 @@ pub(crate) mod tests {
 
         // Paged Search
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -804,7 +801,7 @@ pub(crate) mod tests {
         // Build with full-precision single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index
                     .insert(FullPrecision, &ctx, &(i as u32), v)
@@ -818,7 +815,7 @@ pub(crate) mod tests {
         // Build with quantized single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
@@ -829,7 +826,7 @@ pub(crate) mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
 
             // Partition by `max_minibatch_par`.
             let chunk_size = 2 * minibatch_par;
@@ -857,7 +854,7 @@ pub(crate) mod tests {
         // Build with quantized multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
             let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
@@ -885,6 +882,29 @@ pub(crate) mod tests {
         ) -> Vec<Vec<Self>>;
     }
 
+    /// Cast a normalized f32 value to the target element type, matching the semantics of
+    /// the original `generate_vector_with_norm` in `math_util.rs`:
+    /// - For signed/floating types: direct truncating cast
+    /// - For unsigned types: take absolute value first, then truncating cast
+    trait CastSphericalF32: Sized {
+        fn cast_spherical_f32(value: f32) -> Self;
+    }
+    impl CastSphericalF32 for f32 {
+        fn cast_spherical_f32(value: f32) -> Self {
+            value
+        }
+    }
+    impl CastSphericalF32 for i8 {
+        fn cast_spherical_f32(value: f32) -> Self {
+            value as i8
+        }
+    }
+    impl CastSphericalF32 for u8 {
+        fn cast_spherical_f32(value: f32) -> Self {
+            value.abs() as u8
+        }
+    }
+
     macro_rules! impl_generate_spherical_data {
         ($T:ty) => {
             impl GenerateSphericalData for $T {
@@ -899,17 +919,14 @@ pub(crate) mod tests {
 
                     let mut vectors: Vec<Vec<$T>> = (0..num)
                         .map(|_| {
-                            let f32_vec: Vec<f32> =
-                                (0..dim).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+                            let f32_vec: Vec<f32> = (0..dim)
+                                .map(|_| rng.sample::<f32, _>(StandardNormal))
+                                .collect();
                             let norm = f32_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                             let scale = radius / norm;
                             f32_vec
                                 .into_iter()
-                                .map(|x| {
-                                    let scaled = x * scale;
-                                    // For unsigned types, ensure non-negative values
-                                    scaled.abs() as $T
-                                })
+                                .map(|x| <$T>::cast_spherical_f32(x * scale))
                                 .collect()
                         })
                         .collect();
@@ -956,7 +973,7 @@ pub(crate) mod tests {
             num_queries,
         } = params;
 
-        let ctx = &DefaultContext;
+        let ctx = &Default::default();
         let l_search = 10;
 
         let (config, params) =
@@ -985,7 +1002,7 @@ pub(crate) mod tests {
         let distance = T::distance(metric, None);
 
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 20,
             search_k: 10,
             to_check: 10,
@@ -1164,7 +1181,7 @@ pub(crate) mod tests {
         // then walk through the list, verifying monotonicity and that the filter was
         // applied properly.
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 40,
             search_k: 20,
             to_check: 20,

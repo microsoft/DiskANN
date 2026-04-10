@@ -3,15 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{ANNError, ANNResult};
-use diskann_providers::{
-    common::AlignedBoxWithSlice,
-    model::{
-        graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
-        FP_VECTOR_MEM_ALIGN,
-    },
-};
+use diskann::{graph::AdjacencyList, ANNError, ANNResult};
+use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
+
+use super::FP_VECTOR_MEM_ALIGN;
 
 pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
     // Maintains the mapping of vector_id to index in the global cached nodes list.
@@ -151,10 +147,8 @@ pub enum CachingStrategy {
 
 #[cfg(test)]
 mod tests {
-    use diskann_providers::{
-        model::graph::graph_data_model::AdjacencyList,
-        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
-    };
+    use diskann::graph::AdjacencyList;
+    use diskann_providers::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
     use rstest::rstest;
 
     use crate::data_model::Cache;
@@ -166,7 +160,7 @@ mod tests {
         insert_a_random_node(&mut cache);
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
         cache
             .insert(&vector_id, &vector, adjacency_list, ())
             .unwrap();
@@ -184,7 +178,7 @@ mod tests {
         insert_a_random_node(&mut cache);
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
         cache
             .insert(&vector_id, &vector, adjacency_list, ())
             .unwrap();
@@ -203,7 +197,7 @@ mod tests {
         insert_a_random_node(&mut cache);
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
         cache
             .insert(&vector_id, &vector, adjacency_list.clone(), ())
             .unwrap();
@@ -222,7 +216,7 @@ mod tests {
         insert_a_random_node(&mut cache);
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
         let associated_data = ();
         cache
             .insert(&vector_id, &vector, adjacency_list, associated_data)
@@ -242,7 +236,7 @@ mod tests {
         insert_a_random_node(&mut cache);
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
 
         // Insert in cache
         cache
@@ -293,7 +287,7 @@ mod tests {
 
         let vector_id = 1;
         let vector = vec![1.0; 10];
-        let adjacency_list = AdjacencyList::from(vec![2, 3, 4]);
+        let adjacency_list = AdjacencyList::from_iter_untrusted([2, 3, 4]);
         cache
             .insert(&vector_id, &vector, adjacency_list.clone(), ())
             .unwrap();
@@ -316,7 +310,7 @@ mod tests {
             .insert(
                 &vector_id,
                 &vector,
-                AdjacencyList::from(vec![20, 30, 40]),
+                AdjacencyList::from_iter_untrusted([20, 30, 40]),
                 (),
             )
             .unwrap();

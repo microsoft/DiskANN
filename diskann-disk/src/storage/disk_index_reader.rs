@@ -6,7 +6,9 @@ use std::{marker::PhantomData, sync::Arc};
 
 use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{model::pq::PQData, storage::PQStorage, utils::load_metadata_from_file};
+use diskann_providers::{storage::PQStorage, utils::load_metadata_from_file};
+
+use crate::search::pq::PQData;
 use tracing::info;
 
 /// This struct is used by the DiskIndexSearcher to read the index data from storage. Noted that the index data here is different from index graph,
