@@ -35,8 +35,8 @@ macro_rules! impl_set_for_roaring {
                 Ok(<$ty>::remove(self, *value))
             }
 
-            fn contains(&self, value: &$elem) -> ANNResult<bool> {
-                Ok(<$ty>::contains(self, *value))
+            fn contains(&self, value: &$elem) -> bool {
+                <$ty>::contains(self, *value)
             }
 
             fn clear(&mut self) -> ANNResult<()> {
@@ -87,10 +87,10 @@ mod tests {
         assert!(!a.insert(&v3).unwrap());
 
         assert_eq!(a.len().unwrap(), 3);
-        assert!(a.contains(&v1).unwrap());
-        assert!(a.contains(&v2).unwrap());
-        assert!(a.contains(&v3).unwrap());
-        assert!(!a.contains(&v4).unwrap());
+        assert!(a.contains(&v1));
+        assert!(a.contains(&v2));
+        assert!(a.contains(&v3));
+        assert!(!a.contains(&v4));
 
         // is_empty on non-empty set
         assert!(!a.is_empty().unwrap());
@@ -99,7 +99,7 @@ mod tests {
         assert!(a.remove(&v2).unwrap()); // should return true - element was present
         assert!(!a.remove(&v2).unwrap()); // should return false - element no longer present
         assert!(!a.remove(&v4).unwrap()); // should return false - element was never present
-        assert!(!a.contains(&v2).unwrap());
+        assert!(!a.contains(&v2));
         assert_eq!(a.len().unwrap(), 2);
         // add it back for following tests
         assert!(a.insert(&v2).unwrap()); // should return true - element being newly inserted
@@ -113,15 +113,15 @@ mod tests {
         let u = a.union(&b);
         assert_eq!(u.len().unwrap(), 5);
         for v in [v1, v2, v3, v4, v5] {
-            assert!(u.contains(&v).unwrap());
+            assert!(u.contains(&v));
         }
 
         // intersection
         let i = a.intersection(&b);
         assert_eq!(i.len().unwrap(), 1);
-        assert!(i.contains(&v3).unwrap());
-        assert!(!i.contains(&v1).unwrap());
-        assert!(!i.contains(&v4).unwrap());
+        assert!(i.contains(&v3));
+        assert!(!i.contains(&v1));
+        assert!(!i.contains(&v4));
 
         // clear
         let mut c = a.clone();

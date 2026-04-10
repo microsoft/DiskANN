@@ -39,8 +39,7 @@ pub trait Set<Element>: Clone + Default + IntoIterator<Item = Element> {
     fn remove(&mut self, value: &Element) -> ANNResult<bool>;
 
     /// Return true if `value` is a member of the set.
-    /// Return ANNError if the operation failed.
-    fn contains(&self, value: &Element) -> ANNResult<bool>;
+    fn contains(&self, value: &Element) -> bool;
 
     /// Remove all elements from the set.
     /// Return ANNError if the operation failed.
