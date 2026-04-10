@@ -6,7 +6,7 @@
 # This workflow runs macro benchmarks comparing the current branch against a baseline.
 # It is manually triggered and requires a baseline reference (branch, tag, or commit).
 
-name: Benchmarks
+name: Disk Benchmarks
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ on:
       - 'diskann-label-filter/**'
       - 'diskann-benchmark/**'
       - 'diskann-benchmark-runner/**'
-      - '.github/workflows/benchmarks.yml'
+      - '.github/workflows/disk-benchmarks.yml'
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
@@ -41,6 +41,7 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
+  PERF_INPUTS: diskann-benchmark/perf_test_inputs
 
 defaults:
   run:
@@ -87,16 +88,13 @@ jobs:
           path: baseline
           lfs: true
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+      - name: Setup benchmark environment
+        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
         with:
-          toolchain: stable
-
-      - name: Cache Rust dependencies (current)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: diskann_rust -> target
-          key: benchmark-current
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: diskann_rust/target/tmp
+          rust-cache-key: benchmark-current
 
       - name: Cache Rust dependencies (baseline)
         uses: Swatinem/rust-cache@v2
@@ -104,43 +102,34 @@ jobs:
           workspaces: baseline -> target
           key: benchmark-baseline
 
-      - name: Install system dependencies
+      - name: Copy dataset to baseline
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssl libssl-dev pkg-config
-
-      # Download pre-packaged dataset from GitHub Release
-      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Download ${{ matrix.dataset }} dataset
-        run: |
-          mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o ${{ matrix.archive }} https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/${{ matrix.archive }}
-          tar xzf ${{ matrix.archive }} -C diskann_rust/target/tmp/
+          mkdir -p baseline/target/tmp
           cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
 
       - name: Run baseline benchmark
         working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
+            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
-            --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
-            --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --before ../baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json \
-            --after target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
+            --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
+            --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --before ../baseline/target/tmp/${{ matrix.dataset }}_baseline.json \
+            --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -148,6 +137,6 @@ jobs:
         with:
           name: benchmark-results-${{ matrix.dataset }}
           path: |
-            diskann_rust/target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
-            baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
+            baseline/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30

@@ -13,6 +13,7 @@ use diskann_benchmark_runner::{
     output::Output,
     utils::{
         datatype::{DataType, Type},
+        fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
     Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input,
@@ -208,6 +209,13 @@ impl Input for DiskIndexTolerance {
     }
 }
 
+/// Whether a metric improves when its value goes down or up.
+#[derive(Clone, Copy)]
+enum Direction {
+    LowerIsBetter,
+    HigherIsBetter,
+}
+
 /// A single metric comparison in the regression check.
 #[derive(Debug, Serialize)]
 struct MetricComparison {
@@ -223,89 +231,48 @@ struct MetricComparison {
 /// Aggregated result of a disk-index regression check.
 #[derive(Debug, Serialize)]
 struct DiskIndexCheckResult {
-    search_l: u32,
     comparisons: Vec<MetricComparison>,
 }
 
 impl fmt::Display for DiskIndexCheckResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "  Search L={}: {:>15} {:>15} {:>12} {:>12}   Remark",
-            self.search_l, "Before", "After", "Change", "Tolerance"
-        )?;
-        writeln!(f, "  {}", "=".repeat(90))?;
-        for c in &self.comparisons {
-            writeln!(
-                f,
-                "  {:>20}, {:>14.3}, {:>14.3}, {:>11}, {:>11.1}%,   {}",
-                c.metric,
-                c.before,
-                c.after,
-                c.change_pct,
-                c.tolerance_pct * 100.0,
-                c.remark
-            )?;
-        }
-        Ok(())
-    }
-}
+        let header = ["Metric", "Before", "After", "Change", "Tolerance", "Remark"];
+        let mut table = Table::new(header, self.comparisons.len());
 
-/// Check a "lower is better" metric (latency, IOs, comparisons).
-/// Regression = value increased beyond tolerance.
-fn check_lower_is_better(
-    name: &'static str,
-    before: f64,
-    after: f64,
-    tolerance: NonNegativeFinite,
-    passed: &mut bool,
-) -> MetricComparison {
-    let (change_pct, remark, metric_passed) = match relative_change(before, after) {
-        Ok(change) => {
-            let ok = change <= tolerance.get();
-            if !ok {
-                *passed = false;
+        for (i, c) in self.comparisons.iter().enumerate() {
+            let mut row = table.row(i);
+            row.insert(c.metric, 0);
+            row.insert(format!("{:.3}", c.before), 1);
+            row.insert(format!("{:.3}", c.after), 2);
+            row.insert(&c.change_pct, 3);
+            row.insert(format!("{:.1}%", c.tolerance_pct * 100.0), 4);
+            if !c.remark.is_empty() {
+                row.insert(&c.remark, 5);
             }
-            (
-                format!("{:.3}%", change * 100.0),
-                if ok {
-                    String::new()
-                } else {
-                    "REGRESSION".to_string()
-                },
-                ok,
-            )
         }
-        Err(e) => {
-            *passed = false;
-            ("invalid".to_string(), e.to_string(), false)
-        }
-    };
-    MetricComparison {
-        metric: name,
-        before,
-        after,
-        change_pct,
-        tolerance_pct: tolerance.get(),
-        passed: metric_passed,
-        remark,
+
+        table.fmt(f)
     }
 }
 
-/// Check a "higher is better" metric (QPS, recall).
-/// Regression = value decreased beyond tolerance.
-fn check_higher_is_better(
+/// Check a metric for regression.
+///
+/// For `LowerIsBetter` metrics (latency, IOs), regression = value increased beyond tolerance.
+/// For `HigherIsBetter` metrics (QPS, recall), regression = value decreased beyond tolerance.
+fn check_metric(
     name: &'static str,
+    direction: Direction,
     before: f64,
     after: f64,
     tolerance: NonNegativeFinite,
     passed: &mut bool,
 ) -> MetricComparison {
-    // Flip before/after so that a decrease becomes a positive relative_change
     let (change_pct, remark, metric_passed) = match relative_change(before, after) {
         Ok(change) => {
-            // For higher-is-better, a negative change is a regression
-            let ok = -change <= tolerance.get();
+            let ok = match direction {
+                Direction::LowerIsBetter => change <= tolerance.get(),
+                Direction::HigherIsBetter => -change <= tolerance.get(),
+            };
             if !ok {
                 *passed = false;
             }
@@ -350,17 +317,18 @@ where
         before: &DiskIndexStats,
         after: &DiskIndexStats,
     ) -> anyhow::Result<PassFail<DiskIndexCheckResult, DiskIndexCheckResult>> {
+        use Direction::{HigherIsBetter, LowerIsBetter};
+
         let mut passed = true;
         let mut comparisons = Vec::new();
 
         // Check build time if both sides have it
         if let (Some(b_build), Some(a_build)) = (&before.build, &after.build) {
-            let b_time = b_build.build_time_seconds();
-            let a_time = a_build.build_time_seconds();
-            comparisons.push(check_lower_is_better(
+            comparisons.push(check_metric(
                 "build_time",
-                b_time,
-                a_time,
+                LowerIsBetter,
+                b_build.build_time_seconds(),
+                a_build.build_time_seconds(),
                 tolerances.build_time_regression,
                 &mut passed,
             ));
@@ -387,43 +355,56 @@ where
                 a_sr.search_l,
             );
 
-            comparisons.push(check_higher_is_better(
-                "qps",
+            // Prefix metric names with L value when multiple search_l entries exist.
+            let prefix = if before.search.search_results_per_l.len() > 1 {
+                format!("L{}:", b_sr.search_l)
+            } else {
+                String::new()
+            };
+
+            comparisons.push(check_metric(
+                Box::leak(format!("{}qps", prefix).into_boxed_str()),
+                HigherIsBetter,
                 b_sr.qps as f64,
                 a_sr.qps as f64,
                 tolerances.qps_regression,
                 &mut passed,
             ));
-            comparisons.push(check_higher_is_better(
-                "recall",
+            comparisons.push(check_metric(
+                Box::leak(format!("{}recall", prefix).into_boxed_str()),
+                HigherIsBetter,
                 b_sr.recall as f64,
                 a_sr.recall as f64,
                 tolerances.recall_regression,
                 &mut passed,
             ));
-            comparisons.push(check_lower_is_better(
-                "mean_latency",
+            comparisons.push(check_metric(
+                Box::leak(format!("{}mean_latency", prefix).into_boxed_str()),
+                LowerIsBetter,
                 b_sr.mean_latency,
                 a_sr.mean_latency,
                 tolerances.mean_latency_regression,
                 &mut passed,
             ));
-            comparisons.push(check_lower_is_better(
-                "p95_latency",
+            comparisons.push(check_metric(
+                Box::leak(format!("{}p95_latency", prefix).into_boxed_str()),
+                LowerIsBetter,
                 b_sr.p95_latency.as_f64(),
                 a_sr.p95_latency.as_f64(),
                 tolerances.p95_latency_regression,
                 &mut passed,
             ));
-            comparisons.push(check_lower_is_better(
-                "mean_ios",
+            comparisons.push(check_metric(
+                Box::leak(format!("{}mean_ios", prefix).into_boxed_str()),
+                LowerIsBetter,
                 b_sr.mean_ios,
                 a_sr.mean_ios,
                 tolerances.mean_ios_regression,
                 &mut passed,
             ));
-            comparisons.push(check_lower_is_better(
-                "mean_comparisons",
+            comparisons.push(check_metric(
+                Box::leak(format!("{}mean_comparisons", prefix).into_boxed_str()),
+                LowerIsBetter,
                 b_sr.mean_comparisons,
                 a_sr.mean_comparisons,
                 tolerances.mean_comps_regression,
@@ -431,16 +412,7 @@ where
             ));
         }
 
-        let search_l = before
-            .search
-            .search_results_per_l
-            .first()
-            .map(|s| s.search_l)
-            .unwrap_or(0);
-        let result = DiskIndexCheckResult {
-            search_l,
-            comparisons,
-        };
+        let result = DiskIndexCheckResult { comparisons };
 
         if passed {
             Ok(PassFail::Pass(result))

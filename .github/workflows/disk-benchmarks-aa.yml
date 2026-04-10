@@ -7,7 +7,7 @@
 # If any threshold is breached, a GitHub issue is created to notify @microsoft/diskann-admin.
 # Can also be triggered manually for debugging.
 
-name: Benchmarks (A/A)
+name: Disk Benchmarks (A/A)
 
 on:
   schedule:
@@ -21,6 +21,7 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
+  PERF_INPUTS: diskann-benchmark/perf_test_inputs
 
 defaults:
   run:
@@ -43,81 +44,54 @@ jobs:
           - dataset: wikipedia-100K
             config: wikipedia-100K-disk-index.json
             archive: wikipedia-100K.tar.gz
-            data_dir: wikipedia_cohere
           - dataset: openai-100K
             config: openai-100K-disk-index.json
             archive: openai-100K.tar.gz
-            data_dir: OpenAIArXiv
 
     steps:
-      - name: Checkout main (target)
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           path: diskann_rust
           lfs: true
 
-      - name: Checkout main (baseline)
-        uses: actions/checkout@v4
+      - name: Setup benchmark environment
+        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
         with:
-          ref: main
-          path: baseline
-          lfs: true
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: diskann_rust/target/tmp
+          rust-cache-key: aa
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-
-      - name: Cache Rust dependencies (target)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: diskann_rust -> target
-          key: aa-target
-
-      - name: Cache Rust dependencies (baseline)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: baseline -> target
-          key: aa-baseline
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openssl libssl-dev pkg-config
-
-      # Download pre-packaged dataset from GitHub Release
-      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
-      - name: Download ${{ matrix.dataset }} dataset
-        run: |
-          mkdir -p diskann_rust/target/tmp baseline/target/tmp
-          curl -L -o ${{ matrix.archive }} https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0/${{ matrix.archive }}
-          tar xzf ${{ matrix.archive }} -C diskann_rust/target/tmp/
-          cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
+      # A/A: build once, run twice (identical code — only detecting environment noise)
+      - name: Build benchmark binary
+        working-directory: diskann_rust
+        run: cargo build -p diskann-benchmark --features disk-index --release
 
       - name: Run baseline benchmark
-        working-directory: baseline
+        working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run target benchmark
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --output-file target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
         working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
-            --tolerances diskann-benchmark/perf_test_inputs/disk-index-tolerances.json \
-            --input-file diskann-benchmark/perf_test_inputs/${{ matrix.config }} \
-            --before ../baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json \
-            --after target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
+            --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
+            --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --before target/tmp/${{ matrix.dataset }}_baseline.json \
+            --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -125,8 +99,8 @@ jobs:
         with:
           name: aa-results-${{ matrix.dataset }}
           path: |
-            diskann_rust/target/tmp/${{ matrix.dataset }}_benchmark_crate_target.json
-            baseline/target/tmp/${{ matrix.dataset }}_benchmark_crate_baseline.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30
 
   # Notify diskann-admin on A/A failure

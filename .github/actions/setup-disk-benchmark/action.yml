@@ -1,0 +1,51 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Shared setup for disk-index benchmark workflows.
+# Installs system dependencies and downloads a dataset from big-ann-benchmarks.
+
+name: Setup Disk Benchmark
+description: Install dependencies and download a benchmark dataset
+
+inputs:
+  dataset:
+    description: 'Dataset name (e.g. wikipedia-100K, openai-100K)'
+    required: true
+  archive:
+    description: 'Archive filename to download (e.g. wikipedia-100K.tar.gz)'
+    required: true
+  extract-to:
+    description: 'Directory to extract the dataset into'
+    required: true
+  rust-cache-key:
+    description: 'Suffix for the Rust dependency cache key'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: diskann_rust -> target
+        key: ${{ inputs.rust-cache-key }}
+
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openssl libssl-dev pkg-config
+
+    - name: Download ${{ inputs.dataset }} dataset
+      shell: bash
+      env:
+        BAB_RELEASE_URL: https://github.com/harsha-simhadri/big-ann-benchmarks/releases/download/v0.4.0
+      run: |
+        mkdir -p ${{ inputs.extract-to }}
+        curl -L -o ${{ inputs.archive }} ${{ env.BAB_RELEASE_URL }}/${{ inputs.archive }}
+        tar xzf ${{ inputs.archive }} -C ${{ inputs.extract-to }}
