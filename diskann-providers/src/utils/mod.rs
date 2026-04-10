@@ -26,10 +26,7 @@ mod timer;
 pub use timer::Timer;
 
 pub mod math_util;
-pub use math_util::{
-    compute_closest_centers, compute_closest_centers_in_block, convert_usize_to_u64,
-    generate_vectors_with_norm, process_residuals,
-};
+pub use math_util::{convert_usize_to_u64, generate_vectors_with_norm, process_residuals};
 
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;

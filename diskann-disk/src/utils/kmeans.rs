@@ -14,7 +14,7 @@ use std::cmp::min;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::{
     forward_threadpool,
-    utils::{compute_closest_centers, AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
+    utils::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
 };
 use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
 use hashbrown::HashSet;
@@ -25,52 +25,7 @@ use rand::{
 };
 use rayon::prelude::*;
 
-/// The implementation of computing L2-squared norm of a vector
-fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
-    let start = index * dim;
-    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr().add(start), dim) };
-    let mut sum_squared = 0.0;
-    for &value in slice {
-        sum_squared += value * value;
-    }
-
-    sum_squared
-}
-
-/// Compute L2-squared norms of data stored in row-major num_points * dim,
-/// need to be pre-allocated
-pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
-    vecs_l2sq: &mut [f32],
-    data: &[f32],
-    num_points: usize,
-    dim: usize,
-    pool: Pool,
-) -> ANNResult<()> {
-    if data.len() != num_points * dim {
-        return Err(ANNError::log_pq_error(format_args!(
-            "data.len() {} should be num_points {} * dim {}",
-            data.len(),
-            num_points,
-            dim
-        )));
-    }
-
-    if dim < 5 {
-        for (i, vec_l2sq) in vecs_l2sq.iter_mut().enumerate() {
-            *vec_l2sq = compute_vec_l2sq(data, i, dim);
-        }
-    } else {
-        forward_threadpool!(pool = pool);
-        vecs_l2sq
-            .par_iter_mut()
-            .enumerate()
-            .for_each_in_pool(pool, |(i, vec_l2sq)| {
-                *vec_l2sq = compute_vec_l2sq(data, i, dim);
-            });
-    }
-
-    Ok(())
-}
+use super::math_util::{compute_closest_centers, compute_vecs_l2sq};
 
 /// Run Lloyds one iteration
 /// Given data in row-major num_points * dim, and centers in row-major

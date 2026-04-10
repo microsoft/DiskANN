@@ -6,13 +6,10 @@ use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
-    utils::{
-        compute_closest_centers, gen_random_slice, AsThreadPool, RayonThreadPool,
-        READ_WRITE_BLOCK_SIZE,
-    },
+    utils::{gen_random_slice, AsThreadPool, RayonThreadPool, READ_WRITE_BLOCK_SIZE},
 };
 
-use crate::utils::{k_meanspp_selecting_pivots, run_lloyds};
+use crate::utils::{compute_closest_centers, k_meanspp_selecting_pivots, run_lloyds};
 use rand::Rng;
 use tracing::info;
 

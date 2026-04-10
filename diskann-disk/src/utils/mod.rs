@@ -11,8 +11,11 @@
 pub mod partition;
 pub use partition::partition_with_ram_budget;
 
+pub mod math_util;
+pub use math_util::{compute_closest_centers, compute_closest_centers_in_block, compute_vecs_l2sq};
+
 pub mod kmeans;
-pub use kmeans::{compute_vecs_l2sq, k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
+pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 
 pub mod instrumentation;
 
