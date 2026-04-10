@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        run: rustup toolchain install && rustup component add rustfmt
+        run: rustup show && rustup component add rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
       - name: "cargo fmt --check"
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        run: rustup toolchain install && rustup component add clippy
+        run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
@@ -97,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        run: rustup toolchain install && rustup component add clippy
+        run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
         run: |
@@ -120,7 +120,7 @@ jobs:
           lfs: true
 
       - name: Install Rust
-        run: rustup toolchain install && rustup component add clippy
+        run: rustup show && rustup component add clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -167,7 +167,7 @@ jobs:
           languages: rust
 
       - name: Install Rust
-        run: rustup toolchain install
+        run: rustup show
 
       - uses: Swatinem/rust-cache@v2
 
@@ -186,7 +186,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - name: Install Rust
-  #       run: rustup toolchain install
+  #       run: rustup show
   #     - uses: Swatinem/rust-cache@v2
   #     - name: "doc --workspace --no-deps"
   #       run: cargo doc --workspace --no-deps --document-private-items
@@ -224,7 +224,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        run: rustup toolchain install
+        run: rustup show
 
       - uses: Swatinem/rust-cache@v2
 
@@ -285,7 +285,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        run: rustup toolchain install
+        run: rustup show
 
       - uses: Swatinem/rust-cache@v2
 
@@ -336,7 +336,7 @@ jobs:
           lfs: true
 
       - name: Install Rust
-        run: rustup toolchain install
+        run: rustup show
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -368,7 +368,7 @@ jobs:
           lfs: true
 
       - name: Install Rust
-        run: rustup toolchain install
+        run: rustup show
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -399,7 +399,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust
-        run: rustup toolchain install && rustup component add llvm-tools-preview
+        run: rustup show && rustup component add llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
