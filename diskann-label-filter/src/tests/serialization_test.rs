@@ -145,6 +145,57 @@ fn test_roundtrip_with_data() {
             loaded_attr.len(),
             "attribute map size mismatch"
         );
+
+        // ensure attribute values are deserialized correctly.
+        for attrs in [attrs_0, attrs_1, attrs_2] {
+            for attr in &attrs {
+                let orig_id = orig_attr.get(&attr).unwrap();
+                let loaded_id = loaded_attr.get(&attr).unwrap();
+                assert_eq!(
+                    orig_id, loaded_id,
+                    "attribute ID mismatch for attribute {attr:?}"
+                );
+            }
+        }
+
+        // Inverted index must contain the same node sets for every attribute ID.
+        let orig_inv_arc = store.get_inv_index();
+        let orig_inv = orig_inv_arc.read().unwrap();
+        let loaded_inv_arc = loaded.get_inv_index();
+        let loaded_inv = loaded_inv_arc.read().unwrap();
+        assert_eq!(
+            orig_inv.count().unwrap(),
+            loaded_inv.count().unwrap(),
+            "inverted index entry count mismatch"
+        );
+        let mut attr_ids: Vec<u64> = Vec::new();
+        orig_attr
+            .for_each(|_, id| -> Result<(), ()> {
+                attr_ids.push(id);
+                Ok(())
+            })
+            .unwrap();
+        for attr_id in attr_ids {
+            let orig_nodes = orig_inv
+                .get(&attr_id)
+                .unwrap()
+                .expect("attribute missing from original inverted index");
+            let loaded_nodes = loaded_inv
+                .get(&attr_id)
+                .unwrap()
+                .unwrap_or_else(|| panic!("attribute id {attr_id} missing from loaded inverted index"));
+            assert_eq!(
+                orig_nodes.len(),
+                loaded_nodes.len(),
+                "inverted index node-set len mismatch for attribute id {attr_id}"
+            );
+            for node_id in orig_nodes.iter() {
+                assert!(
+                    loaded_nodes.contains(node_id),
+                    "node {node_id} missing from loaded inverted index for attribute id {attr_id}"
+                );
+            }
+        }
     });
 }
 
