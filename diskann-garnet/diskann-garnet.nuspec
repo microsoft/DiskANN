@@ -2,7 +2,7 @@
 <package>
   <metadata>
     <id>diskann-garnet</id>
-    <version>1.0.25</version>
+    <version>1.0.26</version>
     <readme>docs/README.md</readme>
     <authors>Microsoft</authors>
     <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
