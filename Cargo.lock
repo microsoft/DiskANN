@@ -733,6 +733,7 @@ name = "diskann-disk"
 version = "0.50.0"
 dependencies = [
  "anyhow",
+ "approx",
  "bincode",
  "bytemuck",
  "byteorder",
@@ -752,6 +753,7 @@ dependencies = [
  "io-uring",
  "libc",
  "opentelemetry",
+ "proptest",
  "rand 0.9.2",
  "rayon",
  "rstest",
