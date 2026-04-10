@@ -7,12 +7,8 @@
 //!
 //! - `F32Kernel<GROUP>` — zero-sized marker type selecting the f32 micro-kernel
 //!   for `BlockTransposed<f32, GROUP>` data.
-//! - [`chamfer_kernel`] — architecture- and GROUP-generic entry point for the
+//! - [`max_ip_kernel`] — architecture- and GROUP-generic entry point for the
 //!   reducing max-IP GEMM.
-//! - [`MaxSim`](crate::multi_vector::distance::MaxSim) /
-//!   [`Chamfer`](crate::multi_vector::distance::Chamfer) trait implementations
-//!   on [`TransposedQueryRef`](crate::multi_vector::TransposedQueryRef), using
-//!   runtime architecture dispatch.
 //!
 //! # Architecture-specific micro-kernels
 //!
@@ -21,11 +17,8 @@
 
 use diskann_wide::Architecture;
 
-use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
-
 use super::Kernel;
 use super::tiled_reduce::tiled_reduce;
-use crate::multi_vector::distance::{Chamfer, MaxSim};
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
 pub(super) mod scalar;
@@ -49,9 +42,9 @@ pub(crate) struct F32Kernel<const GROUP: usize>;
 #[inline(never)]
 #[cold]
 #[allow(clippy::panic)]
-fn chamfer_kernel_panic() {
+fn max_ip_kernel_panic() {
     panic!(
-        "chamfer_kernel: precondition failed (scratch.len != available_rows or dimension mismatch)"
+        "max_ip_kernel: precondition failed (scratch.len != available_rows or dimension mismatch)"
     );
 }
 
@@ -73,7 +66,7 @@ fn chamfer_kernel_panic() {
 /// # Panics
 ///
 /// Panics if `scratch.len() != a.available_rows()` or `a.ncols() != b.vector_dim()`.
-pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
+pub(crate) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
     arch: A,
     a: BlockTransposedRef<'_, f32, GROUP>,
     b: MatRef<'_, Standard<f32>>,
@@ -82,24 +75,21 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     F32Kernel<GROUP>: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
 {
     if scratch.len() != a.available_rows() || a.ncols() != b.vector_dim() {
-        chamfer_kernel_panic();
+        max_ip_kernel_panic();
     }
 
     let k = a.ncols();
     let b_nrows = b.num_vectors();
 
-    debug_assert_eq!(
-        <F32Kernel<GROUP> as Kernel<A>>::A_PANEL,
-        GROUP,
-        "F32Kernel A_PANEL must equal GROUP for layout correctness"
-    );
+    // Compile-time: A_PANEL must equal GROUP for block-transposed layout correctness.
+    const { assert!(<F32Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP) }
 
     // SAFETY:
     // - a.as_ptr() is valid for a.available_rows() * k elements of f32.
     // - MatRef<Standard<f32>> stores nrows * ncols contiguous f32 elements at as_raw_ptr().
     // - scratch.len() == a.available_rows() (checked above).
-    // - a.available_rows() is always a multiple of GROUP, and the debug_assert above
-    //   verifies A_PANEL == GROUP.
+    // - a.available_rows() is always a multiple of GROUP, and the const assert above
+    //   verifies A_PANEL == GROUP at compile time.
     unsafe {
         tiled_reduce::<A, F32Kernel<GROUP>>(
             arch,
@@ -113,71 +103,38 @@ pub(crate) fn chamfer_kernel<A: Architecture, const GROUP: usize>(
     }
 }
 
-// ── MaxSim / Chamfer trait implementations (runtime-dispatched) ──
+// ── Target3 dispatch ─────────────────────────────────────────────
 
-use crate::multi_vector::transposed_query::TransposedQueryRef;
-
-impl DistanceFunctionMut<TransposedQueryRef<'_, f32>, MatRef<'_, Standard<f32>>> for MaxSim<'_> {
-    fn evaluate(&mut self, query: TransposedQueryRef<'_, f32>, doc: MatRef<'_, Standard<f32>>) {
-        assert!(
-            self.size() == query.nrows(),
-            "scores buffer not right size: {} != {}",
-            self.size(),
-            query.nrows()
-        );
-
-        if doc.num_vectors() == 0 {
-            self.scores_mut().fill(f32::MAX);
-            return;
-        }
-
-        let available = query.available_rows();
-        let nq = query.nrows();
-
-        let mut padded_scratch = vec![f32::MIN; available];
-
-        diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunner {
-            tq: query,
-            doc,
-            scratch: &mut padded_scratch,
-        });
-
-        let scratch = self.scores_mut();
-        scratch.copy_from_slice(&padded_scratch[..nq]);
-
-        // Negate: DiskANN convention, lower = better.
-        for s in scratch.iter_mut() {
-            *s = -*s;
-        }
-    }
-}
-
-impl PureDistanceFunction<TransposedQueryRef<'_, f32>, MatRef<'_, Standard<f32>>, f32> for Chamfer {
-    fn evaluate(query: TransposedQueryRef<'_, f32>, doc: MatRef<'_, Standard<f32>>) -> f32 {
-        if doc.num_vectors() == 0 {
-            return 0.0;
-        }
-
-        let available = query.available_rows();
-        let nq = query.nrows();
-
-        let mut scratch = vec![f32::MIN; available];
-
-        diskann_wide::arch::dispatch_no_features(super::ChamferKernelRunner {
-            tq: query,
-            doc,
-            scratch: &mut scratch,
-        });
-
-        scratch.iter().take(nq).map(|&s| -s).sum()
+impl<A, const GROUP: usize>
+    diskann_wide::arch::Target3<
+        A,
+        (),
+        BlockTransposedRef<'_, f32, GROUP>,
+        MatRef<'_, Standard<f32>>,
+        &mut [f32],
+    > for F32Kernel<GROUP>
+where
+    A: Architecture,
+    Self: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: A,
+        lhs: BlockTransposedRef<'_, f32, GROUP>,
+        rhs: MatRef<'_, Standard<f32>>,
+        scratch: &mut [f32],
+    ) {
+        max_ip_kernel(arch, lhs, rhs, scratch);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multi_vector::distance::QueryMatRef;
-    use crate::multi_vector::transposed_query::transpose_query;
+    use crate::multi_vector::QueryComputer;
+    use crate::multi_vector::distance::{Chamfer, MaxSim, QueryMatRef};
+    use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
     /// Helper to create a MatRef from raw data.
     fn make_query_mat(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, Standard<f32>> {
@@ -224,9 +181,9 @@ mod tests {
             let simple_query: QueryMatRef<_> = query_mat.into();
             let expected = Chamfer::evaluate(simple_query, doc);
 
-            // Runtime-dispatched transposed query
-            let tq = transpose_query(query_mat.as_matrix_view());
-            let actual = Chamfer::evaluate(tq.as_ref(), doc);
+            // QueryComputer-dispatched
+            let computer = QueryComputer::<f32>::new(query_mat);
+            let actual = computer.chamfer(doc);
 
             assert!(
                 (actual - expected).abs() < 1e-2,
@@ -251,12 +208,10 @@ mod tests {
                 .unwrap()
                 .evaluate(simple_query, doc);
 
-            // Runtime-dispatched transposed query
-            let tq = transpose_query(query_mat.as_matrix_view());
+            // QueryComputer-dispatched
+            let computer = QueryComputer::<f32>::new(query_mat);
             let mut actual_scores = vec![0.0f32; nq];
-            MaxSim::new(&mut actual_scores)
-                .unwrap()
-                .evaluate(tq.as_ref(), doc);
+            computer.max_sim(doc, &mut actual_scores);
 
             for i in 0..nq {
                 assert!(
@@ -273,10 +228,10 @@ mod tests {
     fn chamfer_with_zero_docs_returns_zero() {
         let query_data = [1.0f32, 0.0, 0.0, 1.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let tq = transpose_query(query_mat.as_matrix_view());
+        let computer = QueryComputer::<f32>::new(query_mat);
 
         let doc = make_query_mat(&[], 0, 2);
-        let result = Chamfer::evaluate(tq.as_ref(), doc);
+        let result = computer.chamfer(doc);
         assert_eq!(result, 0.0);
     }
 
@@ -285,11 +240,11 @@ mod tests {
     fn max_sim_panics_on_size_mismatch() {
         let query_data = [1.0f32, 2.0, 3.0, 4.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let tq = transpose_query(query_mat.as_matrix_view());
+        let computer = QueryComputer::<f32>::new(query_mat);
 
         let doc = make_query_mat(&[1.0, 1.0], 1, 2);
         let mut scores = vec![0.0f32; 3]; // Wrong size
-        MaxSim::new(&mut scores).unwrap().evaluate(tq.as_ref(), doc);
+        computer.max_sim(doc, &mut scores);
     }
 
     #[test]
@@ -304,8 +259,8 @@ mod tests {
         let simple_query: QueryMatRef<_> = query_mat.into();
         let expected = Chamfer::evaluate(simple_query, doc);
 
-        let tq = transpose_query(query_mat.as_matrix_view());
-        let actual = Chamfer::evaluate(tq.as_ref(), doc);
+        let computer = QueryComputer::<f32>::new(query_mat);
+        let actual = computer.chamfer(doc);
 
         assert!(
             (actual - expected).abs() < 1e-6,
@@ -317,11 +272,11 @@ mod tests {
     fn max_sim_with_zero_docs() {
         let query_data = [1.0f32, 0.0, 0.0, 1.0];
         let query_mat = make_query_mat(&query_data, 2, 2);
-        let tq = transpose_query(query_mat.as_matrix_view());
+        let computer = QueryComputer::<f32>::new(query_mat);
 
         let doc = make_query_mat(&[], 0, 2);
         let mut scores = vec![0.0f32; 2];
-        MaxSim::new(&mut scores).unwrap().evaluate(tq.as_ref(), doc);
+        computer.max_sim(doc, &mut scores);
 
         // With zero docs the kernel fills f32::MIN then negates → f32::MAX.
         for &s in &scores {

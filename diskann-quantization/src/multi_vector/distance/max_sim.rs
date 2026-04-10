@@ -12,7 +12,7 @@ pub enum MaxSimError {
     IndexOutOfBounds(usize, usize),
     #[error("Scores buffer length cannot be 0")]
     BufferLengthIsZero,
-    #[error("Invalid buffer length {0} for query size {0}")]
+    #[error("Invalid buffer length {0} for query size {1}")]
     InvalidBufferLength(usize, usize),
 }
 

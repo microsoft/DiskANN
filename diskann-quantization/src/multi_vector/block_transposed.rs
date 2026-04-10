@@ -80,7 +80,7 @@
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
-    ReborrowMut,
+    Reborrow, ReborrowMut,
     strided::StridedView,
     views::{MatrixView, MutMatrixView},
 };
@@ -1089,6 +1089,19 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     #[inline]
     pub fn get_row_mut(&mut self, i: usize) -> Option<RowMut<'_, T, GROUP, PACK>> {
         self.data.get_row_mut(i)
+    }
+}
+
+// ── Reborrow ─────────────────────────────────────────────────────
+
+impl<'this, T: Copy, const GROUP: usize, const PACK: usize> Reborrow<'this>
+    for BlockTransposed<T, GROUP, PACK>
+{
+    type Target = BlockTransposedRef<'this, T, GROUP, PACK>;
+
+    #[inline]
+    fn reborrow(&'this self) -> Self::Target {
+        self.as_view()
     }
 }
 

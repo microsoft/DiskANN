@@ -69,14 +69,10 @@
 pub mod block_transposed;
 pub mod distance;
 pub(crate) mod matrix;
-pub mod transposed_query;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
+pub use distance::{Chamfer, MaxSim, MaxSimError, QueryComputer, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,
-};
-pub use transposed_query::{
-    TransposedQuery, TransposedQueryRef, transpose_query, transpose_query_f16,
 };
