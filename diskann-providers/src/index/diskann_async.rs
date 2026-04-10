@@ -893,6 +893,7 @@ pub(crate) mod tests {
                 ) -> Vec<Vec<Self>> {
                     use diskann_utils::sampling::random::WithApproximateNorm;
 
+                    // This code assumes that with_approximate_norm() uses StandardNormal distribution. StandardNormal creates more uniformly distributed points on sphere surface (mathematically proven property), making the graph easier to navigate. Uniform distribution creates clustering artifacts that make navigation harder, requiring larger search budgets.
                     let mut vectors = Vec::with_capacity(num);
                     for _ in 0..num {
                         let vector = <$T>::with_approximate_norm(dim, radius, rng);

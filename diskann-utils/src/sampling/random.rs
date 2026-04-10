@@ -4,6 +4,7 @@
  */
 
 use rand::{rngs::StdRng, Rng};
+use rand_distr::StandardNormal;
 
 pub trait RoundFromf32 {
     fn round_from_f32(x: f32) -> Self;
@@ -60,7 +61,7 @@ impl WithApproximateNorm for i8 {
     }
 }
 
-// Note: private function
+// This function uses StandardNormal distribution. StandardNormal creates more uniformly distributed points on sphere surface (mathematically proven property), making the graph easier to navigate. Uniform distribution creates clustering artifacts that make navigation harder, requiring larger search budgets.
 fn generate_random_vector_with_norm_signed<T, F>(
     dim: usize,
     norm: f32,
@@ -72,11 +73,9 @@ where
     F: Fn(f32) -> T,
 {
     let mut vec: Vec<f32> = if signed {
-        (0..dim)
-            .map(|_| rng.random_range(-1.0f32..1.0f32))
-            .collect()
+        (0..dim).map(|_| rng.sample(StandardNormal)).collect()
     } else {
-        (0..dim).map(|_| rng.random_range(0.0f32..1.0f32)).collect()
+        (0..dim).map(|_| rng.sample::<f32, _>(StandardNormal).abs()).collect()
     };
     let current_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     let scale = norm / current_norm;
