@@ -28,6 +28,7 @@
             "query_predicates": "query.10.label.jsonl",
             "data_labels": "data.256.label.jsonl",
             "max_candidates": [500, 1000, 2000],
+            "result_size_factor": 10,
             "reps": 5,
             "num_threads": [
               1

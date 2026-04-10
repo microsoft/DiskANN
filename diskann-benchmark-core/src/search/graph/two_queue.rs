@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, glue, search::TwoQueueSearch},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -34,6 +34,7 @@ where
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
     max_candidates: usize,
+    result_size_factor: usize,
 }
 
 impl<DP, T, S> TwoQueue<DP, T, S>
@@ -65,6 +66,7 @@ where
         strategy: Strategy<S>,
         labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
         max_candidates: usize,
+        result_size_factor: usize,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -81,6 +83,7 @@ where
                 strategy,
                 labels,
                 max_candidates,
+                result_size_factor,
             }))
         }
     }
@@ -114,8 +117,12 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let two_queue_search =
-            graph::search::TwoQueueSearch::new(*parameters, &*self.labels[index], self.max_candidates);
+        let two_queue_search = TwoQueueSearch::new(
+            *parameters,
+            &*self.labels[index],
+            self.max_candidates,
+            self.result_size_factor,
+        );
         let result = self
             .index
             .search(

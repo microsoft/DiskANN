@@ -28,9 +28,7 @@ use crate::{
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
         },
-        search::{
-            record::NoopSearchRecord,
-        },
+        search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
@@ -51,6 +49,8 @@ pub struct TwoQueueSearch<'q, InternalId> {
     pub filter: &'q dyn QueryLabelProvider<InternalId>,
     /// Maximum number of hops before stopping search.
     pub max_candidates: usize,
+    /// Result queue capacity factor relative to k (capacity = k * result_size_factor).
+    pub resut_size_factor: usize,
 }
 
 /// Describes why the two-queue search terminated.
@@ -83,11 +83,13 @@ impl<'q, InternalId> TwoQueueSearch<'q, InternalId> {
         inner: Knn,
         filter: &'q dyn QueryLabelProvider<InternalId>,
         max_candidates: usize,
+        resut_size_factor: usize,
     ) -> Self {
         Self {
             inner,
             filter,
             max_candidates,
+            resut_size_factor,
         }
     }
 }
@@ -120,9 +122,15 @@ where
                 .into_ann_result()?;
             let computer = accessor.build_query_computer(query).into_ann_result()?;
 
+            let k = self.inner.k_value().get();
+
             // Two-queue search uses its own BinaryHeap for exploration,
             // so skip allocating the NeighborPriorityQueue.
-            let mut scratch = SearchScratch::new_two_queue(self.inner.l_value().get());
+            let mut scratch = SearchScratch::new_two_queue(
+                k * self.resut_size_factor,
+                self.inner.l_value().get(),
+                None,
+            );
 
             let (stats, termination) = two_queue_search_internal(
                 index.max_degree_with_slack(),
@@ -136,7 +144,6 @@ where
 
             // Post-process from filtered_results rather than scratch.best.
             // into_sorted_vec() returns ascending order (smallest distance first).
-            let k = self.inner.k_value().get();
             let sorted_results = scratch.filtered_results.into_sorted_vec();
             let result_count = processor
                 .post_process(
@@ -248,7 +255,12 @@ where
         // Convergence: enough filtered results and closest candidate is worse than worst
         if scratch.filtered_results.len() >= result_cap {
             let closest_dist = beam_dists[0];
-            if closest_dist > scratch.filtered_results.peek().map_or(f32::MAX, |n| n.distance) {
+            if closest_dist
+                > scratch
+                    .filtered_results
+                    .peek()
+                    .map_or(f32::MAX, |n| n.distance)
+            {
                 termination = TwoQueueTermination::Converged;
                 break;
             }
@@ -269,7 +281,10 @@ where
         // Keep exploration broad until we have enough filtered results (result_cap).
         // At low selectivity, premature pruning based on distance prevents the search
         // from reaching graph regions that contain filter-matching vectors.
-        let worst_dist = scratch.filtered_results.peek().map_or(f32::MAX, |n| n.distance);
+        let worst_dist = scratch
+            .filtered_results
+            .peek()
+            .map_or(f32::MAX, |n| n.distance);
         let have_enough = scratch.filtered_results.len() >= result_cap;
         for &neighbor in &neighbors {
             if neighbor.distance < worst_dist || !have_enough {

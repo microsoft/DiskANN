@@ -39,3 +39,7 @@ pub const INTRA_BATCH_CANDIDATES: IntraBatchCandidates = IntraBatchCandidates::A
 /// Default beta factor for filtered search.
 /// Values < 1.0 bias the search toward vectors matching the filter.
 pub const FILTER_BETA: f32 = 0.5;
+
+/// Default result queue capacity factor for two-queue filtered search.
+/// The result queue capacity is k * this factor.
+pub const RESULT_SIZE_FACTOR: usize = 10;

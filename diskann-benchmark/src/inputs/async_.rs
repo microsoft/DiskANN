@@ -271,6 +271,7 @@ pub(crate) struct TwoQueueSearchPhase {
     pub(crate) reps: NonZeroUsize,
     pub(crate) data_labels: InputFile,
     pub(crate) max_candidates: Vec<usize>,
+    pub(crate) result_size_factor: usize,
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
 }

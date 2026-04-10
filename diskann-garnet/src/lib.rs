@@ -36,8 +36,8 @@ use crate::{
 use crate::{
     dyn_index::DynIndex,
     garnet::{
-        Callbacks, Context, DeleteCallback, GarnetId, ReadCallback,
-        ReadModifyWriteCallback, WriteCallback, FilterCandidateCallback,
+        Callbacks, Context, DeleteCallback, FilterCandidateCallback, GarnetId, ReadCallback,
+        ReadModifyWriteCallback, WriteCallback,
     },
 };
 
@@ -231,7 +231,13 @@ pub unsafe extern "C" fn create_index(
     };
 
     let context = Context(ctx);
-    let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback, filter_callback);
+    let callbacks = Callbacks::new(
+        read_callback,
+        write_callback,
+        delete_callback,
+        rmw_callback,
+        filter_callback,
+    );
 
     match quant_type {
         VectorQuantType::XPreQ8 => {

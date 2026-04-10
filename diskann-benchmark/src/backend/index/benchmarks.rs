@@ -427,6 +427,7 @@ where
                     benchmark_core::search::graph::Strategy::broadcast(search_strategy.clone()),
                     labels.clone(),
                     max_candidates,
+                    search_phase.result_size_factor,
                 )?;
 
                 let search_results = search::knn::run(&two_queue, &groundtruth, steps)?;

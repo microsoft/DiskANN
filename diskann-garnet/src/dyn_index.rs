@@ -11,7 +11,7 @@ use crate::{
 };
 use diskann::{
     ANNError, ANNResult,
-    graph::{InplaceDeleteMethod, glue::SearchStrategy, index::SearchStats, search},
+    graph::{InplaceDeleteMethod, config, glue::SearchStrategy, index::SearchStats, search},
     provider::{Accessor, DataProvider},
     utils::VectorRepr,
 };
@@ -91,7 +91,12 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
             Some(GarnetFilter::Callback(provider, max_effort)) => {
                 let ef = params.l_value().get();
                 let effort_cap = std::cmp::max(ef, *max_effort);
-                let two_queue = search::TwoQueueSearch::new(*params, provider, effort_cap);
+                let two_queue = search::TwoQueueSearch::new(
+                    *params,
+                    provider,
+                    effort_cap,
+                    config::defaults::RESULT_SIZE_FACTOR,
+                );
                 let result = self.search(two_queue, &FullPrecision, context, query, output)?;
                 Ok(result.stats)
             }
@@ -99,9 +104,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
                 let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), *beta);
                 self.search(*params, &beta_filter, context, query, output)
             }
-            None => {
-                self.search(*params, &FullPrecision, context, query, output)
-            }
+            None => self.search(*params, &FullPrecision, context, query, output),
         }
     }
 
