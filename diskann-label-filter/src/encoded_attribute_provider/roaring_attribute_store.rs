@@ -49,12 +49,7 @@ where
         }
     }
 
-    #[cfg(test)]
     pub fn get_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
-        self.index.clone()
-    }
-
-    pub(crate) fn get_index_for_serialization(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
         self.index.clone()
     }
 

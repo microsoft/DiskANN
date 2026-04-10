@@ -59,7 +59,7 @@ fn test_roundtrip_empty_store() {
                 .await
                 .unwrap();
 
-        let index_arc = loaded.get_index_for_serialization();
+        let index_arc = loaded.get_index();
         let index = index_arc.read().unwrap();
         assert_eq!(index.count().unwrap(), 0);
     });
@@ -102,9 +102,9 @@ fn test_roundtrip_with_data() {
                 .await
                 .unwrap();
 
-        let orig_index_arc = store.get_index_for_serialization();
+        let orig_index_arc = store.get_index();
         let orig_index = orig_index_arc.read().unwrap();
-        let loaded_index_arc = loaded.get_index_for_serialization();
+        let loaded_index_arc = loaded.get_index();
         let loaded_index = loaded_index_arc.read().unwrap();
 
         assert_eq!(
@@ -228,7 +228,7 @@ fn test_roundtrip_u64_node_ids() {
                 .unwrap();
 
         {
-            let index_arc = loaded.get_index_for_serialization();
+            let index_arc = loaded.get_index();
             let index = index_arc.read().unwrap();
             assert_eq!(index.count().unwrap(), 2);
         } // index guard dropped before next await

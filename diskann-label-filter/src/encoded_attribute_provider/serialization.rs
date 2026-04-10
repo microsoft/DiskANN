@@ -180,7 +180,7 @@ where
         let attr_map_guard = attr_map_arc
             .read()
             .map_err(|_| lock_poison("attribute_map (read)"))?;
-        let index_arc = self.get_index_for_serialization();
+        let index_arc = self.get_index();
         let index_guard = index_arc.read().map_err(|_| lock_poison("index (read)"))?;
 
         let num_attribute_entries = attr_map_guard.len() as u64;
@@ -322,7 +322,7 @@ where
             .map_err(|e| io_error(e, "read num_nodes_with_labels"))?;
 
         {
-            let index_arc = store.get_index_for_serialization();
+            let index_arc = store.get_index();
             let inv_index_arc = store.get_inv_index();
             let mut index = index_arc
                 .write()
