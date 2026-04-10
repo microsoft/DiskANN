@@ -4,25 +4,28 @@
  */
 #![warn(missing_debug_implementations, missing_docs)]
 
-//! Aligned allocator
+//! K-means clustering implementation for disk index partitioning.
+//!
+//! This module provides the k-means++ pivot selection algorithm and Lloyd's
+//! algorithm iteration, used for partitioning datasets during disk index construction.
 
 use std::cmp::min;
 
 use diskann::{ANNError, ANNResult};
-use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+use diskann_providers::{
+    forward_threadpool,
+    utils::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
+};
+use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
 use hashbrown::HashSet;
 use rand::{
-    Rng,
     distr::{StandardUniform, Uniform},
     prelude::Distribution,
+    Rng,
 };
 use rayon::prelude::*;
 
-use super::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool};
-use crate::{
-    forward_threadpool,
-    utils::math_util::{compute_closest_centers, compute_vecs_l2sq},
-};
+use super::math_util::{compute_closest_centers, compute_vecs_l2sq};
 
 /// Run Lloyds one iteration
 /// Given data in row-major num_points * dim, and centers in row-major
@@ -301,7 +304,13 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
         // Calculate the sum of distances of all the nodes to their nearest selected pivot.
         let sum: f64 = dist
             .iter()
-            .map(|&x| { if x == f32::INFINITY { f32::MAX } else { x } } as f64)
+            .map(|&x| {
+                if x == f32::INFINITY {
+                    f32::MAX
+                } else {
+                    x
+                }
+            } as f64)
             .sum();
 
         // All unique points are picked as pivots.
@@ -340,7 +349,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
             return Err(ANNError::log_kmeans_error(
                 "Prefix sum should not be greater than sum.
             If the for loop above ran to conclusion without break,
-            prefix_sum shoule be equal to sum"
+            prefix_sum should be equal to sum"
                     .to_string(),
             ));
         }
@@ -424,14 +433,19 @@ pub fn k_means_clustering<Pool: AsThreadPool>(
 
 #[cfg(test)]
 mod kmeans_test {
-    use crate::storage::{StorageReadProvider, VirtualStorageProvider};
     use approx::assert_relative_eq;
     use diskann::ANNErrorKind;
+    use diskann_providers::{
+        storage::{StorageReadProvider, VirtualStorageProvider},
+        utils::{
+            create_rnd_in_tests, create_rnd_provider_from_seed_in_tests,
+            create_thread_pool_for_test,
+        },
+    };
     use diskann_utils::test_data_root;
     use rstest::rstest;
 
     use super::*;
-    use crate::utils::create_thread_pool_for_test;
 
     #[test]
     fn lloyds_iter_test() {
@@ -549,10 +563,9 @@ mod kmeans_test {
         .unwrap_err();
 
         assert_eq!(err.kind(), ANNErrorKind::PQError);
-        assert!(
-            err.to_string()
-                .contains("Error: Cancellation requested by caller.")
-        );
+        assert!(err
+            .to_string()
+            .contains("Error: Cancellation requested by caller."));
     }
 
     #[test]
@@ -562,7 +575,7 @@ mod kmeans_test {
         let num_centers = 3;
 
         // Generate some random data points
-        let mut rng = crate::utils::create_rnd_in_tests();
+        let mut rng = create_rnd_in_tests();
         let data: Vec<f32> = (0..num_points * dim).map(|_| rng.random()).collect();
 
         let mut pivot_data = vec![0.0; num_centers * dim];
@@ -572,7 +585,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
         )
         .unwrap();
 
@@ -641,7 +654,7 @@ mod kmeans_test {
         expected_error_message: &str,
     ) {
         // Generate some random data points
-        let mut rng = crate::utils::create_rnd_in_tests();
+        let mut rng = create_rnd_in_tests();
         let data: Vec<f32> = (0..num_points * dim).map(|_| rng.random()).collect();
 
         let pivot_data_size = if use_correct_buffer_size {
@@ -656,7 +669,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
         )
         .unwrap_err();
 
@@ -673,7 +686,7 @@ mod kmeans_test {
         #[case] num_centers: usize,
     ) {
         // Generate some random data points
-        let mut rng = crate::utils::create_rnd_in_tests();
+        let mut rng = create_rnd_in_tests();
         let data: Vec<f32> = (0..num_points * dim).map(|_| rng.random()).collect();
 
         let mut pivot_data = vec![0.0; num_centers * dim];
@@ -684,7 +697,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             &mut (false),
             &pool,
         )
@@ -736,7 +749,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             &mut (false),
             &pool,
         )
@@ -750,7 +763,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers + 1,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             &mut (false),
             &pool,
         )
@@ -764,7 +777,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_points,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             &mut (false),
             &pool,
         )
@@ -796,7 +809,7 @@ mod kmeans_test {
         }
 
         // Fill the rest with copies of randomly sampled unique points
-        let mut rng = crate::utils::create_rnd_provider_from_seed_in_tests(42).create_rnd();
+        let mut rng = create_rnd_provider_from_seed_in_tests(42).create_rnd();
         for i in num_unique_points..num_points {
             let random_index = rng.random_range(0..num_unique_points);
             let data_offset = i * dim;
@@ -814,7 +827,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             &mut (false),
             &pool,
         )
@@ -914,7 +927,7 @@ mod kmeans_test {
         expected_error_message: &str,
     ) {
         // Generate some random data points
-        let mut rng = crate::utils::create_rnd_in_tests();
+        let mut rng = create_rnd_in_tests();
         let data: Vec<f32> = (0..num_points * dim).map(|_| rng.random()).collect();
 
         let pivot_data_size = if use_correct_buffer_size {
@@ -930,7 +943,7 @@ mod kmeans_test {
             dim,
             &mut pivot_data,
             num_centers,
-            &mut crate::utils::create_rnd_in_tests(),
+            &mut create_rnd_in_tests(),
             cancellation_token,
             &pool,
         )
@@ -955,7 +968,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data,  num_centers, &mut crate::utils::create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data,  num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
         }
     }
     proptest! {
@@ -969,7 +982,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut crate::utils::create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
         }
     }
     proptest! {
@@ -983,7 +996,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut crate::utils::create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
         }
     }
 }

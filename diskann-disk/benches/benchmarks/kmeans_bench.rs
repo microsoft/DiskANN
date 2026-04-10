@@ -4,9 +4,8 @@
  */
 
 use criterion::Criterion;
-use diskann_providers::utils::{
-    RayonThreadPool, compute_vecs_l2sq, create_thread_pool_for_bench, k_means_clustering,
-};
+use diskann_disk::utils::{compute_vecs_l2sq, k_means_clustering};
+use diskann_providers::utils::{create_thread_pool_for_bench, RayonThreadPool};
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;

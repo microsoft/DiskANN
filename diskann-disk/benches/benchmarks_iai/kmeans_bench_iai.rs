@@ -3,9 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use diskann_providers::utils::{
-    compute_vecs_l2sq, create_thread_pool_for_bench, k_means_clustering,
-};
+use diskann_disk::utils::{compute_vecs_l2sq, k_means_clustering};
+use diskann_providers::utils::create_thread_pool_for_bench;
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;
