@@ -244,10 +244,10 @@ impl fmt::Display for DiskIndexCheckResult {
             row.insert(c.metric, 0);
             row.insert(format!("{:.3}", c.before), 1);
             row.insert(format!("{:.3}", c.after), 2);
-            row.insert(&c.change_pct, 3);
+            row.insert(c.change_pct.clone(), 3);
             row.insert(format!("{:.1}%", c.tolerance_pct * 100.0), 4);
             if !c.remark.is_empty() {
-                row.insert(&c.remark, 5);
+                row.insert(c.remark.clone(), 5);
             }
         }
 
