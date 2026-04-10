@@ -460,6 +460,60 @@ mod imp {
                             writeln!(output, "\n\n{}", result)?;
                             Ok(result)
                         }
+                        SearchPhase::TopkTwoQueueFilter(search_phase) => {
+                            // Handle Two-Queue Filtered Topk search phase
+
+                            // Save construction stats before running queries.
+                            _checkpoint.checkpoint(&result)?;
+
+                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
+                                datafiles::BinFile(&search_phase.queries),
+                            )?);
+
+                            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(
+                                &search_phase.groundtruth,
+                            ))?;
+
+                            let steps = search::knn::SearchSteps::new(
+                                search_phase.reps,
+                                &search_phase.num_threads,
+                                &search_phase.runs,
+                            );
+
+                            let bit_maps = generate_bitmaps(
+                                &search_phase.query_predicates,
+                                &search_phase.data_labels,
+                            )?;
+
+                            let labels: Arc<[_]> = bit_maps
+                                .into_iter()
+                                .map(utils::filters::as_query_label_provider)
+                                .collect();
+
+                            for &layout in self.input.query_layouts.iter() {
+                                for &max_candidates in &search_phase.max_candidates {
+                                    let two_queue = benchmark_core::search::graph::TwoQueue::new(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(
+                                            inmem::spherical::Quantized::search(layout.into()),
+                                        ),
+                                        labels.clone(),
+                                        max_candidates,
+                                        search_phase.result_size_factor,
+                                    )?;
+
+                                    let search_results =
+                                        search::knn::run(&two_queue, &groundtruth, steps)?;
+                                    result.append(SearchRun {
+                                        layout,
+                                        results: AggregatedSearchResults::Topk(search_results),
+                                    });
+                                }
+                            }
+                            writeln!(output, "\n\n{}", result)?;
+                            Ok(result)
+                        }
                     }
                 }
             }
