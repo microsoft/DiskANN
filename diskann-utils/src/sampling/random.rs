@@ -75,7 +75,9 @@ where
     let mut vec: Vec<f32> = if signed {
         (0..dim).map(|_| rng.sample(StandardNormal)).collect()
     } else {
-        (0..dim).map(|_| rng.sample::<f32, _>(StandardNormal).abs()).collect()
+        (0..dim)
+            .map(|_| rng.sample::<f32, _>(StandardNormal).abs())
+            .collect()
     };
     let current_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     let scale = norm / current_norm;
