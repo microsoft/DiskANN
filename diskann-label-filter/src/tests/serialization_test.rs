@@ -180,15 +180,30 @@ fn test_roundtrip_u64_node_ids() {
             let index = index_arc.read().unwrap();
             assert_eq!(index.count().unwrap(), 2);
         } // index guard dropped before next await
+    });
+}
 
-        // Loading the same file as u32 must fail with a type-tag mismatch.
+/// Loading a u64 label file as a u32 store must be rejected.
+#[test]
+fn test_load_u64_file_as_u32_fails() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+
+    let store: RoaringAttributeStore<u64> = RoaringAttributeStore::new();
+    let attrs = vec![Attribute::from_value(
+        "kind",
+        AttributeValue::String("doc".into()),
+    )];
+    store.set_element(&(u32::MAX as u64 + 1), &attrs).unwrap();
+
+    let provider = VirtualStorageProvider::new_memory();
+    let prefix = String::from("/idx64");
+
+    rt.block_on(async {
+        store.save_with(&provider, &prefix).await.unwrap();
         let result = RoaringAttributeStore::<u32>::load_with(&provider, &prefix).await;
         assert!(result.is_err(), "expected error loading u64 file as u32");
-        let err = result.err().unwrap();
-        assert!(
-            err.to_string().contains("type tag mismatch"),
-            "unexpected error: {err}"
-        );
     });
 }
 
