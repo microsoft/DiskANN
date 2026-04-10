@@ -470,9 +470,10 @@ mod imp {
                                 datafiles::BinFile(&search_phase.queries),
                             )?);
 
-                            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(
-                                &search_phase.groundtruth,
-                            ))?;
+                            let groundtruth =
+                                datafiles::load_range_groundtruth(datafiles::BinFile(
+                                    &search_phase.groundtruth,
+                                ))?;
 
                             let steps = search::knn::SearchSteps::new(
                                 search_phase.reps,
