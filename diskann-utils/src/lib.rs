@@ -14,6 +14,7 @@ pub use lifetime::WithLifetime;
 
 pub mod future;
 
+pub mod arbiter;
 pub mod io;
 pub mod sampling;
 
