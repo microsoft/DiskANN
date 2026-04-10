@@ -336,9 +336,10 @@ fn test_document_provider_round_trip() {
     // Every inserted external ID must map to a valid internal ID.
     let ctx = DefaultContext;
     for i in 0..train_data.nrows() as u32 {
-        inner
-            .to_internal_id(&ctx, &i)
-            .unwrap_or_else(|_| panic!("external id {i} missing after round trip"));
+        assert!(
+            inner.to_internal_id(&ctx, &i).is_ok(),
+            "external id {i} missing after round trip"
+        );
     }
 
     // --- Assert labels survived the round trip ---
