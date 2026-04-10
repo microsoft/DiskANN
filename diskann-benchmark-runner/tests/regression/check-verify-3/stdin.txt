@@ -1,5 +1,0 @@
-# All three MatchProblem variants in one test:
-#   - Tolerance 1 (dim=9999) matches no inputs → OrphanedTolerance
-#   - Input 2 (int8) has no dim tolerance → UncoveredInput
-#   - Inputs 1 and 3 (dim) match tolerances 2 and 3 → AmbiguousInput
-check verify --tolerances $TOLERANCES --input-file $INPUT

@@ -1,3 +1,0 @@
-# The tolerance is test-input-dim-tolerance but the input tag is test-input-types.
-# These are incompatible — resolve() should reject this with a clear error.
-check verify --tolerances $TOLERANCES --input-file $INPUT

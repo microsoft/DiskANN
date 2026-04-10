@@ -16,12 +16,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror.workspace = true
 
-[lints.clippy]
-undocumented_unsafe_blocks = "warn"
-uninlined_format_args = "allow"
-unwrap_used = "warn"
-expect_used = "warn"
-panic = "warn"
+[lints]
+workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

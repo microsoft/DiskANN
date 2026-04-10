@@ -1,5 +1,0 @@
-tolerance matching failed:
-  tolerance 1 matched no inputs
-  input 1 matched tolerances 2, 3
-  input 2 matched no tolerances
-  input 3 matched tolerances 2, 3

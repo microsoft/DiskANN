@@ -11,9 +11,7 @@ use thiserror::Error;
 pub struct CannotBeEmpty;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[non_exhaustive]
 pub struct Percentiles<T> {
-    pub minimum: T,
     pub mean: f64,
     pub median: f64,
     pub p90: T,
@@ -79,7 +77,6 @@ where
     let p99 = x[((99 * len) / 100).min(len - 1)];
 
     Ok(Percentiles {
-        minimum: x[0],
         mean,
         median,
         p90,
@@ -158,7 +155,6 @@ mod tests {
             let v: &mut [u64] = &mut [10];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 10,
                 mean: 10.0,
                 median: 10.0,
                 p90: 10,
@@ -172,7 +168,6 @@ mod tests {
             let v: &mut [u64] = &mut [2, 1];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 1,
                 mean: 1.5,
                 median: 1.5,
                 p90: 2,
@@ -186,7 +181,6 @@ mod tests {
             let v: &mut [u64] = &mut [2, 1, 3];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 1,
                 mean: 2.0,
                 median: 2.0,
                 p90: 3,
@@ -200,7 +194,6 @@ mod tests {
             let v: &mut [u64] = &mut [2, 1, 3, 4, 9, 6, 7, 5, 8];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 1,
                 mean: 5.0,
                 median: 5.0,
                 p90: 9,
@@ -214,7 +207,6 @@ mod tests {
             let v: &mut [u64] = &mut [2, 10, 1, 3, 4, 9, 6, 7, 5, 8];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 1,
                 mean: 5.5,
                 median: 5.5,
                 p90: 10,
@@ -228,7 +220,6 @@ mod tests {
             let v: &mut [u64] = &mut [2, 10, 1, 3, 4, 9, 6, 11, 7, 5, 8];
             let p = compute_percentiles(v).unwrap();
             let e = Percentiles {
-                minimum: 1,
                 mean: 6.0,
                 median: 6.0,
                 p90: 10,

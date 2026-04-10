@@ -1,7 +1,0 @@
-Check 1 of 1 ("type-bench-f32") encountered an error:
-the "before" results do not match the output schema expected by this benchmark
-
-Caused by:
-    invalid type: integer `128`, expected a string
-
-one or more checks failed with errors

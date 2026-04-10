@@ -1,2 +1,0 @@
-Benchmarking in debug mode produces misleading performance results.
-Please compile in release mode or use the --allow-debug flag to bypass this check.

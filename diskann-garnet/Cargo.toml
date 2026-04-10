@@ -1,6 +1,6 @@
 [package]
 name = "diskann-garnet"
-version = "1.0.26"
+version = "1.0.25"
 edition = "2024"
 authors.workspace = true
 license.workspace = true

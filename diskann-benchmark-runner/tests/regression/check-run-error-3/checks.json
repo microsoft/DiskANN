@@ -1,9 +1,0 @@
-[
-  {
-    "status": "error",
-    "tolerance": {
-      "error_when_checked": false
-    },
-    "error": "the \"before\" results do not match the output schema expected by this benchmark: invalid type: integer `128`, expected a string"
-  }
-]

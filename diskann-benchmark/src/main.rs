@@ -279,7 +279,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -323,7 +322,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -345,7 +343,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -390,7 +387,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -412,7 +408,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -460,7 +455,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -482,7 +476,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -522,7 +515,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -577,7 +569,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -661,7 +652,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -735,7 +725,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -757,7 +746,6 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
-            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();

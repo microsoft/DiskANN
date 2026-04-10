@@ -59,7 +59,6 @@ impl Table {
         Row::new(self, row)
     }
 
-    #[expect(clippy::panic, reason = "table interfaces are bounds checked")]
     fn check_bounds(&self, row: usize, col: usize) {
         if row >= self.nrows() {
             panic!("row {} is out of bounds (max {})", row, self.nrows());

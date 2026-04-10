@@ -1,4 +1,0 @@
-while processing tolerance input 1 of 1
-
-Caused by:
-    input tag "test-input-types" is not compatible with tolerance tag "test-input-dim-tolerance". Valid input tags are: ["test-input-dim"]

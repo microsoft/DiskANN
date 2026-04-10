@@ -87,9 +87,7 @@ impl std::fmt::Debug for Registered<'_> {
 pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
 
 impl<T> Wrapper<T> {
-    pub(crate) const INSTANCE: Self = Self::new();
-
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(std::marker::PhantomData)
     }
 }

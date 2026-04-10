@@ -22,11 +22,6 @@ impl Jobs {
         &self.jobs
     }
 
-    /// Consume `self`, returning the contained list of jobs.
-    pub(crate) fn into_inner(self) -> Vec<Any> {
-        self.jobs
-    }
-
     /// Load `self` from a serialized JSON representation at `path`.
     ///
     /// In addition to deserializing the on-disk representation, the method also runs
@@ -34,18 +29,14 @@ impl Jobs {
     ///
     /// * Resolution of input files.
     pub(crate) fn load(path: &Path, registry: &registry::Inputs) -> anyhow::Result<Self> {
-        Self::parse(&Partial::load(path)?, registry)
-    }
+        // Load the raw input.
+        let partial = Partial::load(path)?;
 
-    /// Parse `self` from a [`Partial`].
-    ///
-    /// This method also perform deserialization checks on the parsed inputs.
-    pub(crate) fn parse(partial: &Partial, registry: &registry::Inputs) -> anyhow::Result<Self> {
         let mut checker = Checker::new(
             partial
                 .search_directories
                 .iter()
-                .map(PathBuf::from)
+                .map(|i| PathBuf::from(&i))
                 .collect(),
             partial.output_directory.as_ref().map(PathBuf::from),
         );
@@ -67,7 +58,7 @@ impl Jobs {
                 let input = registry
                     .get(&unprocessed.tag)
                     .ok_or_else(|| {
-                        anyhow::anyhow!("Unrecognized input tag: \"{}\"", unprocessed.tag)
+                        anyhow::anyhow!("Un-recognized input tag: \"{}\"", unprocessed.tag)
                     })
                     .with_context(context)?;
 
@@ -96,8 +87,8 @@ impl Jobs {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Unprocessed {
     #[serde(rename = "type")]
-    pub(crate) tag: String,
-    pub(crate) content: serde_json::Value,
+    tag: String,
+    content: serde_json::Value,
 }
 
 impl Unprocessed {
@@ -114,10 +105,6 @@ impl Unprocessed {
     }
 }
 
-/// A partially loaded input file.
-///
-/// To reach this point, we require at least the structure of the input JSON to be correct
-/// and parseable. However, we have not yet mapped the raw JSON of any of the registered inputs.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Partial {
     /// Directories to search for input files.
@@ -131,10 +118,8 @@ impl Partial {
     /// Load `self` from a serialized JSON representation at `path` without post-load
     /// validation.
     pub(crate) fn load(path: &Path) -> anyhow::Result<Self> {
-        crate::internal::load_from_disk(path)
-    }
-
-    pub(crate) fn jobs(&self) -> &[Unprocessed] {
-        &self.jobs
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+        Ok(serde_json::from_reader(reader)?)
     }
 }

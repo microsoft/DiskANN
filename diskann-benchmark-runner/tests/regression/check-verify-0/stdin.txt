@@ -1,1 +1,0 @@
-check verify --tolerances $TOLERANCES --input-file $INPUT
