@@ -22,7 +22,9 @@ use diskann_providers::{
             inmem::{self, CreateFullPrecision, DefaultProvider, DefaultProviderParameters},
         },
     },
-    storage::{AsyncIndexMetadata, LoadWith, SaveWith, StorageReadProvider, VirtualStorageProvider},
+    storage::{
+        AsyncIndexMetadata, LoadWith, SaveWith, StorageReadProvider, VirtualStorageProvider,
+    },
     utils::create_rnd_from_seed_in_tests,
 };
 use diskann_utils::test_data_root;
@@ -32,8 +34,7 @@ use crate::{
     attribute::{Attribute, AttributeValue},
     document::Document,
     encoded_attribute_provider::{
-        document_insert_strategy::DocumentInsertStrategy,
-        document_provider::DocumentProvider,
+        document_insert_strategy::DocumentInsertStrategy, document_provider::DocumentProvider,
         roaring_attribute_store::RoaringAttributeStore,
     },
     set::traits::SetProvider,
@@ -258,16 +259,17 @@ fn test_document_provider_round_trip() {
         DefaultProvider::new_empty(parameters, fp_precursor, pq_table, TableBasedDeletes).unwrap();
 
     // --- Wrap inner provider in DocumentProvider and build the index ---
-    let doc_provider =
-        DocumentProvider::new(inner_provider, RoaringAttributeStore::<u32>::new());
+    let doc_provider = DocumentProvider::new(inner_provider, RoaringAttributeStore::<u32>::new());
     type InnerProvider = inmem::FullPrecisionProvider<
         f32,
         diskann_providers::model::graph::provider::async_::FastMemoryQuantVectorProviderAsync,
         diskann_providers::model::graph::provider::async_::TableDeleteProviderAsync,
     >;
     type TestDocProvider = DocumentProvider<InnerProvider, RoaringAttributeStore<u32>>;
-    let index =
-        DiskANNIndex::<TestDocProvider>::new_with_current_thread_runtime(build_config.clone(), doc_provider);
+    let index = DiskANNIndex::<TestDocProvider>::new_with_current_thread_runtime(
+        build_config.clone(),
+        doc_provider,
+    );
 
     let storage = VirtualStorageProvider::new_memory();
     let ctx = DefaultContext;
@@ -275,11 +277,18 @@ fn test_document_provider_round_trip() {
     // Insert each vector with a synthetic label cycling through 5 categories.
     for (i, v) in train_data.row_iter().enumerate() {
         let label = format!("category_{}", i % 5);
-        let attrs =
-            vec![Attribute::from_value("category", AttributeValue::String(label))];
+        let attrs = vec![Attribute::from_value(
+            "category",
+            AttributeValue::String(label),
+        )];
         let doc = Document::new(v, &attrs);
         index
-            .insert(DocumentInsertStrategy::new(FullPrecision), &ctx, &(i as u32), &doc)
+            .insert(
+                DocumentInsertStrategy::new(FullPrecision),
+                &ctx,
+                &(i as u32),
+                &doc,
+            )
             .unwrap();
     }
 
@@ -299,8 +308,9 @@ fn test_document_provider_round_trip() {
                     .inner_provider()
                     .starting_points()
                     .unwrap();
-                let start_id =
-                    *start_ids.first().expect("index must have a start point after build");
+                let start_id = *start_ids
+                    .first()
+                    .expect("index must have a start point after build");
                 inner
                     .data_provider
                     .save_with(storage_ref, &(start_id, metadata_ref.clone()))
@@ -331,7 +341,10 @@ fn test_document_provider_round_trip() {
 
     // Graph must have at least one start point after rebuild.
     let start_pts = inner.inner_provider().starting_points().unwrap();
-    assert!(!start_pts.is_empty(), "loaded index should have start points");
+    assert!(
+        !start_pts.is_empty(),
+        "loaded index should have start points"
+    );
 
     // Every inserted external ID must map to a valid internal ID.
     let ctx = DefaultContext;

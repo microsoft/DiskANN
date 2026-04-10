@@ -56,8 +56,7 @@ use crate::set::traits::SetProvider;
 use crate::{
     attribute::{Attribute, AttributeValue},
     encoded_attribute_provider::{
-        attribute_encoder::InternalAttribute,
-        document_provider::DocumentProvider,
+        attribute_encoder::InternalAttribute, document_provider::DocumentProvider,
         roaring_attribute_store::RoaringAttributeStore,
     },
     traits::attribute_store::AttributeStore,
@@ -134,11 +133,11 @@ fn vector_id_type_tag<IT: VectorId>() -> VectorIdTypeTag {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 enum AttrTypeTag {
-    Bool    = 0,
+    Bool = 0,
     Integer = 1,
-    Real    = 2,
-    String  = 3,
-    Empty   = 4,
+    Real = 2,
+    String = 3,
+    Empty = 4,
 }
 
 impl AttrTypeTag {
@@ -182,9 +181,7 @@ where
             .read()
             .map_err(|_| lock_poison("attribute_map (read)"))?;
         let index_arc = self.get_index_for_serialization();
-        let index_guard = index_arc
-            .read()
-            .map_err(|_| lock_poison("index (read)"))?;
+        let index_guard = index_arc.read().map_err(|_| lock_poison("index (read)"))?;
 
         let num_attribute_entries = attr_map_guard.len() as u64;
 
@@ -339,12 +336,10 @@ where
                 let node_u64: u64 = node_id.into();
                 for &attr_id in &attr_ids {
                     index.insert(&node_id, &attr_id).map_err(|e| {
-                        ANNError::new(ANNErrorKind::IndexError, e)
-                            .context("rebuild forward index")
+                        ANNError::new(ANNErrorKind::IndexError, e).context("rebuild forward index")
                     })?;
                     inv_index.insert(&attr_id, &node_u64).map_err(|e| {
-                        ANNError::new(ANNErrorKind::IndexError, e)
-                            .context("rebuild inverted index")
+                        ANNError::new(ANNErrorKind::IndexError, e).context("rebuild inverted index")
                     })?;
                 }
             }
@@ -361,9 +356,7 @@ where
 impl<DP, AS, T> SaveWith<T> for DocumentProvider<DP, AS>
 where
     DP: diskann::provider::DataProvider + SaveWith<T, Error = ANNError>,
-    AS: AttributeStore<DP::InternalId>
-        + SaveWith<T, Ok = (), Error = ANNError>
-        + AsyncFriendly,
+    AS: AttributeStore<DP::InternalId> + SaveWith<T, Ok = (), Error = ANNError> + AsyncFriendly,
     T: Send + Sync,
 {
     type Ok = ();
@@ -374,9 +367,7 @@ where
         P: StorageWriteProvider,
     {
         // Delegate to inner provider.
-        self.inner_provider()
-            .save_with(provider, auxiliary)
-            .await?;
+        self.inner_provider().save_with(provider, auxiliary).await?;
 
         // Persist the attribute store.
         self.attribute_store()
@@ -394,9 +385,7 @@ where
 impl<DP, AS, T> LoadWith<T> for DocumentProvider<DP, AS>
 where
     DP: diskann::provider::DataProvider + LoadWith<T, Error = ANNError>,
-    AS: AttributeStore<DP::InternalId>
-        + LoadWith<T, Error = ANNError>
-        + AsyncFriendly,
+    AS: AttributeStore<DP::InternalId> + LoadWith<T, Error = ANNError> + AsyncFriendly,
     T: Send + Sync,
 {
     type Error = ANNError;
@@ -502,9 +491,7 @@ fn read_dict_entry<R: Read>(r: &mut R) -> Result<(u64, Attribute), ANNError> {
         )
     })?;
 
-    let type_tag = AttrTypeTag::from_u8(
-        r.read_u8().map_err(|e| io_error(e, "read type_tag"))?,
-    )?;
+    let type_tag = AttrTypeTag::from_u8(r.read_u8().map_err(|e| io_error(e, "read type_tag"))?)?;
 
     let value = match type_tag {
         AttrTypeTag::Bool => {
@@ -576,7 +563,10 @@ where
     Ok(())
 }
 
-fn read_forward_entry<IT, R>(r: &mut R, type_tag: VectorIdTypeTag) -> Result<(IT, Vec<u64>), ANNError>
+fn read_forward_entry<IT, R>(
+    r: &mut R,
+    type_tag: VectorIdTypeTag,
+) -> Result<(IT, Vec<u64>), ANNError>
 where
     IT: VectorId,
     R: Read,
