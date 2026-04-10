@@ -635,7 +635,7 @@ pub unsafe extern "C" fn search_element(
 
     let garnet_filter = if max_filtering_effort > 0 && bitmap_len == 0 {
         // Only use callback filter when both effort > 0 AND no bitmap exists.
-        // TODO: C# should sets max_filtering_effort = 0 for unfiltered.
+        // TODO: C# should set max_filtering_effort = 0 for unfiltered.
         Some(labels::GarnetFilter::Callback(
             labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
             max_filtering_effort,
