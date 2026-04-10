@@ -6,9 +6,9 @@
 
 use std::mem::size_of;
 
-use diskann::{ANNResult, error::IntoANNResult, utils::VectorRepr};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 
-use crate::common::AlignedBoxWithSlice;
+use diskann_providers::common::AlignedBoxWithSlice;
 
 #[derive(Debug)]
 /// PQ scratch
@@ -87,7 +87,7 @@ impl PQScratch {
 mod tests {
     use rstest::rstest;
 
-    use crate::model::PQScratch;
+    use super::PQScratch;
 
     #[rstest]
     #[case(512, 8, 128, 256)] // default test case
