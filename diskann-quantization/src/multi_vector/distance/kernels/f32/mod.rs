@@ -278,9 +278,9 @@ mod tests {
         let mut scores = vec![0.0f32; 2];
         computer.max_sim(doc, &mut scores);
 
-        // With zero docs the kernel fills f32::MIN then negates → f32::MAX.
+        // With zero docs the scores buffer is left untouched.
         for &s in &scores {
-            assert_eq!(s, f32::MAX, "zero-doc MaxSim should produce f32::MAX");
+            assert_eq!(s, 0.0, "zero-doc MaxSim should leave scores untouched");
         }
     }
 }

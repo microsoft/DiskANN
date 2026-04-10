@@ -98,7 +98,6 @@ impl<T: Copy> QueryComputer<T> {
         );
 
         if doc.num_vectors() == 0 {
-            scores.fill(f32::MAX);
             return;
         }
 
@@ -112,6 +111,9 @@ impl<T: Copy> QueryComputer<T> {
 }
 
 trait DynQueryComputer<T: Copy> {
+    /// Run the SIMD kernel, writing max inner products into `scratch`.
+    ///
+    /// Values are positive (higher = more similar); the caller negates.
     fn raw_kernel(&self, doc: MatRef<'_, Standard<T>>, scratch: &mut [f32]);
     fn nrows(&self) -> usize;
     fn ncols(&self) -> usize;
@@ -163,10 +165,37 @@ impl<T: Copy> DistanceFunctionMut<&QueryComputer<T>, MatRef<'_, Standard<T>>> fo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multi_vector::distance::{Chamfer, MaxSim, QueryMatRef};
+    use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
     fn make_query_mat(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, Standard<f32>> {
         MatRef::new(Standard::new(nrows, ncols).unwrap(), data).unwrap()
     }
+
+    fn make_test_data(len: usize, ceil: usize, shift: usize) -> Vec<f32> {
+        (0..len).map(|v| ((v + shift) % ceil) as f32).collect()
+    }
+
+    fn make_f16_mat(
+        data: &[half::f16],
+        nrows: usize,
+        ncols: usize,
+    ) -> MatRef<'_, Standard<half::f16>> {
+        MatRef::new(Standard::new(nrows, ncols).unwrap(), data).unwrap()
+    }
+
+    fn make_f16_test_data(len: usize, ceil: usize, shift: usize) -> Vec<half::f16> {
+        (0..len)
+            .map(|v| diskann_wide::cast_f32_to_f16(((v + shift) % ceil) as f32))
+            .collect()
+    }
+
+    const TEST_CASES: &[(usize, usize, usize)] = &[
+        (1, 1, 4),   // Minimal
+        (3, 4, 16),  // General case
+        (7, 7, 32),  // Square case
+        (17, 4, 64), // One more than A_PANEL (remainder)
+    ];
 
     #[test]
     fn query_computer_dimensions() {
@@ -218,8 +247,9 @@ mod tests {
         let doc = make_query_mat(&[], 0, 2);
         let mut scores = vec![0.0f32; 2];
         computer.max_sim(doc, &mut scores);
+        // With zero docs the scores buffer is left untouched.
         for &s in &scores {
-            assert_eq!(s, f32::MAX, "zero-doc MaxSim should produce f32::MAX");
+            assert_eq!(s, 0.0, "zero-doc MaxSim should leave scores untouched");
         }
     }
 
@@ -232,4 +262,81 @@ mod tests {
         let mut scores = vec![0.0f32; 3]; // Wrong size
         computer.max_sim(doc, &mut scores);
     }
+
+    macro_rules! test_matches_fallback {
+        ($mod_name:ident, $make_data:ident, $make_mat:ident, $ty:ty, $tol:expr, $label:literal) => {
+            mod $mod_name {
+                use super::*;
+
+                #[test]
+                fn chamfer_matches_fallback() {
+                    for &(nq, nd, dim) in TEST_CASES {
+                        let query_data = $make_data(nq * dim, dim, dim / 2);
+                        let doc_data = $make_data(nd * dim, dim, dim);
+
+                        let query = $make_mat(&query_data, nq, dim);
+                        let doc = $make_mat(&doc_data, nd, dim);
+
+                        let expected = Chamfer::evaluate(QueryMatRef::from(query), doc);
+                        let actual = QueryComputer::<$ty>::new(query).chamfer(doc);
+
+                        assert!(
+                            (actual - expected).abs() < $tol,
+                            "{}Chamfer mismatch for ({},{},{}): actual={}, expected={}",
+                            $label,
+                            nq,
+                            nd,
+                            dim,
+                            actual,
+                            expected
+                        );
+                    }
+                }
+
+                #[test]
+                fn max_sim_matches_fallback() {
+                    for &(nq, nd, dim) in TEST_CASES {
+                        let query_data = $make_data(nq * dim, dim, dim / 2);
+                        let doc_data = $make_data(nd * dim, dim, dim);
+
+                        let query = $make_mat(&query_data, nq, dim);
+                        let doc = $make_mat(&doc_data, nd, dim);
+
+                        let mut expected_scores = vec![0.0f32; nq];
+                        let _ = MaxSim::new(&mut expected_scores)
+                            .unwrap()
+                            .evaluate(QueryMatRef::from(query), doc);
+
+                        let computer = QueryComputer::<$ty>::new(query);
+                        let mut actual_scores = vec![0.0f32; nq];
+                        computer.max_sim(doc, &mut actual_scores);
+
+                        for i in 0..nq {
+                            assert!(
+                                (actual_scores[i] - expected_scores[i]).abs() < $tol,
+                                "{}MaxSim[{}] mismatch for ({},{},{}): actual={}, expected={}",
+                                $label,
+                                i,
+                                nq,
+                                nd,
+                                dim,
+                                actual_scores[i],
+                                expected_scores[i]
+                            );
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    test_matches_fallback!(f32, make_test_data, make_query_mat, f32, 1e-2, "f32 ");
+    test_matches_fallback!(
+        f16,
+        make_f16_test_data,
+        make_f16_mat,
+        half::f16,
+        1e-1,
+        "f16 "
+    );
 }

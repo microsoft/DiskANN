@@ -65,13 +65,10 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
                 1 => f32_microkernel::<1>(arch, a, b, k, r),
                 2 => f32_microkernel::<2>(arch, a, b, k, r),
                 3 => f32_microkernel::<3>(arch, a, b, k, r),
-                _ => {
-                    debug_assert!(
-                        false,
-                        "unexpected remainder {remainder} for B_PANEL={}",
-                        Self::B_PANEL
-                    )
-                }
+                _ => unreachable!(
+                    "unexpected remainder {remainder} for B_PANEL={}",
+                    Self::B_PANEL
+                ),
             }
         }
     }

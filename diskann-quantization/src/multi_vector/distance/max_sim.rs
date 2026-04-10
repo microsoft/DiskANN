@@ -22,8 +22,8 @@ pub enum MaxSimError {
 
 /// Computes per-query-vector maximum similarities to document vectors.
 ///
-/// For each query vector `qᵢ`, finds the maximum similarity (minimum negated
-/// inner product) to any document vector:
+/// For each query vector `qᵢ`, computes the negated maximum inner product
+/// to any document vector:
 ///
 /// ```text
 /// scores[i] = minⱼ -IP(qᵢ, dⱼ)

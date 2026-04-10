@@ -21,10 +21,10 @@ use super::{Kernel, l1_b_tile_budget, l2_a_tile_budget};
 #[derive(Debug, Clone, Copy)]
 struct FullReduce {
     /// The number of micro panels of `A` that make up a tile.
-    a_panels: usize,
+    a_panels_per_tile: usize,
 
     /// The number of micro panels of `B` that make up a tile.
-    b_panels: usize,
+    b_panels_per_tile: usize,
 }
 
 impl FullReduce {
@@ -47,13 +47,16 @@ impl FullReduce {
         let a_row_bytes = a_row_bytes.max(1);
         let b_row_bytes = b_row_bytes.max(1);
 
-        let a_panels = (l2_budget / (a_row_bytes * a_panel)).max(1);
+        let a_panels_per_tile = (l2_budget / (a_row_bytes * a_panel)).max(1);
 
         let a_panel_bytes = a_panel * a_row_bytes;
         let b_tile_budget = l1_budget.saturating_sub(a_panel_bytes);
-        let b_panels = (b_tile_budget / (b_row_bytes * b_panel)).max(1);
+        let b_panels_per_tile = (b_tile_budget / (b_row_bytes * b_panel)).max(1);
 
-        Self { a_panels, b_panels }
+        Self {
+            a_panels_per_tile,
+            b_panels_per_tile,
+        }
     }
 }
 
@@ -98,7 +101,7 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
     let a_panel_stride = K::A_PANEL * k;
     let b_panel_stride = K::B_PANEL * k;
-    let b_tile_stride = b_panel_stride * plan.b_panels;
+    let b_tile_stride = b_panel_stride * plan.b_panels_per_tile;
 
     let b_remainder = b_nrows % K::B_PANEL;
 
@@ -121,7 +124,7 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
-        let a_tile_rows = K::A_PANEL * plan.a_panels;
+        let a_tile_rows = K::A_PANEL * plan.a_panels_per_tile;
         let mut rows_done: usize = 0;
 
         // Loop 1: Tiles of `A`.
@@ -275,16 +278,16 @@ mod tests {
         // 4 B-rows × 256 bytes/row = 1024 bytes per B-panel.
         // 31904 / 1024 = 31 B-panels.
         let plan = FullReduce::new(256, 256, 16, 4, 40960, 36000);
-        assert_eq!(plan.a_panels, 10);
-        assert_eq!(plan.b_panels, 31);
+        assert_eq!(plan.a_panels_per_tile, 10);
+        assert_eq!(plan.b_panels_per_tile, 31);
     }
 
     #[test]
     fn tiny_budget_clamps_to_one() {
         // Budget too small for even one panel — clamp to 1.
         let plan = FullReduce::new(1024, 1024, 16, 4, 1, 1);
-        assert_eq!(plan.a_panels, 1);
-        assert_eq!(plan.b_panels, 1);
+        assert_eq!(plan.a_panels_per_tile, 1);
+        assert_eq!(plan.b_panels_per_tile, 1);
     }
 
     #[test]
@@ -293,10 +296,10 @@ mod tests {
         // FullReduce clamps row bytes to max(1), so a_row_bytes=1, b_row_bytes=1.
         let plan = FullReduce::new(0, 0, 16, 4, 100_000, 50_000);
         // a_panels = 100_000 / (1 * 16) = 6250
-        assert_eq!(plan.a_panels, 6250);
+        assert_eq!(plan.a_panels_per_tile, 6250);
         // a_panel_bytes = 16 * 1 = 16. b_tile_budget = 50_000 - 16 = 49_984.
         // b_panels = 49_984 / (1 * 4) = 12_496
-        assert_eq!(plan.b_panels, 12_496);
+        assert_eq!(plan.b_panels_per_tile, 12_496);
     }
 
     #[test]
@@ -304,17 +307,17 @@ mod tests {
         // Budget exactly fits one A-panel (16 × 64 = 1024 bytes).
         // No room for a second → a_panels = 1.
         let plan = FullReduce::new(64, 64, 16, 4, 1024, 2048);
-        assert_eq!(plan.a_panels, 1);
+        assert_eq!(plan.a_panels_per_tile, 1);
         // L1: 2048 - 16*64(=1024) = 1024 for B. 4*64=256 per B-panel → 4 panels.
-        assert_eq!(plan.b_panels, 4);
+        assert_eq!(plan.b_panels_per_tile, 4);
     }
 
     #[test]
     fn l1_saturated_by_a_panel() {
         // A-panel alone exceeds L1 budget → b_tile_budget saturates to 0,
-        // b_panels clamps to 1.
+        // b_panels_per_tile clamps to 1.
         let plan = FullReduce::new(1024, 64, 16, 4, 100_000, 100);
-        assert_eq!(plan.b_panels, 1);
+        assert_eq!(plan.b_panels_per_tile, 1);
     }
 
     #[test]
@@ -340,6 +343,69 @@ mod tests {
                 k,
                 &mut scratch,
             );
+        }
+    }
+
+    #[test]
+    fn reduce_folds_correctly() {
+        use super::Reduce;
+
+        let max = |a: f32, b: f32| a.max(b);
+        assert_eq!([5.0f32].reduce(&max), 5.0);
+        assert_eq!([1.0f32, 3.0].reduce(&max), 3.0);
+        assert_eq!([2.0f32, 1.0, 4.0].reduce(&max), 4.0);
+        assert_eq!([3.0f32, 1.0, 4.0, 2.0].reduce(&max), 4.0);
+    }
+
+    #[test]
+    fn tiled_reduce_matches_naive() {
+        use super::super::f32::max_ip_kernel;
+        use crate::multi_vector::block_transposed::BlockTransposed;
+        use crate::multi_vector::matrix::{MatRef, Standard};
+        use diskann_wide::arch::Scalar;
+
+        fn naive_max_ip(
+            a: &[f32],
+            a_nrows: usize,
+            b: &[f32],
+            b_nrows: usize,
+            k: usize,
+        ) -> Vec<f32> {
+            (0..a_nrows)
+                .map(|i| {
+                    (0..b_nrows)
+                        .map(|j| (0..k).map(|d| a[i * k + d] * b[j * k + d]).sum::<f32>())
+                        .fold(f32::MIN, f32::max)
+                })
+                .collect()
+        }
+
+        // (a_nrows, b_nrows, dim)
+        let cases: &[(usize, usize, usize)] = &[
+            (8, 3, 4),  // Single A-panel, B remainder (3 % 2 = 1)
+            (16, 5, 8), // Two A-panels, B remainder (5 % 2 = 1)
+        ];
+
+        for &(a_nrows, b_nrows, dim) in cases {
+            let a_data: Vec<f32> = (0..a_nrows * dim).map(|i| (i + 1) as f32).collect();
+            let b_data: Vec<f32> = (0..b_nrows * dim).map(|i| ((i + 1) * 2) as f32).collect();
+
+            let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), &a_data).unwrap();
+            let a_bt = BlockTransposed::<f32, 8>::from_matrix_view(a_mat.as_matrix_view());
+            let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
+
+            let mut scratch = vec![f32::MIN; a_bt.available_rows()];
+            max_ip_kernel::<Scalar, 8>(Scalar::new(), a_bt.as_view(), b_mat, &mut scratch);
+
+            let expected = naive_max_ip(&a_data, a_nrows, &b_data, b_nrows, dim);
+            for i in 0..a_nrows {
+                assert!(
+                    (scratch[i] - expected[i]).abs() < 1e-6,
+                    "row {i} mismatch for ({a_nrows},{b_nrows},{dim}): actual={}, expected={}",
+                    scratch[i],
+                    expected[i]
+                );
+            }
         }
     }
 }

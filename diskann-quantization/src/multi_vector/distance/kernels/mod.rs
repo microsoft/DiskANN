@@ -45,6 +45,8 @@ mod tiled_reduce;
 ///
 /// Returns `None` until platform detection is wired in (e.g. via
 /// `diskann_platform::get_l1d_cache_size()`).
+///
+// TODO: Wire to `diskann_platform` or env-var override.
 fn detect_l1d_cache() -> Option<usize> {
     None
 }
@@ -53,6 +55,8 @@ fn detect_l1d_cache() -> Option<usize> {
 ///
 /// Returns `None` until platform detection is wired in (e.g. via
 /// `diskann_platform::get_l2_cache_size()`).
+///
+// TODO: Wire to `diskann_platform` or env-var override.
 fn detect_l2_cache() -> Option<usize> {
     None
 }

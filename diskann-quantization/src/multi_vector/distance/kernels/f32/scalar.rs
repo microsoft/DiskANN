@@ -72,13 +72,10 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
         unsafe {
             match remainder {
                 1 => scalar_f32_microkernel::<1>(arch, a, b, k, r),
-                _ => {
-                    debug_assert!(
-                        false,
-                        "unexpected remainder {remainder} for B_PANEL={}",
-                        Self::B_PANEL
-                    )
-                }
+                _ => unreachable!(
+                    "unexpected remainder {remainder} for B_PANEL={}",
+                    Self::B_PANEL
+                ),
             }
         }
     }
