@@ -36,7 +36,6 @@ diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 bf-tree = { workspace = true, optional = true }
-
 prost = "0.14.1"
 futures-util.workspace = true
 polonius-the-crab = { version = "0.5.0", optional = true }
