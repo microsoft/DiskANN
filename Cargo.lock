@@ -833,7 +833,6 @@ dependencies = [
 name = "diskann-providers"
 version = "0.50.0"
 dependencies = [
- "anyhow",
  "approx",
  "arc-swap",
  "bf-tree",
@@ -855,7 +854,6 @@ dependencies = [
  "iai-callgrind",
  "itertools 0.13.0",
  "num-traits",
- "once_cell",
  "opentelemetry",
  "polonius-the-crab",
  "proptest",
