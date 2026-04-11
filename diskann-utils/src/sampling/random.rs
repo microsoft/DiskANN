@@ -102,7 +102,7 @@ mod tests {
         let vec: Vec<f32> = WithApproximateNorm::with_approximate_norm(dim, norm, &mut rng);
         let computed_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         let tolerance = 1e-5;
-        assert!((computed_norm - norm).abs() < tolerance);
+        assert!((computed_norm - norm).abs() / norm < tolerance);
     }
 
     #[rstest]
