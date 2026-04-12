@@ -61,7 +61,8 @@ impl WithApproximateNorm for i8 {
     }
 }
 
-// This function uses StandardNormal distribution. StandardNormal creates more uniformly distributed points on sphere surface (mathematically proven property), making the graph easier to navigate. Uniform distribution creates clustering artifacts that make navigation harder, requiring larger search budgets.
+// This function uses StandardNormal distribution. StandardNormal creates uniformly
+// distributed points on sphere surface, making the graph easier to navigate.
 fn generate_random_vector_with_norm_signed<T, F>(
     dim: usize,
     norm: f32,
