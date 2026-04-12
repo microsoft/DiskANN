@@ -201,7 +201,14 @@ mod tests {
 
     /// Test that generated points are evenly distributed on a circle.
     ///
-    /// Tolerance levels:
+    /// **Testing methodology:**
+    /// 1. Split the circle into 36 buckets (signed) or 9 buckets (unsigned), each covering 10 degrees
+    /// 2. Generate points and count how many fall into each angular bucket
+    /// 3. Check that each bucket's count is within `tolerance_sigmas × σ` of the expected count,
+    ///    where σ = sqrt(expected) is the statistical noise for random sampling
+    /// 4. Fail if any bucket deviates too much (indicates clustering instead of uniform distribution)
+    ///
+    /// **Tolerance levels:**
     ///   - tolerance_sigmas = 1.0 → Very strict, only allows ±1σ deviation (about 68% of buckets would naturally fall within this)
     ///   - tolerance_sigmas = 3.0 → Moderate, allows ±3σ deviation (99.7% would naturally fall within this)
     ///   - tolerance_sigmas = 6.0 → Very lenient, allows ±6σ deviation (99.9997% would naturally fall within this)
