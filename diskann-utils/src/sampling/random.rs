@@ -211,7 +211,7 @@ mod tests {
     #[case(false, 500, 3.0, 42)]
     #[case(false, 500, 3.0, 43)]
     #[case(false, 500, 3.0, 44)]
-    fn test_generate_random_vector_with_norm_signed_produces_even_distribution_on_circle(
+    fn test_generate_random_vector_with_norm_signed_produces_uniform_distribution_on_circle(
         #[case] signed: bool,
         #[case] expected_per_bucket: usize,
         #[case] tolerance_sigmas: f32,
@@ -271,9 +271,13 @@ mod tests {
             .count();
 
         assert_eq!(
-            failed_count, 0,
-            "{} bucket(s) outside {}σ threshold",
-            failed_count, tolerance_sigmas
+            failed_count,
+            0,
+            "Distribution not uniform: {} out of {} bucket(s) had point counts that deviated more than {}σ from expected. \
+             This indicates the generator is producing clustered points instead of evenly distributed points on the circle surface.",
+            failed_count,
+            num_buckets,
+            tolerance_sigmas
         );
     }
 }
