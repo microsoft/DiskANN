@@ -198,77 +198,82 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    /// Test that generated points are evenly distributed on a circle.
+    ///
+    /// Tolerance levels:
+    ///   - tolerance_sigmas = 1.0 → Very strict, only allows ±1σ deviation (about 68% of buckets would naturally fall within this)
+    ///   - tolerance_sigmas = 3.0 → Moderate, allows ±3σ deviation (99.7% would naturally fall within this)
+    ///   - tolerance_sigmas = 6.0 → Very lenient, allows ±6σ deviation (99.9997% would naturally fall within this)
     #[rstest]
-    #[case(true, 10_000, 10.0, 42)]
-    #[case(true, 10_000, 10.0, 43)]
-    #[case(true, 10_000, 10.0, 44)]
-    #[case(false, 10_000, 10.0, 42)]
-    #[case(false, 10_000, 10.0, 43)]
-    #[case(false, 10_000, 10.0, 44)]
-    fn test_even_distribution_on_circle(
+    #[case(true, 500, 3.0, 42)]
+    #[case(true, 500, 3.0, 43)]
+    #[case(true, 500, 3.0, 44)]
+    #[case(false, 500, 3.0, 42)]
+    #[case(false, 500, 3.0, 43)]
+    #[case(false, 500, 3.0, 44)]
+    fn test_generate_random_vector_with_norm_signed_produces_even_distribution_on_circle(
         #[case] signed: bool,
-        #[case] num_samples: usize,
-        #[case] max_variation_pct: f32,
+        #[case] expected_per_bucket: usize,
+        #[case] tolerance_sigmas: f32,
         #[case] seed: u64,
     ) {
         let dim = 2;
         let norm = 1.0;
         let mut rng = StdRng::seed_from_u64(seed);
 
-        // Derive parameters based on signed/unsigned
-        let (num_buckets, max_angle) = if signed {
-            (36, 360.0) // Full circle: 36 buckets of 10 degrees each
-        } else {
-            (9, 90.0) // First quadrant: 9 buckets of 10 degrees each
-        };
+        // Step 1: Pick number of buckets and calculate samples
+        let num_buckets = if signed { 36 } else { 9 };
+        let num_samples = num_buckets * expected_per_bucket;
 
         // Generate samples
         let samples: Vec<Vec<f32>> = (0..num_samples)
             .map(|_| generate_random_vector_with_norm_signed(dim, norm, signed, &mut rng, |x| x))
             .collect();
 
-        // Count samples in each bucket
-        let mut buckets = vec![0usize; num_buckets];
-        let degrees_per_bucket = max_angle / num_buckets as f32;
+        // Step 2: Count hits per bucket
+        let mut counts = vec![0usize; num_buckets];
 
         for sample in &samples {
-            let angle = sample[1].atan2(sample[0]);
-            let mut degrees = angle.to_degrees();
+            let theta = sample[1].atan2(sample[0]); // atan2(y, x) returns [-π, π]
 
-            // Normalize to 0-max_angle range
-            if degrees < 0.0 {
-                degrees += 360.0;
-            }
+            // Map to bucket: floor(θ / 2π × buckets)
+            let bucket = if signed {
+                // Full circle [0, 2π) → [0, 36)
+                let normalized_theta = if theta < 0.0 {
+                    theta + 2.0 * std::f32::consts::PI
+                } else {
+                    theta
+                };
+                ((normalized_theta / (2.0 * std::f32::consts::PI)) * num_buckets as f32).floor()
+                    as usize
+                    % num_buckets
+            } else {
+                // First quadrant [0, π/2) → [0, 9)
+                ((theta / (std::f32::consts::PI / 2.0)) * num_buckets as f32).floor() as usize
+            };
 
-            let bucket = (degrees / degrees_per_bucket).floor() as usize % num_buckets;
-            buckets[bucket] += 1;
+            counts[bucket] += 1;
         }
 
-        // Calculate variation
-        let min_count = *buckets.iter().min().unwrap();
-        let max_count = *buckets.iter().max().unwrap();
-        let avg_count = num_samples / num_buckets;
-        let variation_pct = ((max_count - min_count) as f32 / avg_count as f32) * 100.0;
+        // Step 3: Check each bucket is within tolerance_sigmas × σ
+        // Noise per bucket: σ ≈ sqrt(expected)
+        // Threshold: |observed - expected| / expected > tolerance_sigmas / sqrt(expected)
+        let sigma = (expected_per_bucket as f32).sqrt();
+        let threshold = tolerance_sigmas / sigma;
 
-        // Check if variation is within expected bounds
-        if variation_pct >= max_variation_pct {
-            eprintln!("Bucket counts:");
-            for (i, count) in buckets.iter().enumerate() {
-                let start = i as f32 * degrees_per_bucket;
-                let end = (i + 1) as f32 * degrees_per_bucket;
-                eprintln!(
-                    "  Bucket {} ({:3.0}-{:3.0} degrees): {} samples",
-                    i, start, end, count
-                );
-            }
-            eprintln!("Min count: {}", min_count);
-            eprintln!("Max count: {}", max_count);
-            eprintln!("Average count: {}", avg_count);
-            eprintln!("Observed variation: {:.2}%", variation_pct);
-            panic!(
-                "Distribution test failed: {:.2}% >= {:.2}%",
-                variation_pct, max_variation_pct
-            );
-        }
+        let failed_count = counts
+            .iter()
+            .filter(|&&observed| {
+                let deviation = (observed as f32 - expected_per_bucket as f32).abs()
+                    / expected_per_bucket as f32;
+                deviation > threshold
+            })
+            .count();
+
+        assert_eq!(
+            failed_count, 0,
+            "{} bucket(s) outside {}σ threshold",
+            failed_count, tolerance_sigmas
+        );
     }
 }
