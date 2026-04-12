@@ -1,0 +1,390 @@
+{
+  "file": "diskann/src/graph/test/cases/grid_multihop_search.rs",
+  "test": "graph/test/cases/grid_multihop_search/multihop_even_3_5",
+  "payload": [
+    {
+      "beam_width": 1,
+      "comparisons": 81,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 45,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 45,
+        "get_vector": 82,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "results": [
+        [
+          0,
+          3.0
+        ],
+        [
+          30,
+          9.0
+        ],
+        [
+          26,
+          9.0
+        ],
+        [
+          6,
+          9.0
+        ],
+        [
+          2,
+          11.0
+        ],
+        [
+          10,
+          11.0
+        ],
+        [
+          50,
+          11.0
+        ],
+        [
+          56,
+          17.0
+        ],
+        [
+          36,
+          17.0
+        ],
+        [
+          32,
+          17.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 2,
+      "comparisons": 84,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 43,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 43,
+        "get_vector": 85,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "results": [
+        [
+          0,
+          3.0
+        ],
+        [
+          30,
+          9.0
+        ],
+        [
+          26,
+          9.0
+        ],
+        [
+          6,
+          9.0
+        ],
+        [
+          2,
+          11.0
+        ],
+        [
+          10,
+          11.0
+        ],
+        [
+          50,
+          11.0
+        ],
+        [
+          56,
+          17.0
+        ],
+        [
+          36,
+          17.0
+        ],
+        [
+          32,
+          17.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 1,
+      "comparisons": 81,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 45,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 45,
+        "get_vector": 82,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "results": [
+        [
+          0,
+          0.75
+        ],
+        [
+          30,
+          0.75
+        ],
+        [
+          26,
+          0.75
+        ],
+        [
+          6,
+          0.75
+        ],
+        [
+          2,
+          2.75
+        ],
+        [
+          10,
+          2.75
+        ],
+        [
+          50,
+          2.75
+        ],
+        [
+          56,
+          2.75
+        ],
+        [
+          36,
+          2.75
+        ],
+        [
+          32,
+          2.75
+        ]
+      ]
+    },
+    {
+      "beam_width": 2,
+      "comparisons": 84,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 43,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 43,
+        "get_vector": 85,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "results": [
+        [
+          0,
+          0.75
+        ],
+        [
+          30,
+          0.75
+        ],
+        [
+          26,
+          0.75
+        ],
+        [
+          6,
+          0.75
+        ],
+        [
+          2,
+          2.75
+        ],
+        [
+          10,
+          2.75
+        ],
+        [
+          50,
+          2.75
+        ],
+        [
+          56,
+          2.75
+        ],
+        [
+          36,
+          2.75
+        ],
+        [
+          32,
+          2.75
+        ]
+      ]
+    },
+    {
+      "beam_width": 1,
+      "comparisons": 51,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 30,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 30,
+        "get_vector": 52,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        5.0,
+        5.0,
+        5.0
+      ],
+      "results": [
+        [
+          4294967295,
+          0.0
+        ],
+        [
+          124,
+          3.0
+        ],
+        [
+          118,
+          9.0
+        ],
+        [
+          98,
+          9.0
+        ],
+        [
+          94,
+          9.0
+        ],
+        [
+          122,
+          11.0
+        ],
+        [
+          114,
+          11.0
+        ],
+        [
+          74,
+          11.0
+        ],
+        [
+          92,
+          17.0
+        ],
+        [
+          88,
+          17.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 2,
+      "comparisons": 49,
+      "description": "Multihop search with EvenFilter: only even-numbered IDs should appear in results. Two-hop expansion allows traversal through odd nodes to reach even targets. Increasing beam width may affect comparisons.",
+      "filter_name": "EvenFilter",
+      "grid_dims": 3,
+      "grid_size": 5,
+      "hops": 26,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 26,
+        "get_vector": 50,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        5.0,
+        5.0,
+        5.0
+      ],
+      "results": [
+        [
+          4294967295,
+          0.0
+        ],
+        [
+          124,
+          3.0
+        ],
+        [
+          118,
+          9.0
+        ],
+        [
+          98,
+          9.0
+        ],
+        [
+          94,
+          9.0
+        ],
+        [
+          122,
+          11.0
+        ],
+        [
+          114,
+          11.0
+        ],
+        [
+          74,
+          11.0
+        ],
+        [
+          92,
+          17.0
+        ],
+        [
+          88,
+          17.0
+        ]
+      ]
+    }
+  ]
+}

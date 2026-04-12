@@ -1,0 +1,116 @@
+{
+  "file": "diskann/src/graph/test/cases/grid_range_search.rs",
+  "test": "graph/test/cases/grid_range_search/range_search_1_100",
+  "payload": [
+    {
+      "comparisons": 101,
+      "description": "With a query at all -1s, a radius just over sqrt(dim) should capture point (0,...,0) and no others since L2 squared distances for the next ring of neighbors are at least dim+1.",
+      "grid_dims": 1,
+      "grid_size": 100,
+      "hops": 101,
+      "inner_radius": null,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 101,
+        "get_vector": 101,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 1,
+      "query": [
+        -1.0
+      ],
+      "radius": 1.100000023841858,
+      "range_search_second_round": false,
+      "result_distances": [
+        1.0
+      ],
+      "result_ids": [
+        0
+      ]
+    },
+    {
+      "comparisons": 101,
+      "description": "With a query at all 0.5s, a radius of dim+0.1 captures a small neighborhood around the center of the grid. We expect multiple results.",
+      "grid_dims": 1,
+      "grid_size": 100,
+      "hops": 101,
+      "inner_radius": null,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 101,
+        "get_vector": 101,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 2,
+      "query": [
+        0.5
+      ],
+      "radius": 1.100000023841858,
+      "range_search_second_round": false,
+      "result_distances": [
+        0.25,
+        0.25
+      ],
+      "result_ids": [
+        0,
+        1
+      ]
+    },
+    {
+      "comparisons": 101,
+      "description": "With a query at the origin, inner_radius excludes the closest points and outer_radius captures the next ring. Validates annular range search.",
+      "grid_dims": 1,
+      "grid_size": 100,
+      "hops": 101,
+      "inner_radius": 1.100000023841858,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 101,
+        "get_vector": 101,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 0,
+      "query": [
+        0.0
+      ],
+      "radius": 2.0999999046325684,
+      "range_search_second_round": false,
+      "result_distances": [],
+      "result_ids": []
+    },
+    {
+      "comparisons": 101,
+      "description": "With a low starting L value and a large radius, we expect the range search second round to be triggered. This exercises the frontier expansion path. Results must not contain duplicates.",
+      "grid_dims": 1,
+      "grid_size": 100,
+      "hops": 101,
+      "inner_radius": null,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 101,
+        "get_vector": 101,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 3,
+      "query": [
+        0.5
+      ],
+      "radius": 3.0999999046325684,
+      "range_search_second_round": false,
+      "result_distances": [
+        0.25,
+        0.25,
+        2.25
+      ],
+      "result_ids": [
+        0,
+        1,
+        2
+      ]
+    }
+  ]
+}
