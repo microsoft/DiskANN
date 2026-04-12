@@ -198,130 +198,77 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn test_even_distribution_on_circle_signed() {
-        // Test that signed distribution produces uniform points across full circle (360 degrees)
+    #[rstest]
+    #[case(true, 10_000, 10.0, 42)]
+    #[case(true, 10_000, 10.0, 43)]
+    #[case(true, 10_000, 10.0, 44)]
+    #[case(false, 10_000, 10.0, 42)]
+    #[case(false, 10_000, 10.0, 43)]
+    #[case(false, 10_000, 10.0, 44)]
+    fn test_even_distribution_on_circle(
+        #[case] signed: bool,
+        #[case] num_samples: usize,
+        #[case] max_variation_pct: f32,
+        #[case] seed: u64,
+    ) {
         let dim = 2;
         let norm = 1.0;
-        let num_samples = 10000; // 200000 samples per bucket on average
-        let seed = 42;
         let mut rng = StdRng::seed_from_u64(seed);
+
+        // Derive parameters based on signed/unsigned
+        let (num_buckets, max_angle) = if signed {
+            (36, 360.0) // Full circle: 36 buckets of 10 degrees each
+        } else {
+            (9, 90.0) // First quadrant: 9 buckets of 10 degrees each
+        };
 
         // Generate samples
         let samples: Vec<Vec<f32>> = (0..num_samples)
-            .map(|_| generate_random_vector_with_norm_signed(dim, norm, true, &mut rng, |x| x))
+            .map(|_| generate_random_vector_with_norm_signed(dim, norm, signed, &mut rng, |x| x))
             .collect();
 
-        // Count samples in each 10-degree bucket (36 buckets total)
-        const NUM_BUCKETS: usize = 36;
-        let mut buckets = [0usize; NUM_BUCKETS];
+        // Count samples in each bucket
+        let mut buckets = vec![0usize; num_buckets];
+        let degrees_per_bucket = max_angle / num_buckets as f32;
 
-        for sample in samples {
-            let angle = sample[1].atan2(sample[0]); // atan2(y, x) gives angle in radians
-            let degrees = angle.to_degrees();
-            // Normalize to 0-360 range
-            let normalized_degrees = if degrees < 0.0 {
-                degrees + 360.0
-            } else {
-                degrees
-            };
-            let bucket = (normalized_degrees / 10.0).floor() as usize % NUM_BUCKETS;
+        for sample in &samples {
+            let angle = sample[1].atan2(sample[0]);
+            let mut degrees = angle.to_degrees();
+
+            // Normalize to 0-max_angle range
+            if degrees < 0.0 {
+                degrees += 360.0;
+            }
+
+            let bucket = (degrees / degrees_per_bucket).floor() as usize % num_buckets;
             buckets[bucket] += 1;
         }
 
-        // Find min and max counts
+        // Calculate variation
         let min_count = *buckets.iter().min().unwrap();
         let max_count = *buckets.iter().max().unwrap();
-        let avg_count = num_samples / NUM_BUCKETS;
+        let avg_count = num_samples / num_buckets;
         let variation_pct = ((max_count - min_count) as f32 / avg_count as f32) * 100.0;
 
-        // Check if variation is less than 1% (with more samples, variation decreases)
-        if variation_pct >= 5.0 {
-            eprintln!("Test failed! Distribution is not uniform.");
+        // Check if variation is within expected bounds
+        if variation_pct >= max_variation_pct {
             eprintln!("Bucket counts:");
             for (i, count) in buckets.iter().enumerate() {
+                let start = i as f32 * degrees_per_bucket;
+                let end = (i + 1) as f32 * degrees_per_bucket;
                 eprintln!(
-                    "  Bucket {} ({:3}-{:3} degrees): {} samples",
-                    i,
-                    i * 10,
-                    (i + 1) * 10,
-                    count
+                    "  Bucket {} ({:3.0}-{:3.0} degrees): {} samples",
+                    i, start, end, count
                 );
             }
             eprintln!("Min count: {}", min_count);
             eprintln!("Max count: {}", max_count);
             eprintln!("Average count: {}", avg_count);
             eprintln!("Observed variation: {:.2}%", variation_pct);
-            panic!("Distribution test failed: {:.2}% > 1.0%", variation_pct);
-        }
-    }
-
-    #[test]
-    fn test_even_distribution_on_circle_unsigned() {
-        // Test that unsigned distribution produces uniform points across first quadrant (0-90 degrees)
-        let dim = 2;
-        let norm = 1.0;
-        let num_samples = 3600000; // 400000 samples per bucket on average
-        let seed = 42;
-        let mut rng = StdRng::seed_from_u64(seed);
-
-        // Generate samples
-        let samples: Vec<Vec<f32>> = (0..num_samples)
-            .map(|_| generate_random_vector_with_norm_signed(dim, norm, false, &mut rng, |x| x))
-            .collect();
-
-        // For unsigned, all points should be in first quadrant (0-90 degrees)
-        // Divide into 9 buckets of 10 degrees each
-        const NUM_BUCKETS: usize = 9;
-        let mut buckets = [0usize; NUM_BUCKETS];
-
-        for sample in samples {
-            // Verify both coordinates are non-negative
-            assert!(
-                sample[0] >= 0.0 && sample[1] >= 0.0,
-                "Unsigned should produce only non-negative coordinates"
+            panic!(
+                "Distribution test failed: {:.2}% >= {:.2}%",
+                variation_pct, max_variation_pct
             );
-
-            let angle = sample[1].atan2(sample[0]); // atan2(y, x)
-            let degrees = angle.to_degrees();
-
-            // All angles should be in 0-90 degree range
-            assert!(
-                degrees >= 0.0 && degrees <= 90.0,
-                "Unsigned should only produce 0-90 degree arc, got {} degrees",
-                degrees
-            );
-
-            let bucket = (degrees / 10.0).floor() as usize;
-            if bucket < NUM_BUCKETS {
-                buckets[bucket] += 1;
-            }
-        }
-
-        // Find min and max counts
-        let min_count = *buckets.iter().min().unwrap();
-        let max_count = *buckets.iter().max().unwrap();
-        let avg_count = num_samples / NUM_BUCKETS;
-        let difference_pct = ((max_count - min_count) as f32 / avg_count as f32) * 100.0;
-
-        // Check if difference is less than 1%
-        if difference_pct >= 1.0 {
-            eprintln!("Test failed! Distribution is not uniform.");
-            eprintln!("Bucket counts:");
-            for (i, count) in buckets.iter().enumerate() {
-                eprintln!(
-                    "  Bucket {} ({:2}-{:2} degrees): {} samples",
-                    i,
-                    i * 10,
-                    (i + 1) * 10,
-                    count
-                );
-            }
-            eprintln!("Min count: {}", min_count);
-            eprintln!("Max count: {}", max_count);
-            eprintln!("Average count: {}", avg_count);
-            eprintln!("Observed difference: {:.2}%", difference_pct);
-            panic!("Distribution test failed: {:.2}% > 1.0%", difference_pct);
         }
     }
 }
