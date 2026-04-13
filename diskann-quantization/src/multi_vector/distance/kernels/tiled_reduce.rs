@@ -30,8 +30,8 @@ struct FullReduce {
 impl FullReduce {
     /// Compute A-tile and B-tile panel counts from cache budgets.
     ///
-    /// * `a_row_bytes` — bytes per A row (`k * size_of::<AElem>()`).
-    /// * `b_row_bytes` — bytes per B row (`k * size_of::<BElem>()`).
+    /// * `a_row_bytes` — bytes per prepared A row (`k * size_of::<APrepared>()`).
+    /// * `b_row_bytes` — bytes per prepared B row (`k * size_of::<BPrepared>()`).
     /// * `a_panel` — micro-kernel A panel height (`K::A_PANEL`).
     /// * `b_panel` — micro-kernel B panel width (`K::B_PANEL`).
     /// * `l2_budget` — L2 cache budget in bytes for the A tile.
@@ -111,6 +111,15 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
         "a_available_rows ({a_available_rows}) must be a multiple of A_PANEL ({})",
         K::A_PANEL,
     );
+
+    // Zero-dimensional vectors have IP = 0 for every pair. Fill scratch and
+    // return to avoid zero-stride infinite loops in the tiling nest.
+    if k == 0 {
+        if b_nrows > 0 {
+            scratch[..a_available_rows].fill(0.0);
+        }
+        return;
+    }
 
     // Staging buffers are split into independent A and B halves so the tiling
     // loop can borrow them independently — `prepare_a(&mut a_buf)` and
@@ -343,6 +352,63 @@ mod tests {
                 k,
                 &mut scratch,
             );
+        }
+    }
+
+    #[test]
+    fn zero_dim_fills_scratch_and_returns() {
+        use super::super::f32::F32Kernel;
+        use diskann_wide::arch::Scalar;
+
+        let a_rows = 8;
+        let b_rows = 3;
+        let k = 0;
+
+        let a = Vec::<f32>::new();
+        let b = Vec::<f32>::new();
+        let mut scratch = vec![f32::MIN; a_rows];
+
+        // SAFETY: k == 0 so no elements are read; pointers are never dereferenced.
+        unsafe {
+            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+                Scalar::new(),
+                a.as_ptr(),
+                a_rows,
+                b.as_ptr(),
+                b_rows,
+                k,
+                &mut scratch,
+            );
+        }
+
+        for &v in &scratch {
+            assert_eq!(v, 0.0, "zero-dim IP should be 0.0");
+        }
+    }
+
+    #[test]
+    fn zero_dim_zero_docs_leaves_scratch_untouched() {
+        use super::super::f32::F32Kernel;
+        use diskann_wide::arch::Scalar;
+
+        let a_rows = 8;
+        let mut scratch = vec![f32::MIN; a_rows];
+
+        // SAFETY: k == 0, b_nrows == 0; no elements read.
+        unsafe {
+            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+                Scalar::new(),
+                [].as_ptr(),
+                a_rows,
+                [].as_ptr(),
+                0,
+                0,
+                &mut scratch,
+            );
+        }
+
+        for &v in &scratch {
+            assert_eq!(v, f32::MIN, "zero docs should leave scratch untouched");
         }
     }
 

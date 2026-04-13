@@ -40,7 +40,6 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
         _rows: usize,
         _k: usize,
     ) -> *const f32 {
-        // Identity: BElem == BPrepared, no conversion needed.
         src
     }
 
@@ -84,9 +83,9 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
 ///
 /// # Safety
 ///
-/// * `a_packed` must point to `A_PANEL(16) × k` contiguous `f32` values.
-/// * `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
-/// * `r` must point to at least `A_PANEL(16)` writable `f32` values.
+/// 1. `a_packed` must point to `A_PANEL(16) × k` contiguous `f32` values.
+/// 2. `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
+/// 3. `r` must point to at least `A_PANEL(16)` writable `f32` values.
 #[inline(always)]
 pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const UNROLL: usize>(
     arch: V3,
@@ -107,8 +106,7 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
     let a_stride_half = f32s::LANES;
 
     for i in 0..k {
-        // SAFETY: a_packed points to A_PANEL * k contiguous f32s (one micro-panel).
-        // b points to UNROLL rows of k contiguous f32s each. All reads are in-bounds.
+        // SAFETY: By preconditions 1 and 2; i < k and j < UNROLL.
         unsafe {
             let a0 = f32s::load_simd(arch, a_packed.add(a_stride * i));
             let a1 = f32s::load_simd(arch, a_packed.add(a_stride * i + a_stride_half));
@@ -121,16 +119,14 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
         }
     }
 
-    // SAFETY: r points to at least A_PANEL = 16 writable f32s (2 × f32x8).
+    // SAFETY: By precondition 3; LANES < A_PANEL so both halves are in-bounds.
     let mut r0 = unsafe { f32s::load_simd(arch, r) };
-    // SAFETY: r + f32s::LANES is within the same A_PANEL-sized scratch region.
     let mut r1 = unsafe { f32s::load_simd(arch, r.add(f32s::LANES)) };
 
     r0 = op(r0, p0.reduce(&op));
     r1 = op(r1, p1.reduce(&op));
 
-    // SAFETY: r points to at least A_PANEL writable f32s (same region as loads above).
+    // SAFETY: By precondition 3.
     unsafe { r0.store_simd(r) };
-    // SAFETY: r + LANES is within the same A_PANEL-sized scratch region.
     unsafe { r1.store_simd(r.add(f32s::LANES)) };
 }

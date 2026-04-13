@@ -87,36 +87,22 @@ fn l1_b_tile_budget() -> usize {
 
 // ── Kernel trait ─────────────────────────────────────────────────
 
-/// Trait abstracting a SIMD micro-kernel for the tiling loop.
+/// SIMD micro-kernel trait for the [`tiled_reduce`](tiled_reduce::tiled_reduce) loop.
 ///
-/// The architecture parameter `A` enables different implementations for each
-/// micro-architecture (e.g. V3 for AVX2+FMA, Scalar for portable).
-///
-/// Each implementation provides the element types, panel geometry, preparation
-/// hooks, and the actual SIMD micro-kernel body. The generic `tiled_reduce`
-/// function handles the 5-level loop nest and calls into the kernel via this
-/// trait.
-///
-/// `prepare_a` and `prepare_b` allow kernels to convert or repack panel data
-/// before the micro-kernel. Identity kernels (`AElem == APrepared`) may return
-/// `src` directly; converting kernels stage into caller-provided
-/// `&mut [APrepared]` / `&mut [BPrepared]` buffers allocated via
+/// Each implementation provides element types, panel geometry, optional
+/// `prepare_a`/`prepare_b` conversion hooks, and the micro-kernel body.
+/// Identity kernels (`AElem == APrepared`) return `src` directly; converting
+/// kernels stage into `&mut [APrepared]`/`&mut [BPrepared]` buffers from
 /// [`new_buffers`](Self::new_buffers).
-///
-/// The staging buffers are split into independent `Vec<APrepared>` and
-/// `Vec<BPrepared>` so that the tiling loop can borrow them independently,
-/// avoiding Stacked Borrows violations when `prepare_b`'s mutable borrow
-/// overlaps with a pointer returned by `prepare_a`.
 ///
 /// # Safety
 ///
 /// Implementors must ensure that:
-/// - `prepare_a` / `prepare_b` read only within the documented `src` bounds,
-///   and any returned pointer is valid for the corresponding `PANEL * k` reads.
-/// - `prepare_a` must only write to its `buf`; `prepare_b` must only write to
-///   its `buf`.
-/// - `full_panel` and `remainder_dispatch` only read/write within the bounds
-///   described by their pointer arguments and the `k` / panel-size contracts.
+/// - `prepare_a`/`prepare_b` read only within the documented `src` bounds
+///   and return a pointer valid for the corresponding `PANEL * k` reads.
+/// - `prepare_a` writes only to its `buf`; `prepare_b` writes only to its `buf`.
+/// - `full_panel` and `remainder_dispatch` access only within the bounds
+///   described by their pointer arguments and the `k`/panel-size contracts.
 pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
     /// Element type for the A side (e.g. query vectors in storage format).
     type AElem: Copy;

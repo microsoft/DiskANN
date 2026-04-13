@@ -67,7 +67,6 @@ unsafe impl Kernel<V3> for F16Kernel<16> {
 
     #[inline(always)]
     unsafe fn full_panel(arch: V3, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
-        // A and B are already f32 after preparation — reuse the f32 micro-kernel.
         // SAFETY: Caller guarantees pointer validity per Kernel<V3> contract.
         unsafe { f32_microkernel::<{ Self::B_PANEL }>(arch, a, b, k, r) }
     }
@@ -81,7 +80,6 @@ unsafe impl Kernel<V3> for F16Kernel<16> {
         k: usize,
         r: *mut f32,
     ) {
-        // Both A and B are prepared f32 — reuse the f32 micro-kernel.
         // SAFETY: Caller guarantees pointer validity per Kernel<V3> contract.
         unsafe {
             match remainder {

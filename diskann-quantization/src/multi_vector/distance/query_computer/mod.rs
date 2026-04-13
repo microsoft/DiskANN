@@ -90,8 +90,9 @@ impl<T: Copy> QueryComputer<T> {
     /// Panics if `scores.len() != self.nrows()`.
     pub fn max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]) {
         let nq = self.nrows();
-        assert!(
-            scores.len() == nq,
+        assert_eq!(
+            scores.len(),
+            nq,
             "scores buffer not right size: {} != {}",
             scores.len(),
             nq

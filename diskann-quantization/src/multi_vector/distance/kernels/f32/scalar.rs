@@ -92,9 +92,9 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
 ///
 /// # Safety
 ///
-/// * `a_packed` must point to `A_PANEL(8) × k` contiguous `f32` values.
-/// * `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
-/// * `r` must point to at least `A_PANEL(8)` writable `f32` values.
+/// 1. `a_packed` must point to `A_PANEL(8) × k` contiguous `f32` values.
+/// 2. `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
+/// 3. `r` must point to at least `A_PANEL(8)` writable `f32` values.
 #[inline(always)]
 pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
     const UNROLL: usize,
@@ -115,8 +115,7 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
     let a_stride = f32s::LANES;
 
     for i in 0..k {
-        // SAFETY: a_packed points to A_PANEL * k contiguous f32s (one micro-panel).
-        // b points to UNROLL rows of k contiguous f32s each. All reads are in-bounds.
+        // SAFETY: By preconditions 1 and 2; i < k and j < UNROLL.
         unsafe {
             let a0 = f32s::load_simd(arch, a_packed.add(a_stride * i));
 
@@ -127,11 +126,11 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
         }
     }
 
-    // SAFETY: r points to at least A_PANEL = 8 writable f32s (1 × f32x8).
+    // SAFETY: By precondition 3.
     let mut r0 = unsafe { f32s::load_simd(arch, r) };
 
     r0 = op(r0, p0.reduce(&op));
 
-    // SAFETY: same as load — r has A_PANEL writable f32s.
+    // SAFETY: By precondition 3.
     unsafe { r0.store_simd(r) };
 }
