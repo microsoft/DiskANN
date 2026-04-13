@@ -10,6 +10,6 @@ pub use graph_data_type_utils::{
 };
 
 pub mod search_utils;
-pub use search_utils::{assert_top_k_exactly_match, groundtruth};
 #[cfg(test)]
 pub use search_utils::{assert_range_results_exactly_match, is_match};
+pub use search_utils::{assert_top_k_exactly_match, groundtruth};

@@ -19,7 +19,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use diskann_vector::{PureDistanceFunction, distance::{Metric, SquaredL2}};
+use diskann_vector::{
+    PureDistanceFunction,
+    distance::{Metric, SquaredL2},
+};
 
 use crate::{
     graph::{
@@ -472,7 +475,11 @@ fn even_filtering_multihop() {
         .unwrap();
 
     // Verify each result matches the groundtruth (filtered to even IDs).
-    for (i, n) in neighbors.iter().enumerate().take(stats.result_count as usize) {
+    for (i, n) in neighbors
+        .iter()
+        .enumerate()
+        .take(stats.result_count as usize)
+    {
         match search_utils::is_match(&gt_clone, *n, 0.0) {
             Some(position) => {
                 gt_clone.remove(position);
@@ -500,9 +507,8 @@ fn callback_enforces_filtering() {
     // Compute brute-force groundtruth for validation.
     let data = grid.data(grid_size);
     let baseline_gt = {
-        let mut gt = search_utils::groundtruth(data.as_view(), &query, |a, b| {
-            SquaredL2::evaluate(a, b)
-        });
+        let mut gt =
+            search_utils::groundtruth(data.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
         gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
         gt
     };
@@ -549,7 +555,8 @@ fn callback_enforces_filtering() {
     assert!(
         stats.result_count >= to_check as u32,
         "expected at least {} results, got {}",
-        to_check, stats.result_count
+        to_check,
+        stats.result_count
     );
 
     // Validate callback was invoked and tracked the blocked candidate.
