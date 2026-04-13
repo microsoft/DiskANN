@@ -140,10 +140,10 @@ fn flaky_consolidate_returns_failed_retrieval() {
     let index = setup_consolidation_index(&vectors, &adjacency_lists);
     let ctx = test_provider::Context::new();
 
-    // Make ALL non-start-point IDs transient — this ensures that fill() will encounter
-    // a transient error when trying to retrieve any data point's vector.
-    let transient_ids: HashSet<u32> = (0..vectors.len() as u32).collect();
-    let flaky_strategy = FlakyPruneStrategy::new(transient_ids);
+    // Make only the consolidated node (0) transient. During robust_prune_list, fill()
+    // requests node 0's vector first — the transient error causes view.get(0) to return
+    // None, triggering the FailedVectorRetrieval path.
+    let flaky_strategy = FlakyPruneStrategy::new([0]);
 
     let result = rt
         .block_on(index.consolidate_vector(&flaky_strategy, &ctx, 0))
