@@ -49,7 +49,7 @@ where
         }
     }
 
-    pub fn get_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
+    pub(crate) fn get_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
         self.index.clone()
     }
 
