@@ -18,5 +18,5 @@ pub mod graph;
 // Top level exports.
 pub use error::ann_error::{ANNError, ANNErrorKind, ANNResult};
 
-#[cfg(test)]
+#[cfg(test)
 mod test;
