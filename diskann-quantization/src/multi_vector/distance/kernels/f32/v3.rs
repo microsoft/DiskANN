@@ -121,6 +121,7 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
 
     // SAFETY: By precondition 3; LANES < A_PANEL so both halves are in-bounds.
     let mut r0 = unsafe { f32s::load_simd(arch, r) };
+    // SAFETY: By precondition 3; r.add(LANES) is still within the A_PANEL-sized scratch.
     let mut r1 = unsafe { f32s::load_simd(arch, r.add(f32s::LANES)) };
 
     r0 = op(r0, p0.reduce(&op));
@@ -128,5 +129,6 @@ pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const U
 
     // SAFETY: By precondition 3.
     unsafe { r0.store_simd(r) };
+    // SAFETY: By precondition 3; r.add(LANES) is still within the A_PANEL-sized scratch.
     unsafe { r1.store_simd(r.add(f32s::LANES)) };
 }
