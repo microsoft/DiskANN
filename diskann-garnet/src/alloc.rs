@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 /// Custom allocator that over-aligns to 8 bytes. This is needed since Garnet will hand us byte slices for f32 data
 /// that may be unaligned, so we need an allocator to make owned, aligned byte containers.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AlignToEight;
+pub struct AlignToEight;
 
 unsafe impl AllocatorCore for AlignToEight {
     #[inline]

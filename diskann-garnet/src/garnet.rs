@@ -86,6 +86,10 @@ impl Callbacks {
         self.rmw_callback
     }
 
+    #[expect(
+        dead_code,
+        reason = "currently unused, but may be needed in the future"
+    )]
     pub fn exists_iid(&self, ctx: Context, id: u32) -> bool {
         let key = [4, id];
         // SAFETY: Key bytes are preceded by 4 bytes of space.
@@ -100,6 +104,10 @@ impl Callbacks {
         unsafe { self.exists_raw(ctx, &key_bytes[4..]) }
     }
 
+    #[expect(
+        dead_code,
+        reason = "currently unused, but may be needed in the future"
+    )]
     pub fn exists_eid(&self, ctx: Context, id: &GarnetId) -> bool {
         // SAFETY: GarnetId ensures there are 4 bytes preceding the key bytes.
         unsafe { self.exists_raw(ctx, id) }

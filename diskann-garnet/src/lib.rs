@@ -51,6 +51,7 @@ mod fsm;
 mod garnet;
 mod labels;
 mod provider;
+mod quantization;
 #[cfg(test)]
 mod test_utils;
 
@@ -175,7 +176,8 @@ fn create_index_impl<T: VectorRepr>(
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
-    let provider = GarnetProvider::<T>::new(dim, metric_type, max_degree, callbacks, context)?;
+    let provider =
+        GarnetProvider::<T>::new(dim, quant_type, metric_type, max_degree, callbacks, context)?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
     } else {
@@ -217,7 +219,7 @@ pub unsafe extern "C" fn create_index(
         target_degree,
         config::MaxDegree::Value(max_degree as usize),
         l_build as usize,
-        config::PruneKind::TriangleInequality,
+        metric_type.into(),
     )
     .build()
     {
@@ -230,6 +232,7 @@ pub unsafe extern "C" fn create_index(
     let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
 
     match quant_type {
+        VectorQuantType::Invalid => ptr::null(),
         VectorQuantType::XPreQ8 => {
             if let Ok(index) = create_index_impl::<u8>(
                 quant_type,
@@ -245,7 +248,7 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::NoQuant => {
+        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
             if let Ok(index) = create_index_impl::<f32>(
                 quant_type,
                 config,
@@ -260,7 +263,6 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        _ => ptr::null(),
     }
 }
 
@@ -318,6 +320,9 @@ fn interpret_vector<'a>(
     let v = match vector_value_type {
         VectorValueType::Invalid => return None,
         VectorValueType::FP32 => match quant_type {
+            VectorQuantType::Invalid => {
+                return None;
+            }
             VectorQuantType::XPreQ8 => {
                 let mut bp = if let Ok(bp) = Poly::broadcast(0u8, vector_len, AlignToEight) {
                     bp
@@ -332,11 +337,11 @@ fn interpret_vector<'a>(
                 }
                 PolyCow::from(bp)
             }
-            VectorQuantType::NoQuant if v.as_ptr().align_offset(4) == 0 => {
+            _ if v.as_ptr().align_offset(4) == 0 => {
                 // pointer is correctly aligned to interpret as f32
                 PolyCow::from(v)
             }
-            VectorQuantType::NoQuant => {
+            _ => {
                 // need to copy f32 data as it is unaligned
                 let mut fp = if let Ok(fp) = Poly::broadcast(0u8, vector_len_bytes, AlignToEight) {
                     fp
@@ -345,9 +350,6 @@ fn interpret_vector<'a>(
                 };
                 fp.copy_from_slice(v);
                 PolyCow::from(fp)
-            }
-            _ => {
-                return None;
             }
         },
         VectorValueType::XB8 => match quant_type {
@@ -375,6 +377,10 @@ fn interpret_vector<'a>(
     Some(v)
 }
 
+const INSERT_FAIL: u8 = 0;
+const INSERT_SUCCESS: u8 = 1;
+const INSERT_SUCCESS_START_TRAINING: u8 = 2;
+
 /// # Safety
 ///
 /// FFI
@@ -389,7 +395,7 @@ pub unsafe extern "C" fn insert(
     vector_len: usize,
     attribute_data: *const u8,
     attribute_len: usize,
-) -> bool {
+) -> u8 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context(ctx);
 
@@ -404,13 +410,13 @@ pub unsafe extern "C" fn insert(
     ) {
         v
     } else {
-        return false;
+        return INSERT_FAIL;
     };
 
     if let Some(_err) =
         ensure_index_ready_or_init(index, || index.inner.maybe_set_start_point(&ctx, &v).err())
     {
-        return false;
+        return INSERT_FAIL;
     };
 
     // Write attributes to garnet
@@ -420,11 +426,22 @@ pub unsafe extern "C" fn insert(
         &[]
     };
     if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-        return false;
+        return INSERT_FAIL;
     }
 
+    let old_ready = provider::QUANTIZER_READY.with(|v| v.load(Ordering::Acquire));
+
     // Insert the vector
-    index.inner.insert(&ctx, &id, &v).is_ok()
+    if index.inner.insert(&ctx, &id, &v).is_ok() {
+        let ready = provider::QUANTIZER_READY.with(|v| v.load(Ordering::Acquire));
+        if !old_ready && ready {
+            INSERT_SUCCESS_START_TRAINING
+        } else {
+            INSERT_SUCCESS
+        }
+    } else {
+        INSERT_FAIL
+    }
 }
 
 fn ensure_index_ready_or_init<F, E>(index: &Index, init: F) -> Option<E>
@@ -464,6 +481,34 @@ where
         }
     }
     None
+}
+
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_void) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context(context);
+
+    index.inner.train_quantizer(&ctx)
+}
+
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn backfill_quant_vectors(
+    context: u64,
+    index_ptr: *const c_void,
+    task_index: usize,
+    task_count: usize,
+) {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context(context);
+    index
+        .inner
+        .backfill_quant_vectors(&ctx, task_index, task_count);
 }
 
 /// # Safety

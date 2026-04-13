@@ -117,6 +117,12 @@ impl<const NBITS: usize> num_traits::FromPrimitive for MinMaxElement<NBITS> {
     impl_from_primitive!(NBITS, from_u32, u32);
 }
 
+impl<const NBITS: usize> MinMaxElement<NBITS> {
+    pub fn from_bytes(x: &[u8]) -> &[Self] {
+        bytemuck::must_cast_slice(x)
+    }
+}
+
 ////////////////////////
 /// DistanceProvider ///
 ////////////////////////
