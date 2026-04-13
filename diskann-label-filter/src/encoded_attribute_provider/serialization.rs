@@ -46,8 +46,7 @@ use std::mem;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use diskann::{utils::VectorId, ANNError, ANNErrorKind};
 use diskann_providers::storage::{
-    AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith, StorageReadProvider,
-    StorageWriteProvider,
+    AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith, StorageReadProvider, StorageWriteProvider
 };
 use diskann_utils::future::AsyncFriendly;
 use roaring::RoaringTreemap;
@@ -87,6 +86,12 @@ impl LabelFilePath for AsyncIndexMetadata {
 impl LabelFilePath for (u32, AsyncIndexMetadata) {
     fn label_file_path(&self) -> String {
         format!("{}.labels.bin", self.1.prefix())
+    }
+}
+
+impl LabelFilePath for (u32, u32, DiskGraphOnly) {
+    fn label_file_path(&self) -> String {
+        format!("{}.labels.bin", self.2.prefix())
     }
 }
 
