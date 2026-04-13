@@ -4,3 +4,4 @@
  */
 
 pub mod aligned_file_reader_bench;
+pub mod kmeans_bench;

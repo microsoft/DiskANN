@@ -18,9 +18,10 @@ use thiserror::Error;
 
 use crate::{
     ANNError, ANNResult, default_post_processor,
-    error::{Infallible, RankedError, ToRanked, TransientError, message},
-    graph::{AdjacencyList, glue, test::synthetic, workingset},
+    error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
+    graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
+    neighbor::Neighbor,
     provider,
     utils::VectorRepr,
 };
@@ -984,6 +985,11 @@ pub struct Accessor<'a> {
 }
 
 impl<'a> Accessor<'a> {
+    /// Return the underlying [`Provider`] reference.
+    pub fn provider(&self) -> &'a Provider {
+        self.provider
+    }
+
     /// Creates an accessor with no flaky behavior (backward-compatible).
     pub fn new(provider: &'a Provider) -> Self {
         Self::new_inner(provider, None)
@@ -1082,6 +1088,24 @@ impl glue::SearchExt for Accessor<'_> {
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
+impl provider::CacheableAccessor for Accessor<'_> {
+    type Map = diskann_utils::lifetime::Slice<f32>;
+
+    fn from_cached<'a>(element: &'a [f32]) -> &'a [f32]
+    where
+        Self: 'a,
+    {
+        element
+    }
+
+    fn as_cached<'a, 'b>(element: &'a &'b [f32]) -> &'a &'b [f32]
+    where
+        Self: 'a + 'b,
+    {
+        element
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy {
     // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded
@@ -1122,7 +1146,7 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
-    default_post_processor!(glue::CopyIds);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
@@ -1200,6 +1224,44 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     }
 }
 
+/// A [`glue::SearchPostProcessStep`] for [`Accessor`] that removes deleted IDs from the
+/// candidate stream.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilterDeleted;
+
+impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
+    type Error<NextError>
+        = NextError
+    where
+        NextError: StandardError;
+
+    type NextAccessor = Accessor<'a>;
+
+    fn post_process_step<I, B, Next>(
+        &self,
+        next: &Next,
+        accessor: &mut Accessor<'a>,
+        query: &'b [f32],
+        computer: &<f32 as VectorRepr>::QueryDistance,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+        Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
+    {
+        let provider = accessor.provider;
+        next.post_process(
+            accessor,
+            query,
+            computer,
+            candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
+            output,
+        )
+    }
+}
+
 impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElement<'a> = &'a [f32];
     type DeleteElementGuard = Box<[f32]>;
@@ -1207,7 +1269,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
-    type SearchPostProcessor = glue::CopyIds;
+    type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -1218,7 +1280,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        glue::Pipeline::new(FilterDeleted, glue::CopyIds)
     }
 
     async fn get_delete_element<'a>(
