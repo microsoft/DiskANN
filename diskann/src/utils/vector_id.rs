@@ -4,6 +4,7 @@
  */
 
 use diskann_vector::contains::ContainsSimd;
+use num_traits::FromPrimitive;
 
 use crate::utils::{IntoUsize, TryIntoInteger, TypeStr, VectorIdTryFrom};
 
@@ -23,6 +24,7 @@ pub trait VectorId:
     + TryIntoInteger<u32>
     + Into<u64>
     + IntoUsize
+    + FromPrimitive
     + Copy
     + Sized
     + Send
@@ -48,6 +50,7 @@ impl<T> VectorId for T where
         + VectorIdTryFrom<u64>
         + VectorIdTryFrom<usize>
         + TryIntoInteger<u32>
+        + FromPrimitive
         + Copy
         + Sized
         + Send
