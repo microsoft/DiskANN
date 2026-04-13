@@ -776,6 +776,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "foldhash 0.2.0",
+ "rand 0.9.2",
  "thiserror 2.0.17",
  "tokio",
 ]

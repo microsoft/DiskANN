@@ -51,6 +51,7 @@ mod fsm;
 mod garnet;
 mod labels;
 mod provider;
+mod quantization;
 #[cfg(test)]
 mod test_utils;
 

@@ -26,7 +26,7 @@
 use crossbeam::queue::ArrayQueue;
 use std::sync::{
     RwLock,
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 use thiserror::Error;
 
@@ -52,6 +52,7 @@ pub struct FreeSpaceMap {
     fast_free_list: ArrayQueue<u32>,
     max_block: RwLock<u32>,
     next_id: AtomicU32,
+    total_used: AtomicUsize,
 }
 
 impl FreeSpaceMap {
@@ -60,6 +61,7 @@ impl FreeSpaceMap {
         let fast_free_list = ArrayQueue::new(FAST_SIZE);
         let max_block = RwLock::new(u32::MAX);
         let next_id = AtomicU32::new(0);
+        let total_used = AtomicUsize::new(0);
 
         let mut this = Self {
             callbacks,
@@ -67,6 +69,7 @@ impl FreeSpaceMap {
             fast_free_list,
             max_block,
             next_id,
+            total_used,
         };
 
         // Attempt to load state from Garnet.
@@ -97,6 +100,7 @@ impl FreeSpaceMap {
 
         let mut block = vec![0u8; BLOCK_SIZE_BYTES];
         let mut last_used_id = -1i64;
+        let mut total_used = 0usize;
 
         for block_id in (0..max_block_id).rev() {
             let block_key = Self::block_key(block_id);
@@ -115,8 +119,9 @@ impl FreeSpaceMap {
                     let used = bit_used(byte, bidx);
                     if used {
                         last_used_id = last_used_id.max(id as i64);
-                    } else if (id as i64) < last_used_id && self.fast_free_list.push(id).is_err() {
-                        break;
+                        total_used += 1;
+                    } else if (id as i64) < last_used_id {
+                        let _ = self.fast_free_list.push(id);
                     }
 
                     id = id.saturating_sub(1);
@@ -129,6 +134,8 @@ impl FreeSpaceMap {
 
         self.next_id
             .store((last_used_id + 1) as u32, Ordering::Release);
+
+        self.total_used.store(total_used, Ordering::Release);
 
         if !self.fast_free_list.is_empty() {
             self.has_free_ids.store(true, Ordering::Release);
@@ -172,6 +179,14 @@ impl FreeSpaceMap {
             |data: &mut [u8]| changed = update_status(used, &mut data[byte_idx], bit_idx),
         ) {
             return Err(FsmError::Garnet(GarnetError::Write));
+        }
+
+        if changed {
+            if used {
+                self.total_used.fetch_add(1, Ordering::Release);
+            } else {
+                self.total_used.fetch_sub(1, Ordering::Release);
+            }
         }
 
         // NOTE: We don't modify the free list if the id was already free.
@@ -270,6 +285,10 @@ impl FreeSpaceMap {
         self.next_id.load(Ordering::Acquire).saturating_sub(1)
     }
 
+    pub fn total_used(&self) -> usize {
+        self.total_used.load(Ordering::Acquire)
+    }
+
     /// Return the FSM block number, byte index, and bit index for a given ID.
     /// The block number is the block which stores this ID, the byte index is byte offset
     /// within the block which contains the status bits, and the bit index is the bit index
@@ -301,9 +320,9 @@ impl FreeSpaceMap {
 
         let mut has_free_ids = false;
         let mut id = 0u32;
+        let mut block = vec![0u8; BLOCK_SIZE_BYTES];
         'scan: for block_id in 0..*max_block {
             let block_key = Self::block_key(block_id);
-            let mut block = vec![0u8; BLOCK_SIZE_BYTES];
             if !self
                 .callbacks
                 .read_single_wid(ctx.term(Term::Metadata), block_key, &mut block)
@@ -359,6 +378,45 @@ impl FreeSpaceMap {
             }
         } else if block_id > *max_block + 1 {
             return Err(FsmError::IdOutOfRange(id));
+        }
+
+        Ok(())
+    }
+
+    /// Visit each used id in the FSM, invoking f on each id.
+    pub fn visit_used<F>(&self, ctx: Context, mut f: F) -> Result<(), FsmError>
+    where
+        F: FnMut(u32) -> bool,
+    {
+        let max_block = { *self.max_block.read().unwrap() };
+        let mut block = vec![0u8; BLOCK_SIZE_BYTES];
+        let mut id = 0u32;
+
+        for block_id in 0..max_block {
+            let block_key = Self::block_key(block_id);
+            if !self
+                .callbacks
+                .read_single_wid(ctx.term(Term::Metadata), block_key, &mut block)
+            {
+                return Err(FsmError::Garnet(GarnetError::Read));
+            }
+
+            for &byte in &block {
+                if byte == 0x00 {
+                    id += 8;
+                    continue;
+                }
+
+                for bidx in 0..8 {
+                    if bit_used(byte, bidx) {
+                        let keep_going = f(id);
+                        if !keep_going {
+                            return Ok(());
+                        }
+                    }
+                    id += 1;
+                }
+            }
         }
 
         Ok(())
