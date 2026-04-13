@@ -26,7 +26,7 @@ use diskann_vector::{
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self, AdjacencyList, DiskANNIndex,
         index::{QueryLabelProvider, QueryVisitDecision},
         search::{Knn, MultihopSearch},
         search_output_buffer,
@@ -91,8 +91,7 @@ fn run_multihop_search(
 /// Compute brute-force L2 groundtruth for a 3D grid, sorted with nearest neighbors last.
 fn l2_groundtruth(grid_size: usize, query: &[f32]) -> Vec<Neighbor<u32>> {
     let data = Grid::Three.data(grid_size);
-    let mut gt =
-        search_utils::groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
+    let mut gt = search_utils::groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
     gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
     gt
 }
@@ -288,8 +287,7 @@ fn reject_all_returns_zero_results() {
     let query = vec![grid_size as f32; 3];
     let filter = RejectAllFilter::only([]);
 
-    let (_index, stats, ids, _distances) =
-        run_multihop_search(grid_size, &query, 10, 20, &filter);
+    let (_index, stats, ids, _distances) = run_multihop_search(grid_size, &query, 10, 20, &filter);
 
     // The start point (u32::MAX) is seeded directly into the candidate set and bypasses
     // both is_match and on_visit. It may appear in results. All non-start-point results
@@ -313,8 +311,7 @@ fn early_termination() {
     let target = (num_points / 2) as u32;
     let filter = TerminatingFilter::new(target);
 
-    let (_index, stats, _ids, _distances) =
-        run_multihop_search(grid_size, &query, 10, 40, &filter);
+    let (_index, stats, _ids, _distances) = run_multihop_search(grid_size, &query, 10, 40, &filter);
 
     let hits = filter.hits();
 
@@ -345,8 +342,14 @@ fn distance_adjustment_affects_ranking() {
     let (_index, adjusted_stats, adjusted_ids, _adjusted_distances) =
         run_multihop_search(grid_size, &query, 10, 20, &filter);
 
-    assert!(baseline_stats.result_count > 0, "baseline should have results");
-    assert!(adjusted_stats.result_count > 0, "adjusted should have results");
+    assert!(
+        baseline_stats.result_count > 0,
+        "baseline should have results"
+    );
+    assert!(
+        adjusted_stats.result_count > 0,
+        "adjusted should have results"
+    );
 
     let boosted_in_baseline = baseline_ids
         .iter()
@@ -469,8 +472,7 @@ fn callback_enforces_filtering() {
     let to_check = 10;
     let filter = CallbackFilter::new(blocked, adjusted, 0.5);
 
-    let (_index, stats, ids, distances) =
-        run_multihop_search(grid_size, &query, 20, 40, &filter);
+    let (_index, stats, ids, distances) = run_multihop_search(grid_size, &query, 20, 40, &filter);
 
     let callback_metrics = filter.metrics();
 
@@ -529,4 +531,138 @@ fn callback_enforces_filtering() {
         distances[adjusted_idx],
         baseline_adjusted_distance
     );
+}
+
+/// Test that multihop search can find matching nodes reachable only through non-matching nodes.
+///
+/// Graph topology (1D, L2 metric):
+///
+/// ```text
+///   start(10) ──→ 1(odd) ──→ 2(even, target)
+///       │              │
+///       └──→ 3(odd) ──→ 4(even)
+/// ```
+///
+/// With an even-only filter, nodes 1 and 3 are non-matching. Node 2 is only reachable
+/// through node 1 (a non-matching node). Standard filtered search would never reach it,
+/// but multihop's two-hop expansion should traverse through node 1 to discover node 2.
+#[test]
+fn two_hop_reaches_through_non_matching() {
+    use std::iter;
+
+    let rt = current_thread_runtime();
+
+    let start_id = 10u32;
+    let max_degree = 4;
+
+    let provider_config = test_provider::Config::new(
+        Metric::L2,
+        max_degree,
+        test_provider::StartPoint::new(start_id, vec![5.0]),
+    )
+    .unwrap();
+
+    // Build a graph where even nodes (matching) are only reachable through odd nodes.
+    //
+    // Vectors are 1D: distances are just squared differences.
+    //   start(10) at position 5.0
+    //   node 0 at 0.0 (even - matching, directly reachable from start)
+    //   node 1 at 1.0 (odd - non-matching, reachable from start)
+    //   node 2 at 2.0 (even - matching, ONLY reachable through node 1)
+    //   node 3 at 3.0 (odd - non-matching, reachable from start)
+    //   node 4 at 4.0 (even - matching, ONLY reachable through node 3)
+    let start_neighbors = AdjacencyList::from_iter_untrusted([0, 1, 3]);
+    let points = vec![
+        (
+            0u32,
+            vec![0.0f32],
+            AdjacencyList::from_iter_untrusted([1, start_id]),
+        ),
+        (
+            1,
+            vec![1.0],
+            AdjacencyList::from_iter_untrusted([0, 2, start_id]),
+        ),
+        (2, vec![2.0], AdjacencyList::from_iter_untrusted([1, 3])),
+        (
+            3,
+            vec![3.0],
+            AdjacencyList::from_iter_untrusted([0, 4, start_id]),
+        ),
+        (4, vec![4.0], AdjacencyList::from_iter_untrusted([3, 2])),
+    ];
+
+    let provider = test_provider::Provider::new_from(
+        provider_config,
+        iter::once((start_id, start_neighbors)),
+        points,
+    )
+    .unwrap();
+
+    let index_config = graph::config::Builder::new(
+        max_degree,
+        graph::config::MaxDegree::same(),
+        100,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+
+    // Query at position 2.0 — node 2 is the nearest even node.
+    let query = vec![2.0f32];
+    let filter = EvenFilter;
+
+    let search_params = Knn::new_default(5, 20).unwrap();
+    let multihop = MultihopSearch::new(search_params, &filter);
+
+    let mut ids = vec![0u32; 5];
+    let mut distances = vec![0.0f32; 5];
+    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+    let stats = rt
+        .block_on(index.search(
+            multihop,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query.as_slice(),
+            &mut buffer,
+        ))
+        .unwrap();
+
+    let result_ids: Vec<u32> = ids
+        .iter()
+        .take(stats.result_count as usize)
+        .copied()
+        .collect();
+
+    // Node 2 (even, at position 2.0) is the exact match — it must appear in results
+    // even though it's only reachable through odd node 1.
+    assert!(
+        result_ids.contains(&2),
+        "node 2 should be found via two-hop traversal through non-matching node 1, \
+         got results: {:?}",
+        result_ids
+    );
+
+    // Node 4 (even, at position 4.0) should also be found via odd node 3.
+    assert!(
+        result_ids.contains(&4),
+        "node 4 should be found via two-hop traversal through non-matching node 3, \
+         got results: {:?}",
+        result_ids
+    );
+
+    // All returned results should be even (matching the filter).
+    for &id in &result_ids {
+        if id == u32::MAX {
+            continue; // start point may appear
+        }
+        assert!(
+            id % 2 == 0,
+            "all results should match the even filter, but got id {}",
+            id
+        );
+    }
 }
