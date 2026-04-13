@@ -149,8 +149,8 @@ fn test_roundtrip_with_data() {
         // ensure attribute values are deserialized correctly.
         for attrs in [attrs_0, attrs_1, attrs_2] {
             for attr in &attrs {
-                let orig_id = orig_attr.get(&attr).unwrap();
-                let loaded_id = loaded_attr.get(&attr).unwrap();
+                let orig_id = orig_attr.get(attr).unwrap();
+                let loaded_id = loaded_attr.get(attr).unwrap();
                 assert_eq!(
                     orig_id, loaded_id,
                     "attribute ID mismatch for attribute {attr:?}"

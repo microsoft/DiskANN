@@ -518,7 +518,8 @@ fn read_dict_entry<R: Read>(r: &mut R) -> Result<(u64, Attribute), ANNError> {
         AttrTypeTag::String => {
             let slen = r
                 .read_u32::<LittleEndian>()
-                .map_err(|e| io_error(e, "read String byte_len"))? as usize;
+                .map_err(|e| io_error(e, "read String byte_len"))?
+                as usize;
             let mut sb = vec![0u8; slen];
             r.read_exact(&mut sb)
                 .map_err(|e| io_error(e, "read String bytes"))?;
