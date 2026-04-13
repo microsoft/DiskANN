@@ -241,6 +241,7 @@ where
             distances::MathematicalResult<u32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(
         x: DataRef<'_, NBITS>,
         y: DataRef<'_, MBITS>,
@@ -260,6 +261,7 @@ where
             distances::MathematicalResult<u32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
@@ -277,6 +279,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
         let raw_product: f32 = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
         Ok(MathematicalValue::new(
@@ -295,6 +298,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
@@ -314,6 +318,7 @@ where
             distances::MathematicalResult<u32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(
         x: DataRef<'_, NBITS>,
         y: DataRef<'_, MBITS>,
@@ -335,6 +340,7 @@ where
             distances::MathematicalResult<u32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
@@ -352,6 +358,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
         let raw_product = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
 
@@ -374,6 +381,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
@@ -398,6 +406,7 @@ where
         >,
 {
     // 1 - <X, Y> / (|X| * |Y|)
+    #[inline(always)]
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MV<f32> = MinMaxIP::evaluate(x, y)?;
         let (xm, ym) = (x.meta(), y.meta());
@@ -416,6 +425,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         let (xm, ym) = (x.meta().norm_squared, y.meta());
@@ -437,6 +447,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
@@ -454,6 +465,7 @@ where
             distances::MathematicalResult<f32>,
         >,
 {
+    #[inline(always)]
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
