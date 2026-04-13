@@ -85,9 +85,10 @@ fn setup_consolidation_index(
     let start_neighbors =
         AdjacencyList::from_iter_untrusted((0..num_points as u32).take(provider_max_degree));
 
-    let points = vectors.iter().enumerate().map(|(id, vec)| {
-        (id as u32, vec.clone(), adjacency_lists[id].clone())
-    });
+    let points = vectors
+        .iter()
+        .enumerate()
+        .map(|(id, vec)| (id as u32, vec.clone(), adjacency_lists[id].clone()));
 
     let provider = Provider::new_from(
         provider_config,
