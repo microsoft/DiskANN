@@ -9,54 +9,17 @@
 //! the inmem provider's `FlakyAccessor` which fails every Nth `get_element` call.
 //! This version uses `test_provider::Accessor::flaky()` which fails for specific IDs.
 
-use std::{collections::HashSet, iter, sync::Arc};
+use std::{iter, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
-    error::Infallible,
     graph::{
         self, AdjacencyList, ConsolidateKind, DiskANNIndex,
-        glue::PruneStrategy,
-        test::provider::{self as test_provider, Accessor, Provider},
-        workingset,
+        test::provider::{self as test_provider, Provider, Strategy},
     },
     test::tokio::current_thread_runtime,
-    utils::VectorRepr,
 };
-
-/// A [`PruneStrategy`] that produces a flaky accessor returning transient errors
-/// for the specified IDs. Everything else delegates to the default [`test_provider::Strategy`].
-struct FlakyPruneStrategy {
-    transient_ids: HashSet<u32>,
-}
-
-impl FlakyPruneStrategy {
-    fn new(transient_ids: impl IntoIterator<Item = u32>) -> Self {
-        Self {
-            transient_ids: transient_ids.into_iter().collect(),
-        }
-    }
-}
-
-impl PruneStrategy<Provider> for FlakyPruneStrategy {
-    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-    type DistanceComputer = <f32 as VectorRepr>::Distance;
-    type PruneAccessor<'a> = Accessor<'a>;
-    type PruneAccessorError = Infallible;
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        workingset::map::Builder::new(workingset::map::Capacity::None).build(capacity)
-    }
-
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a test_provider::Context,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(Accessor::flaky(provider, self.transient_ids.clone()))
-    }
-}
 
 /// Build a small index with explicit vectors and adjacency lists for consolidation testing.
 ///
@@ -143,7 +106,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
     // Make only the consolidated node (0) transient. During robust_prune_list, fill()
     // requests node 0's vector first — the transient error causes view.get(0) to return
     // None, triggering the FailedVectorRetrieval path.
-    let flaky_strategy = FlakyPruneStrategy::new([0]);
+    let flaky_strategy = Strategy::with_transient([0]);
 
     let result = rt
         .block_on(index.consolidate_vector(&flaky_strategy, &ctx, 0))
