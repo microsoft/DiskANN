@@ -53,6 +53,50 @@ fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provide
     Arc::new(DiskANNIndex::new(index_config, provider, None))
 }
 
+/// Run a multihop search on a 3D grid index, returning stats and result buffers.
+fn run_multihop_search(
+    grid_size: usize,
+    query: &[f32],
+    k: usize,
+    l: usize,
+    filter: &dyn QueryLabelProvider<u32>,
+) -> (
+    Arc<DiskANNIndex<test_provider::Provider>>,
+    graph::index::SearchStats,
+    Vec<u32>,
+    Vec<f32>,
+) {
+    let rt = current_thread_runtime();
+    let index = setup_grid_index(grid_size);
+
+    let mut ids = vec![0u32; k];
+    let mut distances = vec![0.0f32; k];
+    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+    let search_params = Knn::new_default(k, l).unwrap();
+    let multihop = MultihopSearch::new(search_params, filter);
+    let stats = rt
+        .block_on(index.search(
+            multihop,
+            &test_provider::Strategy::new(),
+            &test_provider::Context::new(),
+            query,
+            &mut buffer,
+        ))
+        .unwrap();
+
+    (index, stats, ids, distances)
+}
+
+/// Compute brute-force L2 groundtruth for a 3D grid, sorted with nearest neighbors last.
+fn l2_groundtruth(grid_size: usize, query: &[f32]) -> Vec<Neighbor<u32>> {
+    let data = Grid::Three.data(grid_size);
+    let mut gt =
+        search_utils::groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
+    gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
+    gt
+}
+
 /////////////
 // Filters //
 /////////////
@@ -240,30 +284,12 @@ impl QueryLabelProvider<u32> for TerminateAfterN {
 
 #[test]
 fn reject_all_returns_zero_results() {
-    let rt = current_thread_runtime();
     let grid_size = 4;
-    let index = setup_grid_index(grid_size);
-
     let query = vec![grid_size as f32; 3];
-    let mut ids = vec![0u32; 10];
-    let mut distances = vec![0.0f32; 10];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    // The start point (u32::MAX) is inserted directly into the candidate set without
-    // going through on_visit, so it must be excluded via is_match as well.
     let filter = RejectAllFilter::only([]);
 
-    let search_params = Knn::new_default(10, 20).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
-    let stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
-        .unwrap();
+    let (_index, stats, ids, _distances) =
+        run_multihop_search(grid_size, &query, 10, 20, &filter);
 
     // The start point (u32::MAX) is seeded directly into the candidate set and bypasses
     // both is_match and on_visit. It may appear in results. All non-start-point results
@@ -280,30 +306,15 @@ fn reject_all_returns_zero_results() {
 
 #[test]
 fn early_termination() {
-    let rt = current_thread_runtime();
     let grid_size = 5;
-    let index = setup_grid_index(grid_size);
     let num_points = Grid::Three.num_points(grid_size);
-
     let query = vec![grid_size as f32; 3];
-    let mut ids = vec![0u32; 10];
-    let mut distances = vec![0.0f32; 10];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
     let target = (num_points / 2) as u32;
     let filter = TerminatingFilter::new(target);
 
-    let search_params = Knn::new_default(10, 40).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
-    let stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
-        .unwrap();
+    let (_index, stats, _ids, _distances) =
+        run_multihop_search(grid_size, &query, 10, 40, &filter);
 
     let hits = filter.hits();
 
@@ -319,63 +330,23 @@ fn early_termination() {
 
 #[test]
 fn distance_adjustment_affects_ranking() {
-    let rt = current_thread_runtime();
     let grid_size = 4;
-    let index = setup_grid_index(grid_size);
     let num_points = Grid::Three.num_points(grid_size);
-
     let query = vec![0.0f32; 3]; // Query at origin
 
     // Baseline: run with EvenFilter (no distance adjustment).
-    let mut baseline_ids = vec![0u32; 10];
-    let mut baseline_distances = vec![0.0f32; 10];
-    let mut baseline_buffer =
-        search_output_buffer::IdDistance::new(&mut baseline_ids, &mut baseline_distances);
-
-    let search_params = Knn::new_default(10, 20).unwrap();
-    let multihop = MultihopSearch::new(search_params, &EvenFilter);
-    let baseline_stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut baseline_buffer,
-        ))
-        .unwrap();
+    let (_index, baseline_stats, baseline_ids, _baseline_distances) =
+        run_multihop_search(grid_size, &query, 10, 20, &EvenFilter);
 
     // Adjusted: boost a far-away point by shrinking its distance.
     let boosted_point = (num_points - 2) as u32;
     let filter = CallbackFilter::new(u32::MAX, boosted_point, 0.01);
 
-    // Need a fresh index for fair comparison (metrics are accumulated).
-    let index = setup_grid_index(grid_size);
+    let (_index, adjusted_stats, adjusted_ids, _adjusted_distances) =
+        run_multihop_search(grid_size, &query, 10, 20, &filter);
 
-    let mut adjusted_ids = vec![0u32; 10];
-    let mut adjusted_distances = vec![0.0f32; 10];
-    let mut adjusted_buffer =
-        search_output_buffer::IdDistance::new(&mut adjusted_ids, &mut adjusted_distances);
-
-    let search_params = Knn::new_default(10, 20).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
-    let adjusted_stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut adjusted_buffer,
-        ))
-        .unwrap();
-
-    assert!(
-        baseline_stats.result_count > 0,
-        "baseline should have results"
-    );
-    assert!(
-        adjusted_stats.result_count > 0,
-        "adjusted should have results"
-    );
+    assert!(baseline_stats.result_count > 0, "baseline should have results");
+    assert!(adjusted_stats.result_count > 0, "adjusted should have results");
 
     let boosted_in_baseline = baseline_ids
         .iter()
@@ -403,30 +374,15 @@ fn distance_adjustment_affects_ranking() {
 
 #[test]
 fn terminate_stops_traversal() {
-    let rt = current_thread_runtime();
     let grid_size = 5;
-    let index = setup_grid_index(grid_size);
-
     let query = vec![grid_size as f32; 3];
-    let mut ids = vec![0u32; 10];
-    let mut distances = vec![0.0f32; 10];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
     let max_visits = 5;
     let filter = TerminateAfterN::new(max_visits);
 
     // Large L to ensure we'd visit more without termination.
-    let search_params = Knn::new_default(10, 100).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
-    let _stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
-        .unwrap();
+    let (_index, _stats, _ids, _distances) =
+        run_multihop_search(grid_size, &query, 10, 100, &filter);
 
     // Allow some slack for beam expansion.
     assert!(
@@ -439,28 +395,22 @@ fn terminate_stops_traversal() {
 #[test]
 fn even_filtering_multihop() {
     let rt = current_thread_runtime();
-    let grid = Grid::Three;
     let grid_size = 7;
     let index = setup_grid_index(grid_size);
-
     let query = vec![grid_size as f32; 3];
     let filter = EvenFilter;
 
     // Compute brute-force groundtruth, filtered to even IDs only.
-    let data = grid.data(grid_size);
     let gt = {
-        let mut gt =
-            search_utils::groundtruth(data.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
+        let mut gt = l2_groundtruth(grid_size, &query);
         gt.retain(|n| filter.is_match(n.id));
-        gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
         gt
     };
 
     let k = 20;
-    let l = 40;
     let mut gt_clone = gt.clone();
 
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(k, 40).unwrap();
     let multihop = MultihopSearch::new(search_params, &filter);
 
     let mut neighbors = vec![Neighbor::<u32>::default(); k];
@@ -496,22 +446,11 @@ fn even_filtering_multihop() {
 
 #[test]
 fn callback_enforces_filtering() {
-    let rt = current_thread_runtime();
-    let grid = Grid::Three;
     let grid_size = 5;
-    let num_points = grid.num_points(grid_size);
-    let index = setup_grid_index(grid_size);
-
+    let num_points = Grid::Three.num_points(grid_size);
     let query = vec![grid_size as f32; 3];
 
-    // Compute brute-force groundtruth for validation.
-    let data = grid.data(grid_size);
-    let baseline_gt = {
-        let mut gt =
-            search_utils::groundtruth(data.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
-        gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
-        gt
-    };
+    let baseline_gt = l2_groundtruth(grid_size, &query);
 
     let blocked = (num_points - 2) as u32;
     let adjusted = (num_points - 1) as u32;
@@ -527,27 +466,11 @@ fn callback_enforces_filtering() {
         .expect("adjusted node should exist in groundtruth")
         .distance;
 
-    let k = 20;
-    let l = 40;
     let to_check = 10;
     let filter = CallbackFilter::new(blocked, adjusted, 0.5);
 
-    let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
-
-    let mut ids = vec![0u32; k];
-    let mut distances = vec![0.0f32; k];
-    let mut buffer = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-    let stats = rt
-        .block_on(index.search(
-            multihop,
-            &test_provider::Strategy::new(),
-            &test_provider::Context::new(),
-            query.as_slice(),
-            &mut buffer,
-        ))
-        .unwrap();
+    let (_index, stats, ids, distances) =
+        run_multihop_search(grid_size, &query, 20, 40, &filter);
 
     let callback_metrics = filter.metrics();
 
