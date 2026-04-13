@@ -131,6 +131,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
+        VectorQuantType,
         garnet::{Context, Term},
         test_utils::Store,
     };
@@ -203,7 +204,14 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<u8>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<u8>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());
@@ -215,7 +223,14 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<f32>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<f32>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());

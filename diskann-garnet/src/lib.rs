@@ -175,7 +175,8 @@ fn create_index_impl<T: VectorRepr>(
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
-    let provider = GarnetProvider::<T>::new(dim, metric_type, max_degree, callbacks, context)?;
+    let provider =
+        GarnetProvider::<T>::new(dim, quant_type, metric_type, max_degree, callbacks, context)?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
     } else {

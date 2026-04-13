@@ -115,8 +115,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
         let data = rt.block_on(accessor.get_element(iid))?;
-        let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
-        self.search_vector(context, data_bytes, params, filter, output)
+        self.search_vector(context, &data, params, filter, output)
     }
 
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
