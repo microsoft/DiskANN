@@ -132,7 +132,7 @@ impl QuantVectorProvider {
     /// Create a distance computer for the underlying schema
     pub fn distance_computer(
         &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    ) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 

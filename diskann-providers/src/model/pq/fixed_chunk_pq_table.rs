@@ -124,11 +124,6 @@ impl FixedChunkPQTable {
     ///   4. `chunk_offsets.last().unwrap() == dim`: The last offset must match the
     ///      dimension of the full-precision data.
     ///
-    /// * `opq_rotation_matrix`: An optional rotation matrix to apply to queries.
-    ///   If given, the underlying slice must have length `dim * dim`.
-    ///
-    ///   NOTE: This feature is currently not fully supported.
-    ///
     /// # PQ Table Layout
     ///
     /// The in-memory layout of the `pq_table` is shown in the table below in row-major form.
@@ -172,10 +167,10 @@ impl FixedChunkPQTable {
         self.table.nchunks()
     }
 
-    /// Shifting the query according to mean or the whole corpus. The output is a rotated query vector,
-    /// which is later used to calculate the distance between each query chunk and each centroid using populate_chunk_distances.
-    pub fn preprocess_query(&self, rotated_query_vec: &mut [f32]) {
-        for (query, &centroid) in rotated_query_vec.iter_mut().zip(self.centroids.iter()) {
+    /// Shifting the query according to the mean of the whole corpus by subtracting
+    /// the centroid from each dimension of the query vector.
+    pub fn preprocess_query(&self, query_vec: &mut [f32]) {
+        for (query, &centroid) in query_vec.iter_mut().zip(self.centroids.iter()) {
             *query -= centroid;
         }
     }

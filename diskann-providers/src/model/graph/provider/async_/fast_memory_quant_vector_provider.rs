@@ -117,7 +117,7 @@ impl FastMemoryQuantVectorProviderAsync {
     /// Create a distance computer for the underlying schema.
     pub fn distance_computer(
         &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    ) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -459,7 +459,7 @@ mod tests {
             );
 
             // Distance Computer.
-            let d = provider.distance_computer().unwrap();
+            let d = provider.distance_computer();
             assert_eq!(
                 d.evaluate_similarity(&provider.get_vector_sync(0), &provider.get_vector_sync(3)),
                 2.0

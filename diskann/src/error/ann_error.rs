@@ -342,14 +342,7 @@ impl ANNError {
         Self::message(ANNErrorKind::PQError, err.to_string())
     }
 
-    /// Create, log and return OPQError
-    #[track_caller]
-    #[inline(never)]
-    pub fn log_opq_error(err: String) -> Self {
-        Self::message(ANNErrorKind::OPQError, err)
-    }
-
-    /// Create, log and return OPQError
+    /// Create, log and return SQError
     #[track_caller]
     #[inline(never)]
     pub fn log_sq_error<E>(err: E) -> Self
@@ -809,7 +802,6 @@ impl ANNErrorKind {
     define_alias!(LockPoisonError);
     define_alias!(DiskIOAlignmentError);
     define_alias!(PQError);
-    define_alias!(OPQError);
     define_alias!(KMeansError);
     define_alias!(TryFromSliceError);
     define_alias!(AdjacencyListConversionError);
@@ -882,10 +874,6 @@ pub enum DiskANNError {
     // PQ construction error
     // Error happened when we construct PQ pivot or PQ compressed table
     PQError,
-
-    // OPQ construction error
-    // Error happened when we build the optimized PQ index
-    OPQError,
 
     // K-means error
     // Error happened when we run k-means clustering
@@ -1416,14 +1404,6 @@ Caused by:
         let err_msg = "PQ schema registration error";
         let ann_err = ANNError::log_pq_schema_registration_error(err_msg.to_string());
         assert_eq!(ANNErrorKind::PQSchemaRegistrationError, ann_err.kind());
-        assert!(ann_err.to_string().contains(err_msg));
-    }
-
-    #[test]
-    fn test_log_opq_error() {
-        let err_msg = "OPQ error";
-        let ann_err = ANNError::log_opq_error(err_msg.to_string());
-        assert_eq!(ANNErrorKind::OPQError, ann_err.kind());
         assert!(ann_err.to_string().contains(err_msg));
     }
 

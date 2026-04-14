@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::{
     QueryComputer,
-    dynamic::{DistanceComputerConstructionError, VTable},
+    dynamic::VTable,
 };
 use crate::model::FixedChunkPQTable;
 
@@ -195,11 +195,11 @@ where
     pub fn new(
         table: MultiTable<T, I>,
         metric: Metric,
-    ) -> Result<Self, DistanceComputerConstructionError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             table,
             vtable: VTable::new(metric),
-        })
+        }
     }
 
     /// Return the versions associated with the tables in this schema.
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(*n, version);
         assert!(o.is_none());
 
-        let computer = MultiDistanceComputer::new(multi_table, metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table, metric);
 
         test_distance_computer_multi_with_one(
             &computer,
@@ -823,7 +823,7 @@ mod tests {
         assert_eq!(*n, new_version);
         assert_eq!(*o.unwrap(), old_version);
 
-        let computer = MultiDistanceComputer::new(multi_table.clone(), metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table.clone(), metric);
         test_distance_computer_multi_with_two(
             &computer,
             &new,

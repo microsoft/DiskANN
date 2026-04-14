@@ -5,9 +5,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::{ANNError, ANNResult, utils::object_pool::ObjectPool};
+use diskann::{ANNResult, utils::object_pool::ObjectPool};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
-use thiserror::Error;
 
 // Concrete implementations
 use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
@@ -175,20 +174,6 @@ where
     vtable: VTable,
 }
 
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum DistanceComputerConstructionError {
-    #[error("random access computer does not support OPQ")]
-    OPQNotSupported,
-}
-
-impl From<DistanceComputerConstructionError> for ANNError {
-    #[track_caller]
-    fn from(value: DistanceComputerConstructionError) -> ANNError {
-        ANNError::log_pq_error(value)
-    }
-}
-
 impl<T> DistanceComputer<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
@@ -206,11 +191,11 @@ where
     /// * `Metric::Cosine`
     /// * `Metric::CosineNormalized`
     ///
-    pub fn new(table: T, distance: Metric) -> Result<Self, DistanceComputerConstructionError> {
-        Ok(Self {
+    pub fn new(table: T, distance: Metric) -> Self {
+        Self {
             table,
             vtable: VTable::new(distance),
-        })
+        }
     }
 }
 
@@ -379,7 +364,7 @@ mod tests {
 
                     test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::L2).unwrap(),
+                            table: DistanceComputer::new(table, Metric::L2),
                             query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
                         },
                         &table,
@@ -442,7 +427,7 @@ mod tests {
 
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::InnerProduct).unwrap(),
+                            table: DistanceComputer::new(table, Metric::InnerProduct),
                             query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
                         },
                         &table,
@@ -505,7 +490,7 @@ mod tests {
 
                     test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::Cosine).unwrap(),
+                            table: DistanceComputer::new(table, Metric::Cosine),
                             query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
                         },
                         &table,
@@ -561,18 +546,18 @@ mod tests {
                 config.start_value,
             );
 
-            let squared_l2 = DistanceComputer::new(&table, Metric::L2).unwrap();
+            let squared_l2 = DistanceComputer::new(&table, Metric::L2);
             let expected: f32 = SquaredL2::evaluate(&*v0, &*v1);
             assert_eq!(squared_l2.evaluate_similarity(&*code0, &*code1), expected);
 
-            let inner_product = DistanceComputer::new(&table, Metric::InnerProduct).unwrap();
+            let inner_product = DistanceComputer::new(&table, Metric::InnerProduct);
             let expected: f32 = InnerProduct::evaluate(&*v0, &*v1);
             assert_eq!(
                 inner_product.evaluate_similarity(&*code0, &*code1),
                 expected,
             );
 
-            let cosine = DistanceComputer::new(&table, Metric::Cosine).unwrap();
+            let cosine = DistanceComputer::new(&table, Metric::Cosine);
             let sim: f32 = cosine.evaluate_similarity(&*code0, &*code1);
             assert!(0.0 <= sim);
             assert!(sim <= 2.0);
@@ -584,7 +569,7 @@ mod tests {
             normalize(&mut v1);
 
             let cosine_normalized =
-                DistanceComputer::new(&table, Metric::CosineNormalized).unwrap();
+                DistanceComputer::new(&table, Metric::CosineNormalized);
             let expected: f32 = CosineNormalized::evaluate(&*v0, &*v1);
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),

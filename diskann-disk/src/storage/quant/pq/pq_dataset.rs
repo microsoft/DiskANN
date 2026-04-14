@@ -11,13 +11,10 @@ use diskann_quantization::product::TransposedTable;
 use diskann_providers::model::{FixedChunkPQTable, PQCompressedData};
 
 /// Behind the scenes, we can use either the [`FixedChunkPQTable`] or a
-/// [`diskann_quantization::product::TransposedTable`]. The [`TrasposedTable`] is much faster
-/// for preprocessing, but does not support:
+/// [`diskann_quantization::product::TransposedTable`]. The [`TransposedTable`] is much faster
+/// for preprocessing, but does not support removal of the dataset centroid.
 ///
-/// 1. Removal of the dataset centroid (if that was used).
-/// 2. OPQ style transformations.
-///
-/// So, we can only use the [`TransposedTable`] when OPQ is not used and the dataset centroid
+/// So, we can only use the [`TransposedTable`] when the dataset centroid
 /// is all zero.
 #[derive(Debug)]
 pub enum PQTable {

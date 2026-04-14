@@ -93,7 +93,7 @@ impl TestMultiPQProviderAsync {
         let table = self.multi_table().map_err(|err| {
             ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
         })?;
-        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)?))
+        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)))
     }
 
     pub fn get_vector(&self, id: usize) -> ANNResult<Guard<Arc<VersionedPQVector>>> {
