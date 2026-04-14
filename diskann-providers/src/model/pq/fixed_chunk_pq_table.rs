@@ -156,10 +156,7 @@ impl FixedChunkPQTable {
             )));
         }
 
-        Ok(Self {
-            table,
-            centroids,
-        })
+        Ok(Self { table, centroids })
     }
 
     /// Get chunk number.
@@ -744,72 +741,56 @@ mod fixed_chunk_pq_table_test {
         // Check that our valid schema is indeed valid.
         {
             let (dim, pq_table, centroids, chunk_offsets) = create_valid_schema();
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_ok()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_ok());
         }
 
         // `pq_table` length not evenly divisible by `dim`..
         {
             let (dim, _, centroids, chunk_offsets) = create_valid_schema();
             let pq_table = vec![0.0; dim * 3 + 1].into();
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `centroids` length not equal to `dim`..
         {
             let (dim, pq_table, _, chunk_offsets) = create_valid_schema();
             let centroids = vec![0.0; dim - 1].into();
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `offsets` does not begin at zero.
         {
             let (dim, pq_table, centroids, _) = create_valid_schema();
             let chunk_offsets = Box::new([1, 2, dim]);
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `offsets` empty
         {
             let (dim, pq_table, centroids, _) = create_valid_schema();
             let chunk_offsets = Box::new([]);
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `offsets` has length 1.
         {
             let (dim, pq_table, centroids, _) = create_valid_schema();
             let chunk_offsets = Box::new([0]);
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `offsets` not strictly monotonic.
         {
             let (dim, pq_table, centroids, _) = create_valid_schema();
             let chunk_offsets = Box::new([0, 1, 2, 2, dim]);
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
 
         // `offsets` does not end at `dim`.
         {
             let (dim, pq_table, centroids, _) = create_valid_schema();
             let chunk_offsets = Box::new([0, 1, 2, dim, dim + 1]);
-            assert!(
-                FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err()
-            );
+            assert!(FixedChunkPQTable::new(dim, pq_table, centroids, chunk_offsets).is_err());
         }
     }
 
@@ -883,13 +864,9 @@ mod fixed_chunk_pq_table_test {
         let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
-        let fixed_chunk_pq_table = FixedChunkPQTable::new(
-            dim,
-            pq_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let fixed_chunk_pq_table =
+            FixedChunkPQTable::new(dim, pq_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
 
         assert_eq!(dim, DIM);
         assert_eq!(fixed_chunk_pq_table.table.dim(), DIM);
@@ -907,19 +884,12 @@ mod fixed_chunk_pq_table_test {
         let centroids = vec![1.0; dim];
         let chunk_offsets = vec![0, 7, 9, 11, 22, 34, 78, dim];
 
-        let base = FixedChunkPQTable::new(
-            dim,
-            pq_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let base =
+            FixedChunkPQTable::new(dim, pq_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
 
         let clone = base.clone();
-        let FixedChunkPQTable {
-            table,
-            centroids,
-        } = clone;
+        let FixedChunkPQTable { table, centroids } = clone;
 
         assert_eq!(table.view_pivots(), base.table.view_pivots());
         assert_eq!(table.view_offsets(), base.table.view_offsets());
@@ -932,13 +902,9 @@ mod fixed_chunk_pq_table_test {
         let pa_table = vec![0.0; DIM * NUM_PQ_CENTROIDS];
         let centroids = vec![0.0; DIM];
         let chunk_offsets = vec![0, 7, 9, 11, 22, 34, 78, 128];
-        let fixed_chunk_pq_table = FixedChunkPQTable::new(
-            DIM,
-            pa_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let fixed_chunk_pq_table =
+            FixedChunkPQTable::new(DIM, pa_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
         let chunk: usize = fixed_chunk_pq_table.get_num_chunks();
         assert_eq!(chunk, num_chunks);
     }
@@ -950,13 +916,9 @@ mod fixed_chunk_pq_table_test {
         let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
-        let fixed_chunk_pq_table = FixedChunkPQTable::new(
-            dim,
-            pq_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let fixed_chunk_pq_table =
+            FixedChunkPQTable::new(dim, pq_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
 
         let mut query_vec: Vec<f32> = vec![
             32.39f32, 78.57f32, 50.32f32, 80.46f32, 6.47f32, 69.76f32, 94.2f32, 83.36f32, 5.8f32,
@@ -991,13 +953,9 @@ mod fixed_chunk_pq_table_test {
 
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
-        let fixed_chunk_pq_table = FixedChunkPQTable::new(
-            dim,
-            pq_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let fixed_chunk_pq_table =
+            FixedChunkPQTable::new(dim, pq_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
 
         let query_vec: Vec<f32> = vec![
             32.39f32, 78.57f32, 50.32f32, 80.46f32, 6.47f32, 69.76f32, 94.2f32, 83.36f32, 5.8f32,
@@ -1108,8 +1066,7 @@ mod fixed_chunk_pq_table_test {
         });
 
         let table =
-            FixedChunkPQTable::new(dim, pq_table.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, pq_table.into(), centroid.into(), offsets.into()).unwrap();
 
         let max_relative: f32 = 1.0e-7;
         let range: Range<u8> = 0..(num_centers as u8);
@@ -1270,13 +1227,9 @@ mod fixed_chunk_pq_table_test {
         let pq_table = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let centroids = vec![0.0; dim];
         let chunk_offsets = vec![0, 2, 4, 6];
-        let pq_table = FixedChunkPQTable::new(
-            dim,
-            pq_table.into(),
-            centroids.into(),
-            chunk_offsets.into(),
-        )
-        .unwrap();
+        let pq_table =
+            FixedChunkPQTable::new(dim, pq_table.into(), centroids.into(), chunk_offsets.into())
+                .unwrap();
 
         let mut aligned_pq_table_dist_scratch = [0.0; 2];
         let rotated_query_vec = vec![0.0; dim];
