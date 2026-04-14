@@ -54,7 +54,7 @@ pub trait VectorRepr: VectorElement {
     /// An implementation of [`DistanceFunction`] for computing similarity between two
     /// equal sized slices of `Self`.
     type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32>
-        + std::fmt::Debug
+        + Debug
         + Send
         + Sync
         + 'static;
@@ -62,7 +62,7 @@ pub trait VectorRepr: VectorElement {
     /// An implementation of [`PreprocessedDistanceFunciton`] for computing similarity
     /// between a fixed query and slices of `Self`.
     type QueryDistance: for<'a> PreprocessedDistanceFunction<&'a [Self], f32>
-        + std::fmt::Debug
+        + Debug
         + Send
         + Sync
         + 'static;
