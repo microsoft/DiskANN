@@ -6,12 +6,11 @@
 // Common utilities for testing PQ-based distance computations.
 use approx::assert_relative_eq;
 use diskann::utils::IntoUsize;
-use diskann_utils::views;
 use diskann_vector::{
     Half, PreprocessedDistanceFunction, PureDistanceFunction,
     distance::{Cosine, InnerProduct, SquaredL2},
 };
-use rand::{Rng, SeedableRng, distr::Distribution};
+use rand::{Rng, distr::Distribution};
 use rand_distr::{Normal, Uniform};
 
 use crate::model::{FixedChunkPQTable, pq::calculate_chunk_offsets_auto};
@@ -85,8 +84,6 @@ pub(crate) struct TableConfig {
     pub(crate) num_pivots: usize,
     // The starting value for chunk 0, pivot 0.
     pub(crate) start_value: f32,
-    // Flag to initialize both the transformation matrix and the centroid.
-    pub(crate) use_opq: bool,
 }
 
 /// With reference to the docstring for `seed_pivot_table`, this function generates
@@ -153,27 +150,13 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
 
     assert_eq!(pivots.len(), config.dim * config.num_pivots);
 
-    let (centroid, matrix) = if config.use_opq {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(0x1c3e6b3951ac5b73);
-        let dist = Normal::<f32>::new(0.0, 1.0).unwrap();
-
-        let centroid = (0..config.dim).map(|_| dist.sample(&mut rng)).collect();
-        let matrix = views::Matrix::new(
-            views::Init(|| dist.sample(&mut rng)),
-            config.dim,
-            config.dim,
-        );
-        (centroid, Some(matrix))
-    } else {
-        (vec![0.0f32; config.dim], None)
-    };
+    let centroid = vec![0.0f32; config.dim];
 
     FixedChunkPQTable::new(
         config.dim,
         pivots.into(),
         centroid.into(),
         offsets.into(),
-        matrix.map(|x| x.into_inner()),
     )
     .unwrap()
 }

@@ -16,7 +16,6 @@ use diskann::{
     error::IntoANNResult,
     utils::{VectorRepr, read_exact_into},
 };
-use diskann_linalg::{self, Transpose};
 use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
@@ -35,7 +34,7 @@ use crate::{
     storage::PQStorage,
     utils::{
         AsThreadPool, BridgeErr, ParallelIteratorInPool, RandomProvider, Timer,
-        create_rnd_provider_from_seed, k_means_clustering, run_lloyds,
+        create_rnd_provider_from_seed,
     },
 };
 
@@ -48,10 +47,6 @@ pub const NUM_PQ_CENTROIDS: usize = 256;
 
 /// number of k-means repetitions to run for PQ
 pub const NUM_KMEANS_REPS_PQ: usize = 12;
-
-/// Maximum number of iterations of the product quantization algorithm when calculating the optimum product
-/// quantization
-const MAX_OPQ_ITERATIONS: usize = 20;
 
 impl<R> diskann_quantization::random::RngBuilder<usize> for RandomProvider<R>
 where
@@ -258,296 +253,6 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
     Ok(())
 }
 
-/// Copy centroids from this chunk to the full table.
-///
-/// Function extracted from existing functions so marked as inline.
-#[inline]
-fn copy_chunk_centroids_to_full_table(
-    parameters: &GeneratePivotArguments,
-    chunk_offsets: &[usize],
-    full_pivot_data: &mut [f32],
-    chunk_index: usize,
-    chunk_size: &usize,
-    cur_pivot_data: &[f32],
-) {
-    for center_index in 0..parameters.num_centers() {
-        let current_chunk_offset = chunk_offsets[chunk_index];
-        let next_chunk_offset = chunk_offsets[chunk_index + 1];
-        full_pivot_data[center_index * parameters.dim() + current_chunk_offset
-            ..center_index * parameters.dim() + next_chunk_offset]
-            .copy_from_slice(
-                &cur_pivot_data[center_index * chunk_size..(center_index + 1) * chunk_size],
-            );
-    }
-}
-
-/// Given `train_data`  of dimensions num_train * dim, generate
-/// PQ pivots using k-means algorithm to partition the co-ordinates into
-/// num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
-/// k-means in each chunk to compute the PQ pivots and stores in bin format in
-/// file pq_pivots_path as a s num_centers*dim floating point binary file
-/// PQ pivot table layout:
-/// {pivot offsets data: METADATA_SIZE}
-/// {pivot vector:[dim; num_centroid]}
-/// {centroid vector:[dim; 1]}
-/// {chunk offsets:[chunk_num+1; 1]}
-#[allow(dead_code)] // keeping this for now since we may not want to delete this feature
-fn generate_optimized_pq_pivots<Storage, Pool>(
-    parameters: GeneratePivotArguments,
-    train_data: &mut [f32],
-    pq_storage: &PQStorage,
-    storage_provider: &Storage,
-    rng: &mut impl Rng,
-    pool: Pool,
-) -> ANNResult<()>
-where
-    Storage: StorageWriteProvider + StorageReadProvider,
-    Pool: AsThreadPool,
-{
-    if pq_storage.pivot_data_exist(storage_provider) {
-        let (file_num_centers, file_dim) =
-            pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        if file_dim == parameters.dim() && file_num_centers == parameters.num_centers() {
-            // PQ pivot file exists. Not generating again.
-            return Ok(());
-        }
-    }
-
-    let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
-    if parameters.translate_to_center() {
-        move_train_data_by_centroid(
-            train_data,
-            parameters.num_train(),
-            parameters.dim(),
-            &mut centroid,
-        );
-    }
-
-    let mut chunk_offsets: Vec<usize> = vec![0; parameters.num_pq_chunks() + 1];
-    calculate_chunk_offsets(
-        parameters.dim(),
-        parameters.num_pq_chunks(),
-        &mut chunk_offsets,
-    );
-
-    // Create the initial rotation matrix as an identity matrix of size dim x dim.
-    let mut rotation_matrix: Vec<f32> = vec![0.0; parameters.dim() * parameters.dim()];
-    for index in 0..parameters.dim() {
-        // Put 1.0 along the diagonal of the matrix
-        rotation_matrix[index + (index * parameters.dim())] = 1.0;
-    }
-
-    // If we use Vector::with_capacity then the vector length is not set, so we must create the vectors
-    // with zeros to make sure the vector elements are writable using indexing.
-    let mut full_pivot_data: Vec<f32> = vec![0.0; parameters.num_centers() * parameters.dim()];
-    let mut rotated_training_data: Vec<f32> = vec![0.0; parameters.num_train() * parameters.dim()];
-    let mut quantized_data_results: Vec<f32> = vec![0.0; parameters.num_train() * parameters.dim()];
-    let mut correlation_matrix: Vec<f32> = vec![0.0; parameters.dim() * parameters.dim()];
-
-    // LAPACKE sgesdd variables
-    let mut u_matrix: Vec<f32> = vec![0.0; parameters.dim() * parameters.dim()];
-    let mut vt_matrix: Vec<f32> = vec![0.0; parameters.dim() * parameters.dim()];
-    let mut singular_values: Vec<f32> = vec![0.0; parameters.dim()];
-
-    forward_threadpool!(pool = pool);
-    for iteration_number in 0..MAX_OPQ_ITERATIONS {
-        // Transform the training data by the rotation matrix.
-        diskann_linalg::sgemm(
-            Transpose::None,            // Do not transpose matrix 'a'
-            Transpose::None,            // Do not transpose matrix 'b'
-            parameters.num_train(),     // m (number of rows in matrices 'a' and 'c')
-            parameters.dim(),           // n (number of columns in matrices 'b' and 'c')
-            parameters.dim(), // k (number of columns in matrix 'a', number of rows in matrix 'b')
-            1.0,              // alpha (scaling factor for the product of matrices 'a' and 'b')
-            train_data,       // matrix 'a'
-            &rotation_matrix, // matrix 'b'
-            None,             // beta (scaling factor for matrix 'c')
-            &mut rotated_training_data, // matrix 'c' (result matrix)
-        );
-
-        // Quantize in the rotated space.
-        opq_quantize_all_chunks(
-            &parameters,
-            &chunk_offsets,
-            &mut full_pivot_data,
-            &rotated_training_data,
-            &mut quantized_data_results,
-            iteration_number,
-            rng,
-            pool,
-        )?;
-
-        // compute the correlation matrix between the original data and the
-        // quantized data to compute the new rotation matrix.
-        diskann_linalg::sgemm(
-            Transpose::Ordinary,     // Transpose matrix 'a' (flip rows and columns)
-            Transpose::None,         // Do not transpose matrix 'b'
-            parameters.dim(), // m (number of rows in matrices 'a' (after transpose) and 'ic')
-            parameters.dim(), // n (number of columns in matrices 'b' and 'c')
-            parameters.num_train(), // k (number of columns in matrix 'a' (after transpose), number of rows in matrix 'b')
-            1.0,                    // scaling factor for the product of matrices 'a' and 'b'
-            train_data,             // matrix 'a' (before transpose)
-            &quantized_data_results, // matrix 'b'
-            None,                   // beta (scaling factor for matrix 'c')
-            &mut correlation_matrix, // matrix 'c' (result matrix)
-        );
-
-        let result = diskann_linalg::svd_into(
-            parameters.dim(),        // Number of rows in `a`
-            parameters.dim(),        // Number of columns in `a`.
-            &mut correlation_matrix, // Matrix `a`
-            &mut singular_values,    // The singular values of `a` in desceding order.
-            &mut u_matrix,           // Matrix `u` (row major)
-            &mut vt_matrix,          // matrix v` (column major)
-        );
-
-        result.map_err(|err| {
-            ANNError::log_opq_error(format!(
-                "SVD failed on iteration {} with error: {}",
-                iteration_number, err
-            ))
-        })?;
-
-        // Compute the new rotation matrix from the singular vectors as R^T = U * V^T
-        diskann_linalg::sgemm(
-            Transpose::None,      // Matrix 'a' is not transposed
-            Transpose::None,      // Matrix 'b' is not transposed
-            parameters.dim(),     // m (number of rows in matrices 'a' and 'c')
-            parameters.dim(),     // n (number of columns in matrices 'b' and 'c')
-            parameters.dim(), // k (number of columns in matrix 'a', number of rows in matrix 'b')
-            1.0,              // alpha (scaling factor for the product of matrices 'a' and 'b')
-            &u_matrix,        // matrix 'a'
-            &vt_matrix,       // matrix 'b'
-            None,             // beta (scaling factor for matrix 'c')
-            &mut rotation_matrix, // matrix 'c' (result matrix)
-        );
-    }
-
-    // Write the pivot data
-    pq_storage.write_pivot_data(
-        &full_pivot_data,
-        &centroid,
-        &chunk_offsets,
-        parameters.num_centers(),
-        parameters.dim(),
-        storage_provider,
-    )?;
-
-    // Write out the rotation matrix
-    pq_storage.write_rotation_matrix_data(&rotation_matrix, parameters.dim(), storage_provider)?;
-
-    Ok(())
-}
-
-/// Determines quantization for each chunk.  Quantization is the process of mapping a set of values
-/// to a smaller set of known values.
-///
-/// Function marked as inline because it was refactored out of larger function.  This function was
-/// made for code clarity reasons and is unlikely to be reused.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn opq_quantize_all_chunks<Pool: AsThreadPool>(
-    parameters: &GeneratePivotArguments,
-    chunk_offsets: &[usize],
-    full_pivot_data: &mut [f32],
-    rotated_training_data: &[f32],
-    quantized_data_results: &mut [f32],
-    rotation_iteration_number: usize,
-    rng: &mut impl Rng,
-    pool: Pool,
-) -> ANNResult<()> {
-    forward_threadpool!(pool = pool);
-
-    for chunk_index in 0..parameters.num_pq_chunks() {
-        let chunk_end_offset = chunk_offsets[chunk_index + 1];
-        let chunk_start_offset = chunk_offsets[chunk_index];
-        let chunk_size = chunk_end_offset - chunk_start_offset;
-
-        if chunk_size == 0 {
-            continue;
-        }
-
-        let current_chunk_train_data = get_chunk_from_training_data(
-            rotated_training_data,
-            parameters.num_train(),
-            parameters.dim(),
-            chunk_size,
-            chunk_start_offset,
-        );
-
-        // Run kmeans to get the centroids/pivots of this chunk.
-        let mut cur_pivot_data: Vec<f32> = vec![0.0; parameters.num_centers() * chunk_size];
-
-        // On first rotation, do k-means and lloyds.  On second iteration, just lloyds.
-        let closest_center = if rotation_iteration_number == 0 {
-            // run k_means and lloyds
-            let (_closest_docs, closest_center, _residual) = k_means_clustering(
-                &current_chunk_train_data,
-                parameters.num_train(),
-                chunk_size,
-                &mut cur_pivot_data,
-                parameters.num_centers(),
-                parameters.max_k_means_reps(),
-                rng,
-                &mut (false),
-                pool,
-            )?;
-
-            closest_center
-        } else {
-            // map the full pivot data to cur_pivot_data.  cur_pivot_data contains a list of the current chunk
-            // per center so each center only has one chunk.
-            for current_center in 0..parameters.num_centers() {
-                let current_center_index = current_center * parameters.dim();
-                let full_pivot_slice = &full_pivot_data[current_center_index + chunk_start_offset
-                    ..current_center_index + chunk_end_offset];
-
-                let current_center_start = current_center * chunk_size;
-                // Find the next start.
-                let current_center_end = current_center_start + chunk_size;
-
-                // copy chunk from full_pivot_slice to cur_pivot data
-                cur_pivot_data[current_center_start..current_center_end]
-                    .copy_from_slice(full_pivot_slice);
-            }
-
-            let (_closest_docs, closest_center, _residual) = run_lloyds(
-                &current_chunk_train_data,
-                parameters.num_train(),
-                chunk_size,
-                &mut cur_pivot_data,
-                parameters.num_centers(),
-                parameters.max_k_means_reps(),
-                &mut (false),
-                pool,
-            )?;
-
-            closest_center
-        };
-
-        // Copy centroids from this chunk table to full table
-        copy_chunk_centroids_to_full_table(
-            parameters,
-            chunk_offsets,
-            full_pivot_data,
-            chunk_index,
-            &chunk_size,
-            &cur_pivot_data,
-        );
-
-        // copy cur_pivot_data to the rotated train data
-        for index in 0..parameters.num_train() {
-            let source_slice = &cur_pivot_data[closest_center[index] as usize * chunk_size
-                ..(closest_center[index] as usize + 1) * chunk_size];
-
-            quantized_data_results[(index * parameters.dim()) + chunk_start_offset
-                ..(index * parameters.dim()) + chunk_end_offset]
-                .copy_from_slice(source_slice);
-        }
-    }
-    Ok(())
-}
-
 /// Gets all instances of a chunk from the training data for all records in the training data.  Each vector in the
 /// training dataset is divided into chunks and the PQ algorithm handles each vector chunk individually.  This method
 /// gets the same chunk from each vector in the training data and creates a new vector out of all of them.
@@ -677,13 +382,11 @@ where
 /// Compressed PQ table layout: {num_points: usize}{num_chunks: usize}{compressed pq table: [num_points; num_chunks]}
 /// It will start from the start_vector_id and compress the data_file in chunks.
 /// It validates the existing compressed data_file is consistent with the start_vector_id.
-#[allow(clippy::too_many_arguments)]
 pub fn generate_pq_data_from_pivots<T, Storage, Pool>(
     num_centers: usize,
     num_pq_chunks: usize,
     pq_storage: &mut PQStorage,
     storage_provider: &Storage,
-    use_opq: bool,
     offset: usize,
     pool: Pool,
 ) -> ANNResult<()>
@@ -710,7 +413,6 @@ where
     let mut full_pivot_data: Vec<f32>;
     let centroid: Vec<f32>;
     let chunk_offsets: Vec<usize>;
-    let opq_rotation_matrix: Vec<f32>;
     let full_dim: usize;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
@@ -719,30 +421,20 @@ where
         ));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        (
-            full_pivot_data,
-            centroid,
-            chunk_offsets,
-            opq_rotation_matrix,
-        ) = pq_storage.load_existing_pivot_data(
+        (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
             &num_pq_chunks,
             &num_centers,
             &full_dim,
             storage_provider,
-            use_opq,
         )?;
     }
 
     // Instead of subtracting the center from each data set component, we instead
     // add it to each center.
-    //
-    // This centering is only done if OPQ is not being used.
     let mut full_pivot_data_mat =
         MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
-    if !use_opq {
-        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
-    }
+    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
@@ -796,63 +488,32 @@ where
 
         let block_data = &buffer[..cur_block_size * full_dim];
 
-        if !use_opq {
-            // We need some batch size of data to pass to `compress`. There is a balance
-            // to achieve here. It must be:
-            //
-            // 1. Small enough to allow for parallelism across threads/tasks.
-            // 2. Large enough to take advantage of cache locality in `compress`.
-            //
-            // A value of 128 is a somewhat arbitrary compromise, meaning each task will
-            // process `BATCH_SIZE` many dataset vectors at a time.
-            const BATCH_SIZE: usize = 128;
+        // We need some batch size of data to pass to `compress`. There is a balance
+        // to achieve here. It must be:
+        //
+        // 1. Small enough to allow for parallelism across threads/tasks.
+        // 2. Large enough to take advantage of cache locality in `compress`.
+        //
+        // A value of 128 is a somewhat arbitrary compromise, meaning each task will
+        // process `BATCH_SIZE` many dataset vectors at a time.
+        const BATCH_SIZE: usize = 128;
 
-            // Wrap the data in `MatrixViews` so we do not need to manually construct view
-            // in the compression loop.
-            let mut compressed_block =
-                MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
-                    .bridge_err()?;
-            let base_block =
-                MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
+        // Wrap the data in `MatrixViews` so we do not need to manually construct view
+        // in the compression loop.
+        let mut compressed_block =
+            MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
+                .bridge_err()?;
+        let base_block =
+            MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
 
-            base_block
-                .par_window_iter(BATCH_SIZE)
-                .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
-                .try_for_each_in_pool(pool, |(src, dst)| {
-                    table.compress_into(src, dst).map_err(|err| {
-                        ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                    })
-                })?;
-        } else {
-            // Otherwise, we need to convert for F32 and apply the transformation.
-            // NOTE: Don't remove the center in thie case because that step should
-            // not be applied to OPQ.
-
-            let mut adjusted_block_data_output: Vec<f32> = vec![0.0; cur_block_size * full_dim];
-
-            // Rotate the current block with the trained rotation matrix before continuing with PQ
-            diskann_linalg::sgemm(
-                Transpose::None,                 // Do not transpose matrix 'a'
-                Transpose::None,                 // Do not transpose matrix 'b'
-                cur_block_size,                  // m (number of rows in matrices 'a' and 'c')
-                full_dim,                        // n (number of columns in matrices 'b' and 'c')
-                full_dim, // k (number of columns in matrix 'a', number of rows in matrix 'b')
-                1.0,      // alpha (scaling factor for the product of matrices 'a' and 'b')
-                block_data, // matrix 'a'
-                &opq_rotation_matrix, // matrix 'b'
-                None,     // beta (scaling factor for matrix 'c')
-                &mut adjusted_block_data_output, // matrix 'c' (result matrix)
-            );
-
-            block_compressed_base
-                .par_chunks_mut(num_pq_chunks)
-                .zip(adjusted_block_data_output.par_chunks(full_dim))
-                .try_for_each_in_pool(pool, |(dst, src)| {
-                    table.compress_into(src, dst).map_err(|err| {
-                        ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                    })
-                })?;
-        }
+        base_block
+            .par_window_iter(BATCH_SIZE)
+            .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
+            .try_for_each_in_pool(pool, |(src, dst)| {
+                table.compress_into(src, dst).map_err(|err| {
+                    ANNError::log_pq_error(diskann_quantization::error::format(&err))
+                })
+            })?;
 
         let offset = start_index * num_pq_chunks + std::mem::size_of::<i32>() * 2;
         compressed_data_writer.seek(SeekFrom::Start(offset as u64))?;
@@ -1097,67 +758,6 @@ mod pq_test {
         assert_eq!(chunk_offsets.ncols(), 1);
     }
 
-    #[test]
-    fn generate_optimized_pq_pivots_test() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-
-        let pivot_file_name = "/generate_pq_pivots_test3.bin";
-        let compressed_file_name = "/compressed2.bin";
-        let pq_training_file_name = "/file_not_used.bin";
-        let pq_storage: PQStorage = PQStorage::new(
-            pivot_file_name,
-            compressed_file_name,
-            Some(pq_training_file_name),
-        );
-
-        let mut train_data: Vec<f32> = vec![
-            1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 2.0f32, 2.0f32, 2.0f32,
-            2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32,
-            2.1f32, 2.1f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32, 2.2f32,
-            100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
-        ];
-        let pool = create_thread_pool_for_test();
-        generate_optimized_pq_pivots(
-            GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
-            &mut train_data,
-            &pq_storage,
-            &storage_provider,
-            &mut crate::utils::create_rnd_in_tests(),
-            &pool,
-        )
-        .unwrap();
-
-        let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
-        let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
-        let file_offset_data = offsets.map(|x| x.into_usize());
-        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
-        assert_eq!(offsets.nrows(), 4);
-        assert_eq!(offsets.ncols(), 1);
-
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
-
-        assert_eq!(pivots.as_slice().len(), 16);
-        assert_eq!(pivots.nrows(), 2);
-        assert_eq!(pivots.ncols(), 8);
-
-        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
-        assert_eq!(
-            centroid[(0, 0)],
-            (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
-        );
-        assert_eq!(centroid.nrows(), 8);
-        assert_eq!(centroid.ncols(), 1);
-
-        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
-            .unwrap()
-            .map(|x| x.into_usize());
-        assert_eq!(chunk_offsets[(0, 0)], 0);
-        assert_eq!(chunk_offsets[(1, 0)], 4);
-        assert_eq!(chunk_offsets[(2, 0)], 8);
-        assert_eq!(chunk_offsets.nrows(), 3);
-        assert_eq!(chunk_offsets.ncols(), 1);
-    }
-
     #[rstest]
     #[case(false, 2)]
     #[case(true, 2)]
@@ -1282,7 +882,6 @@ mod pq_test {
             2,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1435,7 +1034,6 @@ mod pq_test {
             num_pq_chunks,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1444,13 +1042,12 @@ mod pq_test {
         // use membuf function to generate pq
 
         // use pivot data generated by original function
-        let (full_pivot_data, centroid, offsets, _) = pq_storage
+        let (full_pivot_data, centroid, offsets) = pq_storage
             .load_existing_pivot_data(
                 &num_pq_chunks,
                 &NUM_PQ_CENTROIDS,
                 &train_dim,
                 &storage_provider,
-                false,
             )
             .unwrap();
 
@@ -1656,7 +1253,6 @@ mod pq_test {
             1,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1821,9 +1417,7 @@ mod pq_test {
             train_dim,
             full_pivot_data.into(),
             centroid.clone().into(),
-            offsets.into(),
-            None,
-        )
+            offsets.into())
         .unwrap();
 
         // Hook into here to test pairwise distances.

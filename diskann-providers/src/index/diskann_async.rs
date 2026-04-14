@@ -96,7 +96,6 @@ where
         full_pivot_data.into(),
         centroid.into(),
         offsets.into(),
-        None,
     )
 }
 
@@ -1562,7 +1561,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1622,7 +1620,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1699,7 +1696,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1805,7 +1801,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1926,7 +1921,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2048,7 +2042,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -3646,7 +3639,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 

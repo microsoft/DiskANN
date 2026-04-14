@@ -207,11 +207,6 @@ where
     /// * `Metric::CosineNormalized`
     ///
     pub fn new(table: T, distance: Metric) -> Result<Self, DistanceComputerConstructionError> {
-        // Check for OPQ usage - bail if it is enabled.
-        if table.has_opq() {
-            return Err(DistanceComputerConstructionError::OPQNotSupported);
-        }
-
         Ok(Self {
             table,
             vtable: VTable::new(distance),
@@ -345,7 +340,6 @@ mod tests {
     fn test_l2<T>(
         #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
         _marker: PhantomData<T>,
-        #[values(false, true)] use_opq: bool,
     ) where
         T: Into<f32> + TestDistribution,
     {
@@ -362,7 +356,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq,
                     };
 
                     let table = test_utils::seed_pivot_table(config);
@@ -384,19 +377,17 @@ mod tests {
                         errors,
                     );
 
-                    if !use_opq {
-                        test_utils::test_l2_inner(
-                            |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                                table: DistanceComputer::new(table, Metric::L2).unwrap(),
-                                query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
-                            },
-                            &table,
-                            num_trials,
-                            config,
-                            &mut rng,
-                            errors,
-                        );
-                    }
+                    test_utils::test_l2_inner(
+                        |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
+                            table: DistanceComputer::new(table, Metric::L2).unwrap(),
+                            query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
+                        },
+                        &table,
+                        num_trials,
+                        config,
+                        &mut rng,
+                        errors,
+                    );
                 }
             }
         }
@@ -428,7 +419,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq: false,
                     };
 
                     let table = test_utils::seed_pivot_table(config);
@@ -495,7 +485,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq: false,
                     };
                     let table = test_utils::seed_pivot_table(config);
                     let errors = test_utils::RelativeAndAbsolute {
@@ -549,7 +538,6 @@ mod tests {
             pq_chunks,
             num_pivots: 20,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -604,24 +592,5 @@ mod tests {
                 max_relative = 4.0e-6,
             );
         }
-    }
-
-    #[test]
-    fn test_construction_failure_on_opq() {
-        let table = FixedChunkPQTable::new(
-            2,
-            Box::new([0.0; 2 * 2]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 1, 2]),
-            Some(Box::new([0.0; 2 * 2])),
-        )
-        .unwrap();
-
-        let v = DistanceComputer::new(&table, Metric::L2);
-        assert!(v.is_err());
-        assert_eq!(
-            v.unwrap_err().to_string(),
-            "random access computer does not support OPQ"
-        );
     }
 }

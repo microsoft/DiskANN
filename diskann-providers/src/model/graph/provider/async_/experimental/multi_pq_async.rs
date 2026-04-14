@@ -302,7 +302,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(
@@ -438,7 +437,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let config_new = test_utils::TableConfig {
@@ -446,7 +444,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 2.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(

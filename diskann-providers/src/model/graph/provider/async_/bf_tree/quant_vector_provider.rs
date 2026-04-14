@@ -50,7 +50,7 @@ impl QuantVectorProvider {
         pq_chunk_table: FixedChunkPQTable,
         config: Config,
     ) -> ANNResult<Self> {
-        let quant_vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
+        let quant_vector_index = BfTree::with_config(config).map_err(ConfigError)?;
         let vec_pool = Arc::new(distance_table_pool(&pq_chunk_table));
 
         Ok(Self {
@@ -283,9 +283,7 @@ mod tests {
             dim,
             full_pivot_data.into(),
             centroid.into(),
-            offsets.into(),
-            None,
-        )
+            offsets.into())
         .unwrap();
 
         let bf_tree_config = Config::default();
@@ -317,9 +315,7 @@ mod tests {
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
-            Box::new([0, dim]),
-            None,
-        )
+            Box::new([0, dim]))
         .unwrap();
 
         let bf_tree_config = Config::default();
@@ -397,9 +393,7 @@ mod tests {
             dim,
             full_pivot_data.into(),
             centroid.into(),
-            offsets.into(),
-            None,
-        )
+            offsets.into())
         .unwrap();
 
         let bf_tree_config = Config::default();

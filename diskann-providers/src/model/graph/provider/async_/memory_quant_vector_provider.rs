@@ -338,7 +338,6 @@ mod tests {
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, dim]),
-            None,
         )
         .unwrap();
 
