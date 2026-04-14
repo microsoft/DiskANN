@@ -1112,7 +1112,7 @@ pub struct Strategy {
     // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded
     // baseline tests, this must be set to `false` to obtain repeatable `get_vector` calls.
     working_set_reuse: bool,
-    transient_ids: Option<HashSet<u32>>,
+    transient_ids: Option<Arc<HashSet<u32>>>,
 }
 
 impl Strategy {
@@ -1133,7 +1133,7 @@ impl Strategy {
     pub fn builder(working_set_reuse: bool, transient_ids: impl IntoIterator<Item = u32>) -> Self {
         Self {
             working_set_reuse,
-            transient_ids: Some(transient_ids.into_iter().collect()),
+            transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
         }
     }
 }

@@ -26,8 +26,8 @@ use crate::{
 /// The provider's `max_degree` is set higher than the index's `pruned_degree` so that
 /// adjacency lists can exceed the index limit, forcing `consolidate_vector` to prune.
 fn setup_consolidation_index(
-    vectors: &[Vec<f32>],
-    adjacency_lists: &[AdjacencyList<u32>],
+    vectors: Vec<Vec<f32>>,
+    adjacency_lists: Vec<AdjacencyList<u32>>,
 ) -> Arc<DiskANNIndex<Provider>> {
     let num_points = vectors.len();
     let dim = vectors[0].len();
@@ -49,9 +49,10 @@ fn setup_consolidation_index(
         AdjacencyList::from_iter_untrusted((0..num_points as u32).take(provider_max_degree));
 
     let points = vectors
-        .iter()
+        .into_iter()
+        .zip(adjacency_lists)
         .enumerate()
-        .map(|(id, vec)| (id as u32, vec.clone(), adjacency_lists[id].clone()));
+        .map(|(id, (vec, adj))| (id as u32, vec, adj));
 
     let provider = Provider::new_from(
         provider_config,
@@ -90,7 +91,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
         vec![0.0, 2.0], // point 5
         vec![2.0, 0.0], // point 6
     ];
-    let adjacency_lists = [
+    let adjacency_lists = vec![
         AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0: 5 neighbors > max_degree
         AdjacencyList::from_iter_untrusted([0, 3, 4]),
         AdjacencyList::from_iter_untrusted([0, 3, 4]),
@@ -100,7 +101,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
         AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 5]),
     ];
 
-    let index = setup_consolidation_index(&vectors, &adjacency_lists);
+    let index = setup_consolidation_index(vectors, adjacency_lists);
     let ctx = test_provider::Context::new();
 
     // Make only the consolidated node (0) transient. During robust_prune_list, fill()
