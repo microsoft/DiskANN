@@ -87,7 +87,7 @@ pub fn compute_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator = VectorDataIterator::<StorageProvider, Data>::new(
+    let dataset_iterator = VectorDataIterator::<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>::new(
         base_file,
         associated_data_file.clone(),
         storage_provider,
@@ -111,7 +111,7 @@ pub fn compute_ground_truth_from_datafiles<
 
     let insert_iterator = match insert_file {
         Some(insert_file) => {
-            let i = VectorDataIterator::<StorageProvider, Data>::new(
+            let i = VectorDataIterator::<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>::new(
                 insert_file,
                 Option::None,
                 storage_provider,
@@ -177,7 +177,7 @@ pub fn compute_ground_truth_from_datafiles<
     let ground_truth_result = compute_ground_truth_from_data::<
         Data,
         StorageProvider,
-        VectorDataIterator<StorageProvider, Data>,
+        VectorDataIterator<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>,
     >(
         distance_function,
         dataset_iterator,
@@ -461,11 +461,13 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 #[allow(clippy::too_many_arguments)]
 pub fn compute_ground_truth_from_data<Data, VectorReader, VectorIteratorType>(
     distance_function: Metric,
-    dataset_iter: VectorDataIterator<VectorReader, Data>,
+    dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
     queries: Vec<&[Data::VectorDataType]>,
     query_aligned_dimmensions: usize,
     recall_at: u32,
-    insert_iter: Option<VectorDataIterator<VectorReader, Data>>,
+    insert_iter: Option<
+        VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
+    >,
     skip_base: Option<usize>,
     query_bitmaps: Option<Vec<BitSet>>,
 ) -> CMDResult<(Npq, Vec<Data::AssociatedDataType>)>

@@ -20,7 +20,7 @@ use diskann_providers::{
     model::{
         graph::{
             provider::async_::inmem::DefaultProviderParameters,
-            traits::{AdHoc, GraphDataType},
+            traits::GraphDataType,
         },
         IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
@@ -511,7 +511,7 @@ where
     // Associated data will only be used in the write_disk_layout function which only requires the none-partitioned associated data stream.
     let dataset_iter = Arc::new(Mutex::new({
         let iter =
-            VectorDataIterator::<_, AdHoc<T>>::new(data_path, Option::None, storage_provider)?;
+            VectorDataIterator::<_, T>::new(data_path, Option::None, storage_provider)?;
         iter.enumerate().skip(offset)
     }));
 

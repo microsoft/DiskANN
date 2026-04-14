@@ -20,7 +20,7 @@ use diskann_vector::distance::Metric;
 use super::common::{AlignedMemoryVectorStore, PrefetchCacheLineLevel, TestCallCount};
 use crate::{
     common::IgnoreLockPoison,
-    model::graph::{provider::async_::common::VectorStore, traits::GraphDataType},
+    model::graph::provider::async_::common::VectorStore,
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
 
@@ -36,10 +36,10 @@ const WRITE_LOCK_GRANULARITY: usize = 16;
 /// the widest range of datasets.
 const PREFETCH_DEFAULT: usize = 8;
 
-pub struct FastMemoryVectorProviderAsync<Data: GraphDataType> {
+pub struct FastMemoryVectorProviderAsync<T: VectorRepr> {
     dim: usize,
     max_vectors: usize,
-    vectors: AlignedMemoryVectorStore<Data::VectorDataType>,
+    vectors: AlignedMemoryVectorStore<T>,
 
     // We keep only write locks as reads are unsynchronized. Since there are
     // only writers, we use Mutex here. Note that sync::Mutex is ok here
@@ -47,7 +47,7 @@ pub struct FastMemoryVectorProviderAsync<Data: GraphDataType> {
     write_locks: Vec<Mutex<()>>,
 
     // The distance object used to compare two vector representations.
-    distance: <Data::VectorDataType as VectorRepr>::Distance,
+    distance: T::Distance,
 
     prefetch_cache_line_level: PrefetchCacheLineLevel,
 
@@ -57,7 +57,7 @@ pub struct FastMemoryVectorProviderAsync<Data: GraphDataType> {
     num_get_calls: TestCallCount,
 }
 
-impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
+impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
     pub fn new(
         max_vectors: usize,
         dim: usize,
@@ -76,7 +76,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
             max_vectors,
             vectors,
             write_locks,
-            distance: Data::VectorDataType::distance(metric, Some(dim)),
+            distance: T::distance(metric, Some(dim)),
             num_get_calls: TestCallCount::default(),
             prefetch_cache_line_level: prefetch_cache_line_level.unwrap_or_default(),
             prefetch_lookahead: prefetch_lookahead.unwrap_or(PREFETCH_DEFAULT),
@@ -97,7 +97,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
 
     /// Return a [`diskann_vector::DistanceFunction`] capable of computing distances on elements
     /// yielded by this provider.
-    pub(crate) fn distance(&self) -> &<Data::VectorDataType as VectorRepr>::Distance {
+    pub(crate) fn distance(&self) -> &T::Distance {
         &self.distance
     }
 
@@ -116,7 +116,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     ///
     /// 2. Be okay with racey data.
     #[inline(always)]
-    pub unsafe fn get_vector_sync(&self, i: usize) -> &[Data::VectorDataType] {
+    pub unsafe fn get_vector_sync(&self, i: usize) -> &[T] {
         self.num_get_calls.increment();
         // SAFETY: The caller must ensure that `i < self.total()` and that there is no
         // concurrent mutable access to the vector at index `i`.
@@ -142,11 +142,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     ///
     /// 2. Be okay with racey data.
     #[inline(always)]
-    pub(crate) unsafe fn set_vector_sync(
-        &self,
-        i: usize,
-        v: &[Data::VectorDataType],
-    ) -> ANNResult<()> {
+    pub(crate) unsafe fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
             return Err(ANNError::log_index_error(
                 "Vector dimension is not equal to the expected dimension.",
@@ -238,9 +234,9 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     }
 }
 
-impl<Data> VectorStore for FastMemoryVectorProviderAsync<Data>
+impl<T> VectorStore for FastMemoryVectorProviderAsync<T>
 where
-    Data: GraphDataType,
+    T: VectorRepr,
 {
     fn total(&self) -> usize {
         self.total()
@@ -252,9 +248,9 @@ where
 }
 
 /// This is an adaptor for compatibility with the async index serialization.
-impl<Data> SaveWith<AsyncIndexMetadata> for FastMemoryVectorProviderAsync<Data>
+impl<T> SaveWith<AsyncIndexMetadata> for FastMemoryVectorProviderAsync<T>
 where
-    Data: GraphDataType,
+    T: VectorRepr,
 {
     type Ok = usize;
     type Error = ANNError;
@@ -272,9 +268,9 @@ where
     }
 }
 
-impl<Data> LoadWith<AsyncQuantLoadContext> for FastMemoryVectorProviderAsync<Data>
+impl<T> LoadWith<AsyncQuantLoadContext> for FastMemoryVectorProviderAsync<T>
 where
-    Data: GraphDataType,
+    T: VectorRepr,
 {
     type Error = ANNError;
 
@@ -296,8 +292,8 @@ where
 }
 
 /// Hook into [`storage::bin::load_from_bin`] by implementing [`storage::bin::SetData`].
-impl<Data: GraphDataType> storage::bin::SetData for FastMemoryVectorProviderAsync<Data> {
-    type Item = Data::VectorDataType;
+impl<T: VectorRepr> storage::bin::SetData for FastMemoryVectorProviderAsync<T> {
+    type Item = T;
 
     fn set_data(&mut self, i: usize, element: &[Self::Item]) -> ANNResult<()> {
         // SAFETY: No race can happen because we have a mutable reference to `self`.
@@ -306,8 +302,8 @@ impl<Data: GraphDataType> storage::bin::SetData for FastMemoryVectorProviderAsyn
 }
 
 /// Hook into [`storage::bin::save_to_bin`] by implementing [`storage::bin::GetData`].
-impl<Data: GraphDataType> storage::bin::GetData for FastMemoryVectorProviderAsync<Data> {
-    type Element = Data::VectorDataType;
+impl<T: VectorRepr> storage::bin::GetData for FastMemoryVectorProviderAsync<T> {
+    type Element = T;
     type Item<'a> = &'a [Self::Element];
 
     fn get_data(&self, i: usize) -> ANNResult<Self::Item<'_>> {
@@ -318,12 +314,12 @@ impl<Data: GraphDataType> storage::bin::GetData for FastMemoryVectorProviderAsyn
 
     /// Return the total number of points, including frozen points.
     fn total(&self) -> usize {
-        FastMemoryVectorProviderAsync::<Data>::total(self)
+        FastMemoryVectorProviderAsync::<T>::total(self)
     }
 
     /// Return the dimension of each vector.
     fn dim(&self) -> usize {
-        FastMemoryVectorProviderAsync::<Data>::dim(self)
+        FastMemoryVectorProviderAsync::<T>::dim(self)
     }
 }
 
@@ -336,20 +332,17 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use super::*;
-    use crate::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_vector_provider() {
         let num_points = 100;
-        let vector_provider = Arc::new(
-            FastMemoryVectorProviderAsync::<GraphDataF32VectorUnitData>::new(
-                num_points,
-                3,
-                Metric::L2,
-                None,
-                None,
-            ),
-        );
+        let vector_provider = Arc::new(FastMemoryVectorProviderAsync::<f32>::new(
+            num_points,
+            3,
+            Metric::L2,
+            None,
+            None,
+        ));
         let mut handles = Vec::new();
         for i in 0..num_points {
             let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
@@ -373,17 +366,12 @@ mod tests {
         assert_eq!(vector_provider.num_get_calls.get(), num_points);
     }
 
-    fn create_test_provider() -> FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData> {
+    fn create_test_provider() -> FastMemoryVectorProviderAsync<f32> {
         let num_points = 5;
         let dim = 3;
 
-        let provider = FastMemoryVectorProviderAsync::<GraphDataF32VectorUnitData>::new(
-            num_points,
-            dim,
-            Metric::L2,
-            None,
-            None,
-        );
+        let provider =
+            FastMemoryVectorProviderAsync::<f32>::new(num_points, dim, Metric::L2, None, None);
 
         assert_eq!(provider.total(), num_points);
         assert_eq!(provider.dim(), dim);
@@ -423,8 +411,8 @@ mod tests {
     }
 
     fn check_providers_equal(
-        original: &FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData>,
-        reloaded: &FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData>,
+        original: &FastMemoryVectorProviderAsync<f32>,
+        reloaded: &FastMemoryVectorProviderAsync<f32>,
     ) {
         assert_eq!(original.total(), reloaded.total());
         assert_eq!(original.dim(), reloaded.dim());
@@ -447,7 +435,7 @@ mod tests {
     // Test Saving and Loading.
     #[test]
     fn test_direct_save_load() {
-        type Provider = FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+        type Provider = FastMemoryVectorProviderAsync<f32>;
         let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
@@ -469,7 +457,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_save() {
-        type Provider = FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+        type Provider = FastMemoryVectorProviderAsync<f32>;
 
         let storage = VirtualStorageProvider::new_memory();
 

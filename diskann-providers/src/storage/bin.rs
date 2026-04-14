@@ -13,7 +13,7 @@ use diskann::{
 };
 use diskann_utils::io::Metadata;
 
-use crate::{model::graph::traits::AdHoc, utils::load_metadata_from_file};
+use crate::utils::load_metadata_from_file;
 
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
@@ -150,7 +150,7 @@ where
     );
 
     let mut data = create(metadata.npoints(), metadata.ndims())?;
-    let itr = crate::utils::VectorDataIterator::<_, AdHoc<T>>::new(path, None, provider)?;
+    let itr = crate::utils::VectorDataIterator::<_, T>::new(path, None, provider)?;
     for (i, (vector, _)) in itr.enumerate() {
         data.set_data(i.into_usize(), &vector)?;
     }
