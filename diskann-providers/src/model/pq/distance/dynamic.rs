@@ -568,8 +568,7 @@ mod tests {
             normalize(&mut v0);
             normalize(&mut v1);
 
-            let cosine_normalized =
-                DistanceComputer::new(&table, Metric::CosineNormalized);
+            let cosine_normalized = DistanceComputer::new(&table, Metric::CosineNormalized);
             let expected: f32 = CosineNormalized::evaluate(&*v0, &*v1);
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),

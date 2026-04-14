@@ -98,9 +98,7 @@ impl MemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(
-        &self,
-    ) -> DistanceComputer {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 

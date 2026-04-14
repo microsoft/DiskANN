@@ -111,7 +111,8 @@ mod imp {
                 data.ncols(),
                 base.flatten().into(),
                 vec![0.0; data.ncols()].into(),
-                offsets.into())?;
+                offsets.into(),
+            )?;
 
             let training_time: MicroSeconds = start.elapsed().into();
 
@@ -380,7 +381,8 @@ mod imp {
             Ok(diskann_providers::model::pq::distance::QueryComputer::new(
                 &store.quantizer,
                 self.measure.into(),
-                query)?)
+                query,
+            )?)
         }
     }
 }

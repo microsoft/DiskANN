@@ -152,13 +152,7 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
 
     let centroid = vec![0.0f32; config.dim];
 
-    FixedChunkPQTable::new(
-        config.dim,
-        pivots.into(),
-        centroid.into(),
-        offsets.into(),
-    )
-    .unwrap()
+    FixedChunkPQTable::new(config.dim, pivots.into(), centroid.into(), offsets.into()).unwrap()
 }
 
 /// Generate a random PQ code spanning the requested number of pivots and chunks.

@@ -152,11 +152,7 @@ impl PQStorage {
         num_centers: &usize,
         dim: &usize,
         storage_provider: &Storage,
-    ) -> ANNResult<(
-        FullPivotDataType,
-        CentroidType,
-        ChunkOffsetsType,
-    )>
+    ) -> ANNResult<(FullPivotDataType, CentroidType, ChunkOffsetsType)>
     where
         Storage: StorageReadProvider,
     {

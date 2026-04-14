@@ -503,8 +503,7 @@ where
         let mut compressed_block =
             MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
                 .bridge_err()?;
-        let base_block =
-            MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
+        let base_block = MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
 
         base_block
             .par_window_iter(BATCH_SIZE)
@@ -1417,7 +1416,8 @@ mod pq_test {
             train_dim,
             full_pivot_data.into(),
             centroid.clone().into(),
-            offsets.into())
+            offsets.into(),
+        )
         .unwrap();
 
         // Hook into here to test pairwise distances.

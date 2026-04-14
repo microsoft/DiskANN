@@ -10,10 +10,7 @@ use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{
-    QueryComputer,
-    dynamic::VTable,
-};
+use super::{QueryComputer, dynamic::VTable};
 use crate::model::FixedChunkPQTable;
 
 pub trait PQVersion: Eq + Copy {}
@@ -192,10 +189,7 @@ where
 {
     /// Construct a `MultiDistanceComputer` from the provided table implementing the
     /// requested metric.
-    pub fn new(
-        table: MultiTable<T, I>,
-        metric: Metric,
-    ) -> Self {
+    pub fn new(table: MultiTable<T, I>, metric: Metric) -> Self {
         Self {
             table,
             vtable: VTable::new(metric),

@@ -130,9 +130,7 @@ impl QuantVectorProvider {
     }
 
     /// Create a distance computer for the underlying schema
-    pub fn distance_computer(
-        &self,
-    ) -> DistanceComputer {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -279,12 +277,9 @@ mod tests {
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
-        let pq_chunk_table = FixedChunkPQTable::new(
-            dim,
-            full_pivot_data.into(),
-            centroid.into(),
-            offsets.into())
-        .unwrap();
+        let pq_chunk_table =
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+                .unwrap();
 
         let bf_tree_config = Config::default();
         let provider =
@@ -315,7 +310,8 @@ mod tests {
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
-            Box::new([0, dim]))
+            Box::new([0, dim]),
+        )
         .unwrap();
 
         let bf_tree_config = Config::default();
@@ -389,12 +385,9 @@ mod tests {
         let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
-        let pq_chunk_table = FixedChunkPQTable::new(
-            dim,
-            full_pivot_data.into(),
-            centroid.into(),
-            offsets.into())
-        .unwrap();
+        let pq_chunk_table =
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+                .unwrap();
 
         let bf_tree_config = Config::default();
         let provider = Arc::new(

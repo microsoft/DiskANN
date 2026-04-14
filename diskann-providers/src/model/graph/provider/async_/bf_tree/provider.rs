@@ -2624,7 +2624,8 @@ mod tests {
             dim,
             vec![0.0; dim * 256].into_boxed_slice(),
             vec![0.0; dim].into_boxed_slice(),
-            Box::new([0, 4, dim]))
+            Box::new([0, 4, dim]),
+        )
         .unwrap();
 
         // Create provider parameters
@@ -2926,7 +2927,8 @@ mod tests {
             dim,
             vec![0.0; dim * 256].into_boxed_slice(),
             vec![0.0; dim].into_boxed_slice(),
-            Box::new([0, 4, dim]))
+            Box::new([0, 4, dim]),
+        )
         .unwrap();
 
         let provider =
