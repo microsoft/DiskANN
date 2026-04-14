@@ -17,23 +17,13 @@ inputs:
   extract-to:
     description: 'Directory to extract the dataset into'
     required: true
-  rust-cache-key:
-    description: 'Suffix for the Rust dependency cache key'
-    required: true
 
 runs:
   using: composite
   steps:
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: stable
-
-    - name: Cache Rust dependencies
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: diskann_rust -> target
-        key: ${{ inputs.rust-cache-key }}
+      shell: bash
+      run: rustup show
 
     - name: Install system dependencies
       shell: bash

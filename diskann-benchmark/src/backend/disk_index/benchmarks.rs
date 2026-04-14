@@ -219,7 +219,7 @@ enum Direction {
 /// A single metric comparison in the regression check.
 #[derive(Debug, Serialize)]
 struct MetricComparison {
-    metric: &'static str,
+    metric: String,
     before: f64,
     after: f64,
     change_pct: String,
@@ -241,7 +241,7 @@ impl fmt::Display for DiskIndexCheckResult {
 
         for (i, c) in self.comparisons.iter().enumerate() {
             let mut row = table.row(i);
-            row.insert(c.metric, 0);
+            row.insert(c.metric.clone(), 0);
             row.insert(format!("{:.3}", c.before), 1);
             row.insert(format!("{:.3}", c.after), 2);
             row.insert(c.change_pct.clone(), 3);
@@ -260,7 +260,7 @@ impl fmt::Display for DiskIndexCheckResult {
 /// For `LowerIsBetter` metrics (latency, IOs), regression = value increased beyond tolerance.
 /// For `HigherIsBetter` metrics (QPS, recall), regression = value decreased beyond tolerance.
 fn check_metric(
-    name: &'static str,
+    name: String,
     direction: Direction,
     before: f64,
     after: f64,
@@ -325,7 +325,7 @@ where
         // Check build time if both sides have it
         if let (Some(b_build), Some(a_build)) = (&before.build, &after.build) {
             comparisons.push(check_metric(
-                "build_time",
+                "build_time".to_string(),
                 LowerIsBetter,
                 b_build.build_time_seconds(),
                 a_build.build_time_seconds(),
@@ -363,7 +363,7 @@ where
             };
 
             comparisons.push(check_metric(
-                Box::leak(format!("{}qps", prefix).into_boxed_str()),
+                format!("{prefix}qps"),
                 HigherIsBetter,
                 b_sr.qps as f64,
                 a_sr.qps as f64,
@@ -371,7 +371,7 @@ where
                 &mut passed,
             ));
             comparisons.push(check_metric(
-                Box::leak(format!("{}recall", prefix).into_boxed_str()),
+                format!("{prefix}recall"),
                 HigherIsBetter,
                 b_sr.recall as f64,
                 a_sr.recall as f64,
@@ -379,7 +379,7 @@ where
                 &mut passed,
             ));
             comparisons.push(check_metric(
-                Box::leak(format!("{}mean_latency", prefix).into_boxed_str()),
+                format!("{prefix}mean_latency"),
                 LowerIsBetter,
                 b_sr.mean_latency,
                 a_sr.mean_latency,
@@ -387,7 +387,7 @@ where
                 &mut passed,
             ));
             comparisons.push(check_metric(
-                Box::leak(format!("{}p95_latency", prefix).into_boxed_str()),
+                format!("{prefix}p95_latency"),
                 LowerIsBetter,
                 b_sr.p95_latency.as_f64(),
                 a_sr.p95_latency.as_f64(),
@@ -395,7 +395,7 @@ where
                 &mut passed,
             ));
             comparisons.push(check_metric(
-                Box::leak(format!("{}mean_ios", prefix).into_boxed_str()),
+                format!("{prefix}mean_ios"),
                 LowerIsBetter,
                 b_sr.mean_ios,
                 a_sr.mean_ios,
@@ -403,7 +403,7 @@ where
                 &mut passed,
             ));
             comparisons.push(check_metric(
-                Box::leak(format!("{}mean_comparisons", prefix).into_boxed_str()),
+                format!("{prefix}mean_comparisons"),
                 LowerIsBetter,
                 b_sr.mean_comparisons,
                 a_sr.mean_comparisons,

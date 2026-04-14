@@ -49,7 +49,6 @@ defaults:
 
 permissions:
   contents: read
-  pull-requests: write  # Required for posting PR comments
 
 jobs:
   # Macro benchmark: compare current branch against baseline
@@ -94,13 +93,6 @@ jobs:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
           extract-to: diskann_rust/target/tmp
-          rust-cache-key: benchmark-current
-
-      - name: Cache Rust dependencies (baseline)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: baseline -> target
-          key: benchmark-baseline
 
       - name: Copy dataset to baseline
         run: |

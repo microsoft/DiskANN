@@ -62,7 +62,6 @@ jobs:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
           extract-to: diskann_rust/target/tmp
-          rust-cache-key: aa
 
       # A/A: build once, run twice (identical code — only detecting environment noise)
       - name: Build benchmark binary
