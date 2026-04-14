@@ -3,11 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! Tests for `consolidate_vector` behavior under transient (flaky) errors.
+//! Tests for `consolidate_vector` covering all three code paths:
 //!
-//! Migrated from `diskann-providers/src/index/diskann_async.rs`. The original used
-//! the inmem provider's `FlakyAccessor` which fails every Nth `get_element` call.
-//! This version uses `test_provider::Accessor::flaky()` which fails for specific IDs.
+//! 1. Consolidating a deleted vertex → `ConsolidateKind::Deleted`
+//! 2. Consolidating a vertex with nothing to repair → `ConsolidateKind::Complete` (no-op)
+//! 3. Consolidating a vertex with deleted neighbors → prune and repair edges
+//! 4. Transient failure during vector retrieval → `ConsolidateKind::FailedVectorRetrieval`
 
 use std::{iter, sync::Arc};
 
@@ -18,8 +19,11 @@ use crate::{
         self, AdjacencyList, ConsolidateKind, DiskANNIndex,
         test::provider::{self as test_provider, Provider, Strategy},
     },
+    provider::Delete,
     test::tokio::current_thread_runtime,
 };
+
+use super::helpers::{assert_neighbors, create_2d_unit_square, setup_2d_square};
 
 /// Build a small index with explicit vectors and adjacency lists for consolidation testing.
 ///
@@ -121,4 +125,101 @@ fn flaky_consolidate_returns_failed_retrieval() {
         ConsolidateKind::FailedVectorRetrieval,
         "consolidate should handle transient errors gracefully"
     );
+}
+
+/// Consolidating a deleted vertex returns `ConsolidateKind::Deleted`.
+#[test]
+fn consolidate_deleted_vertex_returns_deleted() {
+    let rt = current_thread_runtime();
+
+    let adjacency_lists = vec![
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
+    ];
+
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+    let strategy = Strategy::new();
+
+    // Delete vertex 3, then try to consolidate it.
+    rt.block_on(index.data_provider.delete(&ctx, &3)).unwrap();
+
+    let result = rt
+        .block_on(index.consolidate_vector(&strategy, &ctx, 3))
+        .unwrap();
+
+    assert_eq!(result, ConsolidateKind::Deleted);
+}
+
+/// Consolidating a vertex with no deleted neighbors and degree within limits is a no-op.
+#[test]
+fn consolidate_nothing_to_do_returns_complete() {
+    let rt = current_thread_runtime();
+
+    let adjacency_lists = vec![
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
+    ];
+
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+    let strategy = Strategy::new();
+
+    // No deletions, all degrees within limit → nothing to do.
+    let result = rt
+        .block_on(index.consolidate_vector(&strategy, &ctx, 0))
+        .unwrap();
+
+    assert_eq!(result, ConsolidateKind::Complete);
+}
+
+/// After deleting vertex 3 and consolidating all vertices, edges to vertex 3 are removed
+/// and replacement edges are added.
+#[test]
+fn consolidate_repairs_after_deletion() {
+    let rt = current_thread_runtime();
+
+    let adjacency_lists = vec![
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([0, 3, 4]),
+        AdjacencyList::from_iter_untrusted([1, 2, 4]),
+        AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
+    ];
+
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+    let strategy = Strategy::new();
+
+    // Delete vertex 3.
+    rt.block_on(index.data_provider.delete(&ctx, &3)).unwrap();
+
+    // Consolidate all vertices.
+    for id in 0..5u32 {
+        let result = rt
+            .block_on(index.consolidate_vector(&strategy, &ctx, id))
+            .unwrap();
+
+        if id == 3 {
+            assert_eq!(result, ConsolidateKind::Deleted);
+        } else {
+            assert_ne!(result, ConsolidateKind::FailedVectorRetrieval);
+        }
+    }
+
+    // Expected outcome:
+    // - vertex 0: unchanged → [1, 2, 4]
+    // - vertex 1: edge to 3 replaced with edge to 2 → [0, 2, 4]
+    // - vertex 2: edge to 3 replaced with edge to 1 → [0, 1, 4]
+    // - vertex 4 (start): edge to 3 removed → [0, 1, 2]
+    assert_neighbors(&rt, &index, 0, &[1, 2, 4]);
+    assert_neighbors(&rt, &index, 1, &[0, 2, 4]);
+    assert_neighbors(&rt, &index, 2, &[0, 1, 4]);
+    assert_neighbors(&rt, &index, 4, &[0, 1, 2]);
 }

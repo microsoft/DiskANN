@@ -7,10 +7,15 @@ use std::{iter, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
-use crate::graph::{
-    self, AdjacencyList, DiskANNIndex,
-    test::provider::{self as test_provider},
+use crate::{
+    graph::{
+        self, AdjacencyList, DiskANNIndex, InplaceDeleteMethod,
+        test::provider::{self as test_provider},
+    },
+    provider::NeighborAccessor,
 };
+
+use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square};
 
 fn inplace_delete_setup() -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider_config = test_provider::Config::new(
@@ -96,4 +101,183 @@ async fn basic_multi() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_twohop_and_onehop() {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            &3,
+            3,
+            InplaceDeleteMethod::TwoHopAndOneHop,
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_visited_and_topk() {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            &3,
+            3,
+            InplaceDeleteMethod::VisitedAndTopK {
+                k_value: 4,
+                l_value: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+}
+
+/// Multi-delete vertices 2 and 3 using TwoHopAndOneHop, then validate the graph.
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_twohop_and_onehop() {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .multi_inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            Arc::new([2, 3]),
+            3,
+            InplaceDeleteMethod::TwoHopAndOneHop,
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_after_2_and_3_delete(neighbors).await;
+}
+
+/// Multi-delete vertices 2 and 3 using VisitedAndTopK, then validate the graph.
+#[tokio::test(flavor = "current_thread")]
+async fn multi_inplace_delete_visited_and_topk() {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .multi_inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            Arc::new([2, 3]),
+            3,
+            InplaceDeleteMethod::VisitedAndTopK {
+                k_value: 4,
+                l_value: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_after_2_and_3_delete(neighbors).await;
+}
+
+async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &N)
+where
+    N: NeighborAccessor<Id = u32> + Copy,
+{
+    // Validate graph repair after deletion.
+    // VisitedAndTopK does a full search for candidates, so it may add edges
+    // beyond just replacing the deleted vertex's connections. We verify:
+    // 1. Vertex 3 is absent from all neighbor lists
+    // 2. Key structural properties hold
+    let mut list = AdjacencyList::new();
+
+    for node in [0u32, 1, 2, 4] {
+        neighbors.get_neighbors(node, &mut list).await.unwrap();
+        assert!(
+            !list.contains(3),
+            "node {node} should not point to deleted vertex 3, got: {:?}",
+            &*list
+        );
+    }
+
+    // Node 2 originally only connected to [3, 4]. After 3's deletion,
+    // repair must have given it at least one live neighbor.
+    neighbors.get_neighbors(2, &mut list).await.unwrap();
+    assert!(
+        !list.is_empty(),
+        "node 2 should still have neighbors after repair"
+    );
+    assert!(list.contains(4), "node 2 should still point to start (4)");
+
+    // Start node (4) should still connect to all live corners.
+    neighbors.get_neighbors(4, &mut list).await.unwrap();
+    list.sort();
+    assert_eq!(
+        &*list,
+        &[0, 1, 2],
+        "start node 4 should connect to live corners"
+    );
+}
+
+/// Validate the graph after deleting both vertices 2 and 3.
+/// Live nodes: 0, 1, 4 (start). Original adjacency:
+///   0: [1, 4]  — no edges to deleted nodes
+///   1: [0, 4]  — no edges to deleted nodes
+///   2: [3, 4]  — deleted
+///   3: [2, 4]  — deleted
+///   4: [0, 1, 2, 3] — edges to 2 and 3 must be removed
+async fn validate_graph_after_2_and_3_delete<N>(neighbors: &N)
+where
+    N: NeighborAccessor<Id = u32> + Copy,
+{
+    let mut list = AdjacencyList::new();
+
+    // No live node should reference either deleted vertex.
+    for node in [0u32, 1, 4] {
+        neighbors.get_neighbors(node, &mut list).await.unwrap();
+        assert!(
+            !list.contains(2),
+            "node {node} should not point to deleted vertex 2, got: {:?}",
+            &*list
+        );
+        assert!(
+            !list.contains(3),
+            "node {node} should not point to deleted vertex 3, got: {:?}",
+            &*list
+        );
+    }
+
+    // Node 0: had [1, 4], neither deleted — should still have both.
+    neighbors.get_neighbors(0, &mut list).await.unwrap();
+    assert!(list.contains(1), "node 0 should still point to node 1");
+    assert!(list.contains(4), "node 0 should still point to start (4)");
+
+    // Node 1: had [0, 4], neither deleted — should still have both.
+    neighbors.get_neighbors(1, &mut list).await.unwrap();
+    assert!(list.contains(0), "node 1 should still point to node 0");
+    assert!(list.contains(4), "node 1 should still point to start (4)");
+
+    // Start node (4): had [0, 1, 2, 3], should now connect to only live corners.
+    neighbors.get_neighbors(4, &mut list).await.unwrap();
+    list.sort();
+    assert_eq!(
+        &*list,
+        &[0, 1],
+        "start node 4 should connect to remaining live corners"
+    );
 }

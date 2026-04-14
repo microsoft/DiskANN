@@ -6,6 +6,8 @@
 mod consolidate;
 mod grid_insert;
 mod grid_search;
+mod helpers;
+mod index;
 mod inplace_delete;
 
 /// Set to `true` and recompile to include full adjacency list state in participating
