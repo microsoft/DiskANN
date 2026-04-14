@@ -1130,7 +1130,10 @@ impl Strategy {
         }
     }
 
-    pub fn builder(working_set_reuse: bool, transient_ids: impl IntoIterator<Item = u32>) -> Self {
+    pub fn with_transient(
+        working_set_reuse: bool,
+        transient_ids: impl IntoIterator<Item = u32>,
+    ) -> Self {
         Self {
             working_set_reuse,
             transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
