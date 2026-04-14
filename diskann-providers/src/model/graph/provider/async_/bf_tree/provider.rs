@@ -172,7 +172,6 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
@@ -221,7 +220,6 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
