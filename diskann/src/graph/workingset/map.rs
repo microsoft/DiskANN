@@ -1992,8 +1992,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn fill_skips_transient_errors() {
         let provider = fill_provider();
-        let flakyset = std::collections::HashSet::from([1]);
-        let mut accessor = TestAccessor::flaky(&provider, Cow::Borrowed(&flakyset));
+
+        let mut accessor =
+            TestAccessor::flaky(&provider, Cow::Owned(std::collections::HashSet::from([1])));
         let mut map: TestMap = Builder::new(Capacity::Unbounded).build(0);
 
         // ID 1 is transient — should be skipped, not propagated.

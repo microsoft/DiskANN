@@ -106,7 +106,10 @@ fn flaky_consolidate_returns_failed_retrieval() {
     // Make only the consolidated node (0) transient. During robust_prune_list, fill()
     // requests node 0's vector first — the transient error causes view.get(0) to return
     // None, triggering the FailedVectorRetrieval path.
-    let flaky_strategy = Strategy::with_transient([0]);
+    let flaky_strategy = Strategy::builder(
+        true, // working_set_reuse
+        [0],  // transient ids
+    );
 
     let result = rt
         .block_on(index.consolidate_vector(&flaky_strategy, &ctx, 0))
