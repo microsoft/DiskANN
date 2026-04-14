@@ -1,1 +1,1 @@
-run --input-file $INPUT --output-file $OUTPUT
+run --input-file $INPUT --output-file $OUTPUT --allow-debug

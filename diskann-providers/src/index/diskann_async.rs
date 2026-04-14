@@ -503,7 +503,7 @@ pub(crate) mod tests {
         full_strategy: FS,
         quant_strategy: QS,
     ) where
-        DP: DataProvider<InternalId = u32, Context = DefaultContext>,
+        DP: DataProvider<InternalId = u32, Context: Default>,
         FS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         QS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
@@ -519,7 +519,7 @@ pub(crate) mod tests {
         // all-zeros query is as far from the entry point as possible.
         let query = vec![T::default(); dim];
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -577,9 +577,6 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
-                return Err(Box::new("start point should not be returned"));
-            }
             if id as usize != num_points - 2 {
                 return Err(Box::new(format!(
                     "expected {} as the nearest id",
@@ -614,7 +611,7 @@ pub(crate) mod tests {
 
         // Paged Search
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -803,7 +800,7 @@ pub(crate) mod tests {
         // Build with full-precision single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index
                     .insert(FullPrecision, &ctx, &(i as u32), v)
@@ -817,7 +814,7 @@ pub(crate) mod tests {
         // Build with quantized single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
@@ -828,7 +825,7 @@ pub(crate) mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
 
             // Partition by `max_minibatch_par`.
             let chunk_size = 2 * minibatch_par;
@@ -856,7 +853,7 @@ pub(crate) mod tests {
         // Build with quantized multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
             let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
@@ -893,10 +890,13 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use diskann_utils::sampling::random::WithApproximateNorm;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors = Vec::with_capacity(num);
+                    for _ in 0..num {
+                        let vector = <$T>::with_approximate_norm(dim, radius, rng);
+                        vectors.push(vector);
+                    }
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
@@ -940,7 +940,7 @@ pub(crate) mod tests {
             num_queries,
         } = params;
 
-        let ctx = &DefaultContext;
+        let ctx = &Default::default();
         let l_search = 10;
 
         let (config, params) =
@@ -969,7 +969,7 @@ pub(crate) mod tests {
         let distance = T::distance(metric, None);
 
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 20,
             search_k: 10,
             to_check: 10,
@@ -1148,7 +1148,7 @@ pub(crate) mod tests {
         // then walk through the list, verifying monotonicity and that the filter was
         // applied properly.
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 40,
             search_k: 20,
             to_check: 20,
