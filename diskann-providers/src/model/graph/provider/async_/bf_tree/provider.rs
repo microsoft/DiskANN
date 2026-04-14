@@ -1336,7 +1336,7 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         let metric = self.provider.quant_vectors.metric();
         Ok(distances::pq::HybridComputer::new(
-            self.provider.quant_vectors.distance_computer()?,
+            self.provider.quant_vectors.distance_computer(),
             T::distance(metric, Some(self.provider.full_vectors.dim())),
         ))
     }
@@ -1856,7 +1856,7 @@ fn load_bftree(
         BfTree::new_from_snapshot_disk_to_memory(snapshot_path, config)
             .map_err(|e| ANNError::from(super::ConfigError(e)))
     } else {
-        BfTree::new_from_snapshot(config).map_err(|e| ANNError::from(super::ConfigError(e)))
+        BfTree::new_from_snapshot(config, None).map_err(|e| ANNError::from(super::ConfigError(e)))
     }
 }
 
@@ -2092,7 +2092,7 @@ where
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
-        let pq_storage = PQStorage::new(&filename, "");
+        let pq_storage = PQStorage::new(&filename, "", None);
         let pq_table = &self.quant_vectors.pq_chunk_table;
         pq_storage.write_pivot_data(
             pq_table.get_pq_table(),
@@ -2167,7 +2167,7 @@ where
 
         // Read PQ table from file using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
-        let pq_storage = PQStorage::new(&filename, "");
+        let pq_storage = PQStorage::new(&filename, "", None);
         let pq_table =
             pq_storage.load_pq_pivots_bin(&filename, quant_params.num_pq_bytes, storage)?;
 

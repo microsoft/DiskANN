@@ -382,6 +382,7 @@ mod imp {
                 &store.quantizer,
                 self.measure.into(),
                 query,
+                None,
             )?)
         }
     }

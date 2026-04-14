@@ -80,7 +80,7 @@ impl TestMultiPQProviderAsync {
         T: Copy + Into<f32>,
     {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
         Ok(NoneToInfinity(QueryComputer::new(
             table,
@@ -91,7 +91,7 @@ impl TestMultiPQProviderAsync {
 
     pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer>> {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
         Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)))
     }

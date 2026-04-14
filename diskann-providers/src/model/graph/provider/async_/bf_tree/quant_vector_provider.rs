@@ -50,7 +50,7 @@ impl QuantVectorProvider {
         pq_chunk_table: FixedChunkPQTable,
         config: Config,
     ) -> ANNResult<Self> {
-        let quant_vector_index = BfTree::with_config(config).map_err(ConfigError)?;
+        let quant_vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
         let vec_pool = Arc::new(distance_table_pool(&pq_chunk_table));
 
         Ok(Self {
@@ -361,7 +361,7 @@ mod tests {
         );
 
         // Distance Computer.
-        let d = provider.distance_computer().unwrap();
+        let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
                 &provider.get_vector_sync(0).unwrap(),
