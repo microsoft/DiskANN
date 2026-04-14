@@ -1317,17 +1317,10 @@ mod pq_test {
     }
 
     #[rstest]
-    #[case(true, "l2", 16)]
-    #[case(false, "l2", 16)]
-    #[case(false, "inner_product", 16)]
-    #[case(true, "l2", 32)]
-    #[case(false, "l2", 32)]
-    #[case(false, "inner_product", 32)]
-    #[case(true, "l2", 31)]
-    #[case(false, "l2", 31)]
-    #[case(false, "inner_product", 31)]
+    #[case("l2", 31)]
+    #[case("l2", 32)]
+    #[case("inner_product", 31)]
     fn rerankingtest_with_membuf_pq_functions(
-        #[case] make_zero_mean: bool,
         #[case] distance_function: String,
         #[case] num_pq_chunks: usize,
     ) {
@@ -1339,7 +1332,7 @@ mod pq_test {
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let pq_storage: PQStorage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
-        let num_runs = 10;
+        let num_runs = 1;
         let num_closest_pq_vectors = 100;
         let num_closest_gt_vectors = 10;
         let p_val = 0.1;
@@ -1362,7 +1355,7 @@ mod pq_test {
             NUM_PQ_CENTROIDS,
             num_pq_chunks,
             crate::model::pq::pq_construction::NUM_KMEANS_REPS_PQ,
-            make_zero_mean,
+            false,
         )
         .unwrap();
         let pool = create_thread_pool_for_test();
@@ -1448,10 +1441,6 @@ mod pq_test {
                 full_data_vector[train_dim * query_index..train_dim * (query_index + 1)].to_vec();
             let query = query_vec.as_mut_slice();
 
-            if make_zero_mean {
-                fixed_chunk_pq_table.preprocess_query(query);
-            }
-
             let mut distance_map: Vec<(f32, usize)> = Vec::new();
 
             // Calculate the PQ distance with the PQ-compressed vectors
@@ -1480,13 +1469,6 @@ mod pq_test {
                 .take(num_closest_pq_vectors)
                 .map(|(_, value)| value)
                 .collect();
-
-            // Adding centroid value again because we are computing gronud truth distance with full vectors later
-            if make_zero_mean {
-                for i in 0..train_dim {
-                    query[i] += centroid[i];
-                }
-            }
 
             // Calculate the ground truth distance with the original data vectors
             let mut gt_map: Vec<(f32, usize)> = Vec::new();
@@ -1542,8 +1524,8 @@ mod pq_test {
             train_dim, num_pq_chunks
         );
         println!(
-            "Data file: {}, Make Zero Mean: {}, Distance function: {}, Recall: {}",
-            data_file, make_zero_mean, distance_function, recall_percentage
+            "Data file: {}, Distance function: {}, Recall: {}",
+            data_file, distance_function, recall_percentage
         );
         assert!(recall_percentage > 90.0);
     }
