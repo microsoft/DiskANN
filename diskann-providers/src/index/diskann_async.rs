@@ -842,10 +842,13 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use diskann_utils::sampling::random::WithApproximateNorm;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors = Vec::with_capacity(num);
+                    for _ in 0..num {
+                        let vector = <$T>::with_approximate_norm(dim, radius, rng);
+                        vectors.push(vector);
+                    }
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
