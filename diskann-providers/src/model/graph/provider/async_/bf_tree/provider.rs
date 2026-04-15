@@ -172,7 +172,6 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
@@ -221,7 +220,6 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let parameters = BfTreeProviderParameters {
@@ -1336,7 +1334,7 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         let metric = self.provider.quant_vectors.metric();
         Ok(distances::pq::HybridComputer::new(
-            self.provider.quant_vectors.distance_computer()?,
+            self.provider.quant_vectors.distance_computer(),
             T::distance(metric, Some(self.provider.full_vectors.dim())),
         ))
     }
@@ -2625,7 +2623,6 @@ mod tests {
             vec![0.0; dim * 256].into_boxed_slice(),
             vec![0.0; dim].into_boxed_slice(),
             Box::new([0, 4, dim]),
-            None,
         )
         .unwrap();
 
@@ -2929,7 +2926,6 @@ mod tests {
             vec![0.0; dim * 256].into_boxed_slice(),
             vec![0.0; dim].into_boxed_slice(),
             Box::new([0, 4, dim]),
-            None,
         )
         .unwrap();
 
