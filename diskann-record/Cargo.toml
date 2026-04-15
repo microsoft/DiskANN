@@ -1,0 +1,16 @@
+[package]
+name = "diskann-record"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_core = "1.0.228"
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -893,6 +893,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-record"
+version = "0.50.0"
+dependencies = [
+ "serde",
+ "serde_core",
+ "serde_json",
+]
+
+[[package]]
 name = "diskann-tools"
 version = "0.50.0"
 dependencies = [
