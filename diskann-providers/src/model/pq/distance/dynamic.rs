@@ -5,9 +5,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::{ANNError, ANNResult, utils::object_pool::ObjectPool};
+use diskann::{ANNResult, utils::object_pool::ObjectPool};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
-use thiserror::Error;
 
 // Concrete implementations
 use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
@@ -175,20 +174,6 @@ where
     vtable: VTable,
 }
 
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum DistanceComputerConstructionError {
-    #[error("random access computer does not support OPQ")]
-    OPQNotSupported,
-}
-
-impl From<DistanceComputerConstructionError> for ANNError {
-    #[track_caller]
-    fn from(value: DistanceComputerConstructionError) -> ANNError {
-        ANNError::log_pq_error(value)
-    }
-}
-
 impl<T> DistanceComputer<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
@@ -206,16 +191,11 @@ where
     /// * `Metric::Cosine`
     /// * `Metric::CosineNormalized`
     ///
-    pub fn new(table: T, distance: Metric) -> Result<Self, DistanceComputerConstructionError> {
-        // Check for OPQ usage - bail if it is enabled.
-        if table.has_opq() {
-            return Err(DistanceComputerConstructionError::OPQNotSupported);
-        }
-
-        Ok(Self {
+    pub fn new(table: T, distance: Metric) -> Self {
+        Self {
             table,
             vtable: VTable::new(distance),
-        })
+        }
     }
 }
 
@@ -345,7 +325,6 @@ mod tests {
     fn test_l2<T>(
         #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
         _marker: PhantomData<T>,
-        #[values(false, true)] use_opq: bool,
     ) where
         T: Into<f32> + TestDistribution,
     {
@@ -362,7 +341,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq,
                     };
 
                     let table = test_utils::seed_pivot_table(config);
@@ -384,19 +362,17 @@ mod tests {
                         errors,
                     );
 
-                    if !use_opq {
-                        test_utils::test_l2_inner(
-                            |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                                table: DistanceComputer::new(table, Metric::L2).unwrap(),
-                                query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
-                            },
-                            &table,
-                            num_trials,
-                            config,
-                            &mut rng,
-                            errors,
-                        );
-                    }
+                    test_utils::test_l2_inner(
+                        |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
+                            table: DistanceComputer::new(table, Metric::L2),
+                            query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
+                        },
+                        &table,
+                        num_trials,
+                        config,
+                        &mut rng,
+                        errors,
+                    );
                 }
             }
         }
@@ -428,7 +404,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq: false,
                     };
 
                     let table = test_utils::seed_pivot_table(config);
@@ -452,7 +427,7 @@ mod tests {
 
                     test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::InnerProduct).unwrap(),
+                            table: DistanceComputer::new(table, Metric::InnerProduct),
                             query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
                         },
                         &table,
@@ -495,7 +470,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq: false,
                     };
                     let table = test_utils::seed_pivot_table(config);
                     let errors = test_utils::RelativeAndAbsolute {
@@ -516,7 +490,7 @@ mod tests {
 
                     test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
-                            table: DistanceComputer::new(table, Metric::Cosine).unwrap(),
+                            table: DistanceComputer::new(table, Metric::Cosine),
                             query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
                         },
                         &table,
@@ -549,7 +523,6 @@ mod tests {
             pq_chunks,
             num_pivots: 20,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -573,18 +546,18 @@ mod tests {
                 config.start_value,
             );
 
-            let squared_l2 = DistanceComputer::new(&table, Metric::L2).unwrap();
+            let squared_l2 = DistanceComputer::new(&table, Metric::L2);
             let expected: f32 = SquaredL2::evaluate(&*v0, &*v1);
             assert_eq!(squared_l2.evaluate_similarity(&*code0, &*code1), expected);
 
-            let inner_product = DistanceComputer::new(&table, Metric::InnerProduct).unwrap();
+            let inner_product = DistanceComputer::new(&table, Metric::InnerProduct);
             let expected: f32 = InnerProduct::evaluate(&*v0, &*v1);
             assert_eq!(
                 inner_product.evaluate_similarity(&*code0, &*code1),
                 expected,
             );
 
-            let cosine = DistanceComputer::new(&table, Metric::Cosine).unwrap();
+            let cosine = DistanceComputer::new(&table, Metric::Cosine);
             let sim: f32 = cosine.evaluate_similarity(&*code0, &*code1);
             assert!(0.0 <= sim);
             assert!(sim <= 2.0);
@@ -595,8 +568,7 @@ mod tests {
             normalize(&mut v0);
             normalize(&mut v1);
 
-            let cosine_normalized =
-                DistanceComputer::new(&table, Metric::CosineNormalized).unwrap();
+            let cosine_normalized = DistanceComputer::new(&table, Metric::CosineNormalized);
             let expected: f32 = CosineNormalized::evaluate(&*v0, &*v1);
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),
@@ -604,24 +576,5 @@ mod tests {
                 max_relative = 4.0e-6,
             );
         }
-    }
-
-    #[test]
-    fn test_construction_failure_on_opq() {
-        let table = FixedChunkPQTable::new(
-            2,
-            Box::new([0.0; 2 * 2]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 1, 2]),
-            Some(Box::new([0.0; 2 * 2])),
-        )
-        .unwrap();
-
-        let v = DistanceComputer::new(&table, Metric::L2);
-        assert!(v.is_err());
-        assert_eq!(
-            v.unwrap_err().to_string(),
-            "random access computer does not support OPQ"
-        );
     }
 }

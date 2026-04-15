@@ -86,7 +86,6 @@ pub fn build_pq<Data: GraphDataType>(
         num_pq_chunks,
         &mut pq_storage,
         &storage_provider,
-        false,
         0,
         parameters.num_threads,
     )?;
