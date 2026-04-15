@@ -114,6 +114,7 @@ mod relative_contrast_tests {
     use super::*;
     use crate::utils::ground_truth::compute_ground_truth_from_datafiles;
     use diskann_disk::data_model::AdHoc;
+    use diskann_vector::Half;
 
     /// Test for compute_relative_contrast function with random data
     /// Generate 1000 random vectors and 10 queries, both random samples/recall_at = 5

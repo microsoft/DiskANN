@@ -174,11 +174,7 @@ pub fn compute_ground_truth_from_datafiles<
     }
 
     let query_aligned_dim = query_dim.next_multiple_of(8);
-    let ground_truth_result = compute_ground_truth_from_data::<
-        Data,
-        StorageProvider,
-        VectorDataIterator<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>,
-    >(
+    let ground_truth_result = compute_ground_truth_from_data::<Data, StorageProvider>(
         distance_function,
         dataset_iterator,
         queries,
@@ -314,16 +310,15 @@ pub fn compute_multivec_ground_truth_from_datafiles<
 
     let has_query_bitmaps = query_bitmaps.is_some();
 
-    let ground_truth =
-        compute_multivec_ground_truth_from_data::<Data::VectorDataType, StorageProvider>(
-            distance_function,
-            aggregation_method,
-            base_vectors,
-            query_vectors,
-            query_dim,
-            recall_at,
-            query_bitmaps,
-        )?;
+    let ground_truth = compute_multivec_ground_truth_from_data::<Data::VectorDataType>(
+        distance_function,
+        aggregation_method,
+        base_vectors,
+        query_vectors,
+        query_dim,
+        recall_at,
+        query_bitmaps,
+    )?;
 
     if has_query_bitmaps {
         let ground_truth_collection = ground_truth
@@ -459,7 +454,7 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 /// * `insert_iterator` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 #[allow(clippy::too_many_arguments)]
-pub fn compute_ground_truth_from_data<Data, VectorReader, VectorIteratorType>(
+pub fn compute_ground_truth_from_data<Data, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
     queries: Vec<&[Data::VectorDataType]>,
@@ -590,7 +585,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn compute_multivec_ground_truth_from_data<T, VectorReader>(
+pub fn compute_multivec_ground_truth_from_data<T>(
     distance_function: Metric,
     aggregation_method: MultivecAggregationMethod,
     base_vectors: Vec<Matrix<T>>,
@@ -601,7 +596,6 @@ pub fn compute_multivec_ground_truth_from_data<T, VectorReader>(
 ) -> CMDResult<Vec<NeighborPriorityQueue<u32>>>
 where
     T: VectorRepr,
-    VectorReader: StorageReadProvider,
 {
     let query_num = queries.len();
 
