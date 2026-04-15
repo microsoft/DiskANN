@@ -6,9 +6,8 @@
 use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 
 use diskann::utils::IntoUsize;
-use diskann_disk::data_model::GraphDataType;
 use diskann_disk::{
-    data_model::CachingStrategy,
+    data_model::{CachingStrategy, GraphDataType},
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },

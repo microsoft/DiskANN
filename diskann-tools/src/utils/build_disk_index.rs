@@ -8,12 +8,12 @@ use diskann::{
     utils::{IntoUsize, ONE},
     ANNError, ANNResult,
 };
-use diskann_disk::data_model::GraphDataType;
 use diskann_disk::{
     build::{
         builder::build::DiskIndexBuilder,
         chunking::{checkpoint::CheckpointManager, continuation::ChunkingConfig},
     },
+    data_model::GraphDataType,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },

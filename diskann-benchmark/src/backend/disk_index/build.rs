@@ -13,6 +13,7 @@ use diskann::{
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::builder::build::DiskIndexBuilder,
+    data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },
@@ -25,8 +26,6 @@ use opentelemetry::global;
 use opentelemetry::trace::Tracer;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use scopeguard::defer;
-
-use diskann_disk::data_model::AdHoc;
 
 use crate::{
     backend::disk_index::json_spancollector::JsonSpanCollector, inputs::disk::DiskIndexBuild,

@@ -12,7 +12,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
-    data_model::CachingStrategy,
+    data_model::{AdHoc, CachingStrategy},
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
@@ -29,8 +29,6 @@ use diskann_providers::{
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
 use serde::Serialize;
-
-use diskann_disk::data_model::AdHoc;
 
 use crate::{
     backend::disk_index::json_spancollector::JsonSpanCollector,
