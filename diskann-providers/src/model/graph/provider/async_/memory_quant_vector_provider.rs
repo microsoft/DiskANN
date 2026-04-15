@@ -98,9 +98,7 @@ impl MemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(
-        &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -338,7 +336,6 @@ mod tests {
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, dim]),
-            None,
         )
         .unwrap();
 
@@ -379,7 +376,7 @@ mod tests {
         );
 
         // Distance Computer.
-        let d = provider.distance_computer().unwrap();
+        let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
                 &provider.get_vector_sync(0).unwrap(),

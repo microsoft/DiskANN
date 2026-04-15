@@ -232,7 +232,7 @@ where
     fn build_distance_computer(
         &self,
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(self.provider.aux_vectors.distance_computer()?)
+        Ok(self.provider.aux_vectors.distance_computer())
     }
 }
 
@@ -368,7 +368,7 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         let metric = self.provider.aux_vectors.metric();
         Ok(distances::pq::HybridComputer::new(
-            self.provider.aux_vectors.distance_computer()?,
+            self.provider.aux_vectors.distance_computer(),
             T::distance(metric, Some(self.provider.base_vectors.dim())),
         ))
     }

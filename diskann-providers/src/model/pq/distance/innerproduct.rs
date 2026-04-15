@@ -155,7 +155,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq: false,
                     };
                     let table = test_utils::seed_pivot_table(config);
                     let num_trials = 10;
@@ -189,7 +188,6 @@ mod tests {
             pq_chunks: 3,
             num_pivots: 4,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -208,7 +206,6 @@ mod tests {
             pq_chunks: 3,
             num_pivots: 4,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);

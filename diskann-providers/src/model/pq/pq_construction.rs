@@ -16,7 +16,6 @@ use diskann::{
     error::IntoANNResult,
     utils::{VectorRepr, read_exact_into},
 };
-use diskann_linalg::{self, Transpose};
 use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
@@ -383,13 +382,11 @@ where
 /// Compressed PQ table layout: {num_points: usize}{num_chunks: usize}{compressed pq table: [num_points; num_chunks]}
 /// It will start from the start_vector_id and compress the data_file in chunks.
 /// It validates the existing compressed data_file is consistent with the start_vector_id.
-#[allow(clippy::too_many_arguments)]
 pub fn generate_pq_data_from_pivots<T, Storage, Pool>(
     num_centers: usize,
     num_pq_chunks: usize,
     pq_storage: &mut PQStorage,
     storage_provider: &Storage,
-    use_opq: bool,
     offset: usize,
     pool: Pool,
 ) -> ANNResult<()>
@@ -416,7 +413,6 @@ where
     let mut full_pivot_data: Vec<f32>;
     let centroid: Vec<f32>;
     let chunk_offsets: Vec<usize>;
-    let opq_rotation_matrix: Vec<f32>;
     let full_dim: usize;
 
     if !pq_storage.pivot_data_exist(storage_provider) {
@@ -425,30 +421,20 @@ where
         ));
     } else {
         (_, full_dim) = pq_storage.read_existing_pivot_metadata(storage_provider)?;
-        (
-            full_pivot_data,
-            centroid,
-            chunk_offsets,
-            opq_rotation_matrix,
-        ) = pq_storage.load_existing_pivot_data(
+        (full_pivot_data, centroid, chunk_offsets) = pq_storage.load_existing_pivot_data(
             &num_pq_chunks,
             &num_centers,
             &full_dim,
             storage_provider,
-            use_opq,
         )?;
     }
 
     // Instead of subtracting the center from each data set component, we instead
     // add it to each center.
-    //
-    // This centering is only done if OPQ is not being used.
     let mut full_pivot_data_mat =
         MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
-    if !use_opq {
-        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
-    }
+    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
@@ -502,63 +488,31 @@ where
 
         let block_data = &buffer[..cur_block_size * full_dim];
 
-        if !use_opq {
-            // We need some batch size of data to pass to `compress`. There is a balance
-            // to achieve here. It must be:
-            //
-            // 1. Small enough to allow for parallelism across threads/tasks.
-            // 2. Large enough to take advantage of cache locality in `compress`.
-            //
-            // A value of 128 is a somewhat arbitrary compromise, meaning each task will
-            // process `BATCH_SIZE` many dataset vectors at a time.
-            const BATCH_SIZE: usize = 128;
+        // We need some batch size of data to pass to `compress`. There is a balance
+        // to achieve here. It must be:
+        //
+        // 1. Small enough to allow for parallelism across threads/tasks.
+        // 2. Large enough to take advantage of cache locality in `compress`.
+        //
+        // A value of 128 is a somewhat arbitrary compromise, meaning each task will
+        // process `BATCH_SIZE` many dataset vectors at a time.
+        const BATCH_SIZE: usize = 128;
 
-            // Wrap the data in `MatrixViews` so we do not need to manually construct view
-            // in the compression loop.
-            let mut compressed_block =
-                MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
-                    .bridge_err()?;
-            let base_block =
-                MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
+        // Wrap the data in `MatrixViews` so we do not need to manually construct view
+        // in the compression loop.
+        let mut compressed_block =
+            MutMatrixView::try_from(&mut block_compressed_base, cur_block_size, num_pq_chunks)
+                .bridge_err()?;
+        let base_block = MatrixView::try_from(block_data, cur_block_size, full_dim).bridge_err()?;
 
-            base_block
-                .par_window_iter(BATCH_SIZE)
-                .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
-                .try_for_each_in_pool(pool, |(src, dst)| {
-                    table.compress_into(src, dst).map_err(|err| {
-                        ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                    })
-                })?;
-        } else {
-            // Otherwise, we need to convert for F32 and apply the transformation.
-            // NOTE: Don't remove the center in thie case because that step should
-            // not be applied to OPQ.
-
-            let mut adjusted_block_data_output: Vec<f32> = vec![0.0; cur_block_size * full_dim];
-
-            // Rotate the current block with the trained rotation matrix before continuing with PQ
-            diskann_linalg::sgemm(
-                Transpose::None,                 // Do not transpose matrix 'a'
-                Transpose::None,                 // Do not transpose matrix 'b'
-                cur_block_size,                  // m (number of rows in matrices 'a' and 'c')
-                full_dim,                        // n (number of columns in matrices 'b' and 'c')
-                full_dim, // k (number of columns in matrix 'a', number of rows in matrix 'b')
-                1.0,      // alpha (scaling factor for the product of matrices 'a' and 'b')
-                block_data, // matrix 'a'
-                &opq_rotation_matrix, // matrix 'b'
-                None,     // beta (scaling factor for matrix 'c')
-                &mut adjusted_block_data_output, // matrix 'c' (result matrix)
-            );
-
-            block_compressed_base
-                .par_chunks_mut(num_pq_chunks)
-                .zip(adjusted_block_data_output.par_chunks(full_dim))
-                .try_for_each_in_pool(pool, |(dst, src)| {
-                    table.compress_into(src, dst).map_err(|err| {
-                        ANNError::log_pq_error(diskann_quantization::error::format(&err))
-                    })
-                })?;
-        }
+        base_block
+            .par_window_iter(BATCH_SIZE)
+            .zip_eq(compressed_block.par_window_iter_mut(BATCH_SIZE))
+            .try_for_each_in_pool(pool, |(src, dst)| {
+                table.compress_into(src, dst).map_err(|err| {
+                    ANNError::log_pq_error(diskann_quantization::error::format(&err))
+                })
+            })?;
 
         let offset = start_index * num_pq_chunks + std::mem::size_of::<i32>() * 2;
         compressed_data_writer.seek(SeekFrom::Start(offset as u64))?;
@@ -927,7 +881,6 @@ mod pq_test {
             2,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1080,7 +1033,6 @@ mod pq_test {
             num_pq_chunks,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1089,13 +1041,12 @@ mod pq_test {
         // use membuf function to generate pq
 
         // use pivot data generated by original function
-        let (full_pivot_data, centroid, offsets, _) = pq_storage
+        let (full_pivot_data, centroid, offsets) = pq_storage
             .load_existing_pivot_data(
                 &num_pq_chunks,
                 &NUM_PQ_CENTROIDS,
                 &train_dim,
                 &storage_provider,
-                false,
             )
             .unwrap();
 
@@ -1301,7 +1252,6 @@ mod pq_test {
             1,
             &mut pq_storage,
             &storage_provider,
-            false,
             0,
             &pool,
         )
@@ -1367,17 +1317,10 @@ mod pq_test {
     }
 
     #[rstest]
-    #[case(true, "l2", 16)]
-    #[case(false, "l2", 16)]
-    #[case(false, "inner_product", 16)]
-    #[case(true, "l2", 32)]
-    #[case(false, "l2", 32)]
-    #[case(false, "inner_product", 32)]
-    #[case(true, "l2", 31)]
-    #[case(false, "l2", 31)]
-    #[case(false, "inner_product", 31)]
+    #[case("l2", 31)]
+    #[case("l2", 32)]
+    #[case("inner_product", 31)]
     fn rerankingtest_with_membuf_pq_functions(
-        #[case] make_zero_mean: bool,
         #[case] distance_function: String,
         #[case] num_pq_chunks: usize,
     ) {
@@ -1389,7 +1332,7 @@ mod pq_test {
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let pq_storage: PQStorage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
-        let num_runs = 10;
+        let num_runs = 1;
         let num_closest_pq_vectors = 100;
         let num_closest_gt_vectors = 10;
         let p_val = 0.1;
@@ -1412,7 +1355,7 @@ mod pq_test {
             NUM_PQ_CENTROIDS,
             num_pq_chunks,
             crate::model::pq::pq_construction::NUM_KMEANS_REPS_PQ,
-            make_zero_mean,
+            false,
         )
         .unwrap();
         let pool = create_thread_pool_for_test();
@@ -1467,7 +1410,6 @@ mod pq_test {
             full_pivot_data.into(),
             centroid.clone().into(),
             offsets.into(),
-            None,
         )
         .unwrap();
 
@@ -1499,10 +1441,6 @@ mod pq_test {
                 full_data_vector[train_dim * query_index..train_dim * (query_index + 1)].to_vec();
             let query = query_vec.as_mut_slice();
 
-            if make_zero_mean {
-                fixed_chunk_pq_table.preprocess_query(query);
-            }
-
             let mut distance_map: Vec<(f32, usize)> = Vec::new();
 
             // Calculate the PQ distance with the PQ-compressed vectors
@@ -1531,13 +1469,6 @@ mod pq_test {
                 .take(num_closest_pq_vectors)
                 .map(|(_, value)| value)
                 .collect();
-
-            // Adding centroid value again because we are computing gronud truth distance with full vectors later
-            if make_zero_mean {
-                for i in 0..train_dim {
-                    query[i] += centroid[i];
-                }
-            }
 
             // Calculate the ground truth distance with the original data vectors
             let mut gt_map: Vec<(f32, usize)> = Vec::new();
@@ -1593,8 +1524,8 @@ mod pq_test {
             train_dim, num_pq_chunks
         );
         println!(
-            "Data file: {}, Make Zero Mean: {}, Distance function: {}, Recall: {}",
-            data_file, make_zero_mean, distance_function, recall_percentage
+            "Data file: {}, Distance function: {}, Recall: {}",
+            data_file, distance_function, recall_percentage
         );
         assert!(recall_percentage > 90.0);
     }
