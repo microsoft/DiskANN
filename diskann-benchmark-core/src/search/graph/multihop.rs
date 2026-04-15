@@ -262,7 +262,7 @@ mod tests {
         let err = MultiHop::new(
             index.clone(),
             queries.clone(),
-            Strategy::collection([strategy]),
+            Strategy::collection([strategy.clone()]),
             labels.clone(),
         )
         .unwrap_err();
@@ -276,7 +276,7 @@ mod tests {
         let err = MultiHop::new(
             index,
             queries.clone(),
-            Strategy::broadcast(strategy),
+            Strategy::broadcast(strategy.clone()),
             labels.clone(),
         )
         .unwrap_err();

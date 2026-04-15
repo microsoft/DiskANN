@@ -50,13 +50,19 @@ async fn basic_single() {
 
     for i in 1..6 {
         index
-            .insert(strat, &ctx, &i, &[i as f32, i as f32])
+            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }
 
     index
-        .inplace_delete(strat, &ctx, &3, 3, graph::InplaceDeleteMethod::OneHop)
+        .inplace_delete(
+            strat.clone(),
+            &ctx,
+            &3,
+            3,
+            graph::InplaceDeleteMethod::OneHop,
+        )
         .await
         .unwrap();
 }
@@ -75,14 +81,14 @@ async fn basic_multi() {
 
     for i in 1..6 {
         index
-            .insert(strat, &ctx, &i, &[i as f32, i as f32])
+            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }
 
     index
         .multi_inplace_delete(
-            strat,
+            strat.clone(),
             &ctx,
             Arc::new([3, 4]),
             3,

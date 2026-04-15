@@ -748,7 +748,14 @@ mod tests {
         paged_tests.push(async_tests::PagedSearch::new(start_point.clone(), gt));
 
         vectors.push(start_point.clone());
-        async_tests::check_grid_search(&index, &vectors, &paged_tests, strategy, strategy).await;
+        async_tests::check_grid_search(
+            &index,
+            &vectors,
+            &paged_tests,
+            strategy.clone(),
+            strategy.clone(),
+        )
+        .await;
     }
 
     fn check_stats(caching: &CachingProvider<test_provider::Provider, ExampleCache>) {
@@ -844,14 +851,21 @@ mod tests {
             let index = init_index();
             for (i, v) in vectors.iter().take(num_points).enumerate() {
                 index
-                    .insert(strategy, ctx, &(i as u32), v.as_slice())
+                    .insert(strategy.clone(), ctx, &(i as u32), v.as_slice())
                     .await
                     .unwrap();
             }
 
             check_stats(index.provider());
 
-            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
+            async_tests::check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                strategy.clone(),
+                strategy.clone(),
+            )
+            .await;
             check_stats(index.provider());
         }
 
@@ -862,11 +876,18 @@ mod tests {
             let ids: Arc<[u32]> = (0..num_points as u32).collect();
 
             index
-                .multi_insert::<_, Matrix<f32>>(strategy, ctx, batch, ids)
+                .multi_insert::<_, Matrix<f32>>(strategy.clone(), ctx, batch, ids)
                 .await
                 .unwrap();
 
-            async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
+            async_tests::check_grid_search(
+                &index,
+                &vectors,
+                &[],
+                strategy.clone(),
+                strategy.clone(),
+            )
+            .await;
             check_stats(index.provider());
         }
     }
@@ -936,7 +957,7 @@ mod tests {
 
         index
             .inplace_delete(
-                strategy,
+                strategy.clone(),
                 ctx,
                 &3, // id to delete
                 3,  // num_to_replace
