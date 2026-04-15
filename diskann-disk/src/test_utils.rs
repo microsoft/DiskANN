@@ -7,25 +7,13 @@
 
 use diskann_providers::common::MinMax8;
 
-use crate::data_model::GraphDataType;
+use crate::data_model::{AdHoc, GraphDataType};
 
 /// Graph data with f32 vector and associated data of unit type (empty).
-pub struct GraphDataF32VectorUnitData {}
-
-impl GraphDataType for GraphDataF32VectorUnitData {
-    type VectorIdType = u32;
-    type VectorDataType = f32;
-    type AssociatedDataType = ();
-}
+pub type GraphDataF32VectorUnitData = AdHoc<f32>;
 
 /// Graph data with MinMax8 vector and associated data of unit type (empty).
-pub struct GraphDataMinMaxVectorUnitData {}
-
-impl GraphDataType for GraphDataMinMaxVectorUnitData {
-    type VectorIdType = u32;
-    type VectorDataType = MinMax8;
-    type AssociatedDataType = ();
-}
+pub type GraphDataMinMaxVectorUnitData = AdHoc<MinMax8>;
 
 /// Graph data with f32 vector and associated data of u32.
 pub struct GraphDataF32VectorU32Data {}

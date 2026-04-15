@@ -39,7 +39,7 @@ pub trait GraphDataType: Send + Sync + 'static {
     type VectorIdType: VectorId;
 }
 
-/// An adhoc `GraphDataType` for implementations that only need an the `VectorDataType`
+/// An adhoc `GraphDataType` for implementations that only need the `VectorDataType`
 /// and `VectorIdType`.
 ///
 /// This type defaults to using `u32` for the ID type for extra convenience.
