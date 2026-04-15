@@ -130,7 +130,7 @@ jobs:
                 `Please review the benchmark artifacts and determine if thresholds need tuning`,
                 `or if there is a runner environment issue.`,
                 ``,
-                `/cc @microsoft/diskann-admin`,
+                `/cc @microsoft/diskann-disk-maintainers`,
               ].join('\n'),
               labels: ['benchmark', 'A/A-failure'],
             });
