@@ -30,8 +30,10 @@ use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
 use serde::Serialize;
 
+use diskann_disk::data_model::AdHoc;
+
 use crate::{
-    backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
+    backend::disk_index::json_spancollector::JsonSpanCollector,
     inputs::disk::{DiskIndexLoad, DiskSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
@@ -217,7 +219,7 @@ where
     let reader_factory = AlignedFileReaderFactory::new(disk_index_path);
     let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim

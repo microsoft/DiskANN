@@ -26,9 +26,10 @@ use opentelemetry::trace::Tracer;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use scopeguard::defer;
 
+use diskann_disk::data_model::AdHoc;
+
 use crate::{
-    backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
-    inputs::disk::DiskIndexBuild,
+    backend::disk_index::json_spancollector::JsonSpanCollector, inputs::disk::DiskIndexBuild,
 };
 
 #[derive(Serialize, Debug)]
@@ -114,7 +115,7 @@ where
         DISK_SECTOR_LEN,
     )?;
 
-    let mut disk_index = DiskIndexBuilder::<GraphData<T>, StorageProviderType>::new(
+    let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
         build_parameters,
         index_configuration,

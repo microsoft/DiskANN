@@ -4,21 +4,15 @@
  */
 
 use diskann::{utils::VectorRepr, ANNError};
-use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_utils::io::read_bin;
 use rand::Rng;
 
 use crate::utils::{CMDResult, CMDToolError};
 
-fn squared_distance<Data: GraphDataType>(
-    v1: &[Data::VectorDataType],
-    v2: &[Data::VectorDataType],
-) -> CMDResult<f32> {
-    let v1 = &*<Data::VectorDataType>::as_f32(v1)
-        .map_err(|x| CMDToolError::from(Into::<ANNError>::into(x)))?;
-    let v2 = &*<Data::VectorDataType>::as_f32(v2)
-        .map_err(|x| CMDToolError::from(Into::<ANNError>::into(x)))?;
+fn squared_distance<T: VectorRepr>(v1: &[T], v2: &[T]) -> CMDResult<f32> {
+    let v1 = &*T::as_f32(v1).map_err(|x| CMDToolError::from(Into::<ANNError>::into(x)))?;
+    let v2 = &*T::as_f32(v2).map_err(|x| CMDToolError::from(Into::<ANNError>::into(x)))?;
     Ok(v1
         .iter()
         .zip(v2)
@@ -29,9 +23,9 @@ fn squared_distance<Data: GraphDataType>(
         .sum())
 }
 
-fn average_squared_distance<Data: GraphDataType, R: Rng>(
-    query: &[Data::VectorDataType],
-    base: &[Vec<Data::VectorDataType>],
+fn average_squared_distance<T: VectorRepr, R: Rng>(
+    query: &[T],
+    base: &[Vec<T>],
     num_random_samples: usize,
     rng: &mut R,
 ) -> CMDResult<f32> {
@@ -39,16 +33,12 @@ fn average_squared_distance<Data: GraphDataType, R: Rng>(
     let mut sum_dist = 0.0;
     for _ in 0..num_random_samples {
         let r = rng.random_range(0..n);
-        sum_dist += squared_distance::<Data>(query, &base[r])?;
+        sum_dist += squared_distance::<T>(query, &base[r])?;
     }
     Ok(sum_dist / num_random_samples as f32)
 }
 
-pub fn compute_relative_contrast<
-    Data: GraphDataType,
-    StorageProvider: StorageReadProvider,
-    R: Rng,
->(
+pub fn compute_relative_contrast<T: VectorRepr, StorageProvider: StorageReadProvider, R: Rng>(
     storage_provider: &StorageProvider,
     base_file: &str,
     query_file: &str,
@@ -58,10 +48,8 @@ pub fn compute_relative_contrast<
     rng: &mut R,
 ) -> CMDResult<f32> {
     // Load base, query, and ground truth data
-    let base_data =
-        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(base_file)?)?;
-    let query_data =
-        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let base_data = read_bin::<T>(&mut storage_provider.open_reader(base_file)?)?;
+    let query_data = read_bin::<T>(&mut storage_provider.open_reader(query_file)?)?;
     let gt_data = read_bin::<u32>(&mut storage_provider.open_reader(gt_file)?)?;
 
     let nb = base_data.nrows();
@@ -78,20 +66,20 @@ pub fn compute_relative_contrast<
     );
 
     // Reshape flat vectors into 2D vectors
-    let base: Vec<Vec<Data::VectorDataType>> = base_data.row_iter().map(|x| x.to_vec()).collect();
-    let query: Vec<Vec<Data::VectorDataType>> = query_data.row_iter().map(|x| x.to_vec()).collect();
+    let base: Vec<Vec<T>> = base_data.row_iter().map(|x| x.to_vec()).collect();
+    let query: Vec<Vec<T>> = query_data.row_iter().map(|x| x.to_vec()).collect();
     let gt: Vec<Vec<u32>> = gt_data.row_iter().map(|x| x.to_vec()).collect();
 
     let mut mean_rc = 0.0;
 
     for (i, q) in query.iter().enumerate() {
         // Compute numerator: average squared distance to random samples
-        let numerator = average_squared_distance::<Data, R>(q, &base, num_random_samples, rng)?;
+        let numerator = average_squared_distance::<T, R>(q, &base, num_random_samples, rng)?;
 
         // Compute denominator: average squared distance to ground truth neighbors
         let mut denominator = 0.0;
         for &idx in gt[i].iter().take(recall_at) {
-            denominator += squared_distance::<Data>(q, &base[idx as usize])?;
+            denominator += squared_distance::<T>(q, &base[idx as usize])?;
         }
         denominator /= recall_at as f32;
 
@@ -124,7 +112,8 @@ mod relative_contrast_tests {
     use rand::Rng;
 
     use super::*;
-    use crate::utils::{ground_truth::compute_ground_truth_from_datafiles, GraphDataHalfVector};
+    use crate::utils::ground_truth::compute_ground_truth_from_datafiles;
+    use diskann_disk::data_model::AdHoc;
 
     /// Test for compute_relative_contrast function with random data
     /// Generate 1000 random vectors and 10 queries, both random samples/recall_at = 5
@@ -176,7 +165,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 5;
-        compute_ground_truth_from_datafiles::<GraphDataHalfVector, _>(
+        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
             &storage_provider,
             Metric::L2,
             base_file_path,
@@ -194,7 +183,7 @@ mod relative_contrast_tests {
 
         // Run compute_relative_contrast with the generated files
         let num_random_samples = 5;
-        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _, _>(
+        let mean_rc = compute_relative_contrast::<Half, _, _>(
             &storage_provider,
             base_file_path,
             query_file_path,
@@ -255,7 +244,7 @@ mod relative_contrast_tests {
         // Generate ground truth file using compute_ground_truth_from_datafiles
         let gt_file_path = "/ground_truth.bin";
         let recall_at = 3;
-        compute_ground_truth_from_datafiles::<GraphDataHalfVector, _>(
+        compute_ground_truth_from_datafiles::<AdHoc<Half>, _>(
             &storage_provider,
             Metric::L2,
             base_file_path,
@@ -273,7 +262,7 @@ mod relative_contrast_tests {
 
         // Run compute_relative_contrast with the generated files
         let num_random_samples = 3;
-        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _, _>(
+        let mean_rc = compute_relative_contrast::<Half, _, _>(
             &storage_provider,
             base_file_path,
             query_file_path,
