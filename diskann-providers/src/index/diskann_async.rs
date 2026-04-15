@@ -91,13 +91,7 @@ where
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(
-        dim,
-        full_pivot_data.into(),
-        centroid.into(),
-        offsets.into(),
-        None,
-    )
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -1189,7 +1183,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1249,7 +1242,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1326,7 +1318,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1432,7 +1423,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1553,7 +1543,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -1675,7 +1664,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -3273,7 +3261,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 

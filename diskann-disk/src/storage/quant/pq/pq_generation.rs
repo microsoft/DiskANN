@@ -127,13 +127,12 @@ where
 
         //Load the pivots
         let num_chunks = context.num_chunks;
-        let (mut full_pivot_data, centroid, chunk_offsets, _) =
+        let (mut full_pivot_data, centroid, chunk_offsets) =
             context.pq_storage.load_existing_pivot_data(
                 &num_chunks,
                 &context.num_centers,
                 &full_dim,
                 context.storage_provider,
-                false,
             )?;
 
         let mut full_pivot_data_mat = diskann_utils::views::MutMatrixView::try_from(
