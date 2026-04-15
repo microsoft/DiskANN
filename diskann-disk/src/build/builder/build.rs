@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::data_model::GraphDataType;
 use diskann::{
     utils::{async_tools, vecid_from_usize, TryIntoVectorId, VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
@@ -18,11 +19,8 @@ use diskann::{
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
-        graph::{
-            provider::async_::inmem::DefaultProviderParameters,
-            traits::GraphDataType,
-        },
-        IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
+        MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
     utils::{
@@ -510,8 +508,7 @@ where
 
     // Associated data will only be used in the write_disk_layout function which only requires the none-partitioned associated data stream.
     let dataset_iter = Arc::new(Mutex::new({
-        let iter =
-            VectorDataIterator::<_, T>::new(data_path, Option::None, storage_provider)?;
+        let iter = VectorDataIterator::<_, T>::new(data_path, Option::None, storage_provider)?;
         iter.enumerate().skip(offset)
     }));
 

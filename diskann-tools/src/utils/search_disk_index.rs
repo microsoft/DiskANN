@@ -6,6 +6,7 @@
 use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 
 use diskann::utils::IntoUsize;
+use diskann_disk::data_model::GraphDataType;
 use diskann_disk::{
     data_model::CachingStrategy,
     search::provider::{
@@ -19,7 +20,6 @@ use diskann_disk::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::graph::traits::GraphDataType,
     storage::{get_compressed_pq_file, get_pq_pivot_file},
     utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
 };

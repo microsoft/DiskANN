@@ -3,15 +3,13 @@
  * Licensed under the MIT license.
  */
 //! Disk index quantizer implementation.
+use crate::data_model::GraphDataType;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
-        graph::{
-            provider::async_::{common::NoStore, inmem::WithBits},
-            traits::GraphDataType,
-        },
+        graph::provider::async_::{common::NoStore, inmem::WithBits},
         FixedChunkPQTable, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE,
     },
     storage::{PQStorage, SQStorage},

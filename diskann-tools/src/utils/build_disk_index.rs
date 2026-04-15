@@ -8,6 +8,7 @@ use diskann::{
     utils::{IntoUsize, ONE},
     ANNError, ANNResult,
 };
+use diskann_disk::data_model::GraphDataType;
 use diskann_disk::{
     build::{
         builder::build::DiskIndexBuilder,
@@ -21,7 +22,7 @@ use diskann_disk::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{graph::traits::GraphDataType, IndexConfiguration},
+    model::IndexConfiguration,
     utils::{load_metadata_from_file, Timer},
 };
 use diskann_vector::distance::Metric;

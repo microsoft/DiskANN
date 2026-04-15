@@ -13,10 +13,10 @@ use diskann::{
     neighbor::{Neighbor, NeighborPriorityQueue},
     utils::VectorRepr,
 };
+use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::AlignedBoxWithSlice,
-    model::graph::traits::GraphDataType,
     utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
 };
 use diskann_utils::{
@@ -87,11 +87,11 @@ pub fn compute_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator = VectorDataIterator::<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>::new(
-        base_file,
-        associated_data_file.clone(),
-        storage_provider,
-    )?;
+    let dataset_iterator = VectorDataIterator::<
+        StorageProvider,
+        Data::VectorDataType,
+        Data::AssociatedDataType,
+    >::new(base_file, associated_data_file.clone(), storage_provider)?;
 
     // both base_file_labels and query_file_labels are provided or both are not provided
     if !((base_file_labels.is_some() && query_file_labels.is_some())
@@ -111,11 +111,11 @@ pub fn compute_ground_truth_from_datafiles<
 
     let insert_iterator = match insert_file {
         Some(insert_file) => {
-            let i = VectorDataIterator::<StorageProvider, Data::VectorDataType, Data::AssociatedDataType>::new(
-                insert_file,
-                Option::None,
-                storage_provider,
-            )?;
+            let i = VectorDataIterator::<
+                StorageProvider,
+                Data::VectorDataType,
+                Data::AssociatedDataType,
+            >::new(insert_file, Option::None, storage_provider)?;
             Some(i)
         }
         None => None,
