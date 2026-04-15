@@ -1,0 +1,39 @@
+{
+    "search_directories": [
+        "target/tmp"
+    ],
+    "jobs": [
+        {
+            "type": "disk-index",
+            "content": {
+                "source": {
+                    "disk-index-source": "Build",
+                    "data_type": "float32",
+                    "data": "wikipedia_cohere/wikipedia_base.bin.crop_nb_100000",
+                    "distance": "inner_product",
+                    "dim": 768,
+                    "max_degree": 59,
+                    "l_build": 72,
+                    "num_threads": 4,
+                    "build_ram_limit_gb": 4.0,
+                    "num_pq_chunks": 192,
+                    "quantization_type": "FP",
+                    "save_path": "wikipedia_100k_benchmark_index"
+                },
+                "search_phase": {
+                    "queries": "wikipedia_cohere/wikipedia_query.bin",
+                    "groundtruth": "wikipedia_cohere/wikipedia-100K",
+                    "search_list": [
+                        200
+                    ],
+                    "beam_width": 4,
+                    "recall_at": 100,
+                    "num_threads": 4,
+                    "is_flat_search": false,
+                    "distance": "inner_product",
+                    "vector_filters_file": null
+                }
+            }
+        }
+    ]
+}
