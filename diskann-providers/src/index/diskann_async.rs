@@ -2965,10 +2965,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 

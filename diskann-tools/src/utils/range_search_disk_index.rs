@@ -4,13 +4,13 @@
  */
 use std::{path::Path, time::Instant};
 
+use diskann_disk::data_model::GraphDataType;
 use diskann_providers::{
     index::DiskIndexSearcher,
     model::{
         aligned_file_reader::AlignedFileReaderFactory,
         graph::{
             graph_data_model::CachingStrategy, provider::disk::DiskVertexProviderFactory,
-            traits::GraphDataType,
         },
         statistics, QueryStatistics,
     },
