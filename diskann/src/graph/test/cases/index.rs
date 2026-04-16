@@ -7,6 +7,7 @@ use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, s
 use crate::{
     graph::{self, AdjacencyList, test::provider as test_provider},
     neighbor::Neighbor,
+    provider::NeighborAccessor,
 };
 
 #[test]
@@ -100,4 +101,25 @@ async fn test_get_degree_stats() {
     assert_eq!(stats.min_degree, 2);
     assert_eq!(stats.avg_degree, 2.0);
     assert_eq!(stats.cnt_less_than_two, 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_prune_range() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 1);
+    let ctx = test_provider::Context::default();
+    let strat = test_provider::Strategy::new();
+
+    index.prune_range(&strat, &ctx, 0..4).await.unwrap();
+
+    let mut accessor = index.provider().neighbors();
+    let mut list = AdjacencyList::new();
+    for node in 0u32..4 {
+        accessor.get_neighbors(node, &mut list).await.unwrap();
+        assert!(
+            list.len() <= 1,
+            "node {node} should have degree <= 1 after prune, got {}",
+            list.len()
+        );
+    }
 }
