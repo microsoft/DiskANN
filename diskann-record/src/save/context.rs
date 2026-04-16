@@ -5,17 +5,40 @@
 
 use std::{collections::HashSet, fs::File, io::BufWriter, path::PathBuf, sync::Mutex};
 
-use crate::save::Handle;
+use crate::save::{Error, Handle, Value};
 
 #[derive(Debug)]
 pub(super) struct ContextInner {
     dir: PathBuf,
+    metadata: PathBuf,
     files: Mutex<HashSet<String>>,
 }
 
+#[derive(serde::Serialize)]
+struct Final<'a> {
+    files: Vec<&'a str>,
+    value: &'a Value<'a>,
+}
+
 impl ContextInner {
-    pub(crate) fn write(&self, key: &str) -> Writer<'_> {
-        // TODO: Proper disambiguation.
+    // TODO: Error if the directory looks bad?
+    pub(super) fn new(
+        dir: PathBuf,
+        metadata: PathBuf,
+    ) -> Self {
+        Self {
+            dir,
+            metadata,
+            files: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub(super) fn context(&self)  -> Context<'_> {
+        Context { inner: self }
+    }
+
+    pub(super) fn write(&self, key: &str) -> Writer<'_> {
+        // TODO: Proper disambiguation - making UUIDs etc.
         let mut files = self.files.lock().unwrap();
         if files.insert(key.into()) {
             let full = self.dir.join(key);
@@ -28,6 +51,29 @@ impl ContextInner {
         } else {
             panic!("you done goofed!");
         }
+    }
+
+    pub fn finish(self, value: Value<'_>) -> Result<(), Error> {
+        let temp = format!("{}.temp", self.metadata.display());
+        if std::path::Path::new(&temp).exists() {
+            return Err(Error::message(format!(
+                "Temporary file {} already exists. Aborting!",
+                temp
+            )));
+        }
+
+        let files = self.files.into_inner().unwrap();
+        let f = Final {
+            files: files.iter().map(|k| &**k).collect(),
+            value: &value,
+        };
+
+
+        let buffer = std::fs::File::create(&temp).unwrap();
+        serde_json::to_writer_pretty(buffer, &f).unwrap();
+        std::fs::rename(&temp, &self.metadata).unwrap();
+        Ok(())
+
     }
 }
 

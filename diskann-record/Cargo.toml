@@ -8,8 +8,8 @@ license.workspace = true
 edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_core = "1.0.228"
 serde_json.workspace = true
 
 [lints]

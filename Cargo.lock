@@ -896,8 +896,8 @@ dependencies = [
 name = "diskann-record"
 version = "0.50.0"
 dependencies = [
+ "anyhow",
  "serde",
- "serde_core",
  "serde_json",
 ]
 
