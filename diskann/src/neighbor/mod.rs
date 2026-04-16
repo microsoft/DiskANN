@@ -133,7 +133,7 @@ where
 {
     /// Construct a new [`BackInserter`] around the provided slice.
     ///
-    /// THe buffer will have a capacity equal to the length of `buffer`.
+    /// The buffer will have a capacity equal to the length of `buffer`.
     pub fn new(buffer: &'a mut [Neighbor<I>]) -> Self {
         Self {
             buffer,
