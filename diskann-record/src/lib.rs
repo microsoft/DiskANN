@@ -116,5 +116,7 @@ mod tests {
 
         save::save_to_disk(&t, dir, metadata).unwrap();
         let we_are_back: Test = load::load_from_disk(metadata.as_ref(), dir.as_ref()).unwrap();
+
+        assert_eq!(t, we_are_back);
     }
 }

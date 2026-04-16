@@ -92,6 +92,7 @@ pub struct Writer<'a> {
 
 impl Writer<'_> {
     pub fn finish(self) -> Handle {
+        self.flush().unwrap();
         Handle::new(self.name)
     }
 }
