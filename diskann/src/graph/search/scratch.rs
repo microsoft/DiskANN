@@ -360,4 +360,35 @@ mod tests {
         assert!(x.hops == 0);
         assert!(x.cmps == 0);
     }
+
+    #[test]
+    pub fn test_new_two_queue() {
+        let x = SearchScratch::<u32, NeighborPriorityQueue<u32>>::new_two_queue(50, 100, None);
+
+        // best queue should be zero-capacity (unused by two-queue search)
+        assert_eq!(x.best.capacity(), 0);
+        assert_eq!(x.best.size(), 0);
+
+        // filtered_results and candidates should be empty but allocated
+        assert!(x.filtered_results.is_empty());
+        assert!(x.candidates.is_empty());
+
+        // Other fields should be default
+        assert!(x.visited.is_empty());
+        assert!(x.id_scratch.is_empty());
+        assert!(x.beam_nodes.is_empty());
+        assert!(x.in_range.is_empty());
+        assert_eq!(x.hops, 0);
+        assert_eq!(x.cmps, 0);
+    }
+
+    #[test]
+    pub fn test_new_two_queue_with_size_hint() {
+        let x =
+            SearchScratch::<u32, NeighborPriorityQueue<u32>>::new_two_queue(50, 100, Some(1000));
+
+        // visited set should be pre-allocated with the size hint
+        assert!(x.visited.capacity() >= 1000);
+        assert!(x.visited.is_empty());
+    }
 }

@@ -1538,4 +1538,67 @@ mod neighbor_priority_queue_test {
         assert_eq!(queue.size(), 1);
         assert_eq!(queue.cursor, 0); // cursor is always reset to 0
     }
+
+    #[test]
+    fn test_has_notvisited_node_unbounded() {
+        let mut queue = NeighborPriorityQueue::auto_resizable_with_search_param_l(2);
+        // Empty queue: no unvisited nodes.
+        assert!(!queue.has_notvisited_node_unbounded());
+
+        // Insert 4 elements (beyond search_param_l of 2).
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 2.0));
+        queue.insert(Neighbor::new(3, 3.0));
+        queue.insert(Neighbor::new(4, 4.0));
+        assert_eq!(queue.size(), 4);
+
+        // Unbounded should see all 4 entries.
+        assert!(queue.has_notvisited_node_unbounded());
+        // Bounded would cap at search_param_l (2).
+        assert!(queue.has_notvisited_node());
+
+        // Visit the first 2 (up to search_param_l).
+        queue.closest_notvisited(); // visits index 0
+        queue.closest_notvisited(); // visits index 1
+
+        // Bounded says no more to visit (cursor reached search_param_l).
+        assert!(!queue.has_notvisited_node());
+        // Unbounded still sees entries 2 and 3.
+        assert!(queue.has_notvisited_node_unbounded());
+    }
+
+    #[test]
+    fn test_closest_notvisited_unbounded() {
+        let mut queue = NeighborPriorityQueue::auto_resizable_with_search_param_l(2);
+
+        // Insert 4 elements.
+        queue.insert(Neighbor::new(10, 1.0));
+        queue.insert(Neighbor::new(20, 2.0));
+        queue.insert(Neighbor::new(30, 3.0));
+        queue.insert(Neighbor::new(40, 4.0));
+        assert_eq!(queue.size(), 4);
+
+        // Visit the first 2 using bounded method.
+        let n1 = queue.closest_notvisited().unwrap();
+        assert_eq!(n1.id, 10);
+        let n2 = queue.closest_notvisited().unwrap();
+        assert_eq!(n2.id, 20);
+        // Bounded is now exhausted (cursor at search_param_l).
+        assert!(queue.closest_notvisited().is_none());
+
+        // Unbounded can still access entries beyond search_param_l.
+        let n3 = queue.closest_notvisited_unbounded().unwrap();
+        assert_eq!(n3.id, 30);
+        let n4 = queue.closest_notvisited_unbounded().unwrap();
+        assert_eq!(n4.id, 40);
+        // Now truly exhausted.
+        assert!(queue.closest_notvisited_unbounded().is_none());
+        assert!(!queue.has_notvisited_node_unbounded());
+    }
+
+    #[test]
+    fn test_closest_notvisited_unbounded_empty() {
+        let mut queue = NeighborPriorityQueue::<u32>::new(10);
+        assert!(queue.closest_notvisited_unbounded().is_none());
+    }
 }
