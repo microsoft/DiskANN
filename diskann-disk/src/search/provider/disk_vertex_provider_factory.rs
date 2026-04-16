@@ -4,8 +4,9 @@
  */
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
+use crate::data_model::GraphDataType;
 use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::HashSet;
 use tracing::info;
 
@@ -231,11 +232,9 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test_utils::GraphDataF32VectorUnitData;
     use crate::utils::VirtualAlignedReaderFactory;
-    use diskann_providers::{
-        storage::VirtualStorageProvider,
-        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
-    };
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 
