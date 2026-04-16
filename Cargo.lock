@@ -788,8 +788,10 @@ version = "0.50.0"
 dependencies = [
  "anyhow",
  "bf-tree",
+ "byteorder",
  "criterion",
  "diskann",
+ "diskann-providers",
  "diskann-utils",
  "diskann-vector",
  "futures-util",

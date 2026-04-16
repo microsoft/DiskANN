@@ -22,6 +22,8 @@ bf-tree.workspace = true
 scc = "3.3.2"
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector.workspace = true
+diskann-providers = { workspace = true }
+byteorder.workspace = true
 tracing.workspace = true
 
 
@@ -34,7 +36,9 @@ anyhow.workspace = true
 futures-util.workspace = true
 tracing.workspace = true
 diskann = { workspace = true, features = ["testing"] }
+diskann-providers = { workspace = true, features = ["virtual_storage"] }
 tokio = { workspace = true, features = ["rt"] }
+diskann-utils = { workspace = true, features = ["testing"] }
 
 
 

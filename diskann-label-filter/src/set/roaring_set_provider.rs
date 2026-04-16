@@ -168,6 +168,19 @@ where
             index: HashMap::with_hasher(BuildIdentityHasher::default()),
         }
     }
+
+    /// Iterate over all `(key, set)` pairs, calling `f` for each.
+    ///
+    /// Returns the first error returned by `f`, or `Ok(())` if all calls succeed.
+    pub(crate) fn for_each<E, F>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&Key, &RoaringTreemap) -> Result<(), E>,
+    {
+        for (key, set) in &self.index {
+            f(key, set)?;
+        }
+        Ok(())
+    }
 }
 
 // RoaringTreemap provider with u64 values
