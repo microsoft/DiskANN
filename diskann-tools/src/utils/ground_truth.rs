@@ -13,10 +13,10 @@ use diskann::{
     neighbor::{Neighbor, NeighborPriorityQueue},
     utils::VectorRepr,
 };
+use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::AlignedBoxWithSlice,
-    model::graph::traits::GraphDataType,
     utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
 };
 use diskann_utils::{
@@ -87,11 +87,11 @@ pub fn compute_ground_truth_from_datafiles<
     base_file_labels: Option<&str>,
     query_file_labels: Option<&str>,
 ) -> CMDResult<()> {
-    let dataset_iterator = VectorDataIterator::<StorageProvider, Data>::new(
-        base_file,
-        associated_data_file.clone(),
-        storage_provider,
-    )?;
+    let dataset_iterator = VectorDataIterator::<
+        StorageProvider,
+        Data::VectorDataType,
+        Data::AssociatedDataType,
+    >::new(base_file, associated_data_file.clone(), storage_provider)?;
 
     // both base_file_labels and query_file_labels are provided or both are not provided
     if !((base_file_labels.is_some() && query_file_labels.is_some())
@@ -111,11 +111,11 @@ pub fn compute_ground_truth_from_datafiles<
 
     let insert_iterator = match insert_file {
         Some(insert_file) => {
-            let i = VectorDataIterator::<StorageProvider, Data>::new(
-                insert_file,
-                Option::None,
-                storage_provider,
-            )?;
+            let i = VectorDataIterator::<
+                StorageProvider,
+                Data::VectorDataType,
+                Data::AssociatedDataType,
+            >::new(insert_file, Option::None, storage_provider)?;
             Some(i)
         }
         None => None,
@@ -174,11 +174,7 @@ pub fn compute_ground_truth_from_datafiles<
     }
 
     let query_aligned_dim = query_dim.next_multiple_of(8);
-    let ground_truth_result = compute_ground_truth_from_data::<
-        Data,
-        StorageProvider,
-        VectorDataIterator<StorageProvider, Data>,
-    >(
+    let ground_truth_result = compute_ground_truth_from_data::<Data, StorageProvider>(
         distance_function,
         dataset_iterator,
         queries,
@@ -314,16 +310,15 @@ pub fn compute_multivec_ground_truth_from_datafiles<
 
     let has_query_bitmaps = query_bitmaps.is_some();
 
-    let ground_truth =
-        compute_multivec_ground_truth_from_data::<Data::VectorDataType, StorageProvider>(
-            distance_function,
-            aggregation_method,
-            base_vectors,
-            query_vectors,
-            query_dim,
-            recall_at,
-            query_bitmaps,
-        )?;
+    let ground_truth = compute_multivec_ground_truth_from_data::<Data::VectorDataType>(
+        distance_function,
+        aggregation_method,
+        base_vectors,
+        query_vectors,
+        query_dim,
+        recall_at,
+        query_bitmaps,
+    )?;
 
     if has_query_bitmaps {
         let ground_truth_collection = ground_truth
@@ -459,13 +454,15 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 /// * `insert_iterator` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
 #[allow(clippy::too_many_arguments)]
-pub fn compute_ground_truth_from_data<Data, VectorReader, VectorIteratorType>(
+pub fn compute_ground_truth_from_data<Data, VectorReader>(
     distance_function: Metric,
-    dataset_iter: VectorDataIterator<VectorReader, Data>,
+    dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
     queries: Vec<&[Data::VectorDataType]>,
     query_aligned_dimmensions: usize,
     recall_at: u32,
-    insert_iter: Option<VectorDataIterator<VectorReader, Data>>,
+    insert_iter: Option<
+        VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
+    >,
     skip_base: Option<usize>,
     query_bitmaps: Option<Vec<BitSet>>,
 ) -> CMDResult<(Npq, Vec<Data::AssociatedDataType>)>
@@ -588,7 +585,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn compute_multivec_ground_truth_from_data<T, VectorReader>(
+pub fn compute_multivec_ground_truth_from_data<T>(
     distance_function: Metric,
     aggregation_method: MultivecAggregationMethod,
     base_vectors: Vec<Matrix<T>>,
@@ -599,7 +596,6 @@ pub fn compute_multivec_ground_truth_from_data<T, VectorReader>(
 ) -> CMDResult<Vec<NeighborPriorityQueue<u32>>>
 where
     T: VectorRepr,
-    VectorReader: StorageReadProvider,
 {
     let query_num = queries.len();
 

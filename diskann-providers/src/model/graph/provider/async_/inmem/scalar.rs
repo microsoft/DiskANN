@@ -38,17 +38,14 @@ use thiserror::Error;
 use super::{DefaultProvider, GetFullPrecision, PassThrough, Rerank};
 use crate::{
     common::IgnoreLockPoison,
-    model::graph::{
-        provider::async_::{
-            FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
-            common::{
-                AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
-                TestCallCount, VectorStore,
-            },
-            inmem::{FullPrecisionProvider, FullPrecisionStore},
-            postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
+    model::graph::provider::async_::{
+        FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
+        common::{
+            AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
+            TestCallCount, VectorStore,
         },
-        traits::AdHoc,
+        inmem::{FullPrecisionProvider, FullPrecisionStore},
+        postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
@@ -389,7 +386,7 @@ where
     T: VectorRepr,
 {
     type Repr = T;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<AdHoc<T>> {
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
         &self.provider.base_vectors
     }
 }

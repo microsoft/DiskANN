@@ -15,6 +15,7 @@ use std::{
     time::Instant,
 };
 
+use crate::data_model::GraphDataType;
 use diskann::{
     graph::{
         self,
@@ -38,9 +39,7 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{
-        compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
-    },
+    model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 
@@ -1053,6 +1052,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 
 #[cfg(test)]
 mod disk_provider_tests {
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::{
             search::{record::VisitedSearchRecord, Knn},
@@ -1066,9 +1066,6 @@ mod disk_provider_tests {
     };
     use diskann_providers::{
         common::AlignedBoxWithSlice,
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
         utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
     };
     use diskann_utils::{io::read_bin, test_data_root};

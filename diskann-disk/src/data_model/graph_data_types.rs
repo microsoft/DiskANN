@@ -20,18 +20,6 @@ use serde::{Deserialize, Serialize};
 ///     namely to allow instances of this type to be saved and loaded.
 ///
 ///   * `Send` & `Sync`: These traits are again necessary for multithreaded access.
-///
-/// * `AdjacencyListType`: This type represents the adjacency list used for the graph.
-///
-///   * `AdjacencyListTrait`: The behavior required for the adjacency list type.
-///
-///   * `Send` & `Sync`: These traits have the same purposes as explained above.
-///
-///   * `TryFrom<&'a [u8]>`: This trait allows the adjacency list to be constructed from a slice of bytes. (Not using Serde here because we want to precisely control the format of the bytes)
-///
-///   * `TryInto<Vec<u8>>`: This trait allows the adjacency list to be converted into a vector of bytes. (Not using Serde here because we want to precisely control the format of the bytes)
-///
-///   * `for<'a> AdjacencyListIterator<'a>' expresses that the a reference to the AdjacencyList should be able to convert into a Iterator of &'a u32.
 pub trait GraphDataType: Send + Sync + 'static {
     type VectorDataType: VectorRepr;
 
@@ -51,7 +39,7 @@ pub trait GraphDataType: Send + Sync + 'static {
     type VectorIdType: VectorId;
 }
 
-/// An adhoc `GraphDataType` for implementations that only need an the `VectorDataType`
+/// An adhoc `GraphDataType` for implementations that only need the `VectorDataType`
 /// and `VectorIdType`.
 ///
 /// This type defaults to using `u32` for the ID type for extra convenience.

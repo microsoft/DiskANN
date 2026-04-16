@@ -7,12 +7,9 @@ use diskann::provider::DefaultContext;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     index::diskann_async,
-    model::graph::{
-        provider::async_::{
-            common::{FullPrecision, NoDeletes},
-            inmem::DefaultProviderParameters,
-        },
-        traits::AdHoc,
+    model::graph::provider::async_::{
+        common::{FullPrecision, NoDeletes},
+        inmem::DefaultProviderParameters,
     },
     storage::FileStorageProvider,
     utils::{VectorDataIterator, create_thread_pool_for_bench},
@@ -42,7 +39,7 @@ async fn test_sift_256_vectors_with_quant_vectors() {
     let file_path = "test_data/sift/siftsmall_learn_256pts.fbin";
 
     let storage_provider = FileStorageProvider;
-    let dataset_iterator = VectorDataIterator::<FileStorageProvider, AdHoc<f32>>::new(
+    let dataset_iterator = VectorDataIterator::<FileStorageProvider, f32>::new(
         get_test_file_path(file_path).as_str(),
         Option::None,
         &storage_provider,

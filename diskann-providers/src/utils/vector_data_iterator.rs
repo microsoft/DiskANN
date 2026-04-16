@@ -12,32 +12,36 @@ use std::{
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNErrorKind, utils::read_exact_into};
 use diskann_utils::io::Metadata;
+use serde::Deserialize;
 use thiserror::Error;
 
-use crate::model::graph::traits::GraphDataType;
+use diskann::utils::VectorRepr;
 
 /// An iterator over the vector and associated data pairs in a dataset loaded from the storage provider.
-pub struct VectorDataIterator<StorageProvider: StorageReadProvider, Data: GraphDataType> {
+///
+/// `T` is the vector element type (e.g. `f32`, `i8`).
+/// `A` is the associated data type (defaults to `()` when no associated data is needed).
+pub struct VectorDataIterator<StorageProvider: StorageReadProvider, T: VectorRepr, A = ()> {
     vector_reader: StorageProvider::Reader,
     dimension: usize,
     associated_data_reader: Option<StorageProvider::Reader>,
     associated_data_length: usize,
     num_points: usize,
     current_index: usize,
-    _phantom: PhantomData<Data>,
+    _phantom: PhantomData<(T, A)>,
 }
 
-impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
-    VectorDataIterator<StorageProvider, Data>
+impl<StorageProvider: StorageReadProvider, T: VectorRepr, A>
+    VectorDataIterator<StorageProvider, T, A>
 {
     /// Create the iterator from a vector dataset stream and an associated data stream.
-    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1 (dimension * size_of::<Data::VectorDataType>())) | .. | vector data N |
+    /// vector_stream format: | num_points (4 bytes) | dimension (4 bytes) | vector data 1 (dimension * size_of::<T>())) | .. | vector data N |
     /// associated_data_stream format: | num_points (4 bytes) | associated_data_length | associated data 1 (associated_data_length) | .. | associated data N |
     pub fn new(
         vector_stream: &str,
         associated_data_stream: Option<String>,
         read_provider: &StorageProvider,
-    ) -> std::io::Result<VectorDataIterator<StorageProvider, Data>> {
+    ) -> std::io::Result<VectorDataIterator<StorageProvider, T, A>> {
         let mut dataset_reader = read_provider.open_reader(vector_stream)?;
 
         let (vector_npts, vector_dim) = Metadata::read(&mut dataset_reader)?.into_dims();
@@ -84,10 +88,10 @@ impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn next_n(
-        &mut self,
-        n: usize,
-    ) -> Option<Vec<(Box<[Data::VectorDataType]>, Data::AssociatedDataType)>> {
+    pub fn next_n(&mut self, n: usize) -> Option<Vec<(Box<[T]>, A)>>
+    where
+        A: for<'de> Deserialize<'de> + Default,
+    {
         let mut result = Vec::with_capacity(n);
         for _ in 0..n {
             if let Some((vector, associated_data)) = self.next() {
@@ -124,14 +128,13 @@ impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
             return Ok(());
         }
 
-        let vector_size = self.dimension * std::mem::size_of::<Data::VectorDataType>();
+        let vector_size = self.dimension * std::mem::size_of::<T>();
         self.vector_reader
             .seek(SeekFrom::Current((n * vector_size) as i64))?;
 
         // If we have associated data, seek there too
         if let Some(reader) = &mut self.associated_data_reader {
-            let data_size =
-                self.associated_data_length * std::mem::size_of::<Data::AssociatedDataType>();
+            let data_size = self.associated_data_length * std::mem::size_of::<A>();
             reader.seek(SeekFrom::Current((n * data_size) as i64))?;
         }
 
@@ -141,8 +144,11 @@ impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
     }
 }
 
-impl<R: StorageReadProvider, Data: GraphDataType> Iterator for VectorDataIterator<R, Data> {
-    type Item = (Box<[Data::VectorDataType]>, Data::AssociatedDataType);
+impl<R: StorageReadProvider, T: VectorRepr, A> Iterator for VectorDataIterator<R, T, A>
+where
+    A: for<'de> Deserialize<'de> + Default,
+{
+    type Item = (Box<[T]>, A);
 
     /// Returns the next vector and associated data pair in the dataset.
     fn next(&mut self) -> Option<Self::Item> {
@@ -160,7 +166,7 @@ impl<R: StorageReadProvider, Data: GraphDataType> Iterator for VectorDataIterato
         match &mut self.associated_data_reader {
             Some(reader) => {
                 let mut associated_data_buf =
-                    vec![0u8; self.associated_data_length * size_of::<Data::AssociatedDataType>()];
+                    vec![0u8; self.associated_data_length * size_of::<A>()];
                 if reader.read_exact(&mut associated_data_buf).is_err() {
                     return None;
                 }
@@ -173,7 +179,7 @@ impl<R: StorageReadProvider, Data: GraphDataType> Iterator for VectorDataIterato
 
             None => {
                 // If there is no associated data, return it with the default value.
-                Some((boxed_vector_slice, Data::AssociatedDataType::default()))
+                Some((boxed_vector_slice, A::default()))
             }
         }
     }
@@ -210,7 +216,6 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::test_utils::graph_data_type_utils::GraphDataF32VectorU32Data;
     const TEST_VECTOR_STREAM: &str = "vector";
     const TEST_ASSOCIATED_DATA_STREAM: &str = "associated_data";
     const INCORRECT_TEST_ASSOCIATED_DATA_STREAM: &str = "incorrect_associated_data";
@@ -276,7 +281,7 @@ mod tests {
     #[test]
     fn test_initialization() {
         let read_provider = MockStorageProvider;
-        let iterator = VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
+        let iterator = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
             TEST_VECTOR_STREAM,
             Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
             &read_provider,
@@ -290,13 +295,12 @@ mod tests {
     #[test]
     fn test_iteration() {
         let read_provider = MockStorageProvider;
-        let mut iterator =
-            VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
-                TEST_VECTOR_STREAM,
-                Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
-                &read_provider,
-            )
-            .unwrap();
+        let mut iterator = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
+            TEST_VECTOR_STREAM,
+            Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
+            &read_provider,
+        )
+        .unwrap();
 
         let (vector, associated_data) = iterator.next().unwrap();
         assert_eq!(vector, vec![1_f32, 2_f32].into_boxed_slice());
@@ -312,7 +316,7 @@ mod tests {
     #[test]
     fn test_initialization_fail_when_associated_data_has_incorrect_length() {
         let read_provider = MockStorageProvider;
-        let result = VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
+        let result = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
             TEST_VECTOR_STREAM,
             Some(INCORRECT_TEST_ASSOCIATED_DATA_STREAM.to_string()),
             &read_provider,
@@ -365,13 +369,12 @@ mod tests {
     #[test]
     fn test_next_n() {
         let read_provider = MockStorageProvider;
-        let mut iterator =
-            VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
-                TEST_VECTOR_STREAM,
-                Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
-                &read_provider,
-            )
-            .unwrap();
+        let mut iterator = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
+            TEST_VECTOR_STREAM,
+            Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
+            &read_provider,
+        )
+        .unwrap();
 
         let result = iterator.next_n(2).unwrap();
         assert_eq!(result.len(), 2);
@@ -386,13 +389,12 @@ mod tests {
     #[test]
     fn test_skip_and_nth() {
         let read_provider = MockStorageProvider;
-        let mut iterator1 =
-            VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
-                TEST_VECTOR_STREAM,
-                Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
-                &read_provider,
-            )
-            .unwrap();
+        let mut iterator1 = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
+            TEST_VECTOR_STREAM,
+            Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
+            &read_provider,
+        )
+        .unwrap();
 
         // Using Iterator::nth directly
         let (vector, associated_data) = iterator1.nth(1).unwrap();
@@ -400,7 +402,7 @@ mod tests {
         assert_eq!(associated_data, 20_u32);
 
         // Create a fresh iterator for the skip test
-        let iterator2 = VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
+        let iterator2 = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
             TEST_VECTOR_STREAM,
             Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
             &read_provider,
@@ -417,13 +419,12 @@ mod tests {
     #[test]
     fn test_nth_out_of_bounds() {
         let read_provider = MockStorageProvider;
-        let mut iterator =
-            VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
-                TEST_VECTOR_STREAM,
-                Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
-                &read_provider,
-            )
-            .unwrap();
+        let mut iterator = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
+            TEST_VECTOR_STREAM,
+            Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
+            &read_provider,
+        )
+        .unwrap();
 
         // Try to get an element beyond the end
         assert!(iterator.nth(3).is_none());
@@ -435,13 +436,12 @@ mod tests {
     #[test]
     fn test_nth_zero() {
         let read_provider = MockStorageProvider;
-        let mut iterator =
-            VectorDataIterator::<MockStorageProvider, GraphDataF32VectorU32Data>::new(
-                TEST_VECTOR_STREAM,
-                Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
-                &read_provider,
-            )
-            .unwrap();
+        let mut iterator = VectorDataIterator::<MockStorageProvider, f32, u32>::new(
+            TEST_VECTOR_STREAM,
+            Some(TEST_ASSOCIATED_DATA_STREAM.to_string()),
+            &read_provider,
+        )
+        .unwrap();
 
         // nth(0) should be equivalent to next()
         #[allow(clippy::iter_nth_zero)]

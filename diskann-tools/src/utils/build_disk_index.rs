@@ -13,6 +13,7 @@ use diskann_disk::{
         builder::build::DiskIndexBuilder,
         chunking::{checkpoint::CheckpointManager, continuation::ChunkingConfig},
     },
+    data_model::GraphDataType,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },
@@ -21,7 +22,7 @@ use diskann_disk::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{graph::traits::GraphDataType, IndexConfiguration},
+    model::IndexConfiguration,
     utils::{load_metadata_from_file, Timer},
 };
 use diskann_vector::distance::Metric;

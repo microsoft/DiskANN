@@ -28,17 +28,14 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
-use crate::model::graph::{
-    provider::async_::{
-        FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
-        common::{
-            CreateVectorStore, FlatVectorAccess, FullPrecision, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
-        },
-        inmem::{DefaultProvider, PassThrough},
-        postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
+use crate::model::graph::provider::async_::{
+    FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
+    common::{
+        CreateVectorStore, FlatVectorAccess, FullPrecision, NoDeletes, NoStore, Panics,
+        PrefetchCacheLineLevel, SetElementHelper,
     },
-    traits::AdHoc,
+    inmem::{DefaultProvider, PassThrough},
+    postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
 };
 
 /// A type alias for the DefaultProvider with full-precision as the primary vector store.
@@ -46,7 +43,7 @@ pub type FullPrecisionProvider<T, Q = NoStore, D = NoDeletes, Ctx = DefaultConte
     DefaultProvider<FullPrecisionStore<T>, Q, D, Ctx>;
 
 /// The default full-precision vector store.
-pub type FullPrecisionStore<T> = FastMemoryVectorProviderAsync<AdHoc<T>>;
+pub type FullPrecisionStore<T> = FastMemoryVectorProviderAsync<T>;
 
 /// A default full-precision vector store provider.
 #[derive(Clone)]
@@ -109,9 +106,8 @@ impl<T> FlatVectorAccess<T> for FullPrecisionStore<T>
 where
     T: VectorRepr,
 {
-    // AdHoc<T>::VectorDataType == T, so the inherent flat_prefix returns &[T].
     unsafe fn flat_prefix(&self, first_n: usize) -> &[T] {
-        unsafe { FastMemoryVectorProviderAsync::<AdHoc<T>>::flat_prefix(self, first_n) }
+        unsafe { FastMemoryVectorProviderAsync::<T>::flat_prefix(self, first_n) }
     }
 }
 
@@ -352,7 +348,7 @@ where
 
 pub trait GetFullPrecision {
     type Repr: VectorRepr;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<AdHoc<Self::Repr>>;
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<Self::Repr>;
 }
 
 /// A [`SearchPostProcess`]or that:

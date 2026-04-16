@@ -12,7 +12,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
-    data_model::CachingStrategy,
+    data_model::{AdHoc, CachingStrategy},
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
@@ -31,7 +31,7 @@ use diskann_utils::views::Matrix;
 use serde::Serialize;
 
 use crate::{
-    backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
+    backend::disk_index::json_spancollector::JsonSpanCollector,
     inputs::disk::{DiskIndexLoad, DiskSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
@@ -217,7 +217,7 @@ where
     let reader_factory = AlignedFileReaderFactory::new(disk_index_path);
     let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim

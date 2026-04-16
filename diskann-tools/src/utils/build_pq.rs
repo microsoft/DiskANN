@@ -4,11 +4,11 @@
  */
 
 use diskann::ANNResult;
+use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
-        graph::traits::GraphDataType, GeneratePivotArguments, MAX_PQ_TRAINING_SET_SIZE,
-        NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        GeneratePivotArguments, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
     storage::{
         get_disk_index_compressed_pq_file, get_disk_index_pq_pivot_file, FileStorageProvider,

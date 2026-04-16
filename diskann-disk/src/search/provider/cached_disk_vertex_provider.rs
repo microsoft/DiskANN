@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::data_model::GraphDataType;
 use diskann::{ANNError, ANNResult};
-use diskann_providers::model::graph::traits::GraphDataType;
 
 use crate::utils::aligned_file_reader::traits::AlignedFileReader;
 use hashbrown::HashMap;
