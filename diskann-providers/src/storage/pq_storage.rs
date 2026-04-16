@@ -10,7 +10,7 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::{
-    io::{Metadata, write_bin},
+    io::{Metadata, read_bin, write_bin},
     views::MatrixView,
 };
 use rand::Rng;
@@ -18,7 +18,7 @@ use tracing::info;
 
 use crate::{
     model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, PQCompressedData, pq::METADATA_SIZE},
-    utils::{copy_aligned_data, gen_random_slice, read_bin_from, write_bin_from},
+    utils::{gen_random_slice, read_bin_from, write_bin_from},
 };
 
 // Create types to make return values easier to understand
@@ -233,13 +233,24 @@ impl PQStorage {
             num_points_to_load, num_pq_chunks
         );
 
-        let mut pq_compressed_dataset = PQCompressedData::new(num_points_to_load, num_pq_chunks)?;
+        let data = read_bin::<u8>(&mut storage_provider.open_reader(pq_compressed_data)?)?;
 
-        let (_, _) = copy_aligned_data(
-            &mut storage_provider.open_reader(pq_compressed_data)?,
-            pq_compressed_dataset.into_dto(),
-            0,
-        )?;
+        if data.nrows() != num_points_to_load || data.ncols() != num_pq_chunks {
+            return Err(ANNError::log_pq_error(format_args!(
+                "PQ compressed data mismatch: file has {}x{} but expected {}x{}",
+                data.nrows(),
+                data.ncols(),
+                num_points_to_load,
+                num_pq_chunks
+            )));
+        }
+
+        let mut pq_compressed_dataset = PQCompressedData::new(num_points_to_load, num_pq_chunks)?;
+        pq_compressed_dataset
+            .into_dto()
+            .data
+            .copy_from_slice(data.as_slice());
+
         info!("PQ compressed dataset loaded.");
         Ok(pq_compressed_dataset)
     }

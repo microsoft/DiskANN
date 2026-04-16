@@ -6,17 +6,11 @@
 
 //! File operations
 
-use std::{io::Read, mem::size_of};
+use std::io::Read;
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNResult, utils::IntoUsize};
 use diskann_utils::{io::Metadata, views::Matrix};
-use tracing::info;
-
-use crate::{
-    common::AlignedBoxWithSlice,
-    utils::{DatasetDto, copy_aligned_data},
-};
 
 /// Read metadata of data file.
 pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
@@ -25,76 +19,6 @@ pub fn load_metadata_from_file<ReadProvider: StorageReadProvider>(
 ) -> std::io::Result<Metadata> {
     let mut file = storage_provider.open_reader(file_name)?;
     Metadata::read(&mut file)
-}
-
-/// Loads a binary file with aligned memory and returns the data along with metadata.
-///
-/// # Parameters
-/// - `storage_provider`: A reference to an object that implements the `StorageReadProvider` trait, used to read the binary file.
-/// - `bin_file`: A string slice that holds the name of the binary file to be read.
-///
-/// # Returns
-/// - `ANNResult<(AlignedBoxWithSlice<T>, usize, usize, usize)>`: A result containing a tuple with the aligned data, number of points, dimensions, and rounded dimensions.
-///
-/// # Errors
-/// - Returns an `ANNError` if there is a file size mismatch or if the requested memory size cannot be allocated.
-///
-/// # Type Parameters
-/// - `T`: The type of the elements in the binary file. Must implement `Default`, `Copy`, `Sized`, and `bytemuck::Pod`.
-#[inline]
-pub fn load_aligned_bin<T: Default + Copy + Sized + bytemuck::Pod>(
-    storage_provider: &impl StorageReadProvider,
-    bin_file: &str,
-) -> ANNResult<(AlignedBoxWithSlice<T>, usize, usize, usize)> {
-    let size_of_t = size_of::<T>();
-    let (npts, dim, file_size): (usize, usize, usize);
-    {
-        info!("Reading (with alignment) bin file: {bin_file}");
-        file_size = storage_provider.get_length(bin_file)? as usize;
-
-        let mut file = storage_provider.open_reader(bin_file)?;
-        let metadata = Metadata::read(&mut file)?;
-        (npts, dim) = (metadata.npoints(), metadata.ndims());
-    }
-
-    let rounded_dim = dim.next_multiple_of(8);
-    let expected_actual_file_size = npts * dim * size_of_t + 2 * size_of::<u32>();
-
-    if file_size != expected_actual_file_size {
-        return Err(ANNError::log_index_error(format_args!(
-            "ERROR: File size mismatch. Actual size is {} while expected size is {}
-        npts = {}, #dims = {}, aligned_dim = {}",
-            file_size, expected_actual_file_size, npts, dim, rounded_dim
-        )));
-    }
-
-    info!("Metadata: #pts = {npts}, #dims = {dim}, aligned_dim = {rounded_dim}...");
-
-    let alloc_size = npts * rounded_dim;
-    let alignment = 8 * size_of_t;
-    info!(
-        "allocating aligned memory of {} bytes... ",
-        alloc_size * size_of_t
-    );
-    if !(alloc_size * size_of_t).is_multiple_of(alignment) {
-        return Err(ANNError::log_index_error(format_args!(
-            "Requested memory size is not a multiple of {}. Can not be allocated.",
-            alignment
-        )));
-    }
-
-    let mut data = AlignedBoxWithSlice::<T>::new(alloc_size, alignment)?;
-    let dto = DatasetDto {
-        data: &mut data,
-        rounded_dim,
-    };
-
-    info!("done. Copying data to mem_aligned buffer...");
-
-    let mut reader = storage_provider.open_reader(bin_file)?;
-    copy_aligned_data(&mut reader, dto, 0)?;
-
-    Ok((data, npts, dim, rounded_dim))
 }
 
 /// Check whether file exists or not
@@ -201,48 +125,6 @@ mod file_util_test {
             }
             Err(_e) => {}
         }
-        storage_provider
-            .delete(file_name)
-            .expect("Failed to delete file");
-    }
-
-    #[test]
-    fn load_aligned_bin_test() {
-        let storage_provider = VirtualStorageProvider::new_memory();
-
-        let file_name = "/test_load_aligned_bin_test.bin";
-        //npoints=2, dim=8, 2 vectors [1.0..8.0] [9.0..16.0]
-        let data: [u8; 72] = [
-            2, 0, 0, 0, 8, 0, 0, 0, 0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00,
-            0x40, 0x40, 0x00, 0x00, 0x80, 0x40, 0x00, 0x00, 0xa0, 0x40, 0x00, 0x00, 0xc0, 0x40,
-            0x00, 0x00, 0xe0, 0x40, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x10, 0x41, 0x00, 0x00,
-            0x20, 0x41, 0x00, 0x00, 0x30, 0x41, 0x00, 0x00, 0x40, 0x41, 0x00, 0x00, 0x50, 0x41,
-            0x00, 0x00, 0x60, 0x41, 0x00, 0x00, 0x70, 0x41, 0x00, 0x00, 0x80, 0x41,
-        ];
-        {
-            let mut writer = storage_provider.create_for_write(file_name).unwrap();
-            writer
-                .write_all(&data)
-                .expect("Failed to write sample file");
-        }
-
-        let (dataset, npts, dim, rounded_dim) =
-            load_aligned_bin::<f32>(&storage_provider, file_name).unwrap();
-
-        assert_eq!(npts, 2);
-        assert_eq!(dim, 8);
-        assert_eq!(rounded_dim, 8);
-        assert_eq!(dataset.as_slice().len(), 16);
-
-        let first_vector = &dataset.as_slice()[0..8];
-        assert_eq!(first_vector, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-
-        let second_vector = &dataset.as_slice()[8..16];
-        assert_eq!(
-            second_vector,
-            &[9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]
-        );
-
         storage_provider
             .delete(file_name)
             .expect("Failed to delete file");

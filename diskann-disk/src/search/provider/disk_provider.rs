@@ -1066,11 +1066,11 @@ mod disk_provider_tests {
     };
     use diskann_providers::{
         common::AlignedBoxWithSlice,
-        utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
+        utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool},
     };
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
-    use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
+    use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
     use vfs::OverlayFS;
 
@@ -1135,7 +1135,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
             k: 10,
             l: 20,
-            dim: 104,
         });
         // Test multi thread.
         test_disk_search(TestDiskSearchParams {
@@ -1146,7 +1145,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
             k: 10,
             l: 20,
-            dim: 104,
         });
     }
 
@@ -1174,7 +1172,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
             k: 10,
             l: 20,
-            dim: 128,
         });
         // Test multi thread.
         test_disk_search(TestDiskSearchParams {
@@ -1185,7 +1182,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
             k: 10,
             l: 20,
-            dim: 128,
         });
     }
 
@@ -1239,7 +1235,6 @@ mod disk_provider_tests {
                     truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
                     k: 10,
                     l: 20,
-                    dim: 128,
                 },
                 None,
             );
@@ -1254,7 +1249,6 @@ mod disk_provider_tests {
                     truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
                     k: 10,
                     l: 20,
-                    dim: 128,
                 },
                 None,
             );
@@ -1363,7 +1357,6 @@ mod disk_provider_tests {
         truth_result_file_path: &'a str,
         k: usize,
         l: usize,
-        dim: usize,
     }
 
     struct TestDiskSearchAssociateParams<'a, StorageType> {
@@ -1380,29 +1373,24 @@ mod disk_provider_tests {
         truth_result_file_path: &'a str,
         k: usize,
         l: usize,
-        dim: usize,
     }
 
     fn test_disk_search<StorageType: StorageReadProvider>(
         params: TestDiskSearchParams<StorageType>,
     ) {
-        let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
-            .unwrap()
-            .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
-
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
-
+        let queries = read_bin::<f32>(
+            &mut params
+                .storage_provider
+                .open_reader(params.query_file_path)
+                .unwrap(),
+        )
+        .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
-        // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
-            .par_iter()
+            .par_row_iter()
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
@@ -1462,20 +1450,18 @@ mod disk_provider_tests {
         params: TestDiskSearchAssociateParams<StorageType>,
         beam_width: Option<usize>,
     ) {
-        let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
-            .unwrap()
-            .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
+        let queries = read_bin::<f32>(
+            &mut params
+                .storage_provider
+                .open_reader(params.query_file_path)
+                .unwrap(),
+        )
+        .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
-        // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
-            .par_iter()
+            .par_row_iter()
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
                 // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.

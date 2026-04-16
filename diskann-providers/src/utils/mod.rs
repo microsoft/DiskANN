@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 pub mod file_util;
-pub use file_util::{file_exists, load_aligned_bin, load_metadata_from_file};
+pub use file_util::{file_exists, load_metadata_from_file};
 
 #[allow(clippy::module_inception)]
 mod utils;
@@ -49,8 +49,7 @@ pub mod generate_synthetic_labels_utils;
 
 mod storage_utils;
 pub use storage_utils::{
-    copy_aligned_data, load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions,
-    write_bin_from,
+    load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions, write_bin_from,
 };
 
 mod sampling;
