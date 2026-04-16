@@ -23,7 +23,9 @@ use crate::{
     test::tokio::current_thread_runtime,
 };
 
-use super::helpers::{assert_neighbors, create_2d_unit_square, setup_2d_square};
+use super::helpers::{
+    assert_neighbors, create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square,
+};
 
 /// Build a small index with explicit vectors and adjacency lists for consolidation testing.
 ///
@@ -132,13 +134,7 @@ fn flaky_consolidate_returns_failed_retrieval() {
 fn consolidate_deleted_vertex_returns_deleted() {
     let rt = current_thread_runtime();
 
-    let adjacency_lists = vec![
-        AdjacencyList::from_iter_untrusted([1, 2, 4]),
-        AdjacencyList::from_iter_untrusted([0, 3, 4]),
-        AdjacencyList::from_iter_untrusted([0, 3, 4]),
-        AdjacencyList::from_iter_untrusted([1, 2, 4]),
-        AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
-    ];
+    let adjacency_lists = generate_2d_square_adjacency_list();
 
     let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
     let ctx = test_provider::Context::new();
@@ -159,13 +155,7 @@ fn consolidate_deleted_vertex_returns_deleted() {
 fn consolidate_nothing_to_do_returns_complete() {
     let rt = current_thread_runtime();
 
-    let adjacency_lists = vec![
-        AdjacencyList::from_iter_untrusted([1, 2, 4]),
-        AdjacencyList::from_iter_untrusted([0, 3, 4]),
-        AdjacencyList::from_iter_untrusted([0, 3, 4]),
-        AdjacencyList::from_iter_untrusted([1, 2, 4]),
-        AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
-    ];
+    let adjacency_lists = generate_2d_square_adjacency_list();
 
     let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
     let ctx = test_provider::Context::new();
