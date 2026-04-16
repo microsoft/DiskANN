@@ -7,37 +7,37 @@
 
 use std::{iter, sync::Arc};
 
+use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
         self, AdjacencyList, DiskANNIndex,
-        test::provider::{self as test_provider, Provider},
+        test::{
+            provider::{self as test_provider, Provider},
+            synthetic::Grid,
+        },
     },
     provider::NeighborAccessor,
 };
 
-// creating a very simple unit square
-pub(super) fn create_2d_unit_square() -> Vec<Vec<f32>> {
-    vec![
-        vec![0.0, 0.0],
-        vec![0.0, 1.0],
-        vec![1.0, 0.0],
-        vec![1.0, 1.0],
-    ]
+/// Generate the 2D unit square vectors using the synthetic grid infrastructure.
+pub(super) fn create_2d_unit_square() -> Matrix<f32> {
+    Grid::Two.data(2)
 }
 
-/// Build a 2D square index: 4 corners + start point at (0.5, 0.5) with ID 4.
+/// Build a 2D square index with a start point at (0.5, 0.5).
 ///
 /// The `pruned_degree` controls the index's target degree. The provider's max degree
 /// is set to the largest adjacency list size to allow pre-populating graphs that
 /// may exceed the index limit (useful for consolidation tests).
 pub(super) fn setup_2d_square(
-    vectors: Vec<Vec<f32>>,
+    vectors: Matrix<f32>,
     adjacency_lists: Vec<AdjacencyList<u32>>,
     pruned_degree: usize,
 ) -> Arc<DiskANNIndex<Provider>> {
-    let num_points = vectors.len();
+    let num_points = vectors.nrows();
+    let dim = vectors.ncols();
     assert!(
         adjacency_lists.len() >= num_points,
         "need at least one adjacency list per vector, got {} lists for {} vectors",
@@ -63,15 +63,15 @@ pub(super) fn setup_2d_square(
     let provider_config = test_provider::Config::new(
         Metric::L2,
         provider_max_degree,
-        test_provider::StartPoint::new(start_id, vec![0.5, 0.5]),
+        test_provider::StartPoint::new(start_id, vec![0.5; dim]),
     )
     .unwrap();
 
     let points = vectors
-        .into_iter()
+        .row_iter()
         .zip(adjacency_lists.into_iter().take(num_points))
         .enumerate()
-        .map(|(id, (vec, adj))| (id as u32, vec, adj));
+        .map(|(id, (row, adj))| (id as u32, row.to_vec(), adj));
 
     let provider =
         Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();

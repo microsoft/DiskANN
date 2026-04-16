@@ -20,6 +20,7 @@ use crate::graph::AdjacencyList;
 #[derive(Debug, Clone, Copy)]
 pub enum Grid {
     One,
+    Two,
     Three,
     Four,
 }
@@ -112,6 +113,21 @@ impl Grid {
                 });
                 Matrix::new(init, size, 1)
             }
+            Self::Two => {
+                let mut v = [0; 2];
+                let mut i = 0;
+                let init = Init(|| {
+                    let value = f(v[i]);
+                    i += 1;
+                    if i == 2 {
+                        i = 0;
+                        increment(&mut v, size);
+                    }
+                    value
+                });
+
+                Matrix::new(init, size.pow(self.dim().into()), 2)
+            }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
                 // by constructing the grid as we initialize the matrix.
@@ -177,6 +193,27 @@ impl Grid {
                         list.push(i + 1);
                     }
                     lists.push(list);
+                }
+            }
+            Self::Two => {
+                let map = |i, j| (i * size) + j;
+                for i in 0..size {
+                    for j in 0..size {
+                        let mut list = AdjacencyList::new();
+                        if i > 0 {
+                            list.push(map(i - 1, j));
+                        }
+                        if i < size - 1 {
+                            list.push(map(i + 1, j));
+                        }
+                        if j > 0 {
+                            list.push(map(i, j - 1));
+                        }
+                        if j < size - 1 {
+                            list.push(map(i, j + 1));
+                        }
+                        lists.push(list);
+                    }
                 }
             }
             Self::Three => {
@@ -273,6 +310,7 @@ impl Grid {
     pub fn dim(self) -> u8 {
         match self {
             Self::One => 1,
+            Self::Two => 2,
             Self::Three => 3,
             Self::Four => 4,
         }

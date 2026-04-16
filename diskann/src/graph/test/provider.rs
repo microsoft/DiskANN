@@ -628,7 +628,7 @@ impl From<InvalidId> for ANNError {
     }
 }
 
-impl<'a> IntoIterator for &'a Provider {
+impl IntoIterator for &Provider {
     type Item = u32;
     type IntoIter = std::vec::IntoIter<u32>;
 
