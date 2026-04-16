@@ -9,11 +9,6 @@ pub use file_util::{
     open_file_to_write,
 };
 
-mod normalizing_util;
-pub use normalizing_util::{
-    normalize_data_file, normalize_data_internal, normalize_data_internal_no_cblas,
-};
-
 #[allow(clippy::module_inception)]
 mod utils;
 pub use utils::DatasetDto;
@@ -29,15 +24,6 @@ pub use rayon_util::{
 
 mod timer;
 pub use timer::Timer;
-
-pub mod math_util;
-pub use math_util::{
-    compute_closest_centers, compute_closest_centers_in_block, compute_vec_l2sq, compute_vecs_l2sq,
-    convert_usize_to_u64, generate_vectors_with_norm, process_residuals,
-};
-
-mod kmeans;
-pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;

@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_providers::model::graph::traits::GraphDataType;
+use crate::data_model::GraphDataType;
 
 pub type AssociatedDataFilter<Data> =
     Box<dyn Fn(&<Data as GraphDataType>::AssociatedDataType) -> bool>;
@@ -22,7 +22,7 @@ pub fn default_vector_filter<Data: GraphDataType>() -> VectorFilter<'static, Dat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diskann_providers::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
+    use crate::test_utils::GraphDataF32VectorUnitData;
 
     type TestGraphData = GraphDataF32VectorUnitData;
 

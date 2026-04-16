@@ -1,0 +1,46 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "test-input-dim",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "test-input-dim-tolerance",
+        "content": {
+          "succeed": true,
+          "error_in_check": false
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "test-input-types",
+        "content": {
+          "data_type": "float32",
+          "dim": 1000
+        }
+      },
+      "tolerance": {
+        "type": "test-input-types-tolerance",
+        "content": {
+          "error_when_checked": false
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "test-input-types",
+        "content": {
+          "data_type": "int8"
+        }
+      },
+      "tolerance": {
+        "type": "test-input-types-tolerance",
+        "content": {
+          "error_when_checked": false
+        }
+      }
+    }
+  ]
+}
