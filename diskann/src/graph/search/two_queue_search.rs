@@ -50,7 +50,7 @@ pub struct TwoQueueSearch<'q, InternalId> {
     /// Maximum number of hops before stopping search.
     pub max_candidates: usize,
     /// Result queue capacity factor relative to k (capacity = k * result_size_factor).
-    pub resut_size_factor: usize,
+    pub result_size_factor: usize,
 }
 
 /// Describes why the two-queue search terminated.
@@ -83,13 +83,13 @@ impl<'q, InternalId> TwoQueueSearch<'q, InternalId> {
         inner: Knn,
         filter: &'q dyn QueryLabelProvider<InternalId>,
         max_candidates: usize,
-        resut_size_factor: usize,
+        result_size_factor: usize,
     ) -> Self {
         Self {
             inner,
             filter,
             max_candidates,
-            resut_size_factor,
+            result_size_factor,
         }
     }
 }
@@ -127,7 +127,7 @@ where
             // Two-queue search uses its own BinaryHeap-based candidates/filtered_results,
             // so the NeighborPriorityQueue (best) is set to zero capacity.
             let mut scratch = SearchScratch::new_two_queue(
-                k * self.resut_size_factor,
+                k * self.result_size_factor,
                 self.inner.l_value().get(),
                 None,
             );
@@ -190,7 +190,7 @@ where
 {
     let beam_width = search_params.inner.beam_width().get();
     let k = search_params.inner.k_value().get();
-    let result_cap = k * search_params.resut_size_factor;
+    let result_cap = k * search_params.result_size_factor;
     let max_candidates = search_params.max_candidates;
     let filter = search_params.filter;
 
@@ -232,7 +232,7 @@ where
         // At low selectivity, the fixed max_candidates budget may not be sufficient
         // to find k matches. Allow up to 2x the budget when starved for results.
         let effective_limit = if scratch.filtered_results.len() < k {
-            max_candidates * 2
+            max_candidates.saturating_mul(2)
         } else {
             max_candidates
         };
