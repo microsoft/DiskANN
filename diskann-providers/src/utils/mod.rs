@@ -3,11 +3,7 @@
  * Licensed under the MIT license.
  */
 pub mod file_util;
-pub use file_util::{
-    copy_aligned_data_from_file, file_exists, get_file_size, load_aligned_bin,
-    load_ids_to_delete_from_file, load_metadata_from_bytes, load_metadata_from_file,
-    open_file_to_write,
-};
+pub use file_util::{file_exists, load_aligned_bin, load_metadata_from_file};
 
 #[allow(clippy::module_inception)]
 mod utils;
