@@ -9,7 +9,20 @@ pub use error::{Error, Result};
 mod context;
 pub use context::{Context, Object};
 
+use std::path::Path;
+
 use crate::{Version, save};
+
+pub fn load_from_disk<T>(
+    metadata: &Path,
+    dir: &Path,
+) -> Result<T>
+where
+    T: for<'a> Loadable<'a>,
+{
+    let inner = context::ContextInner::new(metadata, dir)?;
+    inner.context().load()
+}
 
 pub trait Load<'a>: Sized {
     const VERSION: Version;
@@ -73,6 +86,15 @@ impl<'a> Loadable<'a> for &'a str {
 impl Loadable<'_> for String {
     fn load(context: Context<'_>) -> Result<Self> {
         context.load::<&str>().map(|s| s.into())
+    }
+}
+
+impl Loadable<'_> for save::Handle {
+    fn load(context: Context<'_>) -> Result<Self> {
+        context
+            .as_handle()
+            .cloned()
+            .ok_or_else(|| error::Kind::TypeMismatch.into())
     }
 }
 

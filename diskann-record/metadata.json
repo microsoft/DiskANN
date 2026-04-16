@@ -1,20 +1,25 @@
 {
-  "files": [],
+  "files": [
+    "auxiliary.bin"
+  ],
   "value": {
-    "record": {
-      "y": 5.0,
-      "inner": {
-        "record": {
-          "w": -1,
-          "z": 10
-        },
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
-      },
-      "x": "hello"
+    "x": "hello",
+    "vector": {
+      "$handle": "auxiliary.bin"
+    },
+    "y": 5.0,
+    "inner": {
+      "z": 10,
+      "w": [
+        -1,
+        -2,
+        -3
+      ],
+      "$version": {
+        "major": 0,
+        "minor": 0,
+        "patch": 0
+      }
     },
     "$version": {
       "major": 0,

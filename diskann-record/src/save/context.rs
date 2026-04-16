@@ -22,10 +22,7 @@ struct Final<'a> {
 
 impl ContextInner {
     // TODO: Error if the directory looks bad?
-    pub(super) fn new(
-        dir: PathBuf,
-        metadata: PathBuf,
-    ) -> Self {
+    pub(super) fn new(dir: PathBuf, metadata: PathBuf) -> Self {
         Self {
             dir,
             metadata,
@@ -33,7 +30,7 @@ impl ContextInner {
         }
     }
 
-    pub(super) fn context(&self)  -> Context<'_> {
+    pub(super) fn context(&self) -> Context<'_> {
         Context { inner: self }
     }
 
@@ -68,12 +65,10 @@ impl ContextInner {
             value: &value,
         };
 
-
         let buffer = std::fs::File::create(&temp).unwrap();
         serde_json::to_writer_pretty(buffer, &f).unwrap();
         std::fs::rename(&temp, &self.metadata).unwrap();
         Ok(())
-
     }
 }
 
@@ -96,7 +91,7 @@ pub struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    fn finish(self) -> Handle {
+    pub fn finish(self) -> Handle {
         Handle::new(self.name)
     }
 }

@@ -38,14 +38,14 @@ impl Serialize for Value<'_> {
     }
 }
 
-impl<'de: 'a, 'a> Deserialize<'de> for Value<'a> {
+impl<'de, 'a> Deserialize<'de> for Value<'a> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Inner<'a>(std::marker::PhantomData<&'a ()>);
 
-        impl<'de: 'a, 'a> Visitor<'de> for Inner<'a> {
+        impl<'de, 'a> Visitor<'de> for Inner<'a> {
             type Value = Value<'a>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -69,7 +69,7 @@ impl<'de: 'a, 'a> Deserialize<'de> for Value<'a> {
             }
 
             fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Value<'a>, E> {
-                Ok(Value::String(Cow::Borrowed(v)))
+                Ok(Value::String(Cow::Owned(v.to_owned())))
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'a>, E> {
@@ -81,7 +81,7 @@ impl<'de: 'a, 'a> Deserialize<'de> for Value<'a> {
             }
 
             fn visit_borrowed_bytes<E: de::Error>(self, v: &'de [u8]) -> Result<Value<'a>, E> {
-                Ok(Value::Bytes(Cow::Borrowed(v)))
+                Ok(Value::Bytes(Cow::Owned(v.to_owned())))
             }
 
             fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Value<'a>, E> {
@@ -146,8 +146,14 @@ impl<'de: 'a, 'a> Deserialize<'de> for Value<'a> {
     }
 }
 
+impl From<Handle> for Value<'_> {
+    fn from(handle: Handle) -> Self {
+        Self::Handle(handle)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "'de: 'a"))]
+#[serde(transparent)]
 pub struct Record<'a> {
     record: HashMap<Cow<'a, str>, Value<'a>>,
 }
@@ -185,7 +191,6 @@ impl<'a> Record<'a> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "'de: 'a"))]
 pub struct Versioned<'a> {
     #[serde(flatten)]
     record: Record<'a>,

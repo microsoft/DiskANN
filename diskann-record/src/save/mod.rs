@@ -14,7 +14,11 @@ pub use error::{Error, Result};
 
 use crate::Version;
 
-pub fn save_to_disk<T>(x: &T, dir: impl AsRef<std::path::Path>, metadata: impl AsRef<std::path::Path>) -> Result<()>
+pub fn save_to_disk<T>(
+    x: &T,
+    dir: impl AsRef<std::path::Path>,
+    metadata: impl AsRef<std::path::Path>,
+) -> Result<()>
 where
     T: Saveable,
 {

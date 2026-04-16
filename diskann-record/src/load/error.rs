@@ -3,11 +3,49 @@
  * Licensed under the MIT license.
  */
 
+use std::fmt::{Debug, Display};
+
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct Error {
     inner: ErrorInner,
+}
+
+impl Error {
+    pub fn new<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Error {
+            inner: ErrorInner::Heavy(anyhow::Error::new(err)),
+        }
+    }
+
+    pub fn message<D>(message: D) -> Self
+    where
+        D: Display + Debug + Send + Sync + 'static,
+    {
+        Error {
+            inner: ErrorInner::Heavy(anyhow::Error::msg(message)),
+        }
+    }
+
+    pub fn context<D>(self, message: D) -> Self
+    where
+        D: Display + Send + Sync + 'static,
+    {
+        // TODO: Should we do something clever with "light" errors to avoid context
+        // proliferation?
+        match self.inner {
+            ErrorInner::Light(kind) => Self {
+                inner: ErrorInner::Light(kind),
+            },
+            ErrorInner::Heavy(kind) => Self {
+                inner: ErrorInner::Heavy(kind.context(message)),
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
