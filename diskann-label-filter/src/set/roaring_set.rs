@@ -35,8 +35,8 @@ macro_rules! impl_set_for_roaring {
                 Ok(<$ty>::remove(self, *value))
             }
 
-            fn contains(&self, value: &$elem) -> ANNResult<bool> {
-                Ok(<$ty>::contains(self, *value))
+            fn contains(&self, value: &$elem) -> bool {
+                <$ty>::contains(self, *value)
             }
 
             fn clear(&mut self) -> ANNResult<()> {
@@ -44,12 +44,12 @@ macro_rules! impl_set_for_roaring {
                 Ok(())
             }
 
-            fn len(&self) -> ANNResult<usize> {
-                Ok(self.len() as usize)
+            fn len(&self) -> usize {
+                self.len() as usize
             }
 
-            fn is_empty(&self) -> ANNResult<bool> {
-                Ok(self.is_empty())
+            fn is_empty(&self) -> bool {
+                self.is_empty()
             }
         }
     };
@@ -69,8 +69,8 @@ mod tests {
     {
         // empty
         let empty = S::empty_set();
-        assert_eq!(empty.len().unwrap(), 0);
-        assert!(empty.is_empty().unwrap());
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
 
         // insert and contains
         let mut a = S::empty_set();
@@ -86,21 +86,21 @@ mod tests {
         // duplicate insert should return false since element already exists
         assert!(!a.insert(&v3).unwrap());
 
-        assert_eq!(a.len().unwrap(), 3);
-        assert!(a.contains(&v1).unwrap());
-        assert!(a.contains(&v2).unwrap());
-        assert!(a.contains(&v3).unwrap());
-        assert!(!a.contains(&v4).unwrap());
+        assert_eq!(a.len(), 3);
+        assert!(a.contains(&v1));
+        assert!(a.contains(&v2));
+        assert!(a.contains(&v3));
+        assert!(!a.contains(&v4));
 
         // is_empty on non-empty set
-        assert!(!a.is_empty().unwrap());
+        assert!(!a.is_empty());
 
         // remove
         assert!(a.remove(&v2).unwrap()); // should return true - element was present
         assert!(!a.remove(&v2).unwrap()); // should return false - element no longer present
         assert!(!a.remove(&v4).unwrap()); // should return false - element was never present
-        assert!(!a.contains(&v2).unwrap());
-        assert_eq!(a.len().unwrap(), 2);
+        assert!(!a.contains(&v2));
+        assert_eq!(a.len(), 2);
         // add it back for following tests
         assert!(a.insert(&v2).unwrap()); // should return true - element being newly inserted
 
@@ -111,23 +111,23 @@ mod tests {
         assert!(b.insert(&v5).unwrap());
 
         let u = a.union(&b);
-        assert_eq!(u.len().unwrap(), 5);
+        assert_eq!(u.len(), 5);
         for v in [v1, v2, v3, v4, v5] {
-            assert!(u.contains(&v).unwrap());
+            assert!(u.contains(&v));
         }
 
         // intersection
         let i = a.intersection(&b);
-        assert_eq!(i.len().unwrap(), 1);
-        assert!(i.contains(&v3).unwrap());
-        assert!(!i.contains(&v1).unwrap());
-        assert!(!i.contains(&v4).unwrap());
+        assert_eq!(i.len(), 1);
+        assert!(i.contains(&v3));
+        assert!(!i.contains(&v1));
+        assert!(!i.contains(&v4));
 
         // clear
         let mut c = a.clone();
-        assert!(c.len().unwrap() > 0);
+        assert!(c.len() > 0);
         c.clear().unwrap();
-        assert_eq!(c.len().unwrap(), 0);
+        assert_eq!(c.len(), 0);
 
         // iteration over owned set
         let mut count = 0usize;

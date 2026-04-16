@@ -124,12 +124,7 @@ where
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
-        if self
-            .filter_expr
-            .encoded_filter_expr()
-            .accept(&pred_eval)
-            .expect("Expected predicate evaluation to not error out!")
-        {
+        if self.filter_expr.encoded_filter_expr().accept(&pred_eval) {
             sim * self.beta_value
         } else {
             sim
@@ -180,7 +175,7 @@ where
             let doc = accessor.get_element(candidate.id).await?;
             let pe = PredicateEvaluator::new(doc.attributes());
 
-            if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
+            if computer.filter_expr().encoded_filter_expr().accept(&pe) {
                 filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
             }
         }

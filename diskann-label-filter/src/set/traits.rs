@@ -39,20 +39,17 @@ pub trait Set<Element>: Clone + Default + IntoIterator<Item = Element> {
     fn remove(&mut self, value: &Element) -> ANNResult<bool>;
 
     /// Return true if `value` is a member of the set.
-    /// Return ANNError if the operation failed.
-    fn contains(&self, value: &Element) -> ANNResult<bool>;
+    fn contains(&self, value: &Element) -> bool;
 
     /// Remove all elements from the set.
     /// Return ANNError if the operation failed.
     fn clear(&mut self) -> ANNResult<()>;
 
     /// Return the number of elements in the set.
-    /// Return ANNError if the operation failed.
-    fn len(&self) -> ANNResult<usize>;
+    fn len(&self) -> usize;
 
     /// Return true if the set is empty.
-    /// Return ANNError if the operation failed.
-    fn is_empty(&self) -> ANNResult<bool>;
+    fn is_empty(&self) -> bool;
 }
 
 /// Provider for sets that may live in memory or in a storage layer.
