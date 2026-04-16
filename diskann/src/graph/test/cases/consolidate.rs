@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Tests for `consolidate_vector` covering all three code paths:
+//! Tests for `consolidate_vector` covering all four code paths:
 //!
 //! 1. Consolidating a deleted vertex → `ConsolidateKind::Deleted`
 //! 2. Consolidating a vertex with nothing to repair → `ConsolidateKind::Complete` (no-op)

@@ -38,13 +38,27 @@ pub(super) fn setup_2d_square(
     pruned_degree: usize,
 ) -> Arc<DiskANNIndex<Provider>> {
     let num_points = vectors.len();
+    assert!(
+        adjacency_lists.len() >= num_points,
+        "need at least one adjacency list per vector, got {} lists for {} vectors",
+        adjacency_lists.len(),
+        num_points,
+    );
+
     let start_id = num_points as u32;
+
+    let start_adj = adjacency_lists
+        .get(num_points)
+        .cloned()
+        .unwrap_or_else(|| AdjacencyList::from_iter_untrusted(0..num_points as u32));
+
     let provider_max_degree = adjacency_lists
         .iter()
         .map(|a| a.len())
         .max()
         .map(|m| m.max(pruned_degree))
-        .unwrap_or(pruned_degree);
+        .unwrap_or(pruned_degree)
+        .max(start_adj.len());
 
     let provider_config = test_provider::Config::new(
         Metric::L2,
@@ -52,11 +66,6 @@ pub(super) fn setup_2d_square(
         test_provider::StartPoint::new(start_id, vec![0.5, 0.5]),
     )
     .unwrap();
-
-    let start_adj = adjacency_lists
-        .get(num_points)
-        .cloned()
-        .unwrap_or_else(|| AdjacencyList::from_iter_untrusted(0..num_points as u32));
 
     let points = vectors
         .into_iter()
