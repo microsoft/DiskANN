@@ -17,6 +17,7 @@ use crate::{
     provider::NeighborAccessor,
 };
 
+// creating a very simple unit square
 pub(super) fn create_2d_unit_square() -> Vec<Vec<f32>> {
     vec![
         vec![0.0, 0.0],
@@ -78,6 +79,7 @@ pub(super) fn setup_2d_square(
     Arc::new(DiskANNIndex::new(index_config, provider, None))
 }
 
+/// Create a basic adjacency list for 2d square validation
 pub(super) fn generate_2d_square_adjacency_list() -> Vec<AdjacencyList<u32>> {
     vec![
         AdjacencyList::from_iter_untrusted([1, 4]),
