@@ -628,6 +628,20 @@ impl From<InvalidId> for ANNError {
     }
 }
 
+impl<'a> IntoIterator for &'a Provider {
+    type Item = u32;
+    type IntoIter = std::vec::IntoIter<u32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.terms
+            .iter()
+            .map(|entry| *entry.key())
+            .filter(|id| !self.config.start_points.contains_key(id))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
 impl provider::DataProvider for Provider {
     type Context = Context;
     type InternalId = u32;

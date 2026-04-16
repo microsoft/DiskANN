@@ -88,3 +88,16 @@ async fn test_count_unreachable_isolated_nodes() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_get_degree_stats() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let mut accessor = index.provider().neighbors();
+    let stats = index.get_degree_stats(&mut accessor).await.unwrap();
+
+    assert_eq!(stats.max_degree, 2);
+    assert_eq!(stats.min_degree, 2);
+    assert_eq!(stats.avg_degree, 2.0);
+    assert_eq!(stats.cnt_less_than_two, 0);
+}
