@@ -1,56 +1,44 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! f16 × f16 micro-kernel family for block-transposed multi-vector distance.
+//! f16 × f16 entry point for block-transposed multi-vector distance.
 //!
-//! Implements the [`Kernel<A>`](super::Kernel) trait with `AElem = BElem = f16`,
-//! lazily unpacking both sides to f32 via the `prepare_a` / `prepare_b` hooks.
-//! The micro-kernel body itself is the same f32 SIMD arithmetic used by the
-//! f32 kernel family — zero additional micro-kernel code is required.
+//! Reuses the f32 micro-kernel family with tile-level f16→f32 conversion
+//! via [`ConvertTo`](super::layouts::ConvertTo). No f16-specific micro-kernel
+//! code is needed — the [`F32Kernel`](super::f32::F32Kernel) does all the
+//! SIMD work after conversion.
 //!
-//! # Architecture-specific implementations
-//!
-//! | Module   | Arch      | Geometry | Conversion       |
-//! |----------|-----------|----------|------------------|
-//! | `v3`     | V3        | 16 × 4   | [`CastFromSlice`]|
-//! | `scalar` | Scalar    | 8 × 2    | [`CastFromSlice`]|
-//!
-//! [`CastFromSlice`] dispatches via `diskann_wide::ARCH` at compile time, so
-//! the conversion is SIMD-accelerated on every platform that `diskann-wide`
-//! supports (e.g. Neon on aarch64), regardless of the kernel's architecture
-//! parameter.
-//!
-//! [`CastFromSlice`]: diskann_vector::conversion::CastFromSlice
+//! Conversion from f16 to f32 is performed at tile granularity via
+//! [`SliceCast`](diskann_vector::conversion::SliceCast), dispatched through
+//! the runtime architecture token — the same SIMD level used by the
+//! micro-kernel.
 
 use diskann_wide::Architecture;
 
 use super::Kernel;
+use super::f32::F32Kernel;
+use super::layouts::{self, DescribeLayout};
 use super::tiled_reduce::tiled_reduce;
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
-mod scalar;
-#[cfg(target_arch = "x86_64")]
-mod v3;
+// ── F16 entry ────────────────────────────────────────────────────
 
-// ── F16 kernel ───────────────────────────────────────────────────
-
-/// Kernel type for f16 micro-kernels with block size `GROUP`.
+/// Zero-sized entry point for the f16 path with block size `GROUP`.
 ///
-/// Both A and B sides store [`half::f16`] values. The
-/// [`prepare_a`](Kernel::prepare_a) / [`prepare_b`](Kernel::prepare_b)
-/// hooks convert to f32 into caller-provided staging buffers allocated via
-/// [`Kernel::new_buffers`]. The micro-kernel itself is the same f32 SIMD
-/// arithmetic used by [`F32Kernel`](super::f32::F32Kernel).
-pub(crate) struct F16Kernel<const GROUP: usize>;
+/// Drives [`tiled_reduce`](super::tiled_reduce::tiled_reduce) using
+/// [`F32Kernel`] with tile-level f16→f32 [`ConvertTo`](super::layouts::ConvertTo) conversion.
+pub(crate) struct F16Entry<const GROUP: usize>;
 
 // ── Public entry point ───────────────────────────────────────────
 
 #[inline(never)]
 #[cold]
 #[allow(clippy::panic)]
-fn max_ip_kernel_panic() {
+fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, b_dim: usize) {
     panic!(
-        "max_ip_kernel: precondition failed (scratch.len != available_rows or dimension mismatch)"
+        "max_ip_kernel (f16): precondition failed: \
+         scratch.len()={scratch_len} (expected {padded_nrows}), \
+         a.ncols()={a_ncols}, b.vector_dim()={b_dim}"
     );
 }
 
@@ -58,50 +46,60 @@ fn max_ip_kernel_panic() {
 /// and a row-major f16 B matrix, writing per-A-row max similarities into
 /// `scratch`.
 ///
-/// Both A and B sides are lazily unpacked to f32 via the `prepare_a` /
-/// `prepare_b` hooks. The micro-kernel itself operates in f32.
+/// Both A and B sides are converted to f32 at tile granularity via
+/// [`ConvertTo`](super::layouts::ConvertTo), then processed by the f32
+/// micro-kernel.
 ///
 /// # Arguments
 ///
 /// * `arch` - Architecture token (must satisfy the `Kernel` where-bound).
 /// * `a` - Block-transposed f16 matrix view with block size `GROUP`.
 /// * `b` - Row-major f16 matrix view.
-/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::available_rows()`].
+/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::padded_nrows()`].
 ///   Must be initialized to `f32::MIN` before the first call.
 ///
 /// # Panics
 ///
-/// Panics if `scratch.len() != a.available_rows()` or `a.ncols() != b.vector_dim()`.
-pub(crate) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
+/// Panics if `scratch.len() != a.padded_nrows()` or `a.ncols() != b.vector_dim()`.
+pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
     arch: A,
     a: BlockTransposedRef<'_, half::f16, GROUP>,
     b: MatRef<'_, Standard<half::f16>>,
     scratch: &mut [f32],
 ) where
-    F16Kernel<GROUP>:
-        Kernel<A, AElem = half::f16, BElem = half::f16, APrepared = f32, BPrepared = f32>,
+    F32Kernel<GROUP>:
+        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
+    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, layouts::BlockTransposed<f32, GROUP>>
+        + layouts::Layout<Element = half::f16>,
+    layouts::RowMajor<half::f16>:
+        layouts::ConvertTo<A, layouts::RowMajor<f32>> + layouts::Layout<Element = half::f16>,
 {
-    if scratch.len() != a.available_rows() || a.ncols() != b.vector_dim() {
-        max_ip_kernel_panic();
+    if scratch.len() != a.padded_nrows() || a.ncols() != b.vector_dim() {
+        max_ip_kernel_panic(scratch.len(), a.padded_nrows(), a.ncols(), b.vector_dim());
     }
 
     let k = a.ncols();
     let b_nrows = b.num_vectors();
 
     // Compile-time: A_PANEL must equal GROUP for block-transposed layout correctness.
-    const { assert!(<F16Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP) }
+    const { assert!(<F32Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP) }
+
+    let ca = a.layout();
+    let cb = b.layout();
 
     // SAFETY:
-    // - a.as_ptr() is valid for a.available_rows() * k elements of f16.
+    // - a.as_ptr() is valid for a.padded_nrows() * k elements of f16.
     // - MatRef<Standard<f16>> stores nrows * ncols contiguous f16 elements.
-    // - scratch.len() == a.available_rows() (checked above).
-    // - a.available_rows() is always a multiple of GROUP, and the const assert above
+    // - scratch.len() == a.padded_nrows() (checked above).
+    // - a.padded_nrows() is always a multiple of GROUP, and the const assert above
     //   verifies A_PANEL == GROUP at compile time.
     unsafe {
-        tiled_reduce::<A, F16Kernel<GROUP>>(
+        tiled_reduce::<A, F32Kernel<GROUP>, _, _>(
             arch,
+            &ca,
+            &cb,
             a.as_ptr(),
-            a.available_rows(),
+            a.padded_nrows(),
             b.as_slice().as_ptr(),
             b_nrows,
             k,
@@ -119,10 +117,15 @@ impl<A, const GROUP: usize>
         BlockTransposedRef<'_, half::f16, GROUP>,
         MatRef<'_, Standard<half::f16>>,
         &mut [f32],
-    > for F16Kernel<GROUP>
+    > for F16Entry<GROUP>
 where
     A: Architecture,
-    Self: Kernel<A, AElem = half::f16, BElem = half::f16, APrepared = f32, BPrepared = f32>,
+    F32Kernel<GROUP>:
+        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
+    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, layouts::BlockTransposed<f32, GROUP>>
+        + layouts::Layout<Element = half::f16>,
+    layouts::RowMajor<half::f16>:
+        layouts::ConvertTo<A, layouts::RowMajor<f32>> + layouts::Layout<Element = half::f16>,
 {
     #[inline(always)]
     fn run(
@@ -352,5 +355,63 @@ mod tests {
             (actual - (-11.0)).abs() < 1e-3,
             "f16 precision test: expected -11.0, got {actual}"
         );
+    }
+
+    /// Direct test of f16 `max_ip_kernel` against a naive reference, bypassing
+    /// `QueryComputer` to validate the kernel + ConvertTo pipeline directly.
+    #[test]
+    fn max_ip_kernel_matches_naive() {
+        use crate::multi_vector::block_transposed::BlockTransposed;
+        use diskann_wide::arch::Scalar;
+
+        fn naive_max_ip_f16(
+            a: &[half::f16],
+            a_nrows: usize,
+            b: &[half::f16],
+            b_nrows: usize,
+            k: usize,
+        ) -> Vec<f32> {
+            (0..a_nrows)
+                .map(|i| {
+                    (0..b_nrows)
+                        .map(|j| {
+                            (0..k)
+                                .map(|d| a[i * k + d].to_f32() * b[j * k + d].to_f32())
+                                .sum::<f32>()
+                        })
+                        .fold(f32::MIN, f32::max)
+                })
+                .collect()
+        }
+
+        let cases: &[(usize, usize, usize)] = &[
+            (1, 1, 4),   // Single query, single doc
+            (8, 3, 4),   // Single A-panel, B remainder
+            (16, 5, 8),  // Two A-panels, B remainder
+            (17, 4, 64), // A-panel remainder
+            (16, 8, 32), // No B remainder
+        ];
+
+        for &(a_nrows, b_nrows, dim) in cases {
+            let a_data = make_test_data(a_nrows * dim, dim.max(1), dim / 2);
+            let b_data = make_test_data(b_nrows * dim, dim.max(1), dim);
+
+            let a_mat = make_query_mat(&a_data, a_nrows, dim);
+            let a_bt = BlockTransposed::<half::f16, 8>::from_matrix_view(a_mat.as_matrix_view());
+            let b_mat = make_query_mat(&b_data, b_nrows, dim);
+
+            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
+            super::max_ip_kernel::<Scalar, 8>(Scalar::new(), a_bt.as_view(), b_mat, &mut scratch);
+
+            let expected = naive_max_ip_f16(&a_data, a_nrows, &b_data, b_nrows, dim);
+            for i in 0..a_nrows {
+                assert!(
+                    (scratch[i] - expected[i]).abs() < 1e-1,
+                    "row {i} mismatch for ({a_nrows},{b_nrows},{dim}): actual={}, expected={}",
+                    scratch[i],
+                    expected[i]
+                );
+            }
+        }
     }
 }

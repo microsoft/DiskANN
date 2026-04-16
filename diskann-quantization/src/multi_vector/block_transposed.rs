@@ -236,7 +236,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
     /// This is the number of "available" row slots in the backing allocation,
     /// including zero-padded rows in the last (possibly partial) block.
     #[inline]
-    pub fn available_rows(&self) -> usize {
+    pub fn padded_nrows(&self) -> usize {
         self.num_blocks() * GROUP
     }
 
@@ -757,8 +757,8 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     /// This is the number of "available" row slots in the backing allocation,
     /// including zero-padded rows in the last (possibly partial) block.
     #[inline]
-    pub fn available_rows(&self) -> usize {
-        self.data.repr().available_rows()
+    pub fn padded_nrows(&self) -> usize {
+        self.data.repr().padded_nrows()
     }
 
     /// Return a raw typed pointer to the start of the backing data.
@@ -888,7 +888,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
-    delegate_to_ref!(pub fn available_rows(&self) -> usize);
+    delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1036,7 +1036,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
-    delegate_to_ref!(pub fn available_rows(&self) -> usize);
+    delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1709,12 +1709,12 @@ mod tests {
             }
         }
 
-        // ── available_rows() returns padded row count ────────────
+        // ── padded_nrows() returns padded row count ──────────────
 
         assert_eq!(
-            transpose.as_view().available_rows(),
+            transpose.as_view().padded_nrows(),
             padded_nrows,
-            "available_rows() mismatch -- {}",
+            "padded_nrows() mismatch -- {}",
             context,
         );
 

@@ -35,8 +35,12 @@
 mod f16;
 mod f32;
 
+use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
+
 use crate::multi_vector::block_transposed::BlockTransposed;
 use crate::multi_vector::matrix::{MatRef, Standard};
+
+use super::max_sim::{Chamfer, MaxSim};
 
 /// An architecture-optimized query computer for multi-vector distance.
 ///
@@ -63,8 +67,8 @@ impl<T: Copy> QueryComputer<T> {
 
     /// Total available rows (padded to GROUP boundary).
     #[inline]
-    pub fn available_rows(&self) -> usize {
-        self.inner.available_rows()
+    pub fn padded_nrows(&self) -> usize {
+        self.inner.padded_nrows()
     }
 
     /// Compute Chamfer distance (sum of per-query max similarities, negated).
@@ -102,7 +106,7 @@ impl<T: Copy> QueryComputer<T> {
             return;
         }
 
-        let mut scratch = vec![f32::MIN; self.available_rows()];
+        let mut scratch = vec![f32::MIN; self.padded_nrows()];
         self.inner.raw_kernel(doc, &mut scratch);
 
         for (dst, &src) in scores.iter_mut().zip(&scratch[..nq]) {
@@ -118,7 +122,7 @@ trait DynQueryComputer<T: Copy> {
     fn raw_kernel(&self, doc: MatRef<'_, Standard<T>>, scratch: &mut [f32]);
     fn nrows(&self) -> usize;
     fn ncols(&self) -> usize;
-    fn available_rows(&self) -> usize;
+    fn padded_nrows(&self) -> usize;
 }
 
 struct Prepared<A, Q> {
@@ -126,7 +130,7 @@ struct Prepared<A, Q> {
     prepared: Q,
     nrows: usize,
     ncols: usize,
-    available_rows: usize,
+    padded_nrows: usize,
 }
 
 /// Helper to build a [`Prepared`] from a [`MatRef`] and architecture token.
@@ -137,19 +141,15 @@ fn build_prepared<T: Copy + Default, A, const GROUP: usize>(
     let nrows = query.num_vectors();
     let ncols = query.vector_dim();
     let prepared = BlockTransposed::<T, GROUP>::from_matrix_view(query.as_matrix_view());
-    let available_rows = prepared.available_rows();
+    let padded_nrows = prepared.padded_nrows();
     Prepared {
         arch,
         prepared,
         nrows,
         ncols,
-        available_rows,
+        padded_nrows,
     }
 }
-
-use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
-
-use super::max_sim::{Chamfer, MaxSim};
 
 impl<T: Copy> PureDistanceFunction<&QueryComputer<T>, MatRef<'_, Standard<T>>, f32> for Chamfer {
     fn evaluate(query: &QueryComputer<T>, doc: MatRef<'_, Standard<T>>) -> f32 {
@@ -206,8 +206,8 @@ mod tests {
 
         assert_eq!(computer.nrows(), 5);
         assert_eq!(computer.ncols(), 8);
-        assert!(computer.available_rows() >= 5);
-        assert_eq!(computer.available_rows() % 8, 0);
+        assert!(computer.padded_nrows() >= 5);
+        assert_eq!(computer.padded_nrows() % 8, 0);
     }
 
     #[test]
@@ -218,8 +218,8 @@ mod tests {
 
         assert_eq!(computer.nrows(), 5);
         assert_eq!(computer.ncols(), 8);
-        assert!(computer.available_rows() >= 5);
-        assert_eq!(computer.available_rows() % 8, 0);
+        assert!(computer.padded_nrows() >= 5);
+        assert_eq!(computer.padded_nrows() % 8, 0);
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
 
         assert_eq!(computer.nrows(), 1);
         assert_eq!(computer.ncols(), 4);
-        assert!(computer.available_rows() >= 1);
+        assert!(computer.padded_nrows() >= 1);
     }
 
     #[test]

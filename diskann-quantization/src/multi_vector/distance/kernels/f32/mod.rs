@@ -18,20 +18,18 @@
 use diskann_wide::Architecture;
 
 use super::Kernel;
+use super::layouts::{self, DescribeLayout};
 use super::tiled_reduce::tiled_reduce;
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
-pub(super) mod scalar;
+mod scalar;
 #[cfg(target_arch = "x86_64")]
-pub(super) mod v3;
+mod v3;
 
 // ── F32 kernel ───────────────────────────────────────────────────
 
 /// Zero-sized kernel type for f32 micro-kernels with block size `GROUP`.
 ///
-/// Since `AElem == APrepared` and `BElem == BPrepared`, no staging buffers
-/// are needed — [`prepare_a`](Kernel::prepare_a) and
-/// [`prepare_b`](Kernel::prepare_b) return the source pointer directly.
 /// The actual SIMD micro-kernel body is provided by `Kernel<A>`
 /// implementations in architecture-specific submodules (`v3`, `scalar`).
 /// Each implementation sets `A_PANEL = GROUP`.
@@ -42,9 +40,11 @@ pub(crate) struct F32Kernel<const GROUP: usize>;
 #[inline(never)]
 #[cold]
 #[allow(clippy::panic)]
-fn max_ip_kernel_panic() {
+fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, b_dim: usize) {
     panic!(
-        "max_ip_kernel: precondition failed (scratch.len != available_rows or dimension mismatch)"
+        "max_ip_kernel (f32): precondition failed: \
+         scratch.len()={scratch_len} (expected {padded_nrows}), \
+         a.ncols()={a_ncols}, b.vector_dim()={b_dim}"
     );
 }
 
@@ -59,23 +59,24 @@ fn max_ip_kernel_panic() {
 /// * `arch` - Architecture token (must satisfy the `Kernel` where-bound).
 /// * `a` - Block-transposed matrix view with block size `GROUP`.
 /// * `b` - Row-major matrix view.
-/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::available_rows()`].
+/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::padded_nrows()`].
 ///   Must be initialized to `f32::MIN` before the first call. On return, `scratch[i]`
 ///   contains the maximum inner product between A row `i` and any B row.
 ///
 /// # Panics
 ///
-/// Panics if `scratch.len() != a.available_rows()` or `a.ncols() != b.vector_dim()`.
-pub(crate) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
+/// Panics if `scratch.len() != a.padded_nrows()` or `a.ncols() != b.vector_dim()`.
+pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
     arch: A,
     a: BlockTransposedRef<'_, f32, GROUP>,
     b: MatRef<'_, Standard<f32>>,
     scratch: &mut [f32],
 ) where
-    F32Kernel<GROUP>: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
+    F32Kernel<GROUP>:
+        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
 {
-    if scratch.len() != a.available_rows() || a.ncols() != b.vector_dim() {
-        max_ip_kernel_panic();
+    if scratch.len() != a.padded_nrows() || a.ncols() != b.vector_dim() {
+        max_ip_kernel_panic(scratch.len(), a.padded_nrows(), a.ncols(), b.vector_dim());
     }
 
     let k = a.ncols();
@@ -84,17 +85,22 @@ pub(crate) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
     // Compile-time: A_PANEL must equal GROUP for block-transposed layout correctness.
     const { assert!(<F32Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP) }
 
+    let ca = a.layout();
+    let cb = b.layout();
+
     // SAFETY:
-    // - a.as_ptr() is valid for a.available_rows() * k elements of f32.
+    // - a.as_ptr() is valid for a.padded_nrows() * k elements of f32.
     // - MatRef<Standard<f32>> stores nrows * ncols contiguous f32 elements at as_raw_ptr().
-    // - scratch.len() == a.available_rows() (checked above).
-    // - a.available_rows() is always a multiple of GROUP, and the const assert above
+    // - scratch.len() == a.padded_nrows() (checked above).
+    // - a.padded_nrows() is always a multiple of GROUP, and the const assert above
     //   verifies A_PANEL == GROUP at compile time.
     unsafe {
-        tiled_reduce::<A, F32Kernel<GROUP>>(
+        tiled_reduce::<A, F32Kernel<GROUP>, _, _>(
             arch,
+            &ca,
+            &cb,
             a.as_ptr(),
-            a.available_rows(),
+            a.padded_nrows(),
             b.as_slice().as_ptr(),
             b_nrows,
             k,
@@ -115,7 +121,7 @@ impl<A, const GROUP: usize>
     > for F32Kernel<GROUP>
 where
     A: Architecture,
-    Self: Kernel<A, AElem = f32, BElem = f32, APrepared = f32, BPrepared = f32>,
+    Self: Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
 {
     #[inline(always)]
     fn run(

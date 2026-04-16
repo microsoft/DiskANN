@@ -838,7 +838,7 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     /// The returned slice has `num_vectors() * vector_dim()` elements in row-major order.
     #[inline]
     pub fn as_slice(&self) -> &'a [T] {
-        let len = self.num_vectors() * self.vector_dim();
+        let len = self.repr.num_elements();
         // SAFETY: `Standard<T>` guarantees `nrows * ncols` contiguous `T` elements
         // starting at `self.ptr`. The lifetime `'a` is tied to the original data.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }

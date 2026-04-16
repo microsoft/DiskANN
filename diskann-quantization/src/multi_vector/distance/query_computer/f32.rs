@@ -10,6 +10,7 @@ use super::super::kernels::f32::F32Kernel;
 use super::{DynQueryComputer, Prepared, QueryComputer, build_prepared};
 use crate::multi_vector::block_transposed::{BlockTransposed, BlockTransposedRef};
 use crate::multi_vector::matrix::{MatRef, Standard};
+use diskann_utils::Reborrow;
 
 impl QueryComputer<f32> {
     /// Build an f32 query computer, selecting the optimal architecture and
@@ -31,7 +32,6 @@ where
         >,
 {
     fn raw_kernel(&self, doc: MatRef<'_, Standard<f32>>, scratch: &mut [f32]) {
-        use diskann_utils::Reborrow;
         self.arch
             .run3(F32Kernel::<GROUP>, self.prepared.reborrow(), doc, scratch);
     }
@@ -44,8 +44,8 @@ where
         self.ncols
     }
 
-    fn available_rows(&self) -> usize {
-        self.available_rows
+    fn padded_nrows(&self) -> usize {
+        self.padded_nrows
     }
 }
 

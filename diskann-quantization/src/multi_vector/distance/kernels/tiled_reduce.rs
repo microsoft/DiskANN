@@ -11,6 +11,7 @@
 
 use diskann_wide::Architecture;
 
+use super::layouts::{ConvertTo, Layout};
 use super::{Kernel, l1_b_tile_budget, l2_a_tile_budget};
 
 // ── Tile planner ─────────────────────────────────────────────────
@@ -30,8 +31,8 @@ struct FullReduce {
 impl FullReduce {
     /// Compute A-tile and B-tile panel counts from cache budgets.
     ///
-    /// * `a_row_bytes` — bytes per prepared A row (`k * size_of::<APrepared>()`).
-    /// * `b_row_bytes` — bytes per prepared B row (`k * size_of::<BPrepared>()`).
+    /// * `a_row_bytes` — bytes per A row in kernel layout.
+    /// * `b_row_bytes` — bytes per B row in kernel layout.
     /// * `a_panel` — micro-kernel A panel height (`K::A_PANEL`).
     /// * `b_panel` — micro-kernel B panel width (`K::B_PANEL`).
     /// * `l2_budget` — L2 cache budget in bytes for the A tile.
@@ -62,34 +63,46 @@ impl FullReduce {
 
 // ── Generic tiled reduce ─────────────────────────────────────────
 
-/// Execute the 5-level tiling loop with a pluggable SIMD micro-kernel.
+/// Execute the 5-level tiling loop with a pluggable SIMD micro-kernel and
+/// tile-level layout converters.
 ///
-/// This is the core scheduling primitive. The loop nest is:
+/// The loop nest is:
 /// ```text
-/// Loop 1: A tiles     (sized to L2)
-///   Loop 2: B tiles   (sized to L1)
-///     Loop 3: A panels (micro-panels within A tile)
-///       Loop 4: B panels (micro-panels within B tile)
-///         K::full_panel / K::remainder_dispatch
+/// Loop 1: A tiles     (sized to L2) — convert via `ca`
+///   Loop 2: B tiles   (sized to L1) — convert via `cb`
+///     Loop 3: A panels (micro-panels within converted A tile)
+///       Loop 4: B panels (micro-panels within converted B tile)
+///         Loop 5: k (contraction dim, inside K::full_panel / K::partial_panel)
 /// ```
+///
+/// Conversion from storage layout to kernel layout happens once per tile
+/// (not per panel), amortizing cost over the entire tile.
 ///
 /// # Safety
 ///
-/// * `a_ptr` must be valid for `a_available_rows * k` elements of `K::AElem`.
-/// * `a_available_rows` must be a multiple of `K::A_PANEL`.
-/// * `b_ptr` must be valid for `b_nrows * k` elements of `K::BElem`.
-/// * `scratch` must have length ≥ `a_available_rows` and be initialized by caller.
-pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
+/// * `a_ptr` must be valid for `a_padded_nrows * k` elements of `AElem`.
+/// * `a_padded_nrows` must be a multiple of `K::A_PANEL`.
+/// * `b_ptr` must be valid for `b_nrows * k` elements of `BElem`.
+/// * `scratch` must have length ≥ `a_padded_nrows` and be initialized by caller.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
     arch: A,
-    a_ptr: *const K::AElem,
-    a_available_rows: usize,
-    b_ptr: *const K::BElem,
+    ca: &LA,
+    cb: &LB,
+    a_ptr: *const LA::Element,
+    a_padded_nrows: usize,
+    b_ptr: *const LB::Element,
     b_nrows: usize,
     k: usize,
     scratch: &mut [f32],
-) {
-    let a_row_bytes = k * std::mem::size_of::<K::APrepared>();
-    let b_row_bytes = k * std::mem::size_of::<K::BPrepared>();
+) where
+    A: Architecture,
+    K: Kernel<A>,
+    LA: ConvertTo<A, K::Left>,
+    LB: ConvertTo<A, K::Right>,
+{
+    let a_row_bytes = k * std::mem::size_of::<<K::Left as Layout>::Element>();
+    let b_row_bytes = k * std::mem::size_of::<<K::Right as Layout>::Element>();
     let plan = FullReduce::new(
         a_row_bytes,
         b_row_bytes,
@@ -99,16 +112,18 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
         l1_b_tile_budget(),
     );
 
-    let a_panel_stride = K::A_PANEL * k;
-    let b_panel_stride = K::B_PANEL * k;
-    let b_tile_stride = b_panel_stride * plan.b_panels_per_tile;
+    let b_src_panel_stride = K::B_PANEL * k;
+    let b_src_tile_stride = b_src_panel_stride * plan.b_panels_per_tile;
+
+    let a_kern_panel_stride = K::A_PANEL * k;
+    let b_kern_panel_stride = K::B_PANEL * k;
 
     let b_remainder = b_nrows % K::B_PANEL;
 
     assert_eq!(
-        a_available_rows % K::A_PANEL,
+        a_padded_nrows % K::A_PANEL,
         0,
-        "a_available_rows ({a_available_rows}) must be a multiple of A_PANEL ({})",
+        "a_padded_nrows ({a_padded_nrows}) must be a multiple of A_PANEL ({})",
         K::A_PANEL,
     );
 
@@ -116,15 +131,17 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
     // return to avoid zero-stride infinite loops in the tiling nest.
     if k == 0 {
         if b_nrows > 0 {
-            scratch[..a_available_rows].fill(0.0);
+            scratch[..a_padded_nrows].fill(0.0);
         }
         return;
     }
 
-    // Staging buffers are split into independent A and B halves so the tiling
-    // loop can borrow them independently — `prepare_a(&mut a_buf)` and
-    // `prepare_b(&mut b_buf)` never alias. Identity kernels return empty Vecs.
-    let (mut a_buf, mut b_buf) = K::new_buffers(k);
+    // Allocate conversion buffers once. Identity conversions use `Buffer = ()`
+    // and these calls are no-ops.
+    let a_tile_rows = K::A_PANEL * plan.a_panels_per_tile;
+    let b_tile_rows = K::B_PANEL * plan.b_panels_per_tile;
+    let mut a_buf = ca.new_buffer(a_tile_rows, k);
+    let mut b_buf = cb.new_buffer(b_tile_rows, k);
 
     // SAFETY: Caller guarantees b_ptr is valid for b_nrows * k elements.
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };
@@ -133,78 +150,77 @@ pub(crate) unsafe fn tiled_reduce<A: Architecture, K: Kernel<A>>(
 
     // SAFETY: All pointer arithmetic stays within the respective allocations.
     unsafe {
-        let a_tile_rows = K::A_PANEL * plan.a_panels_per_tile;
         let mut rows_done: usize = 0;
 
         // Loop 1: Tiles of `A`.
-        while rows_done < a_available_rows {
-            let tile_rows = a_tile_rows.min(a_available_rows - rows_done);
-            let pa_tile = a_ptr.add(rows_done * k);
-            let pa_tile_end = pa_tile.add(tile_rows * k);
-            // SAFETY: rows_done < a_available_rows (loop condition), so the
+        while rows_done < a_padded_nrows {
+            let tile_rows = a_tile_rows.min(a_padded_nrows - rows_done);
+            let pa_tile_src = a_ptr.add(rows_done * k);
+            // SAFETY: rows_done < a_padded_nrows (loop condition), so the
             // pointer is in-bounds.
             let pr_tile = scratch.as_mut_ptr().add(rows_done);
 
-            let mut pb_tile = b_ptr;
+            // Convert A tile from storage layout to kernel layout.
+            let pa_tile = ca.convert(&mut a_buf, arch, pa_tile_src, tile_rows, k);
+            let pa_tile_end = pa_tile.add(tile_rows * k);
+
+            let mut pb_tile_src = b_ptr;
 
             // Loop 2: Full B-tiles (every panel in the tile is complete).
-            // SAFETY: `pb_tile` is always in `[b_ptr, pb_full_end]` — both within
+            // SAFETY: `pb_tile_src` is always in `[b_ptr, pb_full_end]` — both within
             // the same allocation — so `offset_from` is well-defined.
-            while pb_full_end.offset_from(pb_tile) >= b_tile_stride as isize {
-                let pb_tile_end = pb_tile.add(b_tile_stride);
+            while pb_full_end.offset_from(pb_tile_src) >= b_src_tile_stride as isize {
+                // Convert B tile from storage layout to kernel layout.
+                let pb_tile = cb.convert(&mut b_buf, arch, pb_tile_src, b_tile_rows, k);
+                let pb_tile_end = pb_tile.add(b_tile_rows * k);
 
                 let mut pa_panel = pa_tile;
                 let mut pr_panel = pr_tile;
 
                 // Loop 3: Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    let prepared_a = K::prepare_a(&mut a_buf, arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4: Micro-panels of `B` (all full, no remainder check).
                     while pb_panel < pb_tile_end {
-                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, K::B_PANEL, k);
-                        K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
-                        pb_panel = pb_panel.add(b_panel_stride);
+                        K::full_panel(arch, pa_panel, pb_panel, k, pr_panel);
+                        pb_panel = pb_panel.add(b_kern_panel_stride);
                     }
 
-                    pa_panel = pa_panel.add(a_panel_stride);
+                    pa_panel = pa_panel.add(a_kern_panel_stride);
                     pr_panel = pr_panel.add(K::A_PANEL);
                 }
-                pb_tile = pb_tile.add(b_tile_stride);
+                pb_tile_src = pb_tile_src.add(b_src_tile_stride);
             }
 
             // Peeled last B-tile: contains remaining full panels + remainder rows.
-            if pb_tile < pb_end {
+            if pb_tile_src < pb_end {
+                let remaining_b_rows = b_nrows - ((pb_tile_src.offset_from(b_ptr) as usize) / k);
+                // Convert remaining B rows.
+                let pb_tile = cb.convert(&mut b_buf, arch, pb_tile_src, remaining_b_rows, k);
+
+                let full_panels_in_remainder = remaining_b_rows / K::B_PANEL;
+                let pb_full_end_local = pb_tile.add(full_panels_in_remainder * b_kern_panel_stride);
+
                 let mut pa_panel = pa_tile;
                 let mut pr_panel = pr_tile;
 
                 // Loop 3 (peeled): Micro-panels of `A`.
                 while pa_panel < pa_tile_end {
-                    let prepared_a = K::prepare_a(&mut a_buf, arch, pa_panel, k);
                     let mut pb_panel = pb_tile;
 
                     // Loop 4 (peeled): Full B-panels in the last tile.
-                    while pb_panel < pb_full_end {
-                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, K::B_PANEL, k);
-                        K::full_panel(arch, prepared_a, prepared_b, k, pr_panel);
-                        pb_panel = pb_panel.add(b_panel_stride);
+                    while pb_panel < pb_full_end_local {
+                        K::full_panel(arch, pa_panel, pb_panel, k, pr_panel);
+                        pb_panel = pb_panel.add(b_kern_panel_stride);
                     }
 
                     // Remainder dispatch: 1..(B_PANEL-1) leftover B-rows.
                     if b_remainder > 0 {
-                        let prepared_b = K::prepare_b(&mut b_buf, arch, pb_panel, b_remainder, k);
-                        K::remainder_dispatch(
-                            arch,
-                            b_remainder,
-                            prepared_a,
-                            prepared_b,
-                            k,
-                            pr_panel,
-                        );
+                        K::partial_panel(arch, b_remainder, pa_panel, pb_panel, k, pr_panel);
                     }
 
-                    pa_panel = pa_panel.add(a_panel_stride);
+                    pa_panel = pa_panel.add(a_kern_panel_stride);
                     pr_panel = pr_panel.add(K::A_PANEL);
                 }
             }
@@ -333,6 +349,7 @@ mod tests {
     #[should_panic(expected = "must be a multiple of A_PANEL")]
     fn panics_on_unaligned_a_rows() {
         use super::super::f32::F32Kernel;
+        use super::super::layouts;
         use diskann_wide::arch::Scalar;
 
         let k = 4;
@@ -341,10 +358,15 @@ mod tests {
         let b = vec![0.0f32; 2 * k];
         let mut scratch = vec![f32::MIN; 16];
 
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
+        let cb = layouts::RowMajor::<f32>::new();
+
         // SAFETY: pointers and scratch are correctly sized; we expect a panic.
         unsafe {
-            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+            super::tiled_reduce::<Scalar, F32Kernel<8>, _, _>(
                 Scalar::new(),
+                &ca,
+                &cb,
                 a.as_ptr(),
                 9,
                 b.as_ptr(),
@@ -358,6 +380,7 @@ mod tests {
     #[test]
     fn zero_dim_fills_scratch_and_returns() {
         use super::super::f32::F32Kernel;
+        use super::super::layouts;
         use diskann_wide::arch::Scalar;
 
         let a_rows = 8;
@@ -368,10 +391,15 @@ mod tests {
         let b = Vec::<f32>::new();
         let mut scratch = vec![f32::MIN; a_rows];
 
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
+        let cb = layouts::RowMajor::<f32>::new();
+
         // SAFETY: k == 0 so no elements are read; pointers are never dereferenced.
         unsafe {
-            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+            super::tiled_reduce::<Scalar, F32Kernel<8>, _, _>(
                 Scalar::new(),
+                &ca,
+                &cb,
                 a.as_ptr(),
                 a_rows,
                 b.as_ptr(),
@@ -389,15 +417,21 @@ mod tests {
     #[test]
     fn zero_dim_zero_docs_leaves_scratch_untouched() {
         use super::super::f32::F32Kernel;
+        use super::super::layouts;
         use diskann_wide::arch::Scalar;
 
         let a_rows = 8;
         let mut scratch = vec![f32::MIN; a_rows];
 
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
+        let cb = layouts::RowMajor::<f32>::new();
+
         // SAFETY: k == 0, b_nrows == 0; no elements read.
         unsafe {
-            super::tiled_reduce::<Scalar, F32Kernel<8>>(
+            super::tiled_reduce::<Scalar, F32Kernel<8>, _, _>(
                 Scalar::new(),
+                &ca,
+                &cb,
                 [].as_ptr(),
                 a_rows,
                 [].as_ptr(),
@@ -423,6 +457,28 @@ mod tests {
         assert_eq!([3.0f32, 1.0, 4.0, 2.0].reduce(&max), 4.0);
     }
 
+    /// Verify the exact fold order of each `Reduce` impl using a
+    /// non-commutative operator (subtraction).
+    ///
+    /// - `[a; 1]`       → `a`
+    /// - `[a, b; 2]`    → `a - b`
+    /// - `[a, b, c; 3]` → `(a - b) - c`         (left fold)
+    /// - `[a, b, c, d; 4]` → `(a - b) - (c - d)` (balanced tree)
+    #[test]
+    fn reduce_fold_order() {
+        use super::Reduce;
+
+        let sub = |a: f32, b: f32| a - b;
+        // [10]                          → 10
+        assert_eq!([10.0f32].reduce(&sub), 10.0);
+        // [10, 3]                       → 10 - 3 = 7
+        assert_eq!([10.0f32, 3.0].reduce(&sub), 7.0);
+        // [10, 3, 1]                    → (10 - 3) - 1 = 6
+        assert_eq!([10.0f32, 3.0, 1.0].reduce(&sub), 6.0);
+        // [10, 3, 1, 2]                 → (10 - 3) - (1 - 2) = 7 - (-1) = 8
+        assert_eq!([10.0f32, 3.0, 1.0, 2.0].reduce(&sub), 8.0);
+    }
+
     #[test]
     fn tiled_reduce_matches_naive() {
         use super::super::f32::max_ip_kernel;
@@ -446,10 +502,29 @@ mod tests {
                 .collect()
         }
 
+        // Comprehensive cases matching the TEST_CASES arrays in f32/f16 modules,
+        // plus additional shapes to exercise multi-tile and no-remainder paths.
         // (a_nrows, b_nrows, dim)
         let cases: &[(usize, usize, usize)] = &[
-            (8, 3, 4),  // Single A-panel, B remainder (3 % 2 = 1)
-            (16, 5, 8), // Two A-panels, B remainder (5 % 2 = 1)
+            (1, 1, 1),   // Degenerate single-element
+            (1, 1, 2),   // Minimal non-trivial
+            (1, 1, 4),   // Single query, single doc
+            (1, 5, 8),   // Single query, multiple docs
+            (5, 1, 8),   // Multiple queries, single doc
+            (3, 2, 3),   // Prime k
+            (3, 4, 16),  // General case
+            (5, 3, 5),   // Prime k, A-remainder on aarch64
+            (7, 7, 32),  // Square case
+            (2, 3, 7),   // k not divisible by SIMD lanes
+            (2, 3, 128), // Larger dimension
+            (8, 3, 4),   // Single A-panel, B remainder (3 % 2 = 1)
+            (16, 5, 8),  // Two A-panels, B remainder (5 % 2 = 1)
+            (16, 4, 64), // Two A-panels, no B remainder
+            (17, 4, 64), // A-panel remainder
+            (32, 5, 16), // Multiple full A-panels, B remainder
+            (48, 3, 16), // 6 A-panels (Scalar GROUP=8)
+            (16, 6, 32), // B remainder = 0 (6 % 2 = 0)
+            (16, 8, 32), // No B remainder (8 % 2 = 0)
         ];
 
         for &(a_nrows, b_nrows, dim) in cases {
@@ -460,7 +535,7 @@ mod tests {
             let a_bt = BlockTransposed::<f32, 8>::from_matrix_view(a_mat.as_matrix_view());
             let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
 
-            let mut scratch = vec![f32::MIN; a_bt.available_rows()];
+            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
             max_ip_kernel::<Scalar, 8>(Scalar::new(), a_bt.as_view(), b_mat, &mut scratch);
 
             let expected = naive_max_ip(&a_data, a_nrows, &b_data, b_nrows, dim);

@@ -20,6 +20,7 @@
 //! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
 //! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
 //! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
+//! | [`QueryComputer`] | Architecture-dispatched SIMD query computer |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
 //!

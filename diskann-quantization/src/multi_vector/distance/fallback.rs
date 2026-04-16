@@ -185,7 +185,7 @@ mod tests {
             .fold(f32::MAX, f32::min)
     }
 
-    /// Generate a vector of random f32 values in [-1, 1] for testing
+    /// Generate deterministic test data.
     fn make_test_data(len: usize, ceil: usize, shift: usize) -> Vec<f32> {
         (0..len).map(|v| ((v + shift) % ceil) as f32).collect()
     }
@@ -270,9 +270,9 @@ mod tests {
                     );
                 }
 
-                // Check that FallbackKernel is also correct.
+                // Check that FallbackKernel produces the same values as the naive reference.
                 FallbackKernel::max_sim_kernel(query, doc, |i, score| {
-                    assert!((scores[i] - score).abs() <= 1e-6)
+                    assert!((expected_scores[i] - score).abs() <= 1e-6)
                 });
 
                 // Test Chamfer

@@ -17,41 +17,20 @@ use diskann_wide::arch::Scalar;
 use diskann_wide::{SIMDMinMax, SIMDVector};
 
 use super::super::Kernel;
+use super::super::layouts;
 use super::super::tiled_reduce::Reduce;
 use super::F32Kernel;
 
 diskann_wide::alias!(f32s = <Scalar>::f32x8);
 
-// SAFETY: F32Kernel's `full_panel` and `remainder_dispatch` only access
+// SAFETY: F32Kernel's `full_panel` and `partial_panel` only access
 // A_PANEL(8) * k A elements, UNROLL * k B elements, and A_PANEL(8)
 // scratch elements — all within the bounds guaranteed by `tiled_reduce`.
 unsafe impl Kernel<Scalar> for F32Kernel<8> {
-    type AElem = f32;
-    type BElem = f32;
-    type APrepared = f32;
-    type BPrepared = f32;
+    type Left = layouts::BlockTransposed<f32, 8>;
+    type Right = layouts::RowMajor<f32>;
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;
-
-    fn new_buffers(_k: usize) -> (Vec<f32>, Vec<f32>) {
-        (Vec::new(), Vec::new())
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_a(_buf: &mut [f32], _arch: Scalar, src: *const f32, _k: usize) -> *const f32 {
-        src
-    }
-
-    #[inline(always)]
-    unsafe fn prepare_b(
-        _buf: &mut [f32],
-        _arch: Scalar,
-        src: *const f32,
-        _rows: usize,
-        _k: usize,
-    ) -> *const f32 {
-        src
-    }
 
     #[inline(always)]
     unsafe fn full_panel(arch: Scalar, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
@@ -60,7 +39,7 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
     }
 
     #[inline(always)]
-    unsafe fn remainder_dispatch(
+    unsafe fn partial_panel(
         arch: Scalar,
         remainder: usize,
         a: *const f32,

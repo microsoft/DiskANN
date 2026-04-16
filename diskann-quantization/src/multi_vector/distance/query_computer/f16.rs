@@ -6,10 +6,11 @@
 
 use diskann_wide::Architecture;
 
-use super::super::kernels::f16::F16Kernel;
+use super::super::kernels::f16::F16Entry;
 use super::{DynQueryComputer, Prepared, QueryComputer, build_prepared};
 use crate::multi_vector::block_transposed::{BlockTransposed, BlockTransposedRef};
 use crate::multi_vector::matrix::{MatRef, Standard};
+use diskann_utils::Reborrow;
 
 impl QueryComputer<half::f16> {
     /// Build an f16 query computer, selecting the optimal architecture and
@@ -23,7 +24,7 @@ impl<A, const GROUP: usize> DynQueryComputer<half::f16>
     for Prepared<A, BlockTransposed<half::f16, GROUP>>
 where
     A: Architecture,
-    F16Kernel<GROUP>: for<'a> diskann_wide::arch::Target3<
+    F16Entry<GROUP>: for<'a> diskann_wide::arch::Target3<
             A,
             (),
             BlockTransposedRef<'a, half::f16, GROUP>,
@@ -32,9 +33,8 @@ where
         >,
 {
     fn raw_kernel(&self, doc: MatRef<'_, Standard<half::f16>>, scratch: &mut [f32]) {
-        use diskann_utils::Reborrow;
         self.arch
-            .run3(F16Kernel::<GROUP>, self.prepared.reborrow(), doc, scratch);
+            .run3(F16Entry::<GROUP>, self.prepared.reborrow(), doc, scratch);
     }
 
     fn nrows(&self) -> usize {
@@ -45,8 +45,8 @@ where
         self.ncols
     }
 
-    fn available_rows(&self) -> usize {
-        self.available_rows
+    fn padded_nrows(&self) -> usize {
+        self.padded_nrows
     }
 }
 

@@ -10,13 +10,14 @@
 //! # Module Organization
 //!
 //! - [`Kernel<A>`] — unsafe trait parameterized on architecture (this file).
+//! - [`layouts`] — layout markers, [`ConvertTo`](layouts::ConvertTo) conversion
+//!   trait, and `DescribeLayout` bridge.
 //! - [`tiled_reduce`](tiled_reduce) — generic 5-level tiling loop.
 //! - [`f32`] — f32 micro-kernel family: V3 (x86_64), Scalar (portable). V4 delegates to V3; Neon delegates to Scalar.
 //!   Entry point ([`max_ip_kernel`](f32::max_ip_kernel)).
-//! - [`f16`] — f16 micro-kernel family: same architecture matrix.
-//!   Lazily unpacks f16→f32 in `prepare_a`/`prepare_b`, then delegates
-//!   to the f32 micro-kernel. Entry point
-//!   ([`max_ip_kernel`](f16::max_ip_kernel)).
+//! - [`f16`] — f16 entry point reusing the f32 micro-kernel family with
+//!   tile-level f16→f32 conversion via [`ConvertTo`](layouts::ConvertTo).
+//!   Entry point ([`max_ip_kernel`](f16::max_ip_kernel)).
 //!
 //! # Tiling Strategy
 //!
@@ -39,6 +40,7 @@
 
 pub(super) mod f16;
 pub(super) mod f32;
+mod layouts;
 mod tiled_reduce;
 
 /// Detect the L1 data cache size in bytes.
@@ -89,111 +91,59 @@ fn l1_b_tile_budget() -> usize {
 
 /// SIMD micro-kernel trait for the [`tiled_reduce`](tiled_reduce::tiled_reduce) loop.
 ///
-/// Each implementation provides element types, panel geometry, optional
-/// `prepare_a`/`prepare_b` conversion hooks, and the micro-kernel body.
-/// Identity kernels (`AElem == APrepared`) return `src` directly; converting
-/// kernels stage into `&mut [APrepared]`/`&mut [BPrepared]` buffers from
-/// [`new_buffers`](Self::new_buffers).
+/// Each implementation provides the micro-kernel body and the layout types
+/// that describe the element format consumed by `full_panel` /
+/// `partial_panel`. Tile-level conversion between storage layouts and
+/// kernel layouts is handled externally by [`ConvertTo`](layouts::ConvertTo)
+/// implementations; the kernel itself only sees already-converted data.
 ///
 /// # Safety
 ///
 /// Implementors must ensure that:
-/// - `prepare_a`/`prepare_b` read only within the documented `src` bounds
-///   and return a pointer valid for the corresponding `PANEL * k` reads.
-/// - `prepare_a` writes only to its `buf`; `prepare_b` writes only to its `buf`.
-/// - `full_panel` and `remainder_dispatch` access only within the bounds
+/// - `full_panel` and `partial_panel` access only within the bounds
 ///   described by their pointer arguments and the `k`/panel-size contracts.
-pub(crate) unsafe trait Kernel<A: diskann_wide::Architecture> {
-    /// Element type for the A side (e.g. query vectors in storage format).
-    type AElem: Copy;
-    /// Element type for the B side (e.g. document vectors in storage format).
-    type BElem: Copy;
-    /// Element type for the A side after panel preparation.
-    type APrepared: Copy;
-    /// Element type for the B side after panel preparation.
-    type BPrepared: Copy;
+unsafe trait Kernel<A: diskann_wide::Architecture> {
+    /// Layout consumed by the A (left / query) side of the micro-kernel.
+    type Left: layouts::Layout;
+    /// Layout consumed by the B (right / document) side of the micro-kernel.
+    type Right: layouts::Layout;
 
     /// Number of A rows processed per micro-kernel invocation.
     const A_PANEL: usize;
     /// Number of B rows processed per micro-kernel invocation.
     const B_PANEL: usize;
 
-    /// Allocate staging buffers for the contraction dimension `k`.
-    ///
-    /// Identity kernels (where `AElem == APrepared` and `BElem == BPrepared`)
-    /// return empty `Vec`s and ignore `k`.
-    fn new_buffers(k: usize) -> (Vec<Self::APrepared>, Vec<Self::BPrepared>);
-
-    /// Prepare one full A micro-panel for the micro-kernel.
-    ///
-    /// Called once per A micro-panel in Loop 3, before the B-panel iteration.
-    /// The result is reused across all B-panels in the tile, amortizing
-    /// conversion cost.
-    ///
-    /// # Safety
-    ///
-    /// * `src` must point to `A_PANEL * k` contiguous `AElem` values.
-    /// * The returned pointer must be valid for `A_PANEL * k` reads of
-    ///   `APrepared`.
-    unsafe fn prepare_a(
-        buf: &mut [Self::APrepared],
-        arch: A,
-        src: *const Self::AElem,
-        k: usize,
-    ) -> *const Self::APrepared;
-
-    /// Prepare one B micro-panel for the micro-kernel.
-    ///
-    /// Called once per B micro-panel in Loop 4. The result is reused across all
-    /// A-panels within the current B-panel iteration, amortizing conversion cost.
-    ///
-    /// For full panels `rows == B_PANEL`. For the remainder panel at the tail of
-    /// the B dimension, `rows < B_PANEL`.
-    ///
-    /// # Safety
-    ///
-    /// * `src` must point to `rows * k` contiguous `BElem` values.
-    /// * `rows` must be in `1..=B_PANEL`.
-    /// * The returned pointer must be valid for `rows * k` reads of `BPrepared`.
-    unsafe fn prepare_b(
-        buf: &mut [Self::BPrepared],
-        arch: A,
-        src: *const Self::BElem,
-        rows: usize,
-        k: usize,
-    ) -> *const Self::BPrepared;
-
     /// Process one full `A_PANEL × B_PANEL` micro-panel pair.
     ///
     /// # Safety
     ///
-    /// * `a` must point to `A_PANEL * k` contiguous `APrepared` values.
-    /// * `b` must point to `B_PANEL * k` contiguous `BPrepared` values.
+    /// * `a` must point to `A_PANEL * k` contiguous elements of
+    ///   `<Self::Left as Layout>::Element`.
+    /// * `b` must point to `B_PANEL * k` contiguous elements of
+    ///   `<Self::Right as Layout>::Element`.
     /// * `r` must point to at least `A_PANEL` writable `f32` values.
     unsafe fn full_panel(
         arch: A,
-        a: *const Self::APrepared,
-        b: *const Self::BPrepared,
+        a: *const <Self::Left as layouts::Layout>::Element,
+        b: *const <Self::Right as layouts::Layout>::Element,
         k: usize,
         r: *mut f32,
     );
 
     /// Dispatch for `1..(B_PANEL-1)` remainder B rows.
     ///
-    /// Both A and B are in prepared format — `prepare_b` is called with the
-    /// actual remainder row count before this method, so implementors can
-    /// reuse the same micro-kernel as `full_panel` with a smaller UNROLL.
-    ///
     /// # Safety
     ///
-    /// * `a` must point to `A_PANEL * k` contiguous `APrepared` values.
-    /// * `b` must point to `remainder * k` contiguous `BPrepared` values.
+    /// * `a` must point to `A_PANEL * k` contiguous elements of
+    ///   `<Self::Left as Layout>::Element`.
+    /// * `b` must point to `remainder * k` contiguous elements of
+    ///   `<Self::Right as Layout>::Element`.
     /// * `r` must point to at least `A_PANEL` writable `f32` values.
-    unsafe fn remainder_dispatch(
+    unsafe fn partial_panel(
         arch: A,
         remainder: usize,
-        a: *const Self::APrepared,
-        b: *const Self::BPrepared,
+        a: *const <Self::Left as layouts::Layout>::Element,
+        b: *const <Self::Right as layouts::Layout>::Element,
         k: usize,
         r: *mut f32,
     );
