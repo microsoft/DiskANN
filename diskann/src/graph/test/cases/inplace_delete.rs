@@ -346,3 +346,49 @@ async fn inplace_delete_two_hop_and_one_hop_wider_topology() {
         .unwrap();
     assert_eq!(reachable, 9, "8 data nodes + start should be reachable");
 }
+
+/// Multi-delete on the 3×3 grid with multi_thread to exercise parallel spawn + edge merge.
+/// Deletes nodes [0, 4, 6] simultaneously, avoiding node 8 which is the start's only link.
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_inplace_delete_wider_topology() {
+    let start_id = u32::MAX;
+    let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
+    let ctx = test_provider::Context::new();
+
+    let deleted: [u32; 3] = [0, 4, 6];
+    index
+        .multi_inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            Arc::new(deleted),
+            3,
+            InplaceDeleteMethod::TwoHopAndOneHop,
+        )
+        .await
+        .unwrap();
+
+    let mut accessor = index.provider().neighbors();
+    let mut list = AdjacencyList::new();
+
+    for node in 0u32..9 {
+        if deleted.contains(&node) {
+            continue; // deleted
+        }
+        accessor.get_neighbors(node, &mut list).await.unwrap();
+        for &d in &deleted {
+            assert!(
+                !list.contains(d),
+                "node {node} should not reference deleted node {d}"
+            );
+        }
+    }
+
+    let reachable = index
+        .count_reachable_nodes(&[start_id], &mut accessor)
+        .await
+        .unwrap();
+    assert_eq!(
+        reachable, 7,
+        "6 surviving data nodes + start should be reachable"
+    );
+}
