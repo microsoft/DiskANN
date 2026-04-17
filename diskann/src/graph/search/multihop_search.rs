@@ -310,7 +310,7 @@ mod tests {
 
     impl QueryLabelProvider<u32> for EvenOnly {
         fn is_match(&self, id: u32) -> bool {
-            id % 2 == 0
+            id.is_multiple_of(2)
         }
     }
 

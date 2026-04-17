@@ -4,7 +4,6 @@
  */
 
 pub mod provider;
-pub mod search_utils;
 pub mod synthetic;
 
 #[cfg(test)]
