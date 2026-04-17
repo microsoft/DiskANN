@@ -20,6 +20,7 @@ use crate::{
         test::provider::{self as test_provider, Provider, Strategy},
     },
     provider::Delete,
+    provider::NeighborAccessor,
     test::tokio::current_thread_runtime,
 };
 
@@ -212,4 +213,35 @@ fn consolidate_repairs_after_deletion() {
     assert_neighbors(&rt, &index, 1, &[0, 2, 4]);
     assert_neighbors(&rt, &index, 2, &[0, 1, 4]);
     assert_neighbors(&rt, &index, 4, &[0, 1, 2]);
+}
+
+/// Consolidating a vertex whose degree exceeds `pruned_degree` but has no deleted neighbors
+/// exercises the prune-only path (no deleted-neighbor absorption, just robust_prune_list).
+#[test]
+fn consolidate_prune_only_no_deleted_neighbors() {
+    let rt = current_thread_runtime();
+
+    // pruned_degree=2, but start node (4) has degree 4 → must prune
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 2);
+    let ctx = test_provider::Context::new();
+    let strategy = Strategy::new();
+
+    // Verify start node exceeds pruned_degree before consolidation.
+    assert_neighbors(&rt, &index, 4, &[0, 1, 2, 3]);
+
+    let result = rt
+        .block_on(index.consolidate_vector(&strategy, &ctx, 4))
+        .unwrap();
+    assert_eq!(result, ConsolidateKind::Complete);
+
+    // After consolidation, start node should have degree <= 2.
+    let mut list = AdjacencyList::new();
+    rt.block_on(index.provider().neighbors().get_neighbors(4, &mut list))
+        .unwrap();
+    assert!(
+        list.len() <= 2,
+        "start node should have degree <= pruned_degree (2) after consolidation, got {}",
+        list.len()
+    );
 }
