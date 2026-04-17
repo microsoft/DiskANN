@@ -5,10 +5,25 @@
 
 use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
-    graph::{self, AdjacencyList, test::provider as test_provider},
+    graph::{self, AdjacencyList, DiskANNIndex, test::provider as test_provider},
     neighbor::Neighbor,
     provider::NeighborAccessor,
 };
+use std::sync::Arc;
+
+fn setup_paged_search_test() -> (
+    Arc<DiskANNIndex<test_provider::Provider>>,
+    test_provider::Strategy,
+    test_provider::Context,
+    Vec<f32>,
+) {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+    (index, strategy, ctx, query_point)
+}
 
 #[test]
 fn query_label_provider_on_visit_default() {
@@ -194,14 +209,9 @@ async fn test_get_degree_stats_mixed() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn validate_basic_paged_search() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let k = 2;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
-
     let mut state = index
         .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
         .await
@@ -222,14 +232,9 @@ async fn validate_basic_paged_search() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn validate_paged_search_multiple() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let k = 1;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
-
     let mut state = index
         .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
         .await
@@ -253,14 +258,9 @@ async fn validate_paged_search_multiple() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_paged_search_error_cases() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let l_value = 2;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
-
     let mut state = index
         .start_paged_search(strategy, &ctx, query_point.as_slice(), l_value)
         .await
@@ -290,13 +290,9 @@ async fn test_paged_search_error_cases() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn validate_basic_paged_search_with_init_ids() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let k = 2;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
 
     // Seed search from nodes 0 and 1 instead of using the default start point
     let init_ids: &[u32] = &[0, 1];
@@ -318,13 +314,9 @@ async fn validate_basic_paged_search_with_init_ids() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn validate_paged_search_with_init_ids_multiple() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let k = 1;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
 
     let init_ids: &[u32] = &[0, 1];
     let mut state = index
@@ -350,13 +342,9 @@ async fn validate_paged_search_with_init_ids_multiple() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_paged_search_with_init_ids_error_cases() {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let (index, strategy, ctx, query_point) = setup_paged_search_test();
 
     let l_value = 2;
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
 
     let init_ids: &[u32] = &[0, 1];
     let mut state = index
