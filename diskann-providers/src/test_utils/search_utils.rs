@@ -4,11 +4,6 @@
  */
 
 //! Test assertion helpers for search result verification.
-//!
-//! The canonical `groundtruth` implementation lives in `diskann::graph::test::search_utils`,
-//! but that module is gated behind `cfg(test)` / `feature = "testing"` and is not available
-//! in non-test builds. This module duplicates the functions needed by `diskann-providers`
-//! and `diskann-disk` so they compile unconditionally.
 
 use diskann::neighbor::Neighbor;
 use diskann_utils::views::MatrixView;
