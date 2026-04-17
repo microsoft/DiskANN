@@ -15,12 +15,6 @@ use diskann_utils::io::Metadata;
 
 use crate::{model::graph::traits::AdHoc, utils::load_metadata_from_file};
 
-/// Default buffer size for save operations (16 MB).
-///
-/// This larger buffer reduces the number of system calls during serialization,
-/// improving write throughput especially for large graphs and data files.
-const SAVE_BUFFER_SIZE: usize = 16 * 1024 * 1024;
-
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
 /// These traits are meant for IO purposes and are not meant as general access traits for
@@ -206,9 +200,7 @@ where
     let total = data.total();
     let dim = data.dim();
 
-    let file = provider.create_for_write(path)?;
-    // Use 16 MB buffer for efficient I/O
-    let mut writer = BufWriter::with_capacity(SAVE_BUFFER_SIZE, file);
+    let mut writer = provider.create_for_write(path)?;
     let mut points_written: u32 = 0;
     Metadata::new(points_written, dim)?.write(&mut writer)?;
 
@@ -363,8 +355,7 @@ where
 {
     let file = provider.create_for_write(path)?;
 
-    // Use 16 MB buffer to reduce system call overhead
-    let mut out = BufWriter::with_capacity(SAVE_BUFFER_SIZE, file);
+    let mut out = BufWriter::new(file);
 
     let mut index_size: u64 = 24;
     let mut observed_max_degree: u32 = 0;

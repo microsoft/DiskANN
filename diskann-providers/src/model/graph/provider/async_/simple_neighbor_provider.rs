@@ -297,7 +297,6 @@ impl storage::bin::GetAdjacencyList for SimpleNeighborProviderAsync<u32> {
         self.num_get_calls.increment();
 
         // Lint: We don't have a good way of recovering from lock poisoning anyways.
-        #[allow(clippy::unwrap_used)]
         let _guard = self.locks[i].read().unwrap();
 
         // SAFETY: We are holding the read lock for `i`.
