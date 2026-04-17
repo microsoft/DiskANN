@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
+use crate::data_model::GraphDataType;
 use diskann::{ANNError, ANNResult};
-use diskann_providers::model::graph::{graph_data_model::AdjacencyList, traits::GraphDataType};
 
 use crate::utils::aligned_file_reader::traits::AlignedFileReader;
 use hashbrown::HashMap;
@@ -54,7 +54,7 @@ where
     fn get_adjacency_list(
         &self,
         vertex_id: &Data::VectorIdType,
-    ) -> ANNResult<&AdjacencyList<Data::VectorIdType>> {
+    ) -> ANNResult<&[Data::VectorIdType]> {
         match self.cache.get_adjacency_list(vertex_id) {
             Some(adj_list) => Ok(adj_list),
             None => self.vector_provider.get_adjacency_list(vertex_id),

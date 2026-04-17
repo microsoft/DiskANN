@@ -17,7 +17,6 @@ byteorder.workspace = true
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 hashbrown.workspace = true
 num-traits.workspace = true
-once_cell.workspace = true
 rand.workspace = true
 rayon.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -30,14 +29,12 @@ cfg-if.workspace = true
 diskann-wide = { workspace = true }
 arc-swap.workspace = true
 tracing.workspace = true
-diskann-linalg = { workspace = true }
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 bf-tree = { workspace = true, optional = true }
-anyhow.workspace = true
 prost = "0.14.1"
 futures-util.workspace = true
 polonius-the-crab = { version = "0.5.0", optional = true }
@@ -47,6 +44,7 @@ vfs = { workspace = true, optional = true }
 [dev-dependencies]
 approx.workspace = true
 criterion.workspace = true
+diskann = { workspace = true, features = ["testing"] }
 diskann-utils = { workspace = true, features = ["testing"] }
 iai-callgrind.workspace = true
 itertools.workspace = true
