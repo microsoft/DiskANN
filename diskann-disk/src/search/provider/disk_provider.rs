@@ -1064,10 +1064,7 @@ mod disk_provider_tests {
     use diskann_providers::storage::{
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
-    use diskann_providers::{
-        common::AlignedBoxWithSlice,
-        utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool},
-    };
+    use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::IndexedParallelIterator;
@@ -1393,34 +1390,23 @@ mod disk_provider_tests {
             .par_row_iter()
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
-                // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
-                let mut temp = Vec::with_capacity(query.len() + 1);
-                temp.push(0.0);
-                temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
-
                 let mut query_stats = QueryStatistics::default();
                 let mut indices = vec![0u32; 10];
                 let mut distances = vec![0f32; 10];
                 let mut associated_data = vec![(); 10];
 
-                let result = params
-                    .index_search_engine
-                    //.search_with_associated_data(query, params.k as u32, params.l as u32)
-                    .search_internal(
-                        query,
-                        params.k,
-                        params.l as u32,
-                        None, // beam_width
-                        &mut query_stats,
-                        &mut indices,
-                        &mut distances,
-                        &mut associated_data,
-                        &(|_| true),
-                        false,
-                    );
+                let result = params.index_search_engine.search_internal(
+                    query,
+                    params.k,
+                    params.l as u32,
+                    None, // beam_width
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    &(|_| true),
+                    false,
+                );
 
                 // Calculate the range of the truth_result for this query
                 let truth_slice = &truth_result[i * params.k..(i + 1) * params.k];
@@ -1464,13 +1450,6 @@ mod disk_provider_tests {
             .par_row_iter()
             .enumerate()
             .for_each_in_pool(&pool, |(i, query)| {
-                // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
-                let mut temp = Vec::with_capacity(query.len() + 1);
-                temp.push(0.0);
-                temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
                 let result = params
                     .index_search_engine
                     .search(query, params.k as u32, params.l as u32, beam_width, None, false)

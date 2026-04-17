@@ -15,9 +15,8 @@ use diskann::{
 };
 use diskann_disk::data_model::GraphDataType;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::{
-    common::AlignedBoxWithSlice,
-    utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
+use diskann_providers::utils::{
+    create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator,
 };
 use diskann_utils::{
     io::{read_bin, Metadata},
@@ -125,7 +124,6 @@ pub fn compute_ground_truth_from_datafiles<
     let query_data =
         read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
     let query_num = query_data.nrows();
-    let query_dim = query_data.ncols();
 
     let mut query_bitmaps: Option<Vec<BitSet>> = None;
     if let (Some(base_file_labels), Some(query_file_labels)) = (base_file_labels, query_file_labels)
@@ -136,8 +134,6 @@ pub fn compute_ground_truth_from_datafiles<
         )?);
     }
 
-    let queries: Vec<_> = query_data.row_iter().collect();
-
     // Load the vector filters
     let vector_filters = match vector_filters_file {
         Some(vector_filters_file) => {
@@ -146,7 +142,7 @@ pub fn compute_ground_truth_from_datafiles<
 
             assert_eq!(
                 filters.len(),
-                queries.len(),
+                query_num,
                 "Mismatch in query and vector filter sizes"
             );
 
@@ -161,7 +157,7 @@ pub fn compute_ground_truth_from_datafiles<
     if has_vector_filters {
         // copy vector_filters to query_bitmaps one item at a time
         if let Some(filters) = vector_filters {
-            let mut bitmaps = vec![BitSet::new(); queries.len()];
+            let mut bitmaps = vec![BitSet::new(); query_num];
             for (idx_query, filter) in filters.iter().enumerate() {
                 for item in filter.iter() {
                     if let Ok(idx) = (*item).try_into() {
@@ -173,12 +169,10 @@ pub fn compute_ground_truth_from_datafiles<
         }
     }
 
-    let query_aligned_dim = query_dim.next_multiple_of(8);
     let ground_truth_result = compute_ground_truth_from_data::<Data, StorageProvider>(
         distance_function,
         dataset_iterator,
-        queries,
-        query_aligned_dim,
+        &query_data,
         recall_at,
         insert_iterator,
         skip_base,
@@ -457,8 +451,7 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 pub fn compute_ground_truth_from_data<Data, VectorReader>(
     distance_function: Metric,
     dataset_iter: VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
-    queries: Vec<&[Data::VectorDataType]>,
-    query_aligned_dimmensions: usize,
+    queries: &Matrix<Data::VectorDataType>,
     recall_at: u32,
     insert_iter: Option<
         VectorDataIterator<VectorReader, Data::VectorDataType, Data::AssociatedDataType>,
@@ -470,29 +463,19 @@ where
     Data: GraphDataType,
     VectorReader: StorageReadProvider,
 {
-    let query_num = queries.len();
+    let query_num = queries.nrows();
+    let query_dim = queries.ncols();
 
-    let mut aligned_queries = Vec::with_capacity(query_num);
-    let mut neighbor_queues: Vec<NeighborPriorityQueue<u32>> = Vec::with_capacity(query_num);
-    for query in queries {
-        let mut aligned_query = AlignedBoxWithSlice::new(query_aligned_dimmensions, 32)?;
-        aligned_query[..query.len()].copy_from_slice(query);
-        aligned_queries.push(aligned_query);
-        neighbor_queues.push(NeighborPriorityQueue::new(recall_at as usize));
-    }
-    let mut queries_and_neighbor_queue: Vec<_> = aligned_queries
-        .iter()
-        .zip(neighbor_queues.iter_mut())
+    let mut neighbor_queues: Vec<NeighborPriorityQueue<u32>> = (0..query_num)
+        .map(|_| NeighborPriorityQueue::new(recall_at as usize))
         .collect();
+    let mut queries_and_neighbor_queue: Vec<_> =
+        queries.row_iter().zip(neighbor_queues.iter_mut()).collect();
 
-    let distance_comparer =
-        Data::VectorDataType::distance(distance_function, Some(query_aligned_dimmensions));
+    let distance_comparer = Data::VectorDataType::distance(distance_function, Some(query_dim));
 
     let batch_size = 10_000;
-    let mut aligned_data_batch = Vec::with_capacity(batch_size);
-    for _ in 0..batch_size {
-        aligned_data_batch.push(AlignedBoxWithSlice::new(query_aligned_dimmensions, 32)?);
-    }
+    let mut data_batch: Vec<Box<[Data::VectorDataType]>> = Vec::with_capacity(batch_size);
 
     let pool = create_thread_pool(0)?;
 
@@ -500,18 +483,13 @@ where
     let mut id_to_associated_data = Vec::<Data::AssociatedDataType>::new();
     let skip_base = skip_base.unwrap_or(0);
     // Loop over all the raw data
-    for chunk in dataset_iter
-        .skip(skip_base)
-        .enumerate()
-        .chunks(batch_size)
-        .into_iter()
-    {
-        let mut points = 0;
-        for (idx, (data_vector, associated_data)) in chunk {
-            aligned_data_batch[idx % batch_size][..data_vector.len()].copy_from_slice(&data_vector);
+    for chunk in dataset_iter.skip(skip_base).chunks(batch_size).into_iter() {
+        data_batch.clear();
+        for (data_vector, associated_data) in chunk {
+            data_batch.push(data_vector);
             id_to_associated_data.push(associated_data);
-            points += 1;
         }
+        let points = data_batch.len();
 
         if points == 0 {
             continue;
@@ -521,43 +499,34 @@ where
         queries_and_neighbor_queue
             .par_iter_mut()
             .enumerate()
-            .for_each_in_pool(
-                &pool,
-                |(idx_query, (aligned_query, ref mut neighbor_queue))| {
-                    for (idx_in_batch, aligned_data) in
-                        aligned_data_batch[..points].iter().enumerate()
-                    {
-                        let idx = (num_base_points + idx_in_batch) as u32;
+            .for_each_in_pool(&pool, |(idx_query, (query, ref mut neighbor_queue))| {
+                for (idx_in_batch, data) in data_batch.iter().enumerate() {
+                    let idx = (num_base_points + idx_in_batch) as u32;
 
-                        let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
-                            if let Ok(idx_usize) = idx.try_into() {
-                                bitmaps[idx_query].contains(idx_usize)
-                            } else {
-                                false
-                            }
+                    let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
+                        if let Ok(idx_usize) = idx.try_into() {
+                            bitmaps[idx_query].contains(idx_usize)
                         } else {
-                            true
-                        };
-
-                        if allowed_by_bitmap {
-                            let distance = distance_comparer
-                                .evaluate_similarity(&**aligned_data, aligned_query);
-                            neighbor_queue.insert(Neighbor { id: idx, distance });
+                            false
                         }
+                    } else {
+                        true
+                    };
+
+                    if allowed_by_bitmap {
+                        let distance = distance_comparer.evaluate_similarity(data, query);
+                        neighbor_queue.insert(Neighbor { id: idx, distance });
                     }
-                },
-            );
+                }
+            });
 
         num_base_points += points;
     }
 
-    let mut aligned_data = AlignedBoxWithSlice::new(query_aligned_dimmensions, 32)?;
-
     if let Some(insert_iter) = insert_iter {
         for (insert_idx, (data_vector, _associated_data)) in insert_iter.enumerate() {
-            aligned_data[..data_vector.len()].copy_from_slice(&data_vector);
             // For each node in the raw data, calculate the distance to each query vector and store it in the priority queue for that query.  This will find the closest N neighbors for each query.
-            for (idx_query, (aligned_query, ref mut neighbor_queue)) in
+            for (idx_query, (query, ref mut neighbor_queue)) in
                 queries_and_neighbor_queue.iter_mut().enumerate()
             {
                 let idx = (num_base_points + insert_idx) as u32;
@@ -573,8 +542,7 @@ where
                 };
 
                 if allowed_by_bitmap {
-                    let distance =
-                        distance_comparer.evaluate_similarity(&*aligned_data, aligned_query);
+                    let distance = distance_comparer.evaluate_similarity(&data_vector, query);
                     neighbor_queue.insert(Neighbor { id: idx, distance })
                 }
             }
