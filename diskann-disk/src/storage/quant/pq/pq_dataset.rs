@@ -6,9 +6,9 @@
 use core::fmt::Debug;
 
 use diskann::{ANNError, ANNResult};
+use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::product::TransposedTable;
-
-use diskann_providers::model::{FixedChunkPQTable, PQCompressedData};
+use diskann_utils::views::Matrix;
 
 /// Behind the scenes, we can use either the [`FixedChunkPQTable`] or a
 /// [`diskann_quantization::product::TransposedTable`]. The [`TransposedTable`] is much faster
@@ -27,14 +27,14 @@ pub struct PQData {
     // pq pivot table.
     pq_pivot_table: PQTable,
 
-    // pq compressed vectors.
-    pq_compressed_data: PQCompressedData,
+    // pq compressed vectors, shape `num_points × num_pq_chunks`.
+    pq_compressed_data: Matrix<u8>,
 }
 
 impl PQData {
     pub fn new(
         pq_pivot_table: FixedChunkPQTable,
-        pq_compressed_data: PQCompressedData,
+        pq_compressed_data: Matrix<u8>,
     ) -> ANNResult<Self> {
         // Check if we can use the transposed table. If so, go for it.
         let centroid_is_zero = pq_pivot_table.get_centroids().iter().all(|i| *i == 0.0);
@@ -77,13 +77,15 @@ impl PQData {
     }
 
     /// Get pq_compressed_data
-    pub fn pq_compressed_data(&self) -> &PQCompressedData {
+    pub fn pq_compressed_data(&self) -> &Matrix<u8> {
         &self.pq_compressed_data
     }
 
     // Get compressed vector with the given vector id from the pq_compressed_data.
     pub fn get_compressed_vector(&self, vector_id: usize) -> ANNResult<&[u8]> {
-        self.pq_compressed_data.get_compressed_vector(vector_id)
+        self.pq_compressed_data.get_row(vector_id).ok_or_else(|| {
+            ANNError::log_index_error("Vector id is out of boundary in the compressed dataset.")
+        })
     }
 }
 
@@ -102,13 +104,8 @@ mod tests {
             Box::new([0, 2]),
         )
         .unwrap();
-        let mut pq_compressed_data = PQCompressedData::new(3, 1).unwrap();
-
-        let compressed_vector = [123, 111, 255];
-        pq_compressed_data
-            .into_dto()
-            .data
-            .copy_from_slice(&compressed_vector);
+        let pq_compressed_data = Matrix::try_from(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
+            .expect("valid matrix shape");
 
         PQData::new(pq_pivot_table, pq_compressed_data)
     }

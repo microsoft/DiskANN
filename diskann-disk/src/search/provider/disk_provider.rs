@@ -576,7 +576,7 @@ where
             ids,
             self.provider.pq_data.get_num_chunks(),
             &pq_scratch.aligned_pqtable_dist_scratch,
-            self.provider.pq_data.pq_compressed_data().get_data(),
+            self.provider.pq_data.pq_compressed_data().as_slice(),
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;

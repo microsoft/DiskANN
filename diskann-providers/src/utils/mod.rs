@@ -5,10 +5,6 @@
 pub mod file_util;
 pub use file_util::{file_exists, load_metadata_from_file};
 
-#[allow(clippy::module_inception)]
-mod utils;
-pub use utils::DatasetDto;
-
 mod bridge_error;
 pub use bridge_error::{Bridge, BridgeErr};
 
