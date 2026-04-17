@@ -39,7 +39,3 @@ pub mod bf_tree;
 // Caching proxy provider to accelerate slow providers.
 #[cfg(feature = "bf_tree")]
 pub mod caching;
-
-// Debug provider for testing.
-#[cfg(test)]
-pub mod debug_provider;

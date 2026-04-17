@@ -8,16 +8,13 @@ use core::fmt::Debug;
 use diskann::{ANNError, ANNResult};
 use diskann_quantization::product::TransposedTable;
 
-use crate::model::{FixedChunkPQTable, PQCompressedData};
+use diskann_providers::model::{FixedChunkPQTable, PQCompressedData};
 
 /// Behind the scenes, we can use either the [`FixedChunkPQTable`] or a
-/// [`diskann_quantization::product::TransposedTable`]. The [`TrasposedTable`] is much faster
-/// for preprocessing, but does not support:
+/// [`diskann_quantization::product::TransposedTable`]. The [`TransposedTable`] is much faster
+/// for preprocessing, but does not support removal of the dataset centroid.
 ///
-/// 1. Removal of the dataset centroid (if that was used).
-/// 2. OPQ style transformations.
-///
-/// So, we can only use the [`TransposedTable`] when OPQ is not used and the dataset centroid
+/// So, we can only use the [`TransposedTable`] when the dataset centroid
 /// is all zero.
 #[derive(Debug)]
 pub enum PQTable {
@@ -41,7 +38,7 @@ impl PQData {
     ) -> ANNResult<Self> {
         // Check if we can use the transposed table. If so, go for it.
         let centroid_is_zero = pq_pivot_table.get_centroids().iter().all(|i| *i == 0.0);
-        let pq_pivot_table = if !pq_pivot_table.has_opq() && centroid_is_zero {
+        let pq_pivot_table = if centroid_is_zero {
             let transposed = TransposedTable::from_parts(
                 pq_pivot_table.view_pivots(),
                 pq_pivot_table.view_offsets().to_owned(),
@@ -93,28 +90,16 @@ impl PQData {
 #[cfg(test)]
 mod tests {
 
-    use rstest::rstest;
-
     use super::*;
 
-    fn create_pq_data(use_opq: bool) -> ANNResult<PQData> {
+    fn create_pq_data() -> ANNResult<PQData> {
         let dim = 2;
-        let opq_rotation_matrix = if use_opq {
-            let mut opq_rotation_matrix = Vec::with_capacity(dim * dim);
-            for item in 0..dim * dim {
-                opq_rotation_matrix.push(item as f32 / 10.0);
-            }
-            opq_rotation_matrix.into_boxed_slice().into()
-        } else {
-            None
-        };
 
         let pq_pivot_table = FixedChunkPQTable::new(
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            opq_rotation_matrix,
         )
         .unwrap();
         let mut pq_compressed_data = PQCompressedData::new(3, 1).unwrap();
@@ -130,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_get_compressed_vector() {
-        let dataset = create_pq_data(true).unwrap();
+        let dataset = create_pq_data().unwrap();
 
         let vector_id = 0;
         let result = dataset.get_compressed_vector(vector_id).unwrap();
@@ -145,15 +130,15 @@ mod tests {
         assert_eq!(result, &[255]);
     }
 
-    #[rstest]
-    fn test_get_num_chunks(#[values(true, false)] use_opq: bool) {
-        let dataset = create_pq_data(use_opq).unwrap();
+    #[test]
+    fn test_get_num_chunks() {
+        let dataset = create_pq_data().unwrap();
         assert_eq!(dataset.get_num_chunks(), 1);
     }
 
-    #[rstest]
-    fn test_get_num_centers(#[values(true, false)] use_opq: bool) {
-        let dataset = create_pq_data(use_opq).unwrap();
+    #[test]
+    fn test_get_num_centers() {
+        let dataset = create_pq_data().unwrap();
         assert_eq!(dataset.get_num_centers(), 2);
     }
 }
