@@ -7,7 +7,7 @@ use std::fmt::Display;
 
 use crate::neighbor::Neighbor;
 
-/// An logger provided to various search tasks
+/// A logger provided to various search tasks
 pub trait SearchRecord<T>: Send + Sync + 'static
 where
     T: Eq,

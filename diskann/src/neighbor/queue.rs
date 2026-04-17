@@ -12,8 +12,7 @@ use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
 use super::Neighbor;
 
-/// Shared trait for type the generic `I` parameter used by the
-/// `NeighborPeriorityQueue`.
+/// Shared trait for the generic `I` parameter used by `NeighborQueue`.
 pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
 /// Any type that implements all the individual requirements for
