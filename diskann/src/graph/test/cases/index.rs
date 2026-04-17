@@ -7,7 +7,7 @@ use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, s
 use crate::{
     graph::{self, AdjacencyList, DiskANNIndex, test::provider as test_provider},
     neighbor::Neighbor,
-    provider::NeighborAccessor,
+    provider::{Delete, NeighborAccessor},
 };
 use std::sync::Arc;
 
@@ -382,4 +382,35 @@ async fn test_paged_search_with_init_ids_error_cases() {
         .next_search_results(&ctx, &mut state, 2, &mut small_output)
         .await;
     assert!(result.is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_is_any_neighbor_deleted() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let ctx = test_provider::Context::new();
+    let mut accessor = index.provider().neighbors();
+
+    // Before any deletion, no node should have deleted neighbors.
+    let result = index
+        .is_any_neighbor_deleted(&ctx, &mut accessor, 2)
+        .await
+        .unwrap();
+    assert!(!result, "no neighbors should be deleted yet");
+
+    // Delete node 3 — node 2 has neighbors [3, 4], so it should now return true.
+    index.provider().delete(&ctx, &3).await.unwrap();
+
+    let result = index
+        .is_any_neighbor_deleted(&ctx, &mut accessor, 2)
+        .await
+        .unwrap();
+    assert!(result, "node 2 should detect deleted neighbor 3");
+
+    // Node 0 has neighbors [1, 4] — neither deleted, should still return false.
+    let result = index
+        .is_any_neighbor_deleted(&ctx, &mut accessor, 0)
+        .await
+        .unwrap();
+    assert!(!result, "node 0 has no deleted neighbors");
 }
