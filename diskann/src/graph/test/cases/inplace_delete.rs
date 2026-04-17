@@ -103,117 +103,75 @@ async fn basic_multi() {
         .unwrap();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn inplace_delete_onehop() {
+/// Sets up 2D square, deletes node 3 with the given method, then validates.
+async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
     let adjacency_lists = generate_2d_square_adjacency_list();
     let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
     let ctx = test_provider::Context::new();
 
     index
-        .inplace_delete(
-            test_provider::Strategy::new(),
-            &ctx,
-            &3,
-            3,
-            InplaceDeleteMethod::OneHop,
-        )
+        .inplace_delete(test_provider::Strategy::new(), &ctx, &3, 3, method)
         .await
         .unwrap();
 
     let neighbors = &index.provider().neighbors();
     validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+}
+
+/// Sets up 2D square, multi-deletes nodes 2 and 3 with the given method, then validates.
+async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .multi_inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            Arc::new([2, 3]),
+            3,
+            method,
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_after_2_and_3_delete(neighbors).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_onehop() {
+    delete_node_3_and_validate(InplaceDeleteMethod::OneHop).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_twohop_and_onehop() {
-    let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
-
-    index
-        .inplace_delete(
-            test_provider::Strategy::new(),
-            &ctx,
-            &3,
-            3,
-            InplaceDeleteMethod::TwoHopAndOneHop,
-        )
-        .await
-        .unwrap();
-
-    let neighbors = &index.provider().neighbors();
-    validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+    delete_node_3_and_validate(InplaceDeleteMethod::TwoHopAndOneHop).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_visited_and_topk() {
-    let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
-
-    index
-        .inplace_delete(
-            test_provider::Strategy::new(),
-            &ctx,
-            &3,
-            3,
-            InplaceDeleteMethod::VisitedAndTopK {
-                k_value: 4,
-                l_value: 10,
-            },
-        )
-        .await
-        .unwrap();
-
-    let neighbors = &index.provider().neighbors();
-    validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+    delete_node_3_and_validate(InplaceDeleteMethod::VisitedAndTopK {
+        k_value: 4,
+        l_value: 10,
+    })
+    .await;
 }
 
 /// Multi-delete vertices 2 and 3 using TwoHopAndOneHop, then validate the graph.
 #[tokio::test(flavor = "current_thread")]
 async fn multi_inplace_delete_twohop_and_onehop() {
-    let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
-
-    index
-        .multi_inplace_delete(
-            test_provider::Strategy::new(),
-            &ctx,
-            Arc::new([2, 3]),
-            3,
-            InplaceDeleteMethod::TwoHopAndOneHop,
-        )
-        .await
-        .unwrap();
-
-    let neighbors = &index.provider().neighbors();
-    validate_graph_after_2_and_3_delete(neighbors).await;
+    multi_delete_2_and_3_and_validate(InplaceDeleteMethod::TwoHopAndOneHop).await;
 }
 
 /// Multi-delete vertices 2 and 3 using VisitedAndTopK, then validate the graph.
 #[tokio::test(flavor = "current_thread")]
 async fn multi_inplace_delete_visited_and_topk() {
-    let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
-    let ctx = test_provider::Context::new();
-
-    index
-        .multi_inplace_delete(
-            test_provider::Strategy::new(),
-            &ctx,
-            Arc::new([2, 3]),
-            3,
-            InplaceDeleteMethod::VisitedAndTopK {
-                k_value: 4,
-                l_value: 10,
-            },
-        )
-        .await
-        .unwrap();
-
-    let neighbors = &index.provider().neighbors();
-    validate_graph_after_2_and_3_delete(neighbors).await;
+    multi_delete_2_and_3_and_validate(InplaceDeleteMethod::VisitedAndTopK {
+        k_value: 4,
+        l_value: 10,
+    })
+    .await;
 }
 
 async fn validate_graph_rebuild_for_simple_graph_after_3_delete<N>(neighbors: &N)
