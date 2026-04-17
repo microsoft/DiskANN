@@ -220,7 +220,12 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
 
     if (unv_label != "")
     {
-        unv_label_id = string_int_map[unv_label];
+        auto it = string_int_map.find(unv_label);
+        if (it != string_int_map.end())
+        {
+            unv_label_id = it->second;
+        }
+        // else: unv_label_id remains 0, indicating label not found
     }
 
     std::ofstream map_writer(mapFileName);

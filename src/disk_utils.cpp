@@ -683,8 +683,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             _index.build(base_file.c_str(), base_num);
         else
         {
-            if (universal_label != "")
-            { //  indicates no universal label
+            if (universal_label != "" && universal_label_num != 0)
+            { //  indicates universal label exists in label file
             //    LabelT unv_label_as_num = 0;
                 _index.set_universal_label(universal_label_num);
             }
@@ -757,8 +757,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         else
         {
             diskann::extract_shard_labels(label_file, shard_ids_file, shard_labels_file);
-            if (universal_label != "")
-            { //  indicates no universal label
+            if (universal_label != "" && universal_label_num != 0)
+            { //  indicates universal label exists in label file
 //                LabelT unv_label_as_num = 0;
                 _index.set_universal_label(universal_label_num);
             }
@@ -770,7 +770,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         if (p == 0)
         {
             std::string shard_universal_label_file = shard_index_file + "_universal_label.txt";
-            if (universal_label != "")
+            if (universal_label != "" && universal_label_num != 0)
             {
                 copy_file(shard_universal_label_file, final_index_universal_label_file);
             }
@@ -1394,7 +1394,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     {
         copy_file(labels_file_to_use, disk_labels_file);
         std::remove(mem_labels_file.c_str());
-        if (universal_label != "")
+        if (universal_label != "" && universal_label_id != 0)
         {
             copy_file(mem_univ_label_file, disk_univ_label_file);
             std::remove(mem_univ_label_file.c_str());

@@ -2124,8 +2124,17 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
                                      filter_params.universal_label, unv_label_as_num);
         if (filter_params.universal_label != "")
         {
-//            LabelT unv_label_as_num = 0;
-            this->set_universal_label(unv_label_as_num);
+            if (unv_label_as_num != 0)
+            {
+                this->set_universal_label(unv_label_as_num);
+            }
+            else
+            {
+                // Universal label not found in label file - disable universal label mode
+                _use_universal_label = false;
+                diskann::cout << "Warning: Universal label '" << filter_params.universal_label
+                              << "' not found in label file. Ignoring universal label." << std::endl;
+            }
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load, tags);
     }
