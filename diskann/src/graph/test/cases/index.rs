@@ -434,8 +434,14 @@ async fn test_drop_deleted_neighbors() {
     // Node 2 should no longer reference deleted node 3.
     let mut list = AdjacencyList::new();
     accessor.get_neighbors(2, &mut list).await.unwrap();
-    assert!(!list.contains(3), "node 2 should not reference deleted node 3");
-    assert!(list.contains(4), "node 2 should still reference start node 4");
+    assert!(
+        !list.contains(3),
+        "node 2 should not reference deleted node 3"
+    );
+    assert!(
+        list.contains(4),
+        "node 2 should still reference start node 4"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -458,8 +464,14 @@ async fn test_drop_deleted_neighbors_only_orphans() {
     // so it should be kept in node 2's neighbor list.
     let mut list = AdjacencyList::new();
     accessor.get_neighbors(2, &mut list).await.unwrap();
-    assert!(list.contains(3), "non-orphan deleted neighbor should be retained");
-    assert!(list.contains(4), "node 2 should still reference start node 4");
+    assert!(
+        list.contains(3),
+        "non-orphan deleted neighbor should be retained"
+    );
+    assert!(
+        list.contains(4),
+        "node 2 should still reference start node 4"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -549,7 +561,10 @@ async fn test_flat_search_with_filter() {
         .unwrap();
 
     assert_eq!(stats.result_count, 2);
-    assert!(!ids[..stats.result_count as usize].contains(&0), "node 0 should be filtered out");
+    assert!(
+        !ids[..stats.result_count as usize].contains(&0),
+        "node 0 should be filtered out"
+    );
     // Nodes 1, 2, 3 remain — closest two to (0.1, 0.1) are 1 (1,0) and 2 (0,1).
     assert!(ids.contains(&1), "node 1 should be present");
     assert!(ids.contains(&2), "node 2 should be present");
