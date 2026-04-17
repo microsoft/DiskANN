@@ -191,3 +191,197 @@ async fn test_get_degree_stats_mixed() {
     // nodes with degree < 2: node 0 (degree 0) and node 1 (degree 1)
     assert_eq!(stats.cnt_less_than_two, 2);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn validate_basic_paged_search() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let k = 2;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    let mut state = index
+        .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default(); k];
+    let count = index
+        .next_search_results(&ctx, &mut state, k, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(count, k);
+    assert_eq!(output[0].id, 0);
+    assert_eq!(output[1].id, 1);
+    assert!(output[..count].iter().all(|n| n.id != 4)); // ensure start point isn't in the
+    // output
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validate_paged_search_multiple() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let k = 1;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    let mut state = index
+        .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default()];
+    let mut visited: Vec<u32> = Vec::new();
+    for _ in 0..4 {
+        let count = index
+            .next_search_results(&ctx, &mut state, k, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        visited.push(output[0].id);
+    }
+
+    use std::collections::HashSet;
+    let unique: HashSet<_> = visited.iter().collect();
+    assert_eq!(unique.len(), visited.len());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_paged_search_error_cases() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let l_value = 2;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    let mut state = index
+        .start_paged_search(strategy, &ctx, query_point.as_slice(), l_value)
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default(); 2];
+
+    // k > l_value
+    let result = index
+        .next_search_results(&ctx, &mut state, l_value + 1, &mut output)
+        .await;
+    assert!(result.is_err());
+
+    // k == 0
+    let result = index
+        .next_search_results(&ctx, &mut state, 0, &mut output)
+        .await;
+    assert!(result.is_err());
+
+    // output buffer too small for requested k
+    let mut small_output = vec![Neighbor::default(); 1];
+    let result = index
+        .next_search_results(&ctx, &mut state, 2, &mut small_output)
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validate_basic_paged_search_with_init_ids() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let k = 2;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    // Seed search from nodes 0 and 1 instead of using the default start point
+    let init_ids: &[u32] = &[0, 1];
+    let mut state = index
+        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), k, Some(init_ids))
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default(); k];
+    let count = index
+        .next_search_results(&ctx, &mut state, k, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(count, k);
+    // Init IDs (0, 1) are filtered out as start points; results are from remaining nodes
+    assert!(output[..count].iter().all(|n| n.id != 0 && n.id != 1 && n.id != 4));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validate_paged_search_with_init_ids_multiple() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let k = 1;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    let init_ids: &[u32] = &[0, 1];
+    let mut state = index
+        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), k, Some(init_ids))
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default()];
+    let mut visited: Vec<u32> = Vec::new();
+    for _ in 0..2 {
+        let count = index
+            .next_search_results(&ctx, &mut state, k, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        visited.push(output[0].id);
+    }
+
+    use std::collections::HashSet;
+    let unique: HashSet<_> = visited.iter().collect();
+    assert_eq!(unique.len(), visited.len());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_paged_search_with_init_ids_error_cases() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+
+    let l_value = 2;
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+    let query_point = vec![0.1, 0.2];
+
+    let init_ids: &[u32] = &[0, 1];
+    let mut state = index
+        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), l_value, Some(init_ids))
+        .await
+        .unwrap();
+
+    let mut output = vec![Neighbor::default(); 2];
+
+    // k > l_value
+    let result = index
+        .next_search_results(&ctx, &mut state, l_value + 1, &mut output)
+        .await;
+    assert!(result.is_err());
+
+    // k == 0
+    let result = index
+        .next_search_results(&ctx, &mut state, 0, &mut output)
+        .await;
+    assert!(result.is_err());
+
+    // output buffer too small for requested k
+    let mut small_output = vec![Neighbor::default(); 1];
+    let result = index
+        .next_search_results(&ctx, &mut state, 2, &mut small_output)
+        .await;
+    assert!(result.is_err());
+}
