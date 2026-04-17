@@ -441,12 +441,13 @@ type Npq = Vec<NeighborPriorityQueue<u32>>;
 /// # Arguments
 ///
 /// * `distance_function` - e.g. L2
-/// * `dataset_iter` - The iterator over the dataset vectors, associated data, and
-/// * `queries` - A vector of query vectors
-/// * `query_aligned_dimmensions` - The number of dimensions to align the query vectors to for optimized distance comparison.
+/// * `dataset_iter` - The iterator over the dataset vectors and associated data.
+/// * `queries` - Query vectors as a row-major `Matrix` of shape `num_queries × query_dim`.
+///   `query_dim` is inferred from `queries.ncols()`.
 /// * `recall_at` - The number of neighbors to compute for each query.
-/// * `insert_iterator` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
+/// * `insert_iter` - Optional iterator containing more dataset vectors. This may be useful if you are testing recall for an index that has points dynamically inserted into it.
 /// * `skip_base` - Optional number of base points to skip. This is useful if you want to compute the ground truth for a set where the first skip_base points are deleted from the index.
+/// * `query_bitmaps` - Optional per-query bitmaps restricting which base point ids contribute to that query's neighbors.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_ground_truth_from_data<Data, VectorReader>(
     distance_function: Metric,
