@@ -414,3 +414,65 @@ async fn test_is_any_neighbor_deleted() {
         .unwrap();
     assert!(!result, "node 0 has no deleted neighbors");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_drop_deleted_neighbors() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let ctx = test_provider::Context::new();
+    let mut accessor = index.provider().neighbors();
+
+    // Delete node 3, then drop deleted neighbors from node 2 (neighbors: [3, 4]).
+    index.provider().delete(&ctx, &3).await.unwrap();
+
+    let result = index
+        .drop_deleted_neighbors(&ctx, &mut accessor, 2, false)
+        .await
+        .unwrap();
+    assert_eq!(result, graph::ConsolidateKind::Complete);
+
+    // Node 2 should no longer reference deleted node 3.
+    let mut list = AdjacencyList::new();
+    accessor.get_neighbors(2, &mut list).await.unwrap();
+    assert!(!list.contains(3), "node 2 should not reference deleted node 3");
+    assert!(list.contains(4), "node 2 should still reference start node 4");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_drop_deleted_neighbors_only_orphans() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let ctx = test_provider::Context::new();
+    let mut accessor = index.provider().neighbors();
+
+    // Delete node 3 but don't clear its adjacency list — it's not an orphan.
+    index.provider().delete(&ctx, &3).await.unwrap();
+
+    let result = index
+        .drop_deleted_neighbors(&ctx, &mut accessor, 2, true)
+        .await
+        .unwrap();
+    assert_eq!(result, graph::ConsolidateKind::Complete);
+
+    // With only_orphans=true, node 3 still has a non-empty adjacency list,
+    // so it should be kept in node 2's neighbor list.
+    let mut list = AdjacencyList::new();
+    accessor.get_neighbors(2, &mut list).await.unwrap();
+    assert!(list.contains(3), "non-orphan deleted neighbor should be retained");
+    assert!(list.contains(4), "node 2 should still reference start node 4");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_drop_deleted_neighbors_noop() {
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let ctx = test_provider::Context::new();
+    let mut accessor = index.provider().neighbors();
+
+    // No deletions — should be a no-op.
+    let result = index
+        .drop_deleted_neighbors(&ctx, &mut accessor, 0, false)
+        .await
+        .unwrap();
+    assert_eq!(result, graph::ConsolidateKind::Complete);
+}
