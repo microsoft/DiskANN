@@ -15,7 +15,10 @@ use crate::{
     provider::NeighborAccessor,
 };
 
-use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square};
+use super::helpers::{
+    create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square,
+    setup_2d_square_using_synthetics_grid,
+};
 
 fn inplace_delete_setup() -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider_config = test_provider::Config::new(
@@ -303,4 +306,43 @@ async fn delete_isolated_node() {
             "node {node} neighbors should be unchanged"
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_two_hop_and_one_hop_wider_topology() {
+    let start_id = u32::MAX;
+    let index = setup_2d_square_using_synthetics_grid(3, start_id, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            &4,
+            3,
+            InplaceDeleteMethod::TwoHopAndOneHop,
+        )
+        .await
+        .unwrap();
+
+    let mut accessor = index.provider().neighbors();
+    let mut list = AdjacencyList::new();
+
+    for node in 0u32..9 {
+        if node == 4 {
+            continue; // we deleted 4
+        }
+
+        accessor.get_neighbors(node, &mut list).await.unwrap();
+        assert!(
+            !list.contains(4),
+            "node {node} should not reference 4, it's deleted"
+        );
+    }
+
+    let reachable = index
+        .count_reachable_nodes(&[start_id], &mut accessor)
+        .await
+        .unwrap();
+    assert_eq!(reachable, 9, "8 data nodes + start should be reachable");
 }

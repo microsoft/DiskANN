@@ -14,7 +14,7 @@ use crate::{
     graph::{
         self, AdjacencyList, DiskANNIndex,
         test::{
-            provider::{self as test_provider, Provider},
+            provider::{self as test_provider, Provider, StartPoint},
             synthetic::Grid,
         },
     },
@@ -75,6 +75,36 @@ pub(super) fn setup_2d_square(
 
     let provider =
         Provider::new_from(provider_config, iter::once((start_id, start_adj)), points).unwrap();
+
+    let index_config = graph::config::Builder::new(
+        pruned_degree,
+        graph::config::MaxDegree::same(),
+        10,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    Arc::new(DiskANNIndex::new(index_config, provider, None))
+}
+
+pub(super) fn setup_2d_square_using_synthetics_grid(
+    size: usize,
+    start_id: u32,
+    pruned_degree: usize,
+) -> Arc<DiskANNIndex<Provider>> {
+    let grid = Grid::Two;
+    let setup = grid.setup(size, start_id);
+
+    let provider_config = test_provider::Config::new(
+        Metric::L2,
+        (grid.dim() * 2).into(),
+        StartPoint::new(setup.start_id(), setup.start_point()),
+    )
+    .unwrap();
+
+    let provider =
+        Provider::new_from(provider_config, setup.start_neighbors(), setup.setup()).unwrap();
 
     let index_config = graph::config::Builder::new(
         pruned_degree,
