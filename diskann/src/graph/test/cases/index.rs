@@ -476,3 +476,81 @@ async fn test_drop_deleted_neighbors_noop() {
         .unwrap();
     assert_eq!(result, graph::ConsolidateKind::Complete);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_flat_search_basic() {
+    use crate::graph::search::Knn;
+    use crate::graph::search_output_buffer::IdDistance;
+
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+
+    // Query near origin — node 0 at (0,0) is closest.
+    // l_value must cover all 5 points (4 data + 1 start) so the working set
+    // doesn't drop any before the post-processor runs.
+    let query = [0.1_f32, 0.1];
+    let params = Knn::new(4, 5, None).unwrap();
+
+    let mut ids = [0u32; 4];
+    let mut distances = [0.0f32; 4];
+    let mut output = IdDistance::new(&mut ids, &mut distances);
+
+    let stats = index
+        .flat_search(
+            &strategy,
+            &ctx,
+            query.as_slice(),
+            &|_| true,
+            &params,
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+    // FilterStartPoints removes the start node, leaving 4 data nodes.
+    assert_eq!(stats.result_count, 4);
+    let results: std::collections::HashSet<u32> =
+        ids[..stats.result_count as usize].iter().copied().collect();
+    for id in 0..4u32 {
+        assert!(results.contains(&id), "data node {id} should be in results");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_flat_search_with_filter() {
+    use crate::graph::search::Knn;
+    use crate::graph::search_output_buffer::IdDistance;
+
+    let adjacency_list = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let strategy = test_provider::Strategy::new();
+    let ctx = test_provider::Context::new();
+
+    // Query near origin, but filter out node 0.
+    let query = [0.1_f32, 0.1];
+    let params = Knn::new(2, 4, None).unwrap();
+
+    let mut ids = [0u32; 2];
+    let mut distances = [0.0f32; 2];
+    let mut output = IdDistance::new(&mut ids, &mut distances);
+
+    let stats = index
+        .flat_search(
+            &strategy,
+            &ctx,
+            query.as_slice(),
+            &|ext_id: &u32| *ext_id != 0,
+            &params,
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stats.result_count, 2);
+    assert!(!ids[..stats.result_count as usize].contains(&0), "node 0 should be filtered out");
+    // Nodes 1, 2, 3 remain — closest two to (0.1, 0.1) are 1 (1,0) and 2 (0,1).
+    assert!(ids.contains(&1), "node 1 should be present");
+    assert!(ids.contains(&2), "node 2 should be present");
+}
