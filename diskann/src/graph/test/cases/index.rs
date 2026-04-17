@@ -309,7 +309,11 @@ async fn validate_basic_paged_search_with_init_ids() {
 
     assert_eq!(count, k);
     // Init IDs (0, 1) are filtered out as start points; results are from remaining nodes
-    assert!(output[..count].iter().all(|n| n.id != 0 && n.id != 1 && n.id != 4));
+    assert!(
+        output[..count]
+            .iter()
+            .all(|n| n.id != 0 && n.id != 1 && n.id != 4)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -348,7 +352,13 @@ async fn test_paged_search_with_init_ids_error_cases() {
 
     let init_ids: &[u32] = &[0, 1];
     let mut state = index
-        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), l_value, Some(init_ids))
+        .start_paged_search_with_init_ids(
+            strategy,
+            &ctx,
+            query_point.as_slice(),
+            l_value,
+            Some(init_ids),
+        )
         .await
         .unwrap();
 
