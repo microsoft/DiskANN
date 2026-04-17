@@ -299,3 +299,57 @@ where
 
     Ok(make_stats(scratch))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A simple label evaluator that matches only even IDs.
+    #[derive(Debug)]
+    struct EvenOnly;
+
+    impl QueryLabelProvider<u32> for EvenOnly {
+        fn is_match(&self, id: u32) -> bool {
+            id % 2 == 0
+        }
+    }
+
+    #[test]
+    fn predicate_eval_requires_not_visited_and_matching() {
+        let mut visited = HashSet::new();
+        visited.insert(2u32);
+        let label = EvenOnly;
+        let pred = NotInMutWithLabelCheck::new(&mut visited, &label);
+
+        // Not visited + matches label → true
+        assert!(pred.eval(&4));
+
+        // Already visited + matches label → false
+        assert!(!pred.eval(&2));
+
+        // Not visited + doesn't match label → false
+        assert!(!pred.eval(&3));
+
+        // Already visited + doesn't match → false
+        visited.insert(3);
+        let pred = NotInMutWithLabelCheck::new(&mut visited, &label);
+        assert!(!pred.eval(&3));
+    }
+
+    #[test]
+    fn predicate_eval_mut_inserts_only_matching() {
+        let mut visited = HashSet::new();
+        let label = EvenOnly;
+        let mut pred = NotInMutWithLabelCheck::new(&mut visited, &label);
+
+        // Matching + not visited → inserts and returns true
+        assert!(pred.eval_mut(&4));
+        // Second call → already visited, returns false
+        assert!(!pred.eval_mut(&4));
+
+        // Non-matching → not inserted, returns false
+        assert!(!pred.eval_mut(&3));
+        // Confirm 3 was NOT added to visited set
+        assert!(!pred.visited_set.contains(&3));
+    }
+}
