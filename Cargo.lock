@@ -842,7 +842,6 @@ dependencies = [
  "cfg-if",
  "criterion",
  "diskann",
- "diskann-linalg",
  "diskann-platform",
  "diskann-quantization",
  "diskann-utils",

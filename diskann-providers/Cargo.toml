@@ -29,7 +29,6 @@ cfg-if.workspace = true
 diskann-wide = { workspace = true }
 arc-swap.workspace = true
 tracing.workspace = true
-diskann-linalg = { workspace = true }
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }

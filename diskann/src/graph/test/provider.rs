@@ -6,6 +6,7 @@
 //! A pedantic provider implementation used for testing alorithmic logic.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
@@ -981,7 +982,7 @@ pub struct Accessor<'a> {
     buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
     /// IDs that will produce transient errors when accessed.
-    transient_ids: Option<HashSet<u32>>,
+    transient_ids: Option<Cow<'a, HashSet<u32>>>,
 }
 
 impl<'a> Accessor<'a> {
@@ -998,11 +999,11 @@ impl<'a> Accessor<'a> {
     /// Creates an accessor where `get_element` returns a transient error for
     /// any ID in `transient_ids`. The ID must still exist in the provider —
     /// accessing a truly missing ID remains a critical `InvalidId` error.
-    pub fn flaky(provider: &'a Provider, transient_ids: HashSet<u32>) -> Self {
+    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
         Self::new_inner(provider, Some(transient_ids))
     }
 
-    fn new_inner(provider: &'a Provider, transient_ids: Option<HashSet<u32>>) -> Self {
+    fn new_inner(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
         let buffer = (0..provider.dim()).map(|_| 0.0).collect();
         Self {
             provider,
@@ -1106,22 +1107,37 @@ impl provider::CacheableAccessor for Accessor<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Strategy {
     // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded
     // baseline tests, this must be set to `false` to obtain repeatable `get_vector` calls.
     working_set_reuse: bool,
+    transient_ids: Option<Arc<HashSet<u32>>>,
 }
 
 impl Strategy {
     pub fn new() -> Self {
         Self {
             working_set_reuse: true,
+            transient_ids: None,
         }
     }
 
     pub fn with_options(working_set_reuse: bool) -> Self {
-        Self { working_set_reuse }
+        Self {
+            working_set_reuse,
+            transient_ids: None,
+        }
+    }
+
+    pub fn with_transient(
+        working_set_reuse: bool,
+        transient_ids: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        Self {
+            working_set_reuse,
+            transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
+        }
     }
 }
 
@@ -1170,7 +1186,10 @@ impl glue::PruneStrategy<Provider> for Strategy {
         provider: &'a Provider,
         _context: &'a Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(Accessor::new(provider))
+        match &self.transient_ids {
+            Some(ids) => Ok(Accessor::flaky(provider, Cow::Borrowed(ids))),
+            None => Ok(Accessor::new(provider)),
+        }
     }
 }
 
@@ -1178,7 +1197,7 @@ impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn insert_search_accessor<'a>(
@@ -1197,7 +1216,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
-        *self
+        self.clone()
     }
 
     fn finish<Itr>(
@@ -1272,11 +1291,11 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn search_strategy(&self) -> Self::SearchStrategy {
-        *self
+        self.clone()
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
