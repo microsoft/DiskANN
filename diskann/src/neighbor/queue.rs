@@ -3,30 +3,28 @@
  * Licensed under the MIT license.
  */
 
+use std::{
+    fmt::{Debug, Display},
+    marker::PhantomData,
+};
+
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
-use std::marker::PhantomData;
 
 use super::Neighbor;
 
 /// Shared trait for type the generic `I` parameter used by the
 /// `NeighborPeriorityQueue`.
-pub trait NeighborPriorityQueueIdType:
-    Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
-{
-}
+pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
 /// Any type that implements all the individual requirements for
 /// `NeighborPriorityQueueIdType` implements the full trait.
-impl<T> NeighborPriorityQueueIdType for T where
-    T: Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
-{
-}
+impl<T> NeighborPriorityQueueIdType for T where T: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
 /// Trait defining the interface for a neighbor priority queue.
 ///
 /// This trait abstracts the core functionality of a priority queue that manages
 /// neighbors ordered by distance, supporting both fixed-size and resizable queues.
-pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send + Sync {
+pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: Debug + Send + Sync {
     /// The iterator type returned by `iter()`.
     type Iter<'a>: ExactSizeIterator<Item = Neighbor<I>> + Send + Sync
     where
