@@ -104,6 +104,27 @@ async fn basic_multi() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inplace_delete_onehop() {
+    let adjacency_lists = generate_2d_square_adjacency_list();
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let ctx = test_provider::Context::new();
+
+    index
+        .inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            &3,
+            3,
+            InplaceDeleteMethod::OneHop,
+        )
+        .await
+        .unwrap();
+
+    let neighbors = &index.provider().neighbors();
+    validate_graph_rebuild_for_simple_graph_after_3_delete(neighbors).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inplace_delete_twohop_and_onehop() {
     let adjacency_lists = generate_2d_square_adjacency_list();
     let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
@@ -280,4 +301,48 @@ where
         &[0, 1],
         "start node 4 should connect to remaining live corners"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delete_isolated_node() {
+    let adjacency_list = vec![
+        AdjacencyList::from_iter_untrusted([1, 4]),
+        AdjacencyList::from_iter_untrusted([0, 4]),
+        AdjacencyList::from_iter_untrusted([]),
+        AdjacencyList::from_iter_untrusted([4]),
+        AdjacencyList::from_iter_untrusted([0, 1, 3]),
+    ];
+
+    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let ctx = test_provider::Context::new();
+
+    //capture state of neighbors pre-delete (ignoring node 2)
+    let accessor = index.provider().neighbors();
+    let mut list = AdjacencyList::new();
+    let mut before: Vec<Vec<u32>> = Vec::new();
+
+    for node in [0u32, 1, 3, 4] {
+        accessor.get_neighbors(node, &mut list).await.unwrap();
+        before.push(list.iter().copied().collect());
+    }
+
+    index
+        .inplace_delete(
+            test_provider::Strategy::new(),
+            &ctx,
+            &2,
+            3,
+            InplaceDeleteMethod::OneHop,
+        )
+        .await
+        .unwrap(); // shouldn't panic
+
+    for (i, node) in [0u32, 1, 3, 4].iter().enumerate() {
+        accessor.get_neighbors(*node, &mut list).await.unwrap();
+        let after: Vec<u32> = list.iter().copied().collect();
+        assert_eq!(
+            after, before[i],
+            "node {node} neighbors should be unchanged"
+        );
+    }
 }
