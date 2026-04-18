@@ -522,6 +522,10 @@ mod imp {
                 minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
+                DataRef<'b, NBITS>,
+                distances::Result<f32>,
             >,
         MinMaxIP: for<'a, 'b> PureDistanceFunction<
                 DataRef<'a, NBITS>,
@@ -537,6 +541,14 @@ mod imp {
                 distances::MathematicalResult<f32>,
             > + for<'a, 'b> PureDistanceFunction<
                 minmax::FullQueryRef<'a>,
+                DataRef<'b, NBITS>,
+                distances::MathematicalResult<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
+                DataRef<'b, NBITS>,
+                distances::Result<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
                 DataRef<'b, NBITS>,
                 distances::MathematicalResult<f32>,
             >,
@@ -581,6 +593,29 @@ mod imp {
                         output_dim,
                         diskann_quantization::alloc::GlobalAllocator,
                     )?;
+                    quantizer.compress_into(query, compressed.reborrow_mut())?;
+
+                    match self.measure {
+                        SimilarityMeasure::SquaredL2 => {
+                            let inner: MinMaxL2Squared = quantizer.as_functor();
+                            Ok(Boxed::new(Curried::new(inner, compressed)))
+                        }
+                        SimilarityMeasure::InnerProduct => {
+                            let inner: MinMaxIP = quantizer.as_functor();
+                            Ok(Boxed::new(Curried::new(inner, compressed)))
+                        }
+                        SimilarityMeasure::Cosine => {
+                            let inner: MinMaxCosine = quantizer.as_functor();
+                            Ok(Boxed::new(Curried::new(inner, compressed)))
+                        }
+                        SimilarityMeasure::CosineNormalized => {
+                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
+                            Ok(Boxed::new(Curried::new(inner, compressed)))
+                        }
+                    }
+                }
+                MinMaxQuery::EightBit => {
+                    let mut compressed = Data::<8>::new_boxed(output_dim);
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
 
                     match self.measure {

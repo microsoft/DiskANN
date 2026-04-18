@@ -26,7 +26,8 @@
         },
         "query_layouts": [
           "same_as_data",
-          "full_precision"
+          "full_precision",
+          "eight_bit"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -42,7 +43,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "squared_l2",
+        "distance": "inner_product",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
@@ -59,8 +60,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -93,8 +93,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -129,8 +128,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -146,7 +144,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "squared_l2",
+        "distance": "cosine",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
@@ -163,8 +161,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -197,8 +194,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 1,
@@ -234,7 +230,8 @@
         },
         "query_layouts": [
           "same_as_data",
-          "full_precision"
+          "full_precision",
+          "eight_bit"
         ],
         "compression_threads": 1,
         "num_bits": 4,
@@ -267,8 +264,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 4,
@@ -284,7 +280,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "squared_l2",
+        "distance": "inner_product",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
@@ -301,8 +297,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 4,
@@ -337,8 +332,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 4,
@@ -374,7 +368,8 @@
         },
         "query_layouts": [
           "same_as_data",
-          "full_precision"
+          "full_precision",
+          "eight_bit"
         ],
         "compression_threads": 1,
         "num_bits": 8,
@@ -407,8 +402,7 @@
           }
         },
         "query_layouts": [
-          "same_as_data",
-          "full_precision"
+          "same_as_data"
         ],
         "compression_threads": 1,
         "num_bits": 8,
