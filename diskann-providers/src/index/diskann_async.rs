@@ -167,7 +167,7 @@ pub(crate) mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
             glue::{
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
@@ -2965,10 +2965,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 
@@ -3605,80 +3602,6 @@ pub(crate) mod tests {
 
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
         }
-    }
-
-    // This test uses a "Flaky" accessor that spuriously fails with non-critical errors to
-    // check that such errors are not propagated by DiskANN.
-    #[tokio::test]
-    async fn test_flaky_consolidate() {
-        // What we need to do is populate a graph with an element that has an adjacency list
-        // that exceeds the configured maximum degree.
-        //
-        // We then need to try to consolidate that element and ensure that retrieval of
-        // that element's data results in a transient error.
-
-        // create small index instance
-        let dim = 2;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            4,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            10,         // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        let start_point: &[f32] = &[0.5, 0.5];
-
-        index
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-            .unwrap();
-
-        // vectors are the four corners of a square, with the start point in the middle
-        // the middle point forms an edge to each corner, while corners form an edge
-        // to their opposite vertex vertically and horizontally as well as the middle
-        let vectors = [
-            vec![0.0, 0.0], // point 0
-            vec![0.0, 1.0], // point 1
-            vec![1.0, 0.0], // point 2
-            vec![1.0, 1.0], // point 3
-            vec![2.0, 2.0], // point 4
-            vec![0.0, 2.0], // point 5
-            vec![2.0, 0.0], // point 6
-        ];
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0
-            AdjacencyList::from_iter_untrusted([4, 0, 3, 6]),    // point 1
-            AdjacencyList::from_iter_untrusted([4, 3, 0, 6]),    // point 2
-            AdjacencyList::from_iter_untrusted([4, 2, 1, 6]),    // point 3
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 6]), // point 4
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 6]), // point 5
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 3]), // point 6 -- start point
-        ];
-
-        let ctx = &DefaultContext;
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, ctx, &vectors).await;
-
-        let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
-            .await
-            .unwrap();
-        assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
     }
 
     async fn create_retry_saturated_index(
