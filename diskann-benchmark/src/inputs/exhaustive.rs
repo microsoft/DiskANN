@@ -543,7 +543,11 @@ impl Example for MinMax {
             data_type: DataType::Float32,
             distance: SimilarityMeasure::SquaredL2,
             search: SearchPhase::example(),
-            query_layouts: vec![MinMaxQuery::SameAsData, MinMaxQuery::FullPrecision, MinMaxQuery::EightBit],
+            query_layouts: vec![
+                MinMaxQuery::SameAsData,
+                MinMaxQuery::FullPrecision,
+                MinMaxQuery::EightBit,
+            ],
             num_bits: NUM_BITS,
             transform_kind: TransformKind::DoubleHadamard(TargetDim::Same),
             seed: 0x6cae32c479ac3407,
