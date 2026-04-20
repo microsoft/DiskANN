@@ -28,7 +28,7 @@ use crate::{
 };
 
 fn root() -> TestRoot {
-    TestRoot::new("graph/test/cases/pagedSearch")
+    TestRoot::new("graph/test/cases/paged_search")
 }
 
 fn setup_grid_index(grid_size: usize, dims: Grid) -> Arc<DiskANNIndex<test_provider::Provider>> {
@@ -151,11 +151,12 @@ fn basic_paged_search() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = 32;
     let page_size = 4;
+    let ctx = test_provider::Context::new();
 
     let mut state = rt
         .block_on(index.start_paged_search(
             test_provider::Strategy::new(),
-            &test_provider::Context::new(),
+            &ctx,
             query.as_slice(),
             search_l,
         ))
@@ -168,7 +169,7 @@ fn basic_paged_search() {
         let count = rt
             .block_on(
                 index.next_search_results::<test_provider::Strategy, &[f32]>(
-                    &test_provider::Context::new(),
+                    &ctx,
                     &mut state,
                     page_size,
                     &mut buffer,
@@ -204,11 +205,12 @@ fn single_page() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = 200;
     let page_size = 200; // larger than total points (125)
+    let ctx = test_provider::Context::new();
 
     let mut state = rt
         .block_on(index.start_paged_search(
             test_provider::Strategy::new(),
-            &test_provider::Context::new(),
+            &ctx,
             query.as_slice(),
             search_l,
         ))
@@ -219,7 +221,7 @@ fn single_page() {
     let count = rt
         .block_on(
             index.next_search_results::<test_provider::Strategy, &[f32]>(
-                &test_provider::Context::new(),
+                &ctx,
                 &mut state,
                 page_size,
                 &mut buffer,
@@ -242,7 +244,7 @@ fn single_page() {
     let count2 = rt
         .block_on(
             index.next_search_results::<test_provider::Strategy, &[f32]>(
-                &test_provider::Context::new(),
+                &ctx,
                 &mut state,
                 page_size,
                 &mut buffer,
@@ -264,11 +266,12 @@ fn small_page_size() {
     let (index, query) = setup_grid_index_and_basic_query(grid_size, dims);
     let search_l = 32;
     let page_size = 1; // one result per page, maximum iterations
+    let ctx = test_provider::Context::new();
 
     let mut state = rt
         .block_on(index.start_paged_search(
             test_provider::Strategy::new(),
-            &test_provider::Context::new(),
+            &ctx,
             query.as_slice(),
             search_l,
         ))
@@ -281,7 +284,7 @@ fn small_page_size() {
         let count = rt
             .block_on(
                 index.next_search_results::<test_provider::Strategy, &[f32]>(
-                    &test_provider::Context::new(),
+                    &ctx,
                     &mut state,
                     page_size,
                     &mut buffer,

@@ -1,6 +1,6 @@
 {
   "file": "diskann/src/graph/test/cases/paged_search.rs",
-  "test": "graph/test/cases/pagedSearch/basic_paged_search",
+  "test": "graph/test/cases/paged_search/basic_paged_search",
   "payload": {
     "dims": 3,
     "grid_size": 5,
