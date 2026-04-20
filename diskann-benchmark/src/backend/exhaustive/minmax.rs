@@ -560,33 +560,43 @@ mod imp {
             store: &Store<NBITS>,
             query: &[f32],
         ) -> anyhow::Result<Self::Computer<'_>> {
-            // let query_copy = query.to_vec();
             let quantizer = &store.quantizer;
-
             let output_dim = quantizer.output_dim();
+
+            // Pair the freshly-compressed query with the right `MinMax*` distance functor
+            // for `self.measure` and erase the concrete query type behind a `Boxed<NBITS>`.
+            //
+            // Implemented as a macro because expressing it as a generic function would need
+            // higher-ranked bounds on `<Q as Reborrow<'a>>::Target` that the current trait
+            // solver cannot discharge for the concrete `Q`s used below.
+            macro_rules! box_for_measure {
+                ($compressed:expr) => {
+                    match self.measure {
+                        SimilarityMeasure::SquaredL2 => {
+                            let inner: MinMaxL2Squared = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::InnerProduct => {
+                            let inner: MinMaxIP = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::Cosine => {
+                            let inner: MinMaxCosine = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::CosineNormalized => {
+                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                    }
+                };
+            }
+
             match self.layout {
                 MinMaxQuery::SameAsData => {
                     let mut compressed = Data::<NBITS>::new_boxed(output_dim);
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
-
-                    match self.measure {
-                        SimilarityMeasure::SquaredL2 => {
-                            let inner: MinMaxL2Squared = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::InnerProduct => {
-                            let inner: MinMaxIP = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::Cosine => {
-                            let inner: MinMaxCosine = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::CosineNormalized => {
-                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                    }
+                    Ok(box_for_measure!(compressed))
                 }
                 MinMaxQuery::FullPrecision => {
                     let mut compressed = minmax::FullQuery::new_in(
@@ -594,48 +604,12 @@ mod imp {
                         diskann_quantization::alloc::GlobalAllocator,
                     )?;
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
-
-                    match self.measure {
-                        SimilarityMeasure::SquaredL2 => {
-                            let inner: MinMaxL2Squared = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::InnerProduct => {
-                            let inner: MinMaxIP = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::Cosine => {
-                            let inner: MinMaxCosine = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::CosineNormalized => {
-                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                    }
+                    Ok(box_for_measure!(compressed))
                 }
                 MinMaxQuery::EightBit => {
                     let mut compressed = Data::<8>::new_boxed(output_dim);
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
-
-                    match self.measure {
-                        SimilarityMeasure::SquaredL2 => {
-                            let inner: MinMaxL2Squared = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::InnerProduct => {
-                            let inner: MinMaxIP = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::Cosine => {
-                            let inner: MinMaxCosine = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::CosineNormalized => {
-                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                    }
+                    Ok(box_for_measure!(compressed))
                 }
             }
         }

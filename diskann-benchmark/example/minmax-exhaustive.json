@@ -43,7 +43,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "inner_product",
+        "distance": "squared_l2",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
@@ -144,7 +144,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "cosine",
+        "distance": "squared_l2",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
@@ -280,7 +280,7 @@
       "content": {
         "data": "disk_index_siftsmall_learn_256pts_data.fbin",
         "data_type": "float32",
-        "distance": "inner_product",
+        "distance": "squared_l2",
         "search": {
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
