@@ -204,9 +204,7 @@ pub(crate) mod tests {
             layers::BetaFilter,
         },
         storage::StorageReadProvider,
-        test_utils::{
-            assert_top_k_exactly_match, groundtruth, is_match,
-        },
+        test_utils::{assert_top_k_exactly_match, groundtruth, is_match},
         utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
