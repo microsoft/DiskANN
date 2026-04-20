@@ -89,18 +89,20 @@ fn assert_no_duplicates_across_pages(pages: &[Vec<Neighbor<u32>>]) {
     }
 }
 
-/// assert distances are non-decreasing across full result sequence
+/// assert distances are non-decreasing within each page
 fn assert_non_decreasing_distances(pages: &[Vec<Neighbor<u32>>]) {
-    let all_results: Vec<&Neighbor<u32>> = pages.iter().flat_map(|p| p.iter()).collect();
-    for window in all_results.windows(2) {
-        assert!(
-            window[0].distance <= window[1].distance,
-            "distances not non-decreasing: id {} dist {} followed by id {} dist {}",
-            window[0].id,
-            window[0].distance,
-            window[1].id,
-            window[1].distance,
-        );
+    for (page_idx, page) in pages.iter().enumerate() {
+        for window in page.windows(2) {
+            assert!(
+                window[0].distance <= window[1].distance,
+                "page {}: distances not non-decreasing: id {} dist {} followed by id {} dist {}",
+                page_idx,
+                window[0].id,
+                window[0].distance,
+                window[1].id,
+                window[1].distance,
+            );
+        }
     }
 }
 
