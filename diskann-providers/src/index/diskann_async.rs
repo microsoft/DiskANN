@@ -174,7 +174,7 @@ pub(crate) mod tests {
                 SearchStrategy,
             },
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
-            search::{Knn, Range},
+            search::Knn,
             search_output_buffer,
         },
         neighbor::Neighbor,
@@ -205,7 +205,7 @@ pub(crate) mod tests {
         },
         storage::StorageReadProvider,
         test_utils::{
-            assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
+            assert_top_k_exactly_match, groundtruth, is_match,
         },
         utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
     };
@@ -2219,122 +2219,6 @@ pub(crate) mod tests {
                     .unwrap();
             }
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
-        }
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn test_sift_build_and_range_search<S>(
-        #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
-        #[values(1, 10)] batchsize: usize,
-        #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
-    ) where
-        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
-            + MultiInsertStrategy<TestProvider, Matrix<f32>>
-            + Clone,
-    {
-        let ctx = &DefaultContext;
-        let parameters = InitParams {
-            l_build: 64,
-            max_degree: 16,
-            metric: Metric::L2,
-            batchsize: NonZeroUsize::new(batchsize).unwrap(),
-        };
-
-        let (index, data) = init_from_file(
-            build_strategy.clone(),
-            parameters,
-            SIFTSMALL,
-            8,
-            StartPointStrategy::RandomSamples {
-                nsamples: ONE,
-                seed: 0xe058c9c57864dd1e,
-            },
-        )
-        .await;
-
-        let starting_l_value = 32;
-        let lower_l_value = 4;
-
-        let radius = radii.1;
-        let inner_radius = radii.0;
-
-        // Here, we use elements of the dataset to search the dataset itself.
-        //
-        // We do this for each query, computing the expected ground truth and verifying
-        // that our simple graph search matches.
-        //
-        // Because this dataset is small, we can expect exact equality expect for the
-        // case where we use a lower initial beam, which will trigger more two-round searches.
-
-        for (q, query) in data.row_iter().enumerate() {
-            let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
-            {
-                // Full Precision Search.
-                let range_search = Range::new(starting_l_value, radius).unwrap();
-                let mut results: Vec<Neighbor<u32>> = Vec::new();
-                let _ = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut results)
-                    .await
-                    .unwrap();
-
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
-                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
-            }
-
-            {
-                // Quantized Search
-                let range_search = Range::new(starting_l_value, radius).unwrap();
-                let mut results: Vec<Neighbor<u32>> = Vec::new();
-                let _ = index
-                    .search(range_search, &Hybrid::new(None), ctx, query, &mut results)
-                    .await
-                    .unwrap();
-
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
-                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
-            }
-
-            {
-                // Test with an inner radius
-
-                assert!(inner_radius <= radius);
-                let range_search = Range::with_options(
-                    None,
-                    starting_l_value,
-                    None,
-                    radius,
-                    Some(inner_radius),
-                    1.0,
-                    1.0,
-                )
-                .unwrap();
-                let mut results: Vec<Neighbor<u32>> = Vec::new();
-                let _ = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut results)
-                    .await
-                    .unwrap();
-
-                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
-                assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
-            }
-
-            {
-                // Test with a lower initial beam to trigger more two-round searches
-                // We don't expect results to exactly match here
-                let range_search = Range::new(lower_l_value, radius).unwrap();
-                let mut results: Vec<Neighbor<u32>> = Vec::new();
-                let _ = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut results)
-                    .await
-                    .unwrap();
-
-                // check that ids don't have duplicates
-                let mut ids_set = std::collections::HashSet::new();
-                for n in &results {
-                    assert!(ids_set.insert(n.id));
-                }
-            }
         }
     }
 

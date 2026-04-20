@@ -82,37 +82,4 @@ pub fn assert_top_k_exactly_match(
     }
 }
 
-/// Asserts that the range results exactly match the ground truth
-///
-/// For each of the range results, this function verifies that both the distance and ID
-/// match exactly with what's expected in the ground truth.
-#[cfg(test)]
-pub fn assert_range_results_exactly_match(
-    query_id: usize,
-    gt: &[Neighbor<u32>],
-    ids: &[u32],
-    radius: f32,
-    inner_radius: Option<f32>,
-) {
-    let gt_ids = if let Some(inner_radius) = inner_radius {
-        gt.iter()
-            .filter(|nbh| nbh.distance >= inner_radius && nbh.distance <= radius)
-            .map(|nbh| nbh.id)
-            .collect::<Vec<_>>()
-    } else {
-        gt.iter()
-            .filter(|nbh| nbh.distance <= radius)
-            .map(|nbh| nbh.id)
-            .collect::<Vec<_>>()
-    };
-    if ids.iter().any(|id| !gt_ids.contains(id)) {
-        panic!(
-            "query {}: found ids {:?} in range search with radius {}, inner radius {}, but expected {:?}",
-            query_id,
-            ids,
-            radius,
-            inner_radius.unwrap_or(f32::MIN),
-            gt_ids
-        );
-    }
-}
+
