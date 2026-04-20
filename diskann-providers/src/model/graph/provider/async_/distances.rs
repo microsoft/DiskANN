@@ -115,6 +115,9 @@ pub mod pq {
     /// The [`workingset::View`] for [`HybridMap`].
     pub type View<'a, F, Q> = map::View<'a, u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>>;
 
+    /// The [`workingset::AsWorkingSet`] for [`HybridMap`].
+    pub type Overlay<F, Q> = map::Overlay<u32, Projection<F, Q>>;
+
     impl<F, Q> HybridMap<F, Q>
     where
         F: AsyncFriendly,
