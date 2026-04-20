@@ -3,8 +3,9 @@
  * Licensed under the MIT license.
  */
 
+use crate::data_model::GraphDataType;
 use diskann::{graph::AdjacencyList, ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
 
 use super::FP_VECTOR_MEM_ALIGN;
@@ -147,8 +148,8 @@ pub enum CachingStrategy {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::GraphDataF32VectorUnitData;
     use diskann::graph::AdjacencyList;
-    use diskann_providers::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
     use rstest::rstest;
 
     use crate::data_model::Cache;

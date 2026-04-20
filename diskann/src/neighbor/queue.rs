@@ -3,30 +3,27 @@
  * Licensed under the MIT license.
  */
 
+use std::{
+    fmt::{Debug, Display},
+    marker::PhantomData,
+};
+
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
-use std::marker::PhantomData;
 
 use super::Neighbor;
 
-/// Shared trait for type the generic `I` parameter used by the
-/// `NeighborPeriorityQueue`.
-pub trait NeighborPriorityQueueIdType:
-    Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
-{
-}
+/// Shared trait for the generic `I` parameter used by `NeighborQueue`.
+pub trait NeighborPriorityQueueIdType: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
 /// Any type that implements all the individual requirements for
 /// `NeighborPriorityQueueIdType` implements the full trait.
-impl<T> NeighborPriorityQueueIdType for T where
-    T: Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
-{
-}
+impl<T> NeighborPriorityQueueIdType for T where T: Eq + Clone + Copy + Debug + Display + Send + Sync {}
 
 /// Trait defining the interface for a neighbor priority queue.
 ///
 /// This trait abstracts the core functionality of a priority queue that manages
 /// neighbors ordered by distance, supporting both fixed-size and resizable queues.
-pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send + Sync {
+pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: Debug + Send + Sync {
     /// The iterator type returned by `iter()`.
     type Iter<'a>: ExactSizeIterator<Item = Neighbor<I>> + Send + Sync
     where
@@ -169,29 +166,6 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         if insert_idx < self.cursor {
             self.cursor = insert_idx;
         }
-    }
-
-    /// Extracts the first min(L, size_of_queue) best candidates from the priority queue moving
-    /// them to the result array and returns the count of extracted elements. The rest of the
-    /// candidates are shifted to the beginning of the array and the size and capacity are
-    /// updated accordingly.
-    pub fn extract_best_l_candidates(&mut self, result: &mut [Neighbor<I>]) -> usize {
-        let extract_size = self.search_param_l.min(self.size);
-
-        // Copy the first L best candidates to the result vector
-        for (i, res) in result.iter_mut().enumerate().take(extract_size) {
-            *res = Neighbor::new(self.id_visiteds[i].0, self.distances[i]);
-        }
-
-        // Remove the first L best candidates from the priority queue
-        self.id_visiteds.drain(0..extract_size);
-        self.distances.drain(0..extract_size);
-
-        // Update the size and cursor of the priority queue
-        self.size -= extract_size;
-        self.cursor = 0;
-
-        extract_size
     }
 
     /// Drain candidates from the front, signaling that they have been consumed.
@@ -850,25 +824,6 @@ mod neighbor_priority_queue_test {
         resizable_queue.insert(Neighbor::new(4, 2.0));
         assert_eq!(resizable_queue.size(), 4);
         assert_eq!(resizable_queue.capacity(), 4);
-    }
-
-    #[test]
-    fn test_extract_best_l_candidates() {
-        let mut queue = NeighborPriorityQueue::auto_resizable_with_search_param_l(3);
-        queue.insert(Neighbor::new(1, 1.0));
-        queue.insert(Neighbor::new(2, 0.5));
-        queue.insert(Neighbor::new(3, 0.1));
-        queue.insert(Neighbor::new(4, 5.0));
-        queue.insert(Neighbor::new(5, 0.2));
-
-        let mut result = vec![Neighbor::default(); 3];
-        queue.extract_best_l_candidates(&mut result);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].id, 3);
-        assert_eq!(result[1].id, 5);
-        assert_eq!(result[2].id, 2);
-        assert_eq!(queue.size(), 2);
-        assert_eq!(queue.cursor, 0);
     }
 
     #[test]

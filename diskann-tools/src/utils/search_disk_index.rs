@@ -7,7 +7,7 @@ use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 
 use diskann::utils::IntoUsize;
 use diskann_disk::{
-    data_model::CachingStrategy,
+    data_model::{CachingStrategy, GraphDataType},
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
@@ -19,11 +19,13 @@ use diskann_disk::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::graph::traits::GraphDataType,
     storage::{get_compressed_pq_file, get_pq_pivot_file},
-    utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
+    utils::{create_thread_pool, ParallelIteratorInPool},
 };
-use diskann_utils::{io::write_bin, views::MatrixView};
+use diskann_utils::{
+    io::{read_bin, write_bin},
+    views::MatrixView,
+};
 use diskann_vector::distance::Metric;
 use opentelemetry::global::BoxedSpan;
 #[cfg(feature = "perf_test")]
@@ -72,8 +74,10 @@ where
     );
 
     // Load the query file
-    let (query, query_num, _, query_aligned_dim) =
-        load_aligned_bin::<Data::VectorDataType>(storage_provider, parameters.query_file)?;
+    let queries = read_bin::<Data::VectorDataType>(
+        &mut storage_provider.open_reader(parameters.query_file)?,
+    )?;
+    let query_num = queries.nrows();
     // Load the vector filters
     let vector_filters = match parameters.vector_filters_file {
         Some(vector_filters_file) => {
@@ -219,7 +223,7 @@ where
 
         let zipped = cmp_stats
             .par_iter_mut()
-            .zip(query.par_chunks(query_aligned_dim))
+            .zip(queries.par_row_iter())
             .zip(vector_filters.par_iter())
             .zip(query_result_ids[test_id].par_chunks_mut(parameters.recall_at as usize))
             .zip(query_result_dists[test_id].par_chunks_mut(parameters.recall_at as usize))

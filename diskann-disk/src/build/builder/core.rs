@@ -4,13 +4,11 @@
  */
 use std::mem::{self, size_of};
 
+use crate::data_model::GraphDataType;
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        graph::traits::GraphDataType, IndexConfiguration, GRAPH_SLACK_FACTOR,
-        MAX_PQ_TRAINING_SET_SIZE,
-    },
+    model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
     storage::PQStorage,
     utils::{
         load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
@@ -628,6 +626,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 pub(crate) mod disk_index_builder_tests {
     use std::{io::Read, sync::Arc};
 
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
@@ -635,11 +634,7 @@ pub(crate) mod disk_index_builder_tests {
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
-        common::AlignedBoxWithSlice,
         storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
         utils::Timer,
     };
     use diskann_utils::test_data_root;
@@ -1082,10 +1077,6 @@ pub(crate) mod disk_index_builder_tests {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query: AlignedBoxWithSlice<G::VectorDataType> =
-                AlignedBoxWithSlice::<G::VectorDataType>::new(dim, 8)?;
-            query.memcpy(query_data)?;
-
             let mut query_stats = QueryStatistics::default();
 
             let mut indices = vec![0u32; top_k];
@@ -1093,7 +1084,7 @@ pub(crate) mod disk_index_builder_tests {
             let mut associated_data = vec![(); top_k];
 
             _ = search_engine.search_internal(
-                &query,
+                query_data,
                 top_k,
                 search_l,
                 None, // beam_width
