@@ -56,9 +56,14 @@ impl PQScratch {
     }
 
     /// Copy `query` into `rotated_query`, converting to `f32`.
+    ///
+    /// `dim` is the element count in the `T` representation. The decompressed
+    /// `f32` length returned by `T::as_f32` may differ (e.g. `MinMaxElement`
+    /// expands to more `f32`s than its raw element count), so the destination
+    /// slice is sized by that actual length.
     pub fn set<T: VectorRepr>(&mut self, dim: usize, query: &[T]) -> ANNResult<()> {
         let query = T::as_f32(&query[..dim]).into_ann_result()?;
-        self.rotated_query[..dim].copy_from_slice(&query);
+        self.rotated_query[..query.len()].copy_from_slice(&query);
         Ok(())
     }
 }
