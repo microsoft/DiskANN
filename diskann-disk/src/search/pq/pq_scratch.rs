@@ -4,8 +4,6 @@
  */
 //! Aligned allocator
 
-use std::mem::size_of;
-
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
 
 use diskann_providers::common::AlignedBoxWithSlice;
@@ -26,10 +24,7 @@ pub struct PQScratch {
     pub aligned_pq_coord_scratch: AlignedBoxWithSlice<u8>,
 
     /// Rotated query. It is initialized as the normalized query vector. Use PQTable.PreprocessQuery to rotate it.
-    pub rotated_query: AlignedBoxWithSlice<f32>,
-
-    /// Aligned query float. The query vector is normalized with "norm" and stored here.
-    pub aligned_query_float: AlignedBoxWithSlice<f32>,
+    pub rotated_query: Vec<f32>,
 }
 
 impl PQScratch {
@@ -39,7 +34,7 @@ impl PQScratch {
     /// Create a new pq scratch
     pub fn new(
         graph_degree: usize,
-        aligned_dim: usize,
+        dim: usize,
         num_pq_chunks: usize,
         num_centers: usize,
     ) -> ANNResult<Self> {
@@ -49,36 +44,20 @@ impl PQScratch {
             AlignedBoxWithSlice::new(num_centers * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)?;
         let aligned_dist_scratch =
             AlignedBoxWithSlice::new(graph_degree, PQScratch::ALIGNED_ALLOC_128)?;
-        let aligned_query_float = AlignedBoxWithSlice::new(aligned_dim, 8 * size_of::<f32>())?;
-        let rotated_query = AlignedBoxWithSlice::new(aligned_dim, 8 * size_of::<f32>())?;
+        let rotated_query = vec![0.0f32; dim];
 
         Ok(Self {
             aligned_pqtable_dist_scratch,
             aligned_dist_scratch,
             aligned_pq_coord_scratch,
             rotated_query,
-            aligned_query_float,
         })
     }
 
-    /// Set rotated_query and aligned_query_float values
-    pub fn set<T>(&mut self, dim: usize, query: &[T], norm: f32) -> ANNResult<()>
-    where
-        T: VectorRepr + Copy,
-    {
-        let query = &T::as_f32(&query[..dim]).into_ann_result()?;
-
-        for (d, item) in query.iter().enumerate() {
-            let query_val = *item;
-            if (norm - 1.0).abs() > f32::EPSILON {
-                self.rotated_query[d] = query_val / norm;
-                self.aligned_query_float[d] = query_val / norm;
-            } else {
-                self.rotated_query[d] = query_val;
-                self.aligned_query_float[d] = query_val;
-            }
-        }
-
+    /// Copy `query` into `rotated_query`, converting to `f32`.
+    pub fn set<T: VectorRepr>(&mut self, dim: usize, query: &[T]) -> ANNResult<()> {
+        let query = T::as_f32(&query[..dim]).into_ann_result()?;
+        self.rotated_query[..dim].copy_from_slice(&query);
         Ok(())
     }
 }
@@ -94,14 +73,14 @@ mod tests {
     #[case(59, 16, 37, 41)] // not multiple of 256
     fn test_pq_scratch(
         #[case] graph_degree: usize,
-        #[case] aligned_dim: usize,
+        #[case] dim: usize,
         #[case] num_pq_chunks: usize,
         #[case] num_centers: usize,
     ) {
         let mut pq_scratch: PQScratch =
-            PQScratch::new(graph_degree, aligned_dim, num_pq_chunks, num_centers).unwrap();
+            PQScratch::new(graph_degree, dim, num_pq_chunks, num_centers).unwrap();
 
-        // Check alignment
+        // Check alignment of the remaining AlignedBoxWithSlice buffers.
         assert_eq!(
             (pq_scratch.aligned_pqtable_dist_scratch.as_ptr() as usize)
                 % PQScratch::ALIGNED_ALLOC_128,
@@ -115,17 +94,13 @@ mod tests {
             (pq_scratch.aligned_pq_coord_scratch.as_ptr() as usize) % PQScratch::ALIGNED_ALLOC_128,
             0
         );
-        assert_eq!((pq_scratch.rotated_query.as_ptr() as usize) % 32, 0);
-        assert_eq!((pq_scratch.aligned_query_float.as_ptr() as usize) % 32, 0);
 
         // Test set() method
-        let query: Vec<u8> = (1..=aligned_dim).map(|i| i as u8).collect();
-        let norm = 2.0f32;
-        pq_scratch.set::<u8>(query.len(), &query, norm).unwrap();
+        let query: Vec<u8> = (1..=dim).map(|i| i as u8).collect();
+        pq_scratch.set::<u8>(query.len(), &query).unwrap();
 
         (0..query.len()).for_each(|i| {
-            assert_eq!(pq_scratch.rotated_query[i], query[i] as f32 / norm);
-            assert_eq!(pq_scratch.aligned_query_float[i], query[i] as f32 / norm);
+            assert_eq!(pq_scratch.rotated_query[i], query[i] as f32);
         });
     }
 }
