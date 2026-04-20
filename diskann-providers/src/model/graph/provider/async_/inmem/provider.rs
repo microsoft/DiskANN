@@ -158,7 +158,6 @@ use crate::{
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let prefetch_cache_line_level = None;
@@ -208,7 +207,6 @@ use crate::{
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let prefetch_cache_line_level = None;

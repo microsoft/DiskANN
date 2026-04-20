@@ -5,9 +5,10 @@
 
 use std::ptr;
 
+use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::HashMap;
 
 use crate::{
@@ -276,15 +277,13 @@ where
 mod disk_vertex_provider_tests {
     use std::sync::Arc;
 
+    use crate::{data_model::GraphDataType, test_utils::GraphDataF32VectorU32Data};
     use diskann::{graph::config, utils::ONE};
     use diskann_providers::storage::{
         StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
     use diskann_providers::{
-        model::{graph::traits::GraphDataType, IndexConfiguration},
-        storage::get_disk_index_file,
-        test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
-        utils::load_metadata_from_file,
+        model::IndexConfiguration, storage::get_disk_index_file, utils::load_metadata_from_file,
     };
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;

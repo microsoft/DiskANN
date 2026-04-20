@@ -8,8 +8,8 @@ use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::utils::random;
 use diskann_tools::utils::{
     init_subscriber, relative_contrast::compute_relative_contrast, CMDResult, DataType,
-    GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
 };
+use diskann_vector::Half;
 
 /// Command Usage:
 ///
@@ -40,7 +40,7 @@ fn main() -> CMDResult<()> {
     let mut rng = random::create_rnd();
 
     let result = match args.data_type {
-        DataType::Float => compute_relative_contrast::<GraphDataF32Vector, _, _>(
+        DataType::Float => compute_relative_contrast::<f32, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
@@ -49,7 +49,7 @@ fn main() -> CMDResult<()> {
             args.search_list,
             &mut rng,
         ),
-        DataType::Fp16 => compute_relative_contrast::<GraphDataHalfVector, _, _>(
+        DataType::Fp16 => compute_relative_contrast::<Half, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
@@ -58,7 +58,7 @@ fn main() -> CMDResult<()> {
             args.search_list,
             &mut rng,
         ),
-        DataType::Uint8 => compute_relative_contrast::<GraphDataU8Vector, _, _>(
+        DataType::Uint8 => compute_relative_contrast::<u8, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
@@ -67,7 +67,7 @@ fn main() -> CMDResult<()> {
             args.search_list,
             &mut rng,
         ),
-        DataType::Int8 => compute_relative_contrast::<GraphDataInt8Vector, _, _>(
+        DataType::Int8 => compute_relative_contrast::<i8, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,

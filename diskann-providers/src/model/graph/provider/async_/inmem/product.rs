@@ -25,22 +25,19 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
 use crate::model::{
-    graph::{
-        provider::async_::{
-            FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
-            SimpleNeighborProviderAsync,
-            common::{
-                CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, Unseeded,
-                VectorStore,
-            },
-            distances,
-            inmem::{
-                DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-                PassThrough, Rerank,
-            },
-            postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
+    graph::provider::async_::{
+        FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
+        SimpleNeighborProviderAsync,
+        common::{
+            CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, Unseeded,
+            VectorStore,
         },
-        traits::AdHoc,
+        distances,
+        inmem::{
+            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
+            PassThrough, Rerank,
+        },
+        postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     pq::{self, FixedChunkPQTable},
 };
@@ -103,7 +100,7 @@ where
     T: VectorRepr,
 {
     type Repr = T;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<AdHoc<T>> {
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
         &self.provider.base_vectors
     }
 }
@@ -232,7 +229,7 @@ where
     fn build_distance_computer(
         &self,
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(self.provider.aux_vectors.distance_computer()?)
+        Ok(self.provider.aux_vectors.distance_computer())
     }
 }
 
@@ -368,7 +365,7 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         let metric = self.provider.aux_vectors.metric();
         Ok(distances::pq::HybridComputer::new(
-            self.provider.aux_vectors.distance_computer()?,
+            self.provider.aux_vectors.distance_computer(),
             T::distance(metric, Some(self.provider.base_vectors.dim())),
         ))
     }
