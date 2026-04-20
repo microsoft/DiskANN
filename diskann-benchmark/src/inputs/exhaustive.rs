@@ -482,6 +482,7 @@ impl std::fmt::Display for Spherical {
 pub(crate) enum MinMaxQuery {
     SameAsData,
     FullPrecision,
+    EightBit,
 }
 
 impl std::fmt::Display for MinMaxQuery {
@@ -489,6 +490,7 @@ impl std::fmt::Display for MinMaxQuery {
         let st = match self {
             Self::SameAsData => "same_as_data",
             Self::FullPrecision => "full_precision",
+            Self::EightBit => "eight_bit",
         };
         write!(f, "{}", st)
     }
@@ -541,7 +543,11 @@ impl Example for MinMax {
             data_type: DataType::Float32,
             distance: SimilarityMeasure::SquaredL2,
             search: SearchPhase::example(),
-            query_layouts: vec![MinMaxQuery::SameAsData, MinMaxQuery::FullPrecision],
+            query_layouts: vec![
+                MinMaxQuery::SameAsData,
+                MinMaxQuery::FullPrecision,
+                MinMaxQuery::EightBit,
+            ],
             num_bits: NUM_BITS,
             transform_kind: TransformKind::DoubleHadamard(TargetDim::Same),
             seed: 0x6cae32c479ac3407,
