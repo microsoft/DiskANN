@@ -1,0 +1,22 @@
+{
+    "checks": [
+        {
+            "input": {
+                "type": "disk-index",
+                "content": {}
+            },
+            "tolerance": {
+                "type": "disk-index-tolerance",
+                "content": {
+                    "build_time_regression": 0.10,
+                    "qps_regression": 0.10,
+                    "recall_regression": 0.01,
+                    "mean_ios_regression": 0.01,
+                    "mean_comps_regression": 0.01,
+                    "mean_latency_regression": 0.15,
+                    "p95_latency_regression": 0.15
+                }
+            }
+        }
+    ]
+}

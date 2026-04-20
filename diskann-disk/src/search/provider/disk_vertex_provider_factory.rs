@@ -4,8 +4,9 @@
  */
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
-use diskann::{utils::TryIntoVectorId, ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use crate::data_model::GraphDataType;
+use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
+use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::HashSet;
 use tracing::info;
 
@@ -219,18 +220,21 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         let adjacency_list = vertex_provider.get_adjacency_list(node)?;
         let associated_data = vertex_provider.get_associated_data(node)?;
 
-        cache.insert(node, vector, adjacency_list.clone(), *associated_data)
+        cache.insert(
+            node,
+            vector,
+            AdjacencyList::from_iter_untrusted(adjacency_list.iter().copied()),
+            *associated_data,
+        )
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test_utils::GraphDataF32VectorUnitData;
     use crate::utils::VirtualAlignedReaderFactory;
-    use diskann_providers::{
-        storage::VirtualStorageProvider,
-        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
-    };
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 

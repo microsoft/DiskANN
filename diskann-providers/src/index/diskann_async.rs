@@ -91,13 +91,7 @@ where
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(
-        dim,
-        full_pivot_data.into(),
-        centroid.into(),
-        offsets.into(),
-        None,
-    )
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -173,11 +167,11 @@ pub(crate) mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
             glue::{
-                AsElement, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-                SearchStrategy, aliases,
+                DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+                SearchStrategy,
             },
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
@@ -188,7 +182,7 @@ pub(crate) mod tests {
             AsNeighbor, AsNeighborMut, BuildQueryComputer, DataProvider, DefaultContext, Delete,
             ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
-        utils::{IntoUsize, ONE, async_tools::VectorIdBoxSlice},
+        utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
     use diskann_utils::{test_data_root, views::Matrix};
@@ -261,7 +255,8 @@ pub(crate) mod tests {
     pub(crate) async fn populate_data<DP, Ctx, T>(provider: &DP, context: &Ctx, source: &[Vec<T>])
     where
         Ctx: ExecutionContext,
-        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32> + SetElement<[T]>,
+        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32>
+            + for<'a> SetElement<&'a [T]>,
     {
         for (i, v) in source.iter().enumerate() {
             let guard = provider.set_element(context, &(i as u32), v).await.unwrap();
@@ -346,12 +341,12 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: DefaultSearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -393,13 +388,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: &S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: DefaultSearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -438,13 +433,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         strategy: S,
         parameters: &SearchParameters<DP::Context>,
-        query: &Q,
+        query: Q,
         groundtruth: &mut Vec<Neighbor<u32>>,
         max_candidates: usize,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: SearchStrategy<DP, Q> + 'static,
-        Q: std::fmt::Debug + Send + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
     {
         assert!(max_candidates <= groundtruth.len());
         let mut state = index
@@ -503,9 +498,9 @@ pub(crate) mod tests {
         full_strategy: FS,
         quant_strategy: QS,
     ) where
-        DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: DefaultSearchStrategy<DP, [T]> + Clone + 'static,
-        QS: DefaultSearchStrategy<DP, [T]> + Clone + 'static,
+        DP: DataProvider<InternalId = u32, Context: Default>,
+        FS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
+        QS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -519,7 +514,7 @@ pub(crate) mod tests {
         // all-zeros query is as far from the entry point as possible.
         let query = vec![T::default(); dim];
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -577,9 +572,6 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
-                return Err(Box::new("start point should not be returned"));
-            }
             if id as usize != num_points - 2 {
                 return Err(Box::new(format!(
                     "expected {} as the nearest id",
@@ -614,7 +606,7 @@ pub(crate) mod tests {
 
         // Paged Search
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -760,7 +752,7 @@ pub(crate) mod tests {
             })
             .unwrap();
 
-        let mut vectors = T::generate_grid(dim, grid_size);
+        let mut vectors: Vec<Vec<T>> = T::generate_grid(dim, grid_size);
         assert_eq!(vectors.len(), num_points);
 
         // This is a little subtle, but we need `vectors` to contain the start point as
@@ -773,8 +765,11 @@ pub(crate) mod tests {
             dim
         ]);
 
+        // A matrix view of all vectors (including the start point at the end).
+        let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
+
         let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
+            matrix.map(|i| (*i).into()).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
             1usize,
@@ -792,7 +787,7 @@ pub(crate) mod tests {
             .unwrap();
             index
                 .provider()
-                .set_start_points(std::iter::once(vectors.last().unwrap().as_slice()))
+                .set_start_points(std::iter::once(matrix.row(num_points)))
                 .unwrap();
             index
         };
@@ -800,10 +795,10 @@ pub(crate) mod tests {
         // Build with full-precision single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
+            let ctx = Default::default();
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index
-                    .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
+                    .insert(FullPrecision, &ctx, &(i as u32), v)
                     .await
                     .unwrap();
             }
@@ -814,12 +809,9 @@ pub(crate) mod tests {
         // Build with quantized single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
-                index
-                    .insert(hybrid, &ctx, &(i as u32), v.as_slice())
-                    .await
-                    .unwrap();
+            let ctx = Default::default();
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+                index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
 
             check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
@@ -828,23 +820,24 @@ pub(crate) mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-
-            let mut itr = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()));
+            let ctx = Default::default();
 
             // Partition by `max_minibatch_par`.
-            loop {
-                let v: Vec<_> = itr.by_ref().take(2 * minibatch_par).collect();
-                if v.is_empty() {
-                    break;
-                }
+            let chunk_size = 2 * minibatch_par;
+            for (batch, batch_data) in matrix
+                .subview(0..num_points)
+                .unwrap()
+                .window_iter(chunk_size)
+                .enumerate()
+            {
+                let batch_data = Arc::new(batch_data.to_owned());
+                let start = batch * chunk_size;
+                let batch_ids: Arc<[u32]> = (start..start + batch_data.nrows())
+                    .map(|i| i as u32)
+                    .collect();
 
                 index
-                    .multi_insert(FullPrecision, &ctx, v.into())
+                    .multi_insert::<_, Matrix<T>>(FullPrecision, &ctx, batch_data, batch_ids)
                     .await
                     .unwrap();
             }
@@ -855,15 +848,14 @@ pub(crate) mod tests {
         // Build with quantized multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+            let ctx = Default::default();
+            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
+            let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-            index.multi_insert(hybrid, &ctx, batch).await.unwrap();
+            index
+                .multi_insert::<_, Matrix<T>>(hybrid, &ctx, batch, batch_ids)
+                .await
+                .unwrap();
 
             check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
@@ -893,10 +885,13 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use diskann_utils::sampling::random::WithApproximateNorm;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors = Vec::with_capacity(num);
+                    for _ in 0..num {
+                        let vector = <$T>::with_approximate_norm(dim, radius, rng);
+                        vectors.push(vector);
+                    }
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
@@ -926,8 +921,8 @@ pub(crate) mod tests {
         rng: &mut StdRng,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -940,7 +935,7 @@ pub(crate) mod tests {
             num_queries,
         } = params;
 
-        let ctx = &DefaultContext;
+        let ctx = &Default::default();
         let l_search = 10;
 
         let (config, params) =
@@ -969,7 +964,7 @@ pub(crate) mod tests {
         let distance = T::distance(metric, None);
 
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 20,
             search_k: 10,
             to_check: 10,
@@ -1053,8 +1048,8 @@ pub(crate) mod tests {
         #[case] radius: f32,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1148,7 +1143,7 @@ pub(crate) mod tests {
         // then walk through the list, verifying monotonicity and that the filter was
         // applied properly.
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 40,
             search_k: 20,
             to_check: 20,
@@ -1561,7 +1556,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1621,7 +1615,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1698,7 +1691,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1804,7 +1796,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1925,7 +1916,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2047,7 +2037,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2146,9 +2135,9 @@ pub(crate) mod tests {
         #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
         #[values(1, 10)] batchsize: usize,
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2240,9 +2229,9 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2362,7 +2351,7 @@ pub(crate) mod tests {
         C: FnOnce(Arc<Matrix<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
         B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -2381,8 +2370,8 @@ pub(crate) mod tests {
     async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<Matrix<f32>>)
     where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
-        Quantized: InsertStrategy<DP, [f32]> + Clone + Send + Sync,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
+        Quantized: for<'a> InsertStrategy<DP, &'a [f32]> + Clone + Send + Sync,
     {
         let ctx = &DefaultContext;
         for (i, vector) in data.row_iter().enumerate() {
@@ -2807,7 +2796,7 @@ pub(crate) mod tests {
         let strategy = inmem::spherical::Quantized::build();
         let accessor = <inmem::spherical::Quantized as SearchStrategy<
             DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
-            [f32],
+            &[f32],
         >>::search_accessor(&strategy, index.provider(), ctx)
         .unwrap();
         let computer = accessor.build_query_computer(data.row(0)).unwrap();
@@ -2967,20 +2956,16 @@ pub(crate) mod tests {
         train_data: diskann_utils::views::MatrixView<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
-            + SetElement<[f32]>
+            + for<'a> SetElement<&'a [f32]>
             + SetStartPoints<[f32]>,
-        S: InsertStrategy<DefaultProvider<U, V, D>, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DefaultProvider<U, V, D>, [f32]>:
-            AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<DefaultProvider<U, V, D>, &'a [f32]>
+            + MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 
@@ -3000,17 +2985,18 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let pairs: Box<[_]> = data
-                    .iter()
-                    .map(|(v, _)| {
-                        let r = VectorIdBoxSlice::new(i, v.clone());
+                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
+                let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
+                    .map(|(dst, (v, _))| {
+                        dst.copy_from_slice(v);
+                        let id = i;
                         i += 1;
-                        r
+                        id
                     })
                     .collect();
 
                 index
-                    .multi_insert(strategy.clone(), ctx, pairs)
+                    .multi_insert::<S, _>(strategy.clone(), ctx, Arc::new(vectors), ids)
                     .await
                     .unwrap();
             }
@@ -3025,9 +3011,9 @@ pub(crate) mod tests {
         startpoint: StartPointStrategy,
     ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
     where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -3070,13 +3056,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -3172,13 +3156,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -3620,81 +3602,6 @@ pub(crate) mod tests {
 
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
         }
-    }
-
-    // This test uses a "Flaky" accessor that spuriously fails with non-critical errors to
-    // check that such errors are not propagated by DiskANN.
-    #[tokio::test]
-    async fn test_flaky_consolidate() {
-        // What we need to do is populate a graph with an element that has an adjacency list
-        // that exceeds the configured maximum degree.
-        //
-        // We then need to try to consolidate that element and ensure that retrieval of
-        // that element's data results in a transient error.
-
-        // create small index instance
-        let dim = 2;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            4,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            10,         // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        let start_point: &[f32] = &[0.5, 0.5];
-
-        index
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-            .unwrap();
-
-        // vectors are the four corners of a square, with the start point in the middle
-        // the middle point forms an edge to each corner, while corners form an edge
-        // to their opposite vertex vertically and horizontally as well as the middle
-        let vectors = [
-            vec![0.0, 0.0], // point 0
-            vec![0.0, 1.0], // point 1
-            vec![1.0, 0.0], // point 2
-            vec![1.0, 1.0], // point 3
-            vec![2.0, 2.0], // point 4
-            vec![0.0, 2.0], // point 5
-            vec![2.0, 0.0], // point 6
-        ];
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0
-            AdjacencyList::from_iter_untrusted([4, 0, 3, 6]),    // point 1
-            AdjacencyList::from_iter_untrusted([4, 3, 0, 6]),    // point 2
-            AdjacencyList::from_iter_untrusted([4, 2, 1, 6]),    // point 3
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 6]), // point 4
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 6]), // point 5
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 3]), // point 6 -- start point
-        ];
-
-        let ctx = &DefaultContext;
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, ctx, &vectors).await;
-
-        let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
-            .await
-            .unwrap();
-        assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
     }
 
     async fn create_retry_saturated_index(

@@ -12,7 +12,7 @@
     "insert_metrics": {
       "append_neighbors": 1,
       "get_neighbors": 201,
-      "get_vector": 10304,
+      "get_vector": 10300,
       "set_neighbors": 101,
       "set_vector": 100
     },
@@ -28,7 +28,7 @@
         "metrics": {
           "append_neighbors": 1,
           "get_neighbors": 302,
-          "get_vector": 10405,
+          "get_vector": 10401,
           "set_neighbors": 101,
           "set_vector": 100
         },
@@ -89,7 +89,7 @@
         "metrics": {
           "append_neighbors": 1,
           "get_neighbors": 313,
-          "get_vector": 10417,
+          "get_vector": 10413,
           "set_neighbors": 101,
           "set_vector": 100
         },
@@ -98,10 +98,6 @@
           100.0
         ],
         "results": [
-          [
-            4294967295,
-            0.0
-          ],
           [
             99,
             1.0
@@ -137,6 +133,10 @@
           [
             91,
             81.0
+          ],
+          [
+            90,
+            100.0
           ]
         ]
       }

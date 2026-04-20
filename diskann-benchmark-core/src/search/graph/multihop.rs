@@ -86,7 +86,7 @@ where
 impl<DP, T, S> Search for MultiHop<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -262,7 +262,7 @@ mod tests {
         let err = MultiHop::new(
             index.clone(),
             queries.clone(),
-            Strategy::collection([strategy]),
+            Strategy::collection([strategy.clone()]),
             labels.clone(),
         )
         .unwrap_err();
@@ -276,7 +276,7 @@ mod tests {
         let err = MultiHop::new(
             index,
             queries.clone(),
-            Strategy::broadcast(strategy),
+            Strategy::broadcast(strategy.clone()),
             labels.clone(),
         )
         .unwrap_err();

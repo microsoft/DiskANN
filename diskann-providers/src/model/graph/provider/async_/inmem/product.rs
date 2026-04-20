@@ -3,14 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{future::Future, sync::Arc};
 
 use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
-    graph::glue::{
-        self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchStrategy,
+    graph::{
+        glue::{
+            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
+        },
+        workingset,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -22,22 +25,19 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
 use crate::model::{
-    graph::{
-        provider::async_::{
-            FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
-            SimpleNeighborProviderAsync,
-            common::{
-                CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper,
-                VectorStore,
-            },
-            distances,
-            inmem::{
-                DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-                Rerank,
-            },
-            postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
+    graph::provider::async_::{
+        FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
+        SimpleNeighborProviderAsync,
+        common::{
+            CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, Unseeded,
+            VectorStore,
         },
-        traits::AdHoc,
+        distances,
+        inmem::{
+            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
+            PassThrough, Rerank,
+        },
+        postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     pq::{self, FixedChunkPQTable},
 };
@@ -100,7 +100,7 @@ where
     T: VectorRepr,
 {
     type Repr = T;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<AdHoc<T>> {
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
         &self.provider.base_vectors
     }
 }
@@ -143,27 +143,21 @@ where
     }
 }
 
-impl<'a, V, D, Ctx> Accessor for QuantAccessor<'a, V, D, Ctx>
+impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = &'a [u8];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = &'a [u8]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = &'b [u8];
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
@@ -205,7 +199,7 @@ where
     }
 }
 
-impl<T, V, D, Ctx> BuildQueryComputer<[T]> for QuantAccessor<'_, V, D, Ctx>
+impl<T, V, D, Ctx> BuildQueryComputer<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -235,21 +229,13 @@ where
     fn build_distance_computer(
         &self,
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(self.provider.aux_vectors.distance_computer()?)
+        Ok(self.provider.aux_vectors.distance_computer())
     }
 }
 
-impl<T, V, D, Ctx> ExpandBeam<[T]> for QuantAccessor<'_, V, D, Ctx>
+impl<T, V, D, Ctx> ExpandBeam<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-}
-
-impl<V, D, Ctx> FillSet for QuantAccessor<'_, V, D, Ctx>
-where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
@@ -284,7 +270,7 @@ where
 /// * [`Accessor`] for the [`DefaultProvider`].
 /// * [`BuildDistanceComputer`] for computing distances among [`distances::pq::Hybrid`]
 ///   element types.
-/// * [`FillSet`] for populating a mixture of full-precision and quant vectors.
+/// * [`Fill`] for populating a mixture of full-precision and quant vectors.
 pub struct HybridAccessor<'a, T, D, Ctx>
 where
     T: VectorRepr,
@@ -330,35 +316,29 @@ where
     }
 }
 
-impl<'a, T, D, Ctx> Accessor for HybridAccessor<'a, T, D, Ctx>
+impl<T, D, Ctx> Accessor for HybridAccessor<'_, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = distances::pq::Hybrid<&'a [T], &'a [u8]>;
-
     /// The [`distances::pq::Hybrid`] is an enum consisting of either a full-precision
     /// vector or a quantized vector.
     ///
     /// This accessor can return either.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `CVRef` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = distances::pq::Hybrid<&'a [T], &'a [u8]>
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = distances::pq::Hybrid<&'b [T], &'b [u8]>;
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
 
     /// The default behavior of `get_element` returns a full-precision vector. The
-    /// implementation of [`FillSet`] is how the `max_fp_vecs_per_fill` is used.
+    /// implementation of [`Fill`] is how the `max_fp_vecs_per_fill` is used.
     fn get_element(
         &mut self,
         id: Self::Id,
@@ -385,70 +365,138 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         let metric = self.provider.aux_vectors.metric();
         Ok(distances::pq::HybridComputer::new(
-            self.provider.aux_vectors.distance_computer()?,
+            self.provider.aux_vectors.distance_computer(),
             T::distance(metric, Some(self.provider.base_vectors.dim())),
         ))
     }
 }
 
-impl<T, D, Ctx> FillSet for HybridAccessor<'_, T, D, Ctx>
+/// Tracks which IDs should use full-precision vectors during hybrid pruning.
+///
+/// IDs in the set get full-precision distance computations; all others fall back to
+/// quantized vectors.
+pub struct FullPrecisionTracker(hashbrown::HashSet<u32>);
+
+impl workingset::AsWorkingSet<FullPrecisionTracker> for Unseeded {
+    fn as_working_set(&self, capacity: usize) -> FullPrecisionTracker {
+        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
+    }
+}
+
+// Selective fill — the first `max_fp_vecs_per_prune` candidates receive full-precision
+// vectors; the remainder are accessed through the pass-through `MaybeFullPrecision` view.
+impl<T, D, Ctx> workingset::Fill<FullPrecisionTracker> for HybridAccessor<'_, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// Fill up to `max_fp_per_prune` as full precision. The rest are quantized.
-    ///
-    /// if a full-precision vector already exists regardless of whether a full-precision
-    /// vector or quant vector is needed, it is left as-is.
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
+    type Error = std::convert::Infallible;
+    type View<'a>
+        = MaybeFullPrecision<'a, T, D, Ctx>
     where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        state: &'a mut FullPrecisionTracker,
+        itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
     {
-        let threshold = self.max_fp_vecs_per_prune;
-        itr.enumerate().for_each(|(i, id)| {
-            let e = set.entry(id);
-            // Below the threshold, we try to fetch full-precision vectors.
-            if i < threshold {
-                // If the item already exists but is not full precision, make it full
-                // precision.
-                e.and_modify(|v| {
-                    if !v.is_full() {
-                        // SAFETY: We've decided to live with UB (undefined behavior) that
-                        // can result from potentially mixing unsynchronized reads and
-                        // writes on the underlying memory.
-                        *v = distances::pq::Hybrid::Full(unsafe {
-                            self.provider.base_vectors.get_vector_sync(id.into_usize())
-                        });
-                    }
-                })
-                .or_insert_with(|| {
-                    // Only invoke this method if the entry is not occupied.
-                    //
-                    // SAFETY: We've decided to live with UB (undefined behavior) that
-                    // can result from potentially mixing unsynchronized reads and
-                    // writes on the underlying memory.
-                    distances::pq::Hybrid::Full(unsafe {
-                        self.provider.base_vectors.get_vector_sync(id.into_usize())
-                    })
-                });
-            } else {
-                // Otherwise, only insert into the cache if the entry is not occupied.
-                e.or_insert_with(|| {
-                    // SAFETY: We've decided to live with UB (undefined behavior) that
-                    // can result from potentially mixing unsynchronized reads and
-                    // writes on the underlying memory.
-                    distances::pq::Hybrid::Quant(unsafe {
-                        self.provider.aux_vectors.get_vector_sync(id.into_usize())
-                    })
-                });
+        state.0.clear();
+        state.0.extend(itr.take(self.max_fp_vecs_per_prune));
+        Ok(MaybeFullPrecision {
+            accessor: self,
+            full: state,
+        })
+    }
+}
+
+pub struct MaybeFullPrecision<'a, T, D, Ctx>
+where
+    T: VectorRepr,
+{
+    accessor: &'a HybridAccessor<'a, T, D, Ctx>,
+    full: &'a FullPrecisionTracker,
+}
+
+impl<T, D, Ctx> workingset::View<u32> for MaybeFullPrecision<'_, T, D, Ctx>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
+    type Element<'a>
+        = distances::pq::Hybrid<&'a [T], &'a [u8]>
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
+        let provider = &self.accessor.provider;
+        let element = if self.full.0.contains(&id) {
+            // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+            // this invariant is not enforced. See `get_vector_sync` for details.
+            unsafe {
+                distances::pq::Hybrid::Full(provider.base_vectors.get_vector_sync(id.into_usize()))
             }
-        });
-        Ok(())
+        } else {
+            // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+            // this invariant is not enforced. See `get_vector_sync` for details.
+            unsafe {
+                distances::pq::Hybrid::Quant(provider.aux_vectors.get_vector_sync(id.into_usize()))
+            }
+        };
+        Some(element)
+    }
+}
+
+// Pass-through fill — returns `&Self` which directly accesses the underlying provider.
+impl<V, D, Ctx> workingset::Fill<PassThrough> for QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type Error = std::convert::Infallible;
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
+    }
+}
+
+// Pass-through view — reads PQ codes directly from the provider.
+impl<V, D, Ctx> workingset::View<u32> for &QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = &'a [u8];
+    type Element<'a>
+        = &'a [u8]
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+        // this invariant is not enforced. See `get_vector_sync` for details.
+        Some(unsafe { self.provider.aux_vectors.get_vector_sync(id.into_usize()) })
     }
 }
 
@@ -461,7 +509,7 @@ where
 ////////////
 
 /// Perform a search entirely in the quantized space.
-impl<T, D, Ctx> SearchStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+impl<T, D, Ctx> SearchStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -482,7 +530,8 @@ where
 
 /// Starting points are filtered out of the final results and results are reranked using
 /// the full-precision data.
-impl<T, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+impl<T, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]>
+    for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -500,6 +549,11 @@ where
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = FullPrecisionTracker;
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -513,24 +567,7 @@ where
     }
 }
 
-/// Implementing this trait allows `Quantized` to be used for multi-insert.
-impl<'a, T, D, Ctx> glue::AsElement<&'a [T]> for HybridAccessor<'a, T, D, Ctx>
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type Error = diskann::error::Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(distances::pq::Hybrid::Full(vector)))
-    }
-}
-
-impl<T, D, Ctx> InsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+impl<T, D, Ctx> InsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -542,6 +579,42 @@ where
     }
 }
 
+impl<T, D, Ctx, B> glue::MultiInsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, B>
+    for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type Seed = Unseeded;
+    type WorkingSet = FullPrecisionTracker;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
+        _ctx: &Ctx,
+        _batch: &std::sync::Arc<B>,
+        _ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(Unseeded))
+    }
+}
+
 /// Inplace Delete
 impl<T, D, Ctx> InplaceDeleteStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
 where
@@ -550,7 +623,7 @@ where
     Ctx: ExecutionContext,
 {
     type DeleteElementError = Panics;
-    type DeleteElement<'a> = [T];
+    type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
     type DeleteSearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
@@ -585,7 +658,7 @@ where
 /// Perform a search entirely in the quantized space.
 ///
 /// Starting points are filtered out of the final results.
-impl<T, D, Ctx> SearchStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]> for Quantized
+impl<T, D, Ctx> SearchStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -604,7 +677,7 @@ where
     }
 }
 
-impl<T, D, Ctx> DefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
+impl<T, D, Ctx> DefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]>
     for Quantized
 where
     T: VectorRepr,
@@ -622,6 +695,11 @@ where
     type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
     type PruneAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type WorkingSet = PassThrough;
+
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        PassThrough
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -632,7 +710,7 @@ where
     }
 }
 
-impl<T, D, Ctx> InsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]> for Quantized
+impl<T, D, Ctx> InsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -641,5 +719,40 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<D, Ctx, B> glue::MultiInsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, B>
+    for Quantized
+where
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type Seed = PassThrough;
+    type WorkingSet = PassThrough;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
+        _ctx: &Ctx,
+        _batch: &std::sync::Arc<B>,
+        _ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        std::future::ready(Ok(PassThrough))
     }
 }

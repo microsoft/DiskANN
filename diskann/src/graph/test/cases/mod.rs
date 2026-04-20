@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+mod consolidate;
 mod grid_insert;
 mod grid_search;
 mod inplace_delete;

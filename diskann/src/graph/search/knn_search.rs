@@ -15,13 +15,12 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, SearchExt, SearchPostProcess},
+        glue::{SearchExt, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
     provider::{BuildQueryComputer, DataProvider},
-    utils::IntoUsize,
 };
 
 /// Error type for [`Knn`] parameter validation.
@@ -146,8 +145,8 @@ impl Knn {
 impl<DP, S, T> Search<DP, S, T> for Knn
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
@@ -182,7 +181,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
@@ -212,13 +211,7 @@ where
                 .await?;
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(self.l_value.get().into_usize()),
-                    output,
-                )
+                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -252,8 +245,8 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
 impl<'r, DP, S, T, SR> Search<DP, S, T> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
@@ -264,7 +257,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
@@ -294,16 +287,7 @@ where
                 .await?;
 
             let result_count = processor
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch
-                        .best
-                        .iter()
-                        .take(self.inner.l_value.get().into_usize()),
-                    output,
-                )
+                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
