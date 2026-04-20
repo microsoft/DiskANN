@@ -4,7 +4,7 @@
  */
 //! Aligned allocator
 
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNResult};
+use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 
 use diskann_providers::common::AlignedBoxWithSlice;
 
@@ -61,8 +61,24 @@ impl PQScratch {
     /// `f32` length returned by `T::as_f32` may differ (e.g. `MinMaxElement`
     /// expands to more `f32`s than its raw element count), so the destination
     /// slice is sized by that actual length.
+    ///
+    /// Returns `DimensionMismatchError` if `dim > query.len()` or the
+    /// decompressed vector does not fit in `rotated_query`.
     pub fn set<T: VectorRepr>(&mut self, dim: usize, query: &[T]) -> ANNResult<()> {
+        if dim > query.len() {
+            return Err(ANNError::log_dimension_mismatch_error(format!(
+                "PQScratch::set: expected query of length >= {dim}, got {}",
+                query.len()
+            )));
+        }
         let query = T::as_f32(&query[..dim]).into_ann_result()?;
+        if query.len() > self.rotated_query.len() {
+            return Err(ANNError::log_dimension_mismatch_error(format!(
+                "PQScratch::set: decompressed query of length {} does not fit rotated_query buffer of length {}",
+                query.len(),
+                self.rotated_query.len()
+            )));
+        }
         self.rotated_query[..query.len()].copy_from_slice(&query);
         Ok(())
     }
