@@ -20,9 +20,6 @@ pub use pq_construction::{
 /// all metadata of individual sub-component files is written in first 4KB for unified files
 pub(crate) const METADATA_SIZE: usize = 4096;
 
-mod pq_compressed_data;
-pub use pq_compressed_data::PQCompressedData;
-
 pub mod debug;
 pub mod distance;
 pub mod strided;
