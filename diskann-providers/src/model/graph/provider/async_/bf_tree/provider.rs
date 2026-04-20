@@ -20,8 +20,8 @@ use diskann::{
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, Batch, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
         workingset::{self, map},
     },
@@ -1585,6 +1585,68 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<T, Q, D, B> MultiInsertStrategy<BfTreeProvider<T, Q, D>, B> for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    B: for<'a> Batch<Element<'a> = &'a [T]> + Debug,
+{
+    type Seed = map::Builder<u32, map::Ref<[T]>>;
+    type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &BfTreeProvider<T, Q, D>,
+        _ctx: &DefaultContext,
+        batch: &std::sync::Arc<B>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        let overlay = map::Overlay::from_batch(batch.clone(), ids);
+        let builder = map::Builder::new(map::Capacity::Default).with_overlay(overlay);
+        std::future::ready(Ok(builder))
+    }
+}
+
+impl<T, D, B> MultiInsertStrategy<BfTreeProvider<T, QuantVectorProvider, D>, B> for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    B: for<'a> Batch<Element<'a> = &'a [T]> + Debug,
+{
+    type Seed = distances::pq::Overlay<T, u8>;
+    type WorkingSet = distances::pq::HybridMap<T, u8>;
+    type FinishError = diskann::error::Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &BfTreeProvider<T, QuantVectorProvider, D>,
+        _ctx: &DefaultContext,
+        batch: &std::sync::Arc<B>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        let overlay = Self::Seed::from_batch(batch.clone(), ids);
+        std::future::ready(Ok(overlay))
     }
 }
 
