@@ -10,15 +10,15 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::{
-    io::{Metadata, write_bin},
-    views::MatrixView,
+    io::{Metadata, read_bin, write_bin},
+    views::{Matrix, MatrixView},
 };
 use rand::Rng;
 use tracing::info;
 
 use crate::{
-    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, PQCompressedData, pq::METADATA_SIZE},
-    utils::{copy_aligned_data, gen_random_slice, read_bin_from, write_bin_from},
+    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, pq::METADATA_SIZE},
+    utils::{gen_random_slice, read_bin_from, write_bin_from},
 };
 
 // Create types to make return values easier to understand
@@ -216,13 +216,15 @@ impl PQStorage {
         ))
     }
 
-    /// Load the compressed pq dataset from file
+    /// Load the compressed pq dataset from file.
+    ///
+    /// Returns a `num_points × num_pq_chunks` matrix of u8 codes.
     pub fn load_pq_compressed_vectors_bin<Storage: StorageReadProvider>(
         pq_compressed_data: &str,
         num_points_to_load: usize,
         num_pq_chunks: usize,
         storage_provider: &Storage,
-    ) -> ANNResult<PQCompressedData> {
+    ) -> ANNResult<Matrix<u8>> {
         info!(
             "Loading compressed from pq compressed data file {}...",
             pq_compressed_data,
@@ -233,15 +235,20 @@ impl PQStorage {
             num_points_to_load, num_pq_chunks
         );
 
-        let mut pq_compressed_dataset = PQCompressedData::new(num_points_to_load, num_pq_chunks)?;
+        let data = read_bin::<u8>(&mut storage_provider.open_reader(pq_compressed_data)?)?;
 
-        let (_, _) = copy_aligned_data(
-            &mut storage_provider.open_reader(pq_compressed_data)?,
-            pq_compressed_dataset.into_dto(),
-            0,
-        )?;
+        if data.nrows() != num_points_to_load || data.ncols() != num_pq_chunks {
+            return Err(ANNError::log_pq_error(format_args!(
+                "PQ compressed data mismatch: file has {}x{} but expected {}x{}",
+                data.nrows(),
+                data.ncols(),
+                num_points_to_load,
+                num_pq_chunks
+            )));
+        }
+
         info!("PQ compressed dataset loaded.");
-        Ok(pq_compressed_dataset)
+        Ok(data)
     }
 
     /// Load pre-trained pivot table

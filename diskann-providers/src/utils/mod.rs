@@ -3,15 +3,7 @@
  * Licensed under the MIT license.
  */
 pub mod file_util;
-pub use file_util::{
-    copy_aligned_data_from_file, file_exists, get_file_size, load_aligned_bin,
-    load_ids_to_delete_from_file, load_metadata_from_bytes, load_metadata_from_file,
-    open_file_to_write,
-};
-
-#[allow(clippy::module_inception)]
-mod utils;
-pub use utils::DatasetDto;
+pub use file_util::{file_exists, load_metadata_from_file};
 
 mod bridge_error;
 pub use bridge_error::{Bridge, BridgeErr};
@@ -53,8 +45,7 @@ pub mod generate_synthetic_labels_utils;
 
 mod storage_utils;
 pub use storage_utils::{
-    copy_aligned_data, load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions,
-    write_bin_from,
+    load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions, write_bin_from,
 };
 
 mod sampling;

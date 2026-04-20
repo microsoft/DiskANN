@@ -15,9 +15,11 @@ use diskann_providers::{
         statistics, QueryStatistics,
     },
     storage::{get_disk_index_file, DiskIndexReader, FileStorageProvider},
-    utils::{create_thread_pool, load_aligned_bin, ParallelIteratorInPool},
+    utils::{create_thread_pool, ParallelIteratorInPool},
 };
 use diskann::ANNResult;
+use diskann_providers::storage::StorageReadProvider;
+use diskann_utils::io::read_bin;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use diskann_vector::distance::Metric;
@@ -48,8 +50,9 @@ where
     let storage_provider = FileStorageProvider;
 
     // Load the query file
-    let (query, query_num, _, query_aligned_dim) =
-        load_aligned_bin::<Data::VectorDataType>(&storage_provider, query_file)?;
+    let queries =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_num = queries.nrows();
     let mut gt_ids: Option<Vec<Vec<u32>>> = None;
 
     // Check for ground truth
@@ -144,7 +147,7 @@ where
 
         let zipped = res_counts
             .par_iter_mut()
-            .zip(query.par_chunks(query_aligned_dim))
+            .zip(queries.par_row_iter())
             .zip(query_result_ids[test_id].par_iter_mut())
             .zip(query_result_dists[test_id].par_iter_mut())
             .zip(statistics.par_iter_mut());
