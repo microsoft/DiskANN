@@ -23,7 +23,8 @@ pub struct PQScratch {
     /// This is used to store the pq coordinates of the candidate vectors.
     pub aligned_pq_coord_scratch: AlignedBoxWithSlice<u8>,
 
-    /// Rotated query. It is initialized as the normalized query vector. Use PQTable.PreprocessQuery to rotate it.
+    /// Query scratch buffer stored as `f32`. `set` initializes it by copying/converting the
+    /// raw query values; `PQTable.PreprocessQuery` can then rotate or otherwise preprocess it.
     pub rotated_query: Vec<f32>,
 }
 
