@@ -8,11 +8,10 @@ use std::ptr;
 use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
-use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::HashMap;
 
 use crate::{
-    data_model::{GraphHeader, FP_VECTOR_MEM_ALIGN},
+    data_model::GraphHeader,
     search::{provider::disk_sector_graph::DiskSectorGraph, traits::VertexProvider},
     utils::aligned_file_reader::traits::AlignedFileReader,
 };
@@ -39,8 +38,9 @@ where
     // sector graph
     sector_graph: DiskSectorGraph<AlignedReaderType>,
 
-    // Aligned fp vector cache
-    aligned_vector_buf: AlignedBoxWithSlice<Data::VectorDataType>,
+    // Flat buffer holding the fp vectors for up to `max_batch_size` loaded nodes,
+    // laid out as `max_batch_size * memory_aligned_dimension` elements.
+    aligned_vector_buf: Vec<Data::VectorDataType>,
 
     // The cached adjacency list.
     cached_adjacency_list: Vec<Vec<Data::VectorIdType>>,
@@ -217,10 +217,10 @@ where
             fp_vector_len: (metadata.dims * std::mem::size_of::<Data::VectorDataType>()) as u64,
             sector_graph: DiskSectorGraph::new(sector_reader, header, max_batch_size)?,
 
-            aligned_vector_buf: AlignedBoxWithSlice::new(
-                max_batch_size * memory_aligned_dimension,
-                FP_VECTOR_MEM_ALIGN,
-            )?,
+            aligned_vector_buf: vec![
+                Data::VectorDataType::default();
+                max_batch_size * memory_aligned_dimension
+            ],
             cached_adjacency_list: Vec::with_capacity(max_batch_size),
             cached_associated_data: Vec::with_capacity(max_batch_size),
             loaded_nodes: HashMap::with_capacity(max_batch_size),
@@ -238,10 +238,10 @@ where
             self.cached_adjacency_list.reserve(max_batch_size);
             self.cached_associated_data.reserve(max_batch_size);
             self.loaded_nodes.reserve(max_batch_size);
-            self.aligned_vector_buf = AlignedBoxWithSlice::new(
-                max_batch_size * self.memory_aligned_dimension,
-                FP_VECTOR_MEM_ALIGN,
-            )?;
+            self.aligned_vector_buf = vec![
+                Data::VectorDataType::default();
+                max_batch_size * self.memory_aligned_dimension
+            ];
             self.max_batch_size = max_batch_size;
         }
         Ok(())
