@@ -29,8 +29,8 @@ where
     /// Centroid vertex id.
     pub centroid_vertex_id: u64,
 
-    /// Memory-aligned dimension.  In-memory the vectors should be this size.
-    memory_aligned_dimension: usize,
+    /// Dimensionality of each fp vector.
+    dim: usize,
 
     /// the len of fp vector
     fp_vector_len: u64,
@@ -39,8 +39,8 @@ where
     sector_graph: DiskSectorGraph<AlignedReaderType>,
 
     // Flat buffer holding the fp vectors for up to `max_batch_size` loaded nodes,
-    // laid out as `max_batch_size * memory_aligned_dimension` elements.
-    aligned_vector_buf: Vec<Data::VectorDataType>,
+    // laid out as `max_batch_size * dim` elements.
+    vector_buf: Vec<Data::VectorDataType>,
 
     // The cached adjacency list.
     cached_adjacency_list: Vec<Vec<Data::VectorIdType>>,
@@ -74,10 +74,8 @@ where
         vertex_id: &Data::VectorIdType,
     ) -> ANNResult<&[<Data as GraphDataType>::VectorDataType]> {
         match self.loaded_nodes.get(vertex_id) {
-            Some(local_offset) => Ok(&self.aligned_vector_buf[local_offset.idx
-                * self.memory_aligned_dimension
-                ..(local_offset.idx * self.memory_aligned_dimension)
-                    + self.memory_aligned_dimension]),
+            Some(local_offset) => Ok(&self.vector_buf
+                [local_offset.idx * self.dim..(local_offset.idx * self.dim) + self.dim]),
             None => Err(ANNError::log_get_vertex_data_error(
                 vertex_id.to_string(),
                 "Vector".to_string(),
@@ -126,15 +124,15 @@ where
         let fp_vector_buf =
             &self.sector_graph.node_disk_buf(idx, *vertex_id)[..self.fp_vector_len as usize];
 
-        // memcpy from fp_vector_buf to the aligned buffer..
-        // The safe condition is met here since the dimension of the vector in fp_vector_buffer is the same with aligned_vector_buffer.
-        // fp_vector_buf and aligned_vector_buffer.as_mut_ptr() are guaranteed to be non-overlapping.
+        // memcpy from fp_vector_buf to the vector buffer.
+        // The safe condition is met here since the dimension of the vector in fp_vector_buffer is
+        // the same with vector_buf. fp_vector_buf and vector_buf.as_mut_ptr() are guaranteed to be
+        // non-overlapping.
         unsafe {
             ptr::copy_nonoverlapping(
                 fp_vector_buf.as_ptr(),
-                self.aligned_vector_buf[idx * self.memory_aligned_dimension
-                    ..(idx * self.memory_aligned_dimension) + self.memory_aligned_dimension]
-                    .as_mut_ptr() as *mut u8,
+                self.vector_buf[idx * self.dim..(idx * self.dim) + self.dim].as_mut_ptr()
+                    as *mut u8,
                 fp_vector_buf.len(),
             );
         }
@@ -210,17 +208,14 @@ where
         sector_reader: AlignedReaderType,
     ) -> ANNResult<Self> {
         let metadata = header.metadata();
-        let memory_aligned_dimension = metadata.dims.next_multiple_of(8);
+        let dim = metadata.dims;
         Ok(Self {
             centroid_vertex_id: metadata.medoid,
-            memory_aligned_dimension,
-            fp_vector_len: (metadata.dims * std::mem::size_of::<Data::VectorDataType>()) as u64,
+            dim,
+            fp_vector_len: (dim * std::mem::size_of::<Data::VectorDataType>()) as u64,
             sector_graph: DiskSectorGraph::new(sector_reader, header, max_batch_size)?,
 
-            aligned_vector_buf: vec![
-                Data::VectorDataType::default();
-                max_batch_size * memory_aligned_dimension
-            ],
+            vector_buf: vec![Data::VectorDataType::default(); max_batch_size * dim],
             cached_adjacency_list: Vec::with_capacity(max_batch_size),
             cached_associated_data: Vec::with_capacity(max_batch_size),
             loaded_nodes: HashMap::with_capacity(max_batch_size),
@@ -238,10 +233,7 @@ where
             self.cached_adjacency_list.reserve(max_batch_size);
             self.cached_associated_data.reserve(max_batch_size);
             self.loaded_nodes.reserve(max_batch_size);
-            self.aligned_vector_buf = vec![
-                Data::VectorDataType::default();
-                max_batch_size * self.memory_aligned_dimension
-            ];
+            self.vector_buf = vec![Data::VectorDataType::default(); max_batch_size * self.dim];
             self.max_batch_size = max_batch_size;
         }
         Ok(())
@@ -266,10 +258,6 @@ where
         self.loaded_nodes.clear();
         self.cached_adjacency_list.clear();
         self.cached_associated_data.clear();
-    }
-
-    pub fn memory_aligned_dimension(&self) -> usize {
-        self.memory_aligned_dimension
     }
 }
 
