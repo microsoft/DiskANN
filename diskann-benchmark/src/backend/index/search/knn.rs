@@ -141,10 +141,10 @@ where
 }
 
 impl<DP, T, S, P> Knn<DP::InternalId>
-    for Arc<core_search::graph::knn::KNNWithPostProcessor<DP, T, S, P>>
+    for Arc<core_search::graph::knn::KNN<DP, T, S, P>>
 where
     DP: diskann::provider::DataProvider,
-    core_search::graph::knn::KNNWithPostProcessor<DP, T, S, P>: core_search::Search<
+    core_search::graph::knn::KNN<DP, T, S, P>: core_search::Search<
         Id = DP::InternalId,
         Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,

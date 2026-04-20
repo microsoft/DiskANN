@@ -81,11 +81,8 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
     pub(crate) is_flat_search: bool,
-    #[serde(default)]
-    pub(crate) is_determinant_diversity_search: bool,
-    #[serde(default)]
+    pub(crate) is_determinant_diversity_search: Option<bool>,
     pub(crate) determinant_diversity_eta: Option<f64>,
-    #[serde(default)]
     pub(crate) determinant_diversity_power: Option<f64>,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) vector_filters_file: Option<InputFile>,

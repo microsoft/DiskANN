@@ -9,7 +9,7 @@ pub mod range;
 
 pub mod strategy;
 
-pub use knn::KNN;
+pub use knn::{KNN, NoPostProcessor};
 pub use multihop::MultiHop;
 pub use range::Range;
 

@@ -44,9 +44,9 @@ impl std::error::Error for DeterminantDiversityError {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct DeterminantDiversitySearchParams {
-    pub top_k: usize,
-    pub determinant_diversity_eta: f64,
-    pub determinant_diversity_power: f64,
+    top_k: usize,
+    determinant_diversity_eta: f64,
+    determinant_diversity_power: f64,
 }
 
 impl DeterminantDiversitySearchParams {
@@ -76,6 +76,18 @@ impl DeterminantDiversitySearchParams {
             determinant_diversity_eta,
             determinant_diversity_power,
         })
+    }
+
+    pub fn top_k(&self) -> usize {
+        self.top_k
+    }
+
+    pub fn eta(&self) -> f64 {
+        self.determinant_diversity_eta
+    }
+
+    pub fn power(&self) -> f64 {
+        self.determinant_diversity_power
     }
 }
 

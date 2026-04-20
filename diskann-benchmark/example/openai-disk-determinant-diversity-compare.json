@@ -1,6 +1,6 @@
 {
   "search_directories": [
-    "C:/data/openai"
+    "test_data"
   ],
   "jobs": [
     {

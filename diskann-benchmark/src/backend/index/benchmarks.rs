@@ -399,7 +399,7 @@ where
                     anyhow::anyhow!("Invalid determinant-diversity parameters: {err}")
                 })?;
 
-                let knn = benchmark_core::search::graph::knn::KNNWithPostProcessor::new(
+                let knn = benchmark_core::search::graph::knn::KNN::new_with(
                     index,
                     queries,
                     benchmark_core::search::graph::Strategy::broadcast(search_strategy),

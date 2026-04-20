@@ -397,7 +397,7 @@ mod tests {
         let _: Type<f32> = value.convert::<DataType, _>().unwrap();
 
         // An invalid match should return an error.
-        let value = Any::new(0usize, "random-determinant-diversity");
+        let value = Any::new(0usize, "random-tag");
         let err = value.convert::<DataType, Type<f32>>().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("invalid dispatch"), "{}", msg);
