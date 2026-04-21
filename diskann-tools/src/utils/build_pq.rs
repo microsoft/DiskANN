@@ -14,7 +14,7 @@ use diskann_providers::{
         get_disk_index_compressed_pq_file, get_disk_index_pq_pivot_file, FileStorageProvider,
         PQStorage,
     },
-    utils::{load_metadata_from_file, Timer},
+    utils::{create_thread_pool, load_metadata_from_file, Timer},
 };
 use diskann_vector::distance::Metric;
 use tracing::info;
@@ -65,6 +65,8 @@ pub fn build_pq<Data: GraphDataType>(
             &mut random_provider.create_rnd(),
         )?;
 
+    let pool = create_thread_pool(parameters.num_threads)?;
+
     diskann_providers::model::pq::generate_pq_pivots(
         GeneratePivotArguments::new(
             num_train,
@@ -78,16 +80,16 @@ pub fn build_pq<Data: GraphDataType>(
         &pq_storage,
         &storage_provider,
         random_provider,
-        parameters.num_threads,
+        &pool,
     )?;
 
-    diskann_providers::model::pq::generate_pq_data_from_pivots::<f32, _, _>(
+    diskann_providers::model::pq::generate_pq_data_from_pivots::<f32, _>(
         NUM_PQ_CENTROIDS,
         num_pq_chunks,
         &mut pq_storage,
         &storage_provider,
         0,
-        parameters.num_threads,
+        &pool,
     )?;
 
     info!(

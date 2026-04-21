@@ -14,10 +14,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use diskann::{ANNError, ANNResult};
 use diskann_linalg::{self, Transpose};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPool};
 use rayon::prelude::*;
 
 // This is the chunk size applied when computing the closest centers in a block.
@@ -90,11 +87,11 @@ fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
 
 /// Compute L2-squared norms of data stored in row-major num_points * dim,
 /// need to be pre-allocated
-pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
+pub fn compute_vecs_l2sq(
     vecs_l2sq: &mut [f32],
     data: &[f32],
     dim: usize,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()> {
     let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
         ANNError::log_index_error(format_args!(
@@ -117,7 +114,6 @@ pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
             *vec_l2sq = compute_vec_l2sq(data, i, dim);
         }
     } else {
-        forward_threadpool!(pool = pool);
         vecs_l2sq
             .par_iter_mut()
             .enumerate()
@@ -252,7 +248,7 @@ pub fn compute_closest_centers_in_block(
 /// indices is an empty vector. Additionally, if pts_norms_squared is not null,
 /// then it will assume that point norms are pre-computed and use those values
 #[allow(clippy::too_many_arguments)]
-pub fn compute_closest_centers<Pool: AsThreadPool>(
+pub fn compute_closest_centers(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -262,7 +258,7 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
     closest_centers_ivf: &mut [u32],
     mut inverted_index: Option<&mut Vec<Vec<usize>>>,
     pts_norms_squared: Option<&[f32]>,
-    pool: Pool,
+    pool: &RayonThreadPool,
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
@@ -320,8 +316,6 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
             k
         )));
     }
-
-    forward_threadpool!(pool = pool);
 
     let mut owned_pts_norms_squared;
     let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
