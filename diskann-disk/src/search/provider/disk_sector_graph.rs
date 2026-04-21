@@ -121,6 +121,12 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
         }
 
         let len_per_node = self.num_sectors_per_node * self.block_size;
+        if len_per_node == 0 {
+            return Err(ANNError::log_index_error(format_args!(
+                "len_per_node is 0 (num_sectors_per_node={}, block_size={})",
+                self.num_sectors_per_node, self.block_size,
+            )));
+        }
         let range = cur_sector_idx_usize * len_per_node
             ..(cur_sector_idx_usize + sectors_to_fetch.len()) * len_per_node;
         debug_assert!(
