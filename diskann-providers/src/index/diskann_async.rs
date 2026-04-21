@@ -313,13 +313,13 @@ pub(crate) mod tests {
 
     impl GenerateGrid for i8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| v as i8))
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| i8::try_from(v).unwrap()))
         }
     }
 
     impl GenerateGrid for u8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| v as u8))
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| u8::try_from(v).unwrap()))
         }
     }
 
