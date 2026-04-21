@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! f16 × f16 entry point for block-transposed multi-vector distance.
+//! f16 dispatch adapter for block-transposed multi-vector distance.
 //!
 //! Reuses the f32 micro-kernel family with tile-level f16→f32 conversion
 //! via [`ConvertTo`](super::layouts::ConvertTo). No f16-specific micro-kernel
@@ -16,97 +16,14 @@
 use diskann_wide::Architecture;
 
 use super::Kernel;
-use super::f32::F32Kernel;
-use super::layouts::{self, DescribeLayout};
-use super::tiled_reduce::tiled_reduce;
+use super::TileBudget;
+use super::f32::{F32Kernel, max_ip_kernel};
+use super::layouts;
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
 
 // ── F16 entry ────────────────────────────────────────────────────
 
-/// Zero-sized entry point for the f16 path with block size `GROUP`.
-///
-/// Drives [`tiled_reduce`](super::tiled_reduce::tiled_reduce) using
-/// [`F32Kernel`] with tile-level f16→f32 [`ConvertTo`](super::layouts::ConvertTo) conversion.
 pub(crate) struct F16Entry<const GROUP: usize>;
-
-// ── Public entry point ───────────────────────────────────────────
-
-#[inline(never)]
-#[cold]
-#[allow(clippy::panic)]
-fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, b_dim: usize) {
-    panic!(
-        "max_ip_kernel (f16): precondition failed: \
-         scratch.len()={scratch_len} (expected {padded_nrows}), \
-         a.ncols()={a_ncols}, b.vector_dim()={b_dim}"
-    );
-}
-
-/// Compute the reducing max-IP GEMM between a block-transposed f16 A matrix
-/// and a row-major f16 B matrix, writing per-A-row max similarities into
-/// `scratch`.
-///
-/// Both A and B sides are converted to f32 at tile granularity via
-/// [`ConvertTo`](super::layouts::ConvertTo), then processed by the f32
-/// micro-kernel.
-///
-/// # Arguments
-///
-/// * `arch` - Architecture token (must satisfy the `Kernel` where-bound).
-/// * `a` - Block-transposed f16 matrix view with block size `GROUP`.
-/// * `b` - Row-major f16 matrix view.
-/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::padded_nrows()`].
-///   Must be initialized to `f32::MIN` before the first call.
-///
-/// # Panics
-///
-/// Panics if `scratch.len() != a.padded_nrows()` or `a.ncols() != b.vector_dim()`.
-pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
-    arch: A,
-    a: BlockTransposedRef<'_, half::f16, GROUP>,
-    b: MatRef<'_, Standard<half::f16>>,
-    scratch: &mut [f32],
-) where
-    F32Kernel<GROUP>:
-        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
-    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, layouts::BlockTransposed<f32, GROUP>>
-        + layouts::Layout<Element = half::f16>,
-    layouts::RowMajor<half::f16>:
-        layouts::ConvertTo<A, layouts::RowMajor<f32>> + layouts::Layout<Element = half::f16>,
-{
-    if scratch.len() != a.padded_nrows() || a.ncols() != b.vector_dim() {
-        max_ip_kernel_panic(scratch.len(), a.padded_nrows(), a.ncols(), b.vector_dim());
-    }
-
-    let k = a.ncols();
-    let b_nrows = b.num_vectors();
-
-    // Compile-time: A_PANEL must equal GROUP for block-transposed layout correctness.
-    const { assert!(<F32Kernel<GROUP> as Kernel<A>>::A_PANEL == GROUP) }
-
-    let ca = a.layout();
-    let cb = b.layout();
-
-    // SAFETY:
-    // - a.as_ptr() is valid for a.padded_nrows() * k elements of f16.
-    // - MatRef<Standard<f16>> stores nrows * ncols contiguous f16 elements.
-    // - scratch.len() == a.padded_nrows() (checked above).
-    // - a.padded_nrows() is always a multiple of GROUP, and the const assert above
-    //   verifies A_PANEL == GROUP at compile time.
-    unsafe {
-        tiled_reduce::<A, F32Kernel<GROUP>, _, _>(
-            arch,
-            &ca,
-            &cb,
-            a.as_ptr(),
-            a.padded_nrows(),
-            b.as_slice().as_ptr(),
-            b_nrows,
-            k,
-            scratch,
-        );
-    }
-}
 
 // ── Target3 dispatch ─────────────────────────────────────────────
 
@@ -120,12 +37,11 @@ impl<A, const GROUP: usize>
     > for F16Entry<GROUP>
 where
     A: Architecture,
-    F32Kernel<GROUP>:
-        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
-    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, layouts::BlockTransposed<f32, GROUP>>
+    F32Kernel<GROUP>: Kernel<A>,
+    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left>
         + layouts::Layout<Element = half::f16>,
-    layouts::RowMajor<half::f16>:
-        layouts::ConvertTo<A, layouts::RowMajor<f32>> + layouts::Layout<Element = half::f16>,
+    layouts::RowMajor<half::f16>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right>
+        + layouts::Layout<Element = half::f16>,
 {
     #[inline(always)]
     fn run(
@@ -135,16 +51,16 @@ where
         rhs: MatRef<'_, Standard<half::f16>>,
         scratch: &mut [f32],
     ) {
-        max_ip_kernel(arch, lhs, rhs, scratch);
+        max_ip_kernel(arch, lhs, rhs, scratch, TileBudget::default());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multi_vector::QueryComputer;
-    use crate::multi_vector::distance::{Chamfer, MaxSim, QueryMatRef};
+    use crate::multi_vector::{BlockTransposed, Chamfer, MaxSim, QueryComputer, QueryMatRef};
     use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
+    use diskann_wide::arch::Scalar;
 
     /// Helper to create a MatRef from raw f16 data.
     fn make_query_mat(
@@ -361,9 +277,6 @@ mod tests {
     /// `QueryComputer` to validate the kernel + ConvertTo pipeline directly.
     #[test]
     fn max_ip_kernel_matches_naive() {
-        use crate::multi_vector::block_transposed::BlockTransposed;
-        use diskann_wide::arch::Scalar;
-
         fn naive_max_ip_f16(
             a: &[half::f16],
             a_nrows: usize,
@@ -401,7 +314,13 @@ mod tests {
             let b_mat = make_query_mat(&b_data, b_nrows, dim);
 
             let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
-            super::max_ip_kernel::<Scalar, 8>(Scalar::new(), a_bt.as_view(), b_mat, &mut scratch);
+            max_ip_kernel::<Scalar, _, 8>(
+                Scalar::new(),
+                a_bt.as_view(),
+                b_mat,
+                &mut scratch,
+                TileBudget::default(),
+            );
 
             let expected = naive_max_ip_f16(&a_data, a_nrows, &b_data, b_nrows, dim);
             for i in 0..a_nrows {

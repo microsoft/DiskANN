@@ -16,12 +16,8 @@ use diskann_wide::arch::Target2;
 
 // ── Layout trait ─────────────────────────────────────
 
-/// Describes the memory layout and element type of tile data.
-///
-/// Layout types are zero-sized markers used for compile-time constraints.
-/// They carry no runtime state.
+/// Memory layout and element type marker for tile data.
 pub(super) trait Layout {
-    /// The element type stored in this layout.
     type Element: Copy;
 }
 
@@ -77,7 +73,6 @@ impl<T: Copy> Layout for RowMajor<T> {
 pub(super) trait DescribeLayout {
     type Layout: Layout;
 
-    /// Return a layout marker instance (zero-cost for ZST markers).
     fn layout(&self) -> Self::Layout;
 }
 
@@ -163,10 +158,6 @@ unsafe impl<A: Architecture, L: Layout> ConvertTo<A, L> for L {
 // ── f16 → f32 conversions ────────────────────────────
 
 /// Block-transposed f16 → block-transposed f32 (element-wise, layout-preserving).
-///
-/// Conversion dispatches through [`SliceCast`] via runtime architecture
-/// detection, so it is SIMD-accelerated on every platform that
-/// `diskann-wide` supports.
 // SAFETY: `SliceCast` converts exactly `rows * k` f16 values from `src`
 // into `rows * k` f32 values in `buf`. The returned pointer is
 // `buf.as_ptr()`, valid until the next `&mut` access to `buf`.

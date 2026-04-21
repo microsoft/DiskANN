@@ -1,14 +1,16 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! f32 × f32 micro-kernel family for block-transposed multi-vector distance.
+//! f32 micro-kernel family for block-transposed multi-vector distance.
 //!
 //! Provides:
 //!
 //! - `F32Kernel<GROUP>` — zero-sized marker type selecting the f32 micro-kernel
 //!   for `BlockTransposed<f32, GROUP>` data.
-//! - [`max_ip_kernel`] — architecture- and GROUP-generic entry point for the
-//!   reducing max-IP GEMM.
+//! - [`max_ip_kernel`] — architecture-, element-type-, and GROUP-generic entry point
+//!   for the reducing max-IP GEMM. Accepts any element type `T` for which
+//!   [`ConvertTo`](super::layouts::ConvertTo) impls exist (identity for f32,
+//!   SIMD-accelerated f16→f32, etc.).
 //!
 //! # Architecture-specific micro-kernels
 //!
@@ -18,6 +20,7 @@
 use diskann_wide::Architecture;
 
 use super::Kernel;
+use super::TileBudget;
 use super::layouts::{self, DescribeLayout};
 use super::tiled_reduce::tiled_reduce;
 use crate::multi_vector::{BlockTransposedRef, MatRef, Standard};
@@ -29,10 +32,6 @@ mod v3;
 // ── F32 kernel ───────────────────────────────────────────────────
 
 /// Zero-sized kernel type for f32 micro-kernels with block size `GROUP`.
-///
-/// The actual SIMD micro-kernel body is provided by `Kernel<A>`
-/// implementations in architecture-specific submodules (`v3`, `scalar`).
-/// Each implementation sets `A_PANEL = GROUP`.
 pub(crate) struct F32Kernel<const GROUP: usize>;
 
 // ── Public entry point ───────────────────────────────────────────
@@ -42,7 +41,7 @@ pub(crate) struct F32Kernel<const GROUP: usize>;
 #[allow(clippy::panic)]
 fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, b_dim: usize) {
     panic!(
-        "max_ip_kernel (f32): precondition failed: \
+        "max_ip_kernel: precondition failed: \
          scratch.len()={scratch_len} (expected {padded_nrows}), \
          a.ncols()={a_ncols}, b.vector_dim()={b_dim}"
     );
@@ -51,29 +50,30 @@ fn max_ip_kernel_panic(scratch_len: usize, padded_nrows: usize, a_ncols: usize, 
 /// Compute the reducing max-IP GEMM between a block-transposed A matrix and
 /// a row-major B matrix, writing per-A-row max similarities into `scratch`.
 ///
-/// This is a thin wrapper over the generic `tiled_reduce` loop using the
-/// `F32Kernel<GROUP>` micro-kernel for the requested architecture.
+/// Thin wrapper over [`tiled_reduce`] using `F32Kernel<GROUP>` for the
+/// requested architecture. The element type `T` can be any `Copy` type with
+/// matching [`ConvertTo`](super::layouts::ConvertTo) impls (zero-cost for
+/// `T = f32`; SIMD f16→f32 conversion once per tile for `T = half::f16`).
 ///
-/// # Arguments
-///
-/// * `arch` - Architecture token (must satisfy the `Kernel` where-bound).
-/// * `a` - Block-transposed matrix view with block size `GROUP`.
-/// * `b` - Row-major matrix view.
-/// * `scratch` - Mutable buffer of length [`BlockTransposedRef::padded_nrows()`].
-///   Must be initialized to `f32::MIN` before the first call. On return, `scratch[i]`
-///   contains the maximum inner product between A row `i` and any B row.
+/// `scratch` must have length [`BlockTransposedRef::padded_nrows()`] and be
+/// initialized to `f32::MIN` before the first call. On return, `scratch[i]`
+/// holds the maximum inner product between A row `i` and any B row.
 ///
 /// # Panics
 ///
 /// Panics if `scratch.len() != a.padded_nrows()` or `a.ncols() != b.vector_dim()`.
-pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
+pub(super) fn max_ip_kernel<A: Architecture, T: Copy, const GROUP: usize>(
     arch: A,
-    a: BlockTransposedRef<'_, f32, GROUP>,
-    b: MatRef<'_, Standard<f32>>,
+    a: BlockTransposedRef<'_, T, GROUP>,
+    b: MatRef<'_, Standard<T>>,
     scratch: &mut [f32],
+    budget: TileBudget,
 ) where
-    F32Kernel<GROUP>:
-        Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
+    F32Kernel<GROUP>: Kernel<A>,
+    layouts::BlockTransposed<T, GROUP>:
+        layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + layouts::Layout<Element = T>,
+    layouts::RowMajor<T>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right>
+        + layouts::Layout<Element = T>,
 {
     if scratch.len() != a.padded_nrows() || a.ncols() != b.vector_dim() {
         max_ip_kernel_panic(scratch.len(), a.padded_nrows(), a.ncols(), b.vector_dim());
@@ -89,8 +89,8 @@ pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
     let cb = b.layout();
 
     // SAFETY:
-    // - a.as_ptr() is valid for a.padded_nrows() * k elements of f32.
-    // - MatRef<Standard<f32>> stores nrows * ncols contiguous f32 elements at as_raw_ptr().
+    // - a.as_ptr() is valid for a.padded_nrows() * k elements of T.
+    // - MatRef<Standard<T>> stores nrows * ncols contiguous T elements.
     // - scratch.len() == a.padded_nrows() (checked above).
     // - a.padded_nrows() is always a multiple of GROUP, and the const assert above
     //   verifies A_PANEL == GROUP at compile time.
@@ -105,6 +105,7 @@ pub(super) fn max_ip_kernel<A: Architecture, const GROUP: usize>(
             b_nrows,
             k,
             scratch,
+            budget,
         );
     }
 }
@@ -121,7 +122,11 @@ impl<A, const GROUP: usize>
     > for F32Kernel<GROUP>
 where
     A: Architecture,
-    Self: Kernel<A, Left = layouts::BlockTransposed<f32, GROUP>, Right = layouts::RowMajor<f32>>,
+    Self: Kernel<A>,
+    layouts::BlockTransposed<f32, GROUP>:
+        layouts::ConvertTo<A, <Self as Kernel<A>>::Left> + layouts::Layout<Element = f32>,
+    layouts::RowMajor<f32>:
+        layouts::ConvertTo<A, <Self as Kernel<A>>::Right> + layouts::Layout<Element = f32>,
 {
     #[inline(always)]
     fn run(
@@ -131,15 +136,14 @@ where
         rhs: MatRef<'_, Standard<f32>>,
         scratch: &mut [f32],
     ) {
-        max_ip_kernel(arch, lhs, rhs, scratch);
+        max_ip_kernel(arch, lhs, rhs, scratch, TileBudget::default());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multi_vector::QueryComputer;
-    use crate::multi_vector::distance::{Chamfer, MaxSim, QueryMatRef};
+    use crate::multi_vector::{Chamfer, MaxSim, QueryComputer, QueryMatRef};
     use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
     /// Helper to create a MatRef from raw data.

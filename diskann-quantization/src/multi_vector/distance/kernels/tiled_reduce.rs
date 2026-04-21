@@ -3,55 +3,53 @@
 
 //! Generic tiling loop and shared reduction utilities.
 //!
-//! This module contains the type-agnostic parts of the kernel implementation:
+//! # Tiling Strategy
 //!
-//! - `FullReduce` — tile planner that computes A/B panel counts from cache budgets.
-//! - `tiled_reduce` — the 5-level loop nest that drives any [`Kernel<A>`](super::Kernel).
-//! - `Reduce` — compile-time unroll reduction trait for fixed-size accumulator arrays.
+//! This approach uses a reducing-GEMM pattern modeled after high-performance BLAS
+//! implementations:
+//!
+//! - **L2 cache**: Tiles of A (the transposed query) are sized to fit in L2.
+//! - **L1 cache**: Tiles of B (the document) plus one micro-panel of A are sized
+//!   to fit in L1.
+//! - **Micro-kernel**: An `A_PANEL × B_PANEL` micro-kernel (e.g. 16×4 for f32 on V3)
+//!   processes a panel of A rows against a panel of B rows per invocation,
+//!   accumulating max-IP into a scratch buffer. The panel sizes are determined
+//!   by the `Kernel<A>` implementation for each element type.
 
 use diskann_wide::Architecture;
 
 use super::layouts::{ConvertTo, Layout};
-use super::{Kernel, l1_b_tile_budget, l2_a_tile_budget};
+use super::{Kernel, TileBudget};
 
 // ── Tile planner ─────────────────────────────────────────────────
 
-/// A plan for performing the reducing GEMM when the contraction dimension `k`
-/// is small enough that a micro-panel of `A` fits comfortably in L1 cache with room for
-/// multiple micro-panels of `B`.
+/// Tile-panel counts derived from cache budgets.
 #[derive(Debug, Clone, Copy)]
 struct FullReduce {
-    /// The number of micro panels of `A` that make up a tile.
     a_panels_per_tile: usize,
 
-    /// The number of micro panels of `B` that make up a tile.
     b_panels_per_tile: usize,
 }
 
 impl FullReduce {
     /// Compute A-tile and B-tile panel counts from cache budgets.
     ///
-    /// * `a_row_bytes` — bytes per A row in kernel layout.
-    /// * `b_row_bytes` — bytes per B row in kernel layout.
-    /// * `a_panel` — micro-kernel A panel height (`K::A_PANEL`).
-    /// * `b_panel` — micro-kernel B panel width (`K::B_PANEL`).
-    /// * `l2_budget` — L2 cache budget in bytes for the A tile.
-    /// * `l1_budget` — L1 cache budget in bytes for the B tile.
+    /// The L1 budget is reduced by one A micro-panel before splitting it into
+    /// B panels, since both must coexist in L1 during the inner loop.
     fn new(
         a_row_bytes: usize,
         b_row_bytes: usize,
         a_panel: usize,
         b_panel: usize,
-        l2_budget: usize,
-        l1_budget: usize,
+        budget: TileBudget,
     ) -> Self {
         let a_row_bytes = a_row_bytes.max(1);
         let b_row_bytes = b_row_bytes.max(1);
 
-        let a_panels_per_tile = (l2_budget / (a_row_bytes * a_panel)).max(1);
+        let a_panels_per_tile = (budget.l2_a / (a_row_bytes * a_panel)).max(1);
 
         let a_panel_bytes = a_panel * a_row_bytes;
-        let b_tile_budget = l1_budget.saturating_sub(a_panel_bytes);
+        let b_tile_budget = budget.l1_b.saturating_sub(a_panel_bytes);
         let b_panels_per_tile = (b_tile_budget / (b_row_bytes * b_panel)).max(1);
 
         Self {
@@ -95,6 +93,7 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
     b_nrows: usize,
     k: usize,
     scratch: &mut [f32],
+    budget: TileBudget,
 ) where
     A: Architecture,
     K: Kernel<A>,
@@ -103,14 +102,7 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
 {
     let a_row_bytes = k * std::mem::size_of::<<K::Left as Layout>::Element>();
     let b_row_bytes = k * std::mem::size_of::<<K::Right as Layout>::Element>();
-    let plan = FullReduce::new(
-        a_row_bytes,
-        b_row_bytes,
-        K::A_PANEL,
-        K::B_PANEL,
-        l2_a_tile_budget(),
-        l1_b_tile_budget(),
-    );
+    let plan = FullReduce::new(a_row_bytes, b_row_bytes, K::A_PANEL, K::B_PANEL, budget);
 
     let b_src_panel_stride = K::B_PANEL * k;
     let b_src_tile_stride = b_src_panel_stride * plan.b_panels_per_tile;
@@ -293,7 +285,13 @@ impl<T: Copy> Reduce for [T; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::FullReduce;
+    use super::*;
+
+    use diskann_wide::arch::Scalar;
+
+    use super::super::f32::{F32Kernel, max_ip_kernel};
+    use super::super::layouts;
+    use crate::multi_vector::{BlockTransposed, MatRef, Standard};
 
     #[test]
     fn basic_panel_counts() {
@@ -302,7 +300,16 @@ mod tests {
         // One A-panel = 4096 bytes, L1 budget 36000 → 36000 - 4096 = 31904.
         // 4 B-rows × 256 bytes/row = 1024 bytes per B-panel.
         // 31904 / 1024 = 31 B-panels.
-        let plan = FullReduce::new(256, 256, 16, 4, 40960, 36000);
+        let plan = FullReduce::new(
+            256,
+            256,
+            16,
+            4,
+            TileBudget {
+                l2_a: 40960,
+                l1_b: 36000,
+            },
+        );
         assert_eq!(plan.a_panels_per_tile, 10);
         assert_eq!(plan.b_panels_per_tile, 31);
     }
@@ -310,7 +317,7 @@ mod tests {
     #[test]
     fn tiny_budget_clamps_to_one() {
         // Budget too small for even one panel — clamp to 1.
-        let plan = FullReduce::new(1024, 1024, 16, 4, 1, 1);
+        let plan = FullReduce::new(1024, 1024, 16, 4, TileBudget { l2_a: 1, l1_b: 1 });
         assert_eq!(plan.a_panels_per_tile, 1);
         assert_eq!(plan.b_panels_per_tile, 1);
     }
@@ -319,7 +326,16 @@ mod tests {
     fn zero_byte_rows_clamped() {
         // Zero-byte rows (e.g. k=0) should not divide by zero.
         // FullReduce clamps row bytes to max(1), so a_row_bytes=1, b_row_bytes=1.
-        let plan = FullReduce::new(0, 0, 16, 4, 100_000, 50_000);
+        let plan = FullReduce::new(
+            0,
+            0,
+            16,
+            4,
+            TileBudget {
+                l2_a: 100_000,
+                l1_b: 50_000,
+            },
+        );
         // a_panels = 100_000 / (1 * 16) = 6250
         assert_eq!(plan.a_panels_per_tile, 6250);
         // a_panel_bytes = 16 * 1 = 16. b_tile_budget = 50_000 - 16 = 49_984.
@@ -331,7 +347,16 @@ mod tests {
     fn exact_fit_one_panel() {
         // Budget exactly fits one A-panel (16 × 64 = 1024 bytes).
         // No room for a second → a_panels = 1.
-        let plan = FullReduce::new(64, 64, 16, 4, 1024, 2048);
+        let plan = FullReduce::new(
+            64,
+            64,
+            16,
+            4,
+            TileBudget {
+                l2_a: 1024,
+                l1_b: 2048,
+            },
+        );
         assert_eq!(plan.a_panels_per_tile, 1);
         // L1: 2048 - 16*64(=1024) = 1024 for B. 4*64=256 per B-panel → 4 panels.
         assert_eq!(plan.b_panels_per_tile, 4);
@@ -341,17 +366,22 @@ mod tests {
     fn l1_saturated_by_a_panel() {
         // A-panel alone exceeds L1 budget → b_tile_budget saturates to 0,
         // b_panels_per_tile clamps to 1.
-        let plan = FullReduce::new(1024, 64, 16, 4, 100_000, 100);
+        let plan = FullReduce::new(
+            1024,
+            64,
+            16,
+            4,
+            TileBudget {
+                l2_a: 100_000,
+                l1_b: 100,
+            },
+        );
         assert_eq!(plan.b_panels_per_tile, 1);
     }
 
     #[test]
     #[should_panic(expected = "must be a multiple of A_PANEL")]
     fn panics_on_unaligned_a_rows() {
-        use super::super::f32::F32Kernel;
-        use super::super::layouts;
-        use diskann_wide::arch::Scalar;
-
         let k = 4;
         // 9 is not a multiple of A_PANEL (8).
         let a = vec![0.0f32; 9 * k];
@@ -373,16 +403,13 @@ mod tests {
                 2,
                 k,
                 &mut scratch,
+                TileBudget::default(),
             );
         }
     }
 
     #[test]
     fn zero_dim_fills_scratch_and_returns() {
-        use super::super::f32::F32Kernel;
-        use super::super::layouts;
-        use diskann_wide::arch::Scalar;
-
         let a_rows = 8;
         let b_rows = 3;
         let k = 0;
@@ -406,6 +433,7 @@ mod tests {
                 b_rows,
                 k,
                 &mut scratch,
+                TileBudget::default(),
             );
         }
 
@@ -416,10 +444,6 @@ mod tests {
 
     #[test]
     fn zero_dim_zero_docs_leaves_scratch_untouched() {
-        use super::super::f32::F32Kernel;
-        use super::super::layouts;
-        use diskann_wide::arch::Scalar;
-
         let a_rows = 8;
         let mut scratch = vec![f32::MIN; a_rows];
 
@@ -438,6 +462,7 @@ mod tests {
                 0,
                 0,
                 &mut scratch,
+                TileBudget::default(),
             );
         }
 
@@ -448,8 +473,6 @@ mod tests {
 
     #[test]
     fn reduce_folds_correctly() {
-        use super::Reduce;
-
         let max = |a: f32, b: f32| a.max(b);
         assert_eq!([5.0f32].reduce(&max), 5.0);
         assert_eq!([1.0f32, 3.0].reduce(&max), 3.0);
@@ -466,8 +489,6 @@ mod tests {
     /// - `[a, b, c, d; 4]` → `(a - b) - (c - d)` (balanced tree)
     #[test]
     fn reduce_fold_order() {
-        use super::Reduce;
-
         let sub = |a: f32, b: f32| a - b;
         // [10]                          → 10
         assert_eq!([10.0f32].reduce(&sub), 10.0);
@@ -481,11 +502,6 @@ mod tests {
 
     #[test]
     fn tiled_reduce_matches_naive() {
-        use super::super::f32::max_ip_kernel;
-        use crate::multi_vector::block_transposed::BlockTransposed;
-        use crate::multi_vector::matrix::{MatRef, Standard};
-        use diskann_wide::arch::Scalar;
-
         fn naive_max_ip(
             a: &[f32],
             a_nrows: usize,
@@ -511,6 +527,8 @@ mod tests {
             (1, 1, 4),   // Single query, single doc
             (1, 5, 8),   // Single query, multiple docs
             (5, 1, 8),   // Multiple queries, single doc
+            (3, 2, 0),   // Zero dimensions, both have rows
+            (3, 0, 4),   // Zero docs
             (3, 2, 3),   // Prime k
             (3, 4, 16),  // General case
             (5, 3, 5),   // Prime k, A-remainder on aarch64
@@ -527,25 +545,41 @@ mod tests {
             (16, 8, 32), // No B remainder (8 % 2 = 0)
         ];
 
+        // Two budgets: default exercises the peeled section only; tiny forces
+        // a_panels_per_tile=1 and b_panels_per_tile=1 so the main loop body
+        // (Loop 2) and multiple A-tile iterations (Loop 1) are entered.
+        let budgets = [
+            ("default", TileBudget::default()),
+            ("tiny", TileBudget { l2_a: 1, l1_b: 1 }),
+        ];
+
         for &(a_nrows, b_nrows, dim) in cases {
             let a_data: Vec<f32> = (0..a_nrows * dim).map(|i| (i + 1) as f32).collect();
             let b_data: Vec<f32> = (0..b_nrows * dim).map(|i| ((i + 1) * 2) as f32).collect();
-
-            let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), &a_data).unwrap();
-            let a_bt = BlockTransposed::<f32, 8>::from_matrix_view(a_mat.as_matrix_view());
-            let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
-
-            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
-            max_ip_kernel::<Scalar, 8>(Scalar::new(), a_bt.as_view(), b_mat, &mut scratch);
-
             let expected = naive_max_ip(&a_data, a_nrows, &b_data, b_nrows, dim);
-            for i in 0..a_nrows {
-                assert!(
-                    (scratch[i] - expected[i]).abs() < 1e-6,
-                    "row {i} mismatch for ({a_nrows},{b_nrows},{dim}): actual={}, expected={}",
-                    scratch[i],
-                    expected[i]
+
+            for &(label, budget) in &budgets {
+                let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), &a_data).unwrap();
+                let a_bt = BlockTransposed::<f32, 8>::from_matrix_view(a_mat.as_matrix_view());
+                let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
+
+                let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
+                max_ip_kernel::<Scalar, _, 8>(
+                    Scalar::new(),
+                    a_bt.as_view(),
+                    b_mat,
+                    &mut scratch,
+                    budget,
                 );
+
+                for i in 0..a_nrows {
+                    assert!(
+                        (scratch[i] - expected[i]).abs() < 1e-6,
+                        "row {i} mismatch for ({a_nrows},{b_nrows},{dim}) budget={label}: actual={}, expected={}",
+                        scratch[i],
+                        expected[i],
+                    );
+                }
             }
         }
     }

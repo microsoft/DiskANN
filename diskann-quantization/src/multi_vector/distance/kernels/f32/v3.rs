@@ -24,7 +24,7 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
 
     #[inline(always)]
     unsafe fn full_panel(arch: V3, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
-        // SAFETY: Caller guarantees pointer validity per Kernel<V3> contract.
+        // SAFETY: pointer validity per Kernel<V3> contract.
         unsafe { f32_microkernel::<{ Self::B_PANEL }>(arch, a, b, k, r) }
     }
 
@@ -37,7 +37,7 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
         k: usize,
         r: *mut f32,
     ) {
-        // SAFETY: Caller guarantees pointer validity per Kernel<V3> contract.
+        // SAFETY: pointer validity per Kernel<V3> contract.
         unsafe {
             match remainder {
                 1 => f32_microkernel::<1>(arch, a, b, k, r),
@@ -56,9 +56,8 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
 
 /// SIMD micro-kernel: processes 16 A rows × `UNROLL` B rows.
 ///
-/// Accumulates inner products via FMA (`mul_add_simd`) into two `f32x8` register
-/// tiles (covering 16 A rows), then reduces across the `UNROLL` B
-/// lanes with `max_simd` and merges into the scratch buffer `r`.
+/// Accumulates via FMA into two `f32x8` register tiles, reduces across the
+/// `UNROLL` B lanes with `max_simd`, then merges into the scratch buffer `r`.
 ///
 /// # Safety
 ///
@@ -66,7 +65,7 @@ unsafe impl Kernel<V3> for F32Kernel<16> {
 /// 2. `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
 /// 3. `r` must point to at least `A_PANEL(16)` writable `f32` values.
 #[inline(always)]
-pub(in crate::multi_vector::distance::kernels) unsafe fn f32_microkernel<const UNROLL: usize>(
+unsafe fn f32_microkernel<const UNROLL: usize>(
     arch: V3,
     a_packed: *const f32,
     b: *const f32,

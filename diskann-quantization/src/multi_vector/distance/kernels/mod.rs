@@ -7,31 +7,6 @@
 //! memory layout for **query** vectors (instead of documents), with documents remaining
 //! in row-major format.
 //!
-//! # Module Organization
-//!
-//! - [`Kernel<A>`] — unsafe trait parameterized on architecture (this file).
-//! - [`layouts`] — layout markers, [`ConvertTo`](layouts::ConvertTo) conversion
-//!   trait, and `DescribeLayout` bridge.
-//! - [`tiled_reduce`](tiled_reduce) — generic 5-level tiling loop.
-//! - [`f32`] — f32 micro-kernel family: V3 (x86_64), Scalar (portable). V4 delegates to V3; Neon delegates to Scalar.
-//!   Entry point ([`max_ip_kernel`](f32::max_ip_kernel)).
-//! - [`f16`] — f16 entry point reusing the f32 micro-kernel family with
-//!   tile-level f16→f32 conversion via [`ConvertTo`](layouts::ConvertTo).
-//!   Entry point ([`max_ip_kernel`](f16::max_ip_kernel)).
-//!
-//! # Tiling Strategy
-//!
-//! This approach uses a reducing-GEMM pattern modeled after high-performance BLAS
-//! implementations:
-//!
-//! - **L2 cache**: Tiles of A (the transposed query) are sized to fit in L2.
-//! - **L1 cache**: Tiles of B (the document) plus one micro-panel of A are sized
-//!   to fit in L1.
-//! - **Micro-kernel**: An `A_PANEL × B_PANEL` micro-kernel (e.g. 16×4 for f32 on V3)
-//!   processes a panel of A rows against a panel of B rows per invocation,
-//!   accumulating max-IP into a scratch buffer. The panel sizes are determined
-//!   by the `Kernel<A>` implementation for each element type.
-//!
 //! # Memory Layout
 //!
 //! - **Query**: Block-transposed (`GROUP` vectors per block, dimensions contiguous
@@ -43,65 +18,50 @@ pub(super) mod f32;
 mod layouts;
 mod tiled_reduce;
 
-/// Detect the L1 data cache size in bytes.
+// ── Tile budget ──────────────────────────────────────────────────
+
+/// Cache budgets fed to the tile planner.
 ///
-/// Returns `None` until platform detection is wired in (e.g. via
-/// `diskann_platform::get_l1d_cache_size()`).
-///
-// TODO: Wire to `diskann_platform` or env-var override.
-fn detect_l1d_cache() -> Option<usize> {
-    None
+/// `Default` returns the production budgets derived from hardcoded L1/L2
+/// cache-size estimates and fixed fractions.
+#[derive(Debug, Clone, Copy)]
+struct TileBudget {
+    /// L2 budget in bytes reserved for A tiles.
+    l2_a: usize,
+    /// L1 budget in bytes reserved for B tiles (before A-panel subtraction).
+    l1_b: usize,
 }
 
-/// Detect the L2 cache size in bytes.
-///
-/// Returns `None` until platform detection is wired in (e.g. via
-/// `diskann_platform::get_l2_cache_size()`).
-///
-// TODO: Wire to `diskann_platform` or env-var override.
-fn detect_l2_cache() -> Option<usize> {
-    None
-}
+impl Default for TileBudget {
+    // TODO: Replace hardcoded fallbacks with detected cache sizes
+    // (e.g. via `diskann_platform`, env-var override, or runtime query).
+    fn default() -> Self {
+        const L2_CACHE: usize = 1_250_000; // 1.25 MB fallback
+        const L1_CACHE: usize = 48_000; // 48 KB fallback
 
-// ── Cache budget helpers ─────────────────────────────────────────
-
-/// Approximate usable L1 data cache in bytes.
-fn l1_cache() -> usize {
-    detect_l1d_cache().unwrap_or(48_000)
-}
-
-/// Approximate usable L2 cache in bytes.
-fn l2_cache() -> usize {
-    detect_l2_cache().unwrap_or(1_250_000)
-}
-
-/// Fraction of L2 reserved for the A tile. The remainder accommodates B streaming
-/// traffic and incidental cache pollution.
-fn l2_a_tile_budget() -> usize {
-    l2_cache() / 2
-}
-
-/// Fraction of L1 available for the B tile. The A micro-panel is subtracted at
-/// runtime since it depends on K; this is the total L1 budget before that subtraction.
-fn l1_b_tile_budget() -> usize {
-    l1_cache() * 3 / 4
+        Self {
+            // 50% of L2 for A tiles; remainder for B streaming + pollution.
+            l2_a: L2_CACHE / 2,
+            // 75% of L1 for B tiles; A micro-panel subtracted at runtime.
+            l1_b: L1_CACHE * 3 / 4,
+        }
+    }
 }
 
 // ── Kernel trait ─────────────────────────────────────────────────
 
-/// SIMD micro-kernel trait for the [`tiled_reduce`](tiled_reduce::tiled_reduce) loop.
+/// SIMD micro-kernel for the [`tiled_reduce`](tiled_reduce::tiled_reduce) loop.
 ///
-/// Each implementation provides the micro-kernel body and the layout types
-/// that describe the element format consumed by `full_panel` /
-/// `partial_panel`. Tile-level conversion between storage layouts and
-/// kernel layouts is handled externally by [`ConvertTo`](layouts::ConvertTo)
-/// implementations; the kernel itself only sees already-converted data.
+/// The kernel only sees already-converted data: storage-layout to
+/// kernel-layout conversion is handled at tile boundaries by
+/// [`ConvertTo`](layouts::ConvertTo), so implementors can assume their input
+/// pointers reference `<Self::Left as Layout>::Element` /
+/// `<Self::Right as Layout>::Element` directly.
 ///
 /// # Safety
 ///
-/// Implementors must ensure that:
-/// - `full_panel` and `partial_panel` access only within the bounds
-///   described by their pointer arguments and the `k`/panel-size contracts.
+/// Implementors must respect the per-method `# Safety` contracts on
+/// [`full_panel`](Self::full_panel) and [`partial_panel`](Self::partial_panel).
 unsafe trait Kernel<A: diskann_wide::Architecture> {
     /// Layout consumed by the A (left / query) side of the micro-kernel.
     type Left: layouts::Layout;

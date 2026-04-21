@@ -717,6 +717,20 @@ impl<T: Copy> Mat<Standard<T>> {
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
     }
+
+    /// Return the backing data as a contiguous slice of `T`.
+    ///
+    /// The returned slice has `num_vectors() * vector_dim()` elements in row-major order.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        self.as_view().as_slice()
+    }
+
+    /// Return a [`MatrixView`] over the backing data.
+    #[inline]
+    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+        self.as_view().as_matrix_view()
+    }
 }
 
 ////////////
@@ -1062,6 +1076,20 @@ impl<'a, T: Copy> MatMut<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Return the backing data as a contiguous slice of `T`.
+    ///
+    /// The returned slice has `num_vectors() * vector_dim()` elements in row-major order.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        self.as_view().as_slice()
+    }
+
+    /// Return a [`MatrixView`] over the backing data.
+    #[inline]
+    pub fn as_matrix_view(&self) -> MatrixView<'_, T> {
+        self.as_view().as_matrix_view()
     }
 }
 
@@ -1800,16 +1828,48 @@ mod tests {
     #[test]
     fn as_matrix_view_roundtrip() {
         let data = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mat = MatRef::new(Standard::new(2, 3).unwrap(), &data).unwrap();
-        let view = mat.as_matrix_view();
 
+        // MatRef
+        let matref = MatRef::new(Standard::new(2, 3).unwrap(), &data).unwrap();
+        let view = matref.as_matrix_view();
         assert_eq!(view.nrows(), 2);
         assert_eq!(view.ncols(), 3);
-        // Data should be identical — as_matrix_view wraps the same slice.
         for row in 0..2 {
             for col in 0..3 {
                 assert_eq!(view[(row, col)], data[row * 3 + col]);
             }
         }
+        assert_eq!(matref.as_slice(), &data);
+
+        // Mat
+        let mut mat = Mat::new(Standard::<f32>::new(2, 3).unwrap(), 0.0f32).unwrap();
+        for i in 0..2 {
+            let r = mat.get_row_mut(i).unwrap();
+            for j in 0..3 {
+                r[j] = data[i * 3 + j];
+            }
+        }
+        let view = mat.as_matrix_view();
+        assert_eq!(view.nrows(), 2);
+        assert_eq!(view.ncols(), 3);
+        for row in 0..2 {
+            for col in 0..3 {
+                assert_eq!(view[(row, col)], data[row * 3 + col]);
+            }
+        }
+        assert_eq!(mat.as_slice(), &data);
+
+        // MatMut
+        let mut buf = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let matmut = MatMut::new(Standard::new(2, 3).unwrap(), &mut buf).unwrap();
+        let view = matmut.as_matrix_view();
+        assert_eq!(view.nrows(), 2);
+        assert_eq!(view.ncols(), 3);
+        for row in 0..2 {
+            for col in 0..3 {
+                assert_eq!(view[(row, col)], data[row * 3 + col]);
+            }
+        }
+        assert_eq!(matmut.as_slice(), &data);
     }
 }

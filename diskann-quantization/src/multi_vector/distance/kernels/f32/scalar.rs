@@ -34,7 +34,7 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
 
     #[inline(always)]
     unsafe fn full_panel(arch: Scalar, a: *const f32, b: *const f32, k: usize, r: *mut f32) {
-        // SAFETY: Caller guarantees pointer validity per Kernel<Scalar> contract.
+        // SAFETY: pointer validity per Kernel<Scalar> contract.
         unsafe { scalar_f32_microkernel::<{ Self::B_PANEL }>(arch, a, b, k, r) }
     }
 
@@ -47,7 +47,7 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
         k: usize,
         r: *mut f32,
     ) {
-        // SAFETY: Caller guarantees pointer validity per Kernel<Scalar> contract.
+        // SAFETY: pointer validity per Kernel<Scalar> contract.
         unsafe {
             match remainder {
                 1 => scalar_f32_microkernel::<1>(arch, a, b, k, r),
@@ -75,9 +75,7 @@ unsafe impl Kernel<Scalar> for F32Kernel<8> {
 /// 2. `b` must point to `UNROLL` rows of `k` contiguous `f32` values.
 /// 3. `r` must point to at least `A_PANEL(8)` writable `f32` values.
 #[inline(always)]
-pub(in crate::multi_vector::distance::kernels) unsafe fn scalar_f32_microkernel<
-    const UNROLL: usize,
->(
+unsafe fn scalar_f32_microkernel<const UNROLL: usize>(
     arch: Scalar,
     a_packed: *const f32,
     b: *const f32,
