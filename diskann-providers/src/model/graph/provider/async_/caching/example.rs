@@ -267,7 +267,7 @@ mod tests {
     use std::sync::Arc;
 
     use diskann::{
-        graph::{DiskANNIndex, glue::SearchStrategy},
+        graph::{DiskANNIndex, glue::SearchStrategy, test::synthetic::Grid},
         provider::{
             Accessor, DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
@@ -704,12 +704,7 @@ mod tests {
         );
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
-        let adjacency_lists = match dim {
-            1 => crate_utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => crate_utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => crate_utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let adjacency_lists = async_tests::grid_from_dim(dim).neighbors(grid_size);
         assert_eq!(adjacency_lists.len(), num_points);
         assert_eq!(vectors.len(), num_points);
 
