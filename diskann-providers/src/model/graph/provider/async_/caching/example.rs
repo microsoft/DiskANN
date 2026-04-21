@@ -267,7 +267,7 @@ mod tests {
     use std::sync::Arc;
 
     use diskann::{
-        graph::{DiskANNIndex, glue::SearchStrategy, test::synthetic::Grid},
+        graph::{DiskANNIndex, glue::SearchStrategy},
         provider::{
             Accessor, DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
@@ -280,7 +280,6 @@ mod tests {
     use crate::{
         index::diskann_async::tests as async_tests,
         model::graph::provider::async_::caching::provider::{AsCacheAccessorFor, CachingProvider},
-        utils as crate_utils,
     };
 
     fn test_provider(

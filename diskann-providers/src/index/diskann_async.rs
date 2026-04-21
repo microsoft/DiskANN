@@ -280,12 +280,8 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn grid_from_dim(dim: usize) -> Grid {
-        match dim {
-            1 => Grid::One,
-            3 => Grid::Three,
-            4 => Grid::Four,
-            _ => panic!("{}-dimensions is not supported for grid-generation", dim),
-        }
+        Grid::from_dim(dim)
+            .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
     }
 
     fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
