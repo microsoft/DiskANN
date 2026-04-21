@@ -51,9 +51,11 @@ mod tests {
 
     #[test]
     fn aligned_slice_zero_length() {
-        // Zero-length allocations yield AllocatorError since GlobalAllocator
-        // rejects size-0 layouts. Just verify it doesn't panic.
-        let _ = aligned_slice::<f32>(0, PowerOfTwo::new(16).unwrap());
+        // Zero-length aligned slices should succeed: `Poly::from_iter`
+        // special-cases empty iterators and returns an empty slice.
+        let data = aligned_slice::<f32>(0, PowerOfTwo::new(16).unwrap()).unwrap();
+        assert!(data.is_empty());
+        assert_eq!(data.len(), 0);
     }
 
     #[test]
