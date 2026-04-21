@@ -426,7 +426,6 @@ where
                 .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
-                .as_slice()
                 .to_vec(),
         })
     }
