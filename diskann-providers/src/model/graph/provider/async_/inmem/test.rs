@@ -16,7 +16,7 @@ use diskann::{
             CopyIds, DefaultPostProcessor, ExpandBeam, InsertStrategy, MultiInsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
-        workingset::{self, map},
+        workingset::map,
     },
     neighbor::Neighbor,
     provider::{
@@ -323,27 +323,5 @@ impl MultiInsertStrategy<TestProvider, Matrix<f32>> for Flaky {
     {
         std::future::ready(Ok(map::Builder::new(map::Capacity::Default)
             .with_overlay(map::Overlay::from_batch(batch.clone(), ids))))
-    }
-}
-
-// Directed test to fail vector retrieval during consolidation.
-pub(crate) struct SuperFlaky;
-
-impl PruneStrategy<TestProvider> for SuperFlaky {
-    type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
-    type PruneAccessor<'a> = FlakyAccessor<'a>;
-    type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = workingset::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
-
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a TestProvider,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(FlakyAccessor::new(provider, 1, 1))
-    }
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        map::Builder::new(map::Capacity::None).build(capacity)
     }
 }

@@ -112,7 +112,6 @@ mod imp {
                 base.flatten().into(),
                 vec![0.0; data.ncols()].into(),
                 offsets.into(),
-                None,
             )?;
 
             let training_time: MicroSeconds = start.elapsed().into();

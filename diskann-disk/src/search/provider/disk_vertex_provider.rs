@@ -5,16 +5,9 @@
 
 use std::ptr;
 
+use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{ANNError, ANNResult};
-use diskann_providers::model::{
-    graph::{graph_data_model::AdjacencyList, traits::GraphDataType},
-    FP_VECTOR_MEM_ALIGN,
-};
-use diskann_quantization::{
-    alloc::{aligned_slice, AlignedSlice},
-    num::PowerOfTwo,
-};
 use hashbrown::HashMap;
 
 use crate::{
@@ -36,8 +29,8 @@ where
     /// Centroid vertex id.
     pub centroid_vertex_id: u64,
 
-    /// Memory-aligned dimension.  In-memory the vectors should be this size.
-    memory_aligned_dimension: usize,
+    /// Dimensionality of each fp vector.
+    dim: usize,
 
     /// the len of fp vector
     fp_vector_len: u64,
@@ -45,11 +38,12 @@ where
     // sector graph
     sector_graph: DiskSectorGraph<AlignedReaderType>,
 
-    // Aligned fp vector cache
-    aligned_vector_buf: AlignedSlice<Data::VectorDataType>,
+    // Flat buffer holding the fp vectors for up to `max_batch_size` loaded nodes,
+    // laid out as `max_batch_size * dim` elements.
+    vector_buf: Vec<Data::VectorDataType>,
 
     // The cached adjacency list.
-    cached_adjacency_list: Vec<AdjacencyList<Data::VectorIdType>>,
+    cached_adjacency_list: Vec<Vec<Data::VectorIdType>>,
 
     // The cached associated data.
     cached_associated_data: Vec<Data::AssociatedDataType>,
@@ -80,10 +74,8 @@ where
         vertex_id: &Data::VectorIdType,
     ) -> ANNResult<&[<Data as GraphDataType>::VectorDataType]> {
         match self.loaded_nodes.get(vertex_id) {
-            Some(local_offset) => Ok(&self.aligned_vector_buf[local_offset.idx
-                * self.memory_aligned_dimension
-                ..(local_offset.idx * self.memory_aligned_dimension)
-                    + self.memory_aligned_dimension]),
+            Some(local_offset) => Ok(&self.vector_buf
+                [local_offset.idx * self.dim..(local_offset.idx * self.dim) + self.dim]),
             None => Err(ANNError::log_get_vertex_data_error(
                 vertex_id.to_string(),
                 "Vector".to_string(),
@@ -94,7 +86,7 @@ where
     fn get_adjacency_list(
         &self,
         vertex_id: &Data::VectorIdType,
-    ) -> ANNResult<&AdjacencyList<Data::VectorIdType>> {
+    ) -> ANNResult<&[Data::VectorIdType]> {
         match self.loaded_nodes.get(vertex_id) {
             Some(local_offset) => Ok(&self.cached_adjacency_list[local_offset.vec_idx]),
             None => Err(ANNError::log_get_vertex_data_error(
@@ -132,24 +124,43 @@ where
         let fp_vector_buf =
             &self.sector_graph.node_disk_buf(idx, *vertex_id)[..self.fp_vector_len as usize];
 
-        // memcpy from fp_vector_buf to the aligned buffer..
-        // The safe condition is met here since the dimension of the vector in fp_vector_buffer is the same with aligned_vector_buffer.
-        // fp_vector_buf and aligned_vector_buffer.as_mut_ptr() are guaranteed to be non-overlapping.
+        // memcpy from fp_vector_buf to the vector buffer.
+        // The safe condition is met here since the dimension of the vector in fp_vector_buffer is
+        // the same with vector_buf. fp_vector_buf and vector_buf.as_mut_ptr() are guaranteed to be
+        // non-overlapping.
         unsafe {
             ptr::copy_nonoverlapping(
                 fp_vector_buf.as_ptr(),
-                self.aligned_vector_buf[idx * self.memory_aligned_dimension
-                    ..(idx * self.memory_aligned_dimension) + self.memory_aligned_dimension]
-                    .as_mut_ptr() as *mut u8,
+                self.vector_buf[idx * self.dim..(idx * self.dim) + self.dim].as_mut_ptr()
+                    as *mut u8,
                 fp_vector_buf.len(),
             );
         }
         let neighbor_and_data_buf =
             &self.sector_graph.node_disk_buf(idx, *vertex_id)[self.fp_vector_len as usize..];
         let num_neighbors = LittleEndian::read_u32(&neighbor_and_data_buf[0..4]) as usize;
-        let neighbor_buf = &neighbor_and_data_buf[..4 + num_neighbors * 4];
-        let adjacency_list = AdjacencyList::try_from(neighbor_buf)?;
-        self.cached_adjacency_list.push(adjacency_list);
+        match neighbor_and_data_buf.get(4..4 + num_neighbors * 4) {
+            Some(buf) => {
+                let mut adjacency_list = vec![Default::default(); num_neighbors];
+
+                // `copy_from_slice` cannot panic: we sized `adjacency_list` correctly.
+                bytemuck::must_cast_slice_mut::<_, u8>(&mut adjacency_list).copy_from_slice(buf);
+                self.cached_adjacency_list.push(adjacency_list);
+            }
+            None => {
+                return Err(ANNError::message(
+                    diskann::ANNErrorKind::SerdeError,
+                    format!(
+                        "malformed length for vertex {} \
+                       - reported neighbors is {} ({} bytes) which exceeds the buffer length {}",
+                        vertex_id,
+                        num_neighbors,
+                        4 * num_neighbors + 4,
+                        neighbor_and_data_buf.len()
+                    ),
+                ));
+            }
+        }
 
         let data_end: usize = (self.node_len - self.fp_vector_len) as usize;
         let associated_data = bincode::deserialize(
@@ -197,18 +208,14 @@ where
         sector_reader: AlignedReaderType,
     ) -> ANNResult<Self> {
         let metadata = header.metadata();
-        let memory_aligned_dimension = metadata.dims.next_multiple_of(8);
+        let dim = metadata.dims;
         Ok(Self {
             centroid_vertex_id: metadata.medoid,
-            memory_aligned_dimension,
-            fp_vector_len: (metadata.dims * std::mem::size_of::<Data::VectorDataType>()) as u64,
+            dim,
+            fp_vector_len: (dim * std::mem::size_of::<Data::VectorDataType>()) as u64,
             sector_graph: DiskSectorGraph::new(sector_reader, header, max_batch_size)?,
 
-            aligned_vector_buf: aligned_slice(
-                max_batch_size * memory_aligned_dimension,
-                PowerOfTwo::new(FP_VECTOR_MEM_ALIGN).map_err(ANNError::log_index_error)?,
-            )
-            .map_err(ANNError::log_index_error)?,
+            vector_buf: vec![Data::VectorDataType::default(); max_batch_size * dim],
             cached_adjacency_list: Vec::with_capacity(max_batch_size),
             cached_associated_data: Vec::with_capacity(max_batch_size),
             loaded_nodes: HashMap::with_capacity(max_batch_size),
@@ -226,11 +233,7 @@ where
             self.cached_adjacency_list.reserve(max_batch_size);
             self.cached_associated_data.reserve(max_batch_size);
             self.loaded_nodes.reserve(max_batch_size);
-            self.aligned_vector_buf = aligned_slice(
-                max_batch_size * self.memory_aligned_dimension,
-                PowerOfTwo::new(FP_VECTOR_MEM_ALIGN).map_err(ANNError::log_index_error)?,
-            )
-            .map_err(ANNError::log_index_error)?;
+            self.vector_buf = vec![Data::VectorDataType::default(); max_batch_size * self.dim];
             self.max_batch_size = max_batch_size;
         }
         Ok(())
@@ -256,25 +259,19 @@ where
         self.cached_adjacency_list.clear();
         self.cached_associated_data.clear();
     }
-
-    pub fn memory_aligned_dimension(&self) -> usize {
-        self.memory_aligned_dimension
-    }
 }
 
 #[cfg(test)]
 mod disk_vertex_provider_tests {
     use std::sync::Arc;
 
+    use crate::{data_model::GraphDataType, test_utils::GraphDataF32VectorU32Data};
     use diskann::{graph::config, utils::ONE};
     use diskann_providers::storage::{
         StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
     use diskann_providers::{
-        model::{graph::traits::GraphDataType, IndexConfiguration},
-        storage::get_disk_index_file,
-        test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
-        utils::load_metadata_from_file,
+        model::IndexConfiguration, storage::get_disk_index_file, utils::load_metadata_from_file,
     };
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;

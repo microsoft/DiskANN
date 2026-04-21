@@ -1,0 +1,5 @@
+# Setup: generate the output file from the benchmark inputs.
+run --input-file $INPUT --output-file $OUTPUT --allow-debug
+
+# Test: run regression checks — the dim tolerance has succeed=false so it should fail.
+check run --tolerances $TOLERANCES --input-file $INPUT --before $OUTPUT --after $OUTPUT --output-file $CHECK_OUTPUT

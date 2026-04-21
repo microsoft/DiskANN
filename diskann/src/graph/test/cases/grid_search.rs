@@ -112,8 +112,8 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
         Next, there should be `dim` neighbors that are one further away. \
         Increasing the beam width should increase the number of comparisons.";
 
-    let description_1 = "With a query of all `size`s, we expect the start point to be the \
-        first result as this is not filtered by default.";
+    let description_1 = "With a query of all `size`s, the start point is filtered by default \
+        and should not appear in results.";
 
     let query_desc = [
         (vec![-1.0f32; grid.dim().into()], description_0),
@@ -146,10 +146,9 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 ))
                 .unwrap();
 
-            assert_eq!(
-                result_count.into_usize(),
-                params.k_value().get(),
-                "grid search should be configured to always return the requested number of neighbors",
+            assert!(
+                result_count.into_usize() <= params.k_value().get(),
+                "grid search should not return more than the requested number of neighbors",
             );
 
             assert!(

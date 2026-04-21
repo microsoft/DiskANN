@@ -8,6 +8,9 @@
 //! This crate provides disk-based indexing capabilities for DiskANN,
 //! including builders, providers, and utilities specific to disk storage.
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub mod build;
 pub use build::{
     disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,

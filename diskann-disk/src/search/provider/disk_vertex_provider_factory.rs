@@ -4,14 +4,13 @@
  */
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
-use diskann::{utils::TryIntoVectorId, ANNError, ANNResult};
-use diskann_providers::model::graph::traits::GraphDataType;
-use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
+use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
+use diskann_providers::common::aligned_alloc;
 use hashbrown::HashSet;
 use tracing::info;
 
 use crate::{
-    data_model::{Cache, CachingStrategy, GraphHeader},
+    data_model::{Cache, CachingStrategy, GraphDataType, GraphHeader},
     search::{
         provider::{
             cached_disk_vertex_provider::CachedDiskVertexProvider,
@@ -52,11 +51,7 @@ where
         // since this is the implementation for the disk vertex provider, there're only two kinds of sector lengths: 4096 and 512.
         // it's okay to hardcoded at this place.
         let buffer_len = GraphHeader::get_size().next_multiple_of(DEFAULT_DISK_SECTOR_LEN);
-        let mut read_buf = aligned_slice::<u8>(
-            buffer_len,
-            PowerOfTwo::new(buffer_len).map_err(ANNError::log_index_error)?,
-        )
-        .map_err(ANNError::log_index_error)?;
+        let mut read_buf = aligned_alloc::<u8>(buffer_len, buffer_len)?;
         let aligned_read = AlignedRead::new(0_u64, &mut read_buf)?;
         self.aligned_reader_factory
             .build()?
@@ -221,21 +216,20 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
     {
         vertex_provider.process_loaded_node(node, idx)?;
         let vector = vertex_provider.get_vector(node)?;
-        let adjacency_list = vertex_provider.get_adjacency_list(node)?;
+        let adjacency_list = AdjacencyList::from_iter_untrusted(
+            vertex_provider.get_adjacency_list(node)?.iter().copied(),
+        );
         let associated_data = vertex_provider.get_associated_data(node)?;
 
-        cache.insert(node, vector, adjacency_list.clone(), *associated_data)
+        cache.insert(node, vector, adjacency_list, *associated_data)
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::utils::VirtualAlignedReaderFactory;
-    use diskann_providers::{
-        storage::VirtualStorageProvider,
-        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
-    };
+    use crate::{test_utils::GraphDataF32VectorUnitData, utils::VirtualAlignedReaderFactory};
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 

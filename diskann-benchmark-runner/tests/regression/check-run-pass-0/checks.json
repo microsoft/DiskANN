@@ -1,0 +1,32 @@
+[
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_in_check": false,
+      "succeed": true
+    },
+    "result": "we did it!"
+  },
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_when_checked": false
+    },
+    "result": "exact match dim=1000 type=float32"
+  },
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_when_checked": false
+    },
+    "result": "int8"
+  },
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_in_check": false,
+      "succeed": true
+    },
+    "result": "we did it!"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "test-input-types",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "test-input-types-tolerance",
+        "content": {
+          "error_when_checked": false
+        }
+      }
+    }
+  ]
+}

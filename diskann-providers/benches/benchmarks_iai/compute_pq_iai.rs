@@ -3,11 +3,9 @@
  * Licensed under the MIT license.
  */
 use diskann_providers::{
-    common::AlignedSlice,
     model::{NUM_PQ_CENTROIDS, compute_pq_distance},
     utils::{ParallelIteratorInPool, create_thread_pool_for_bench},
 };
-use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
 use rand::Rng;
 use rayon::{prelude::IndexedParallelIterator, slice::ParallelSliceMut};
 
@@ -21,7 +19,7 @@ iai_callgrind::library_benchmark_group!(
 );
 
 #[iai_callgrind::library_benchmark(setup = generate_benchmark_data)]
-pub fn benchmark_compute_pq_iai(data: (Vec<u32>, AlignedSlice<f32>, Vec<u8>)) {
+pub fn benchmark_compute_pq_iai(data: (Vec<u32>, Vec<f32>, Vec<u8>)) {
     let (neighbor_vector_ids, query_centroid_l2_distance, pq_data) = data;
     let mut pq_distance_scratch: Vec<f32> = vec![0.0; MAX_DEGREE];
     let mut pq_coordinate_scratch: Vec<u8> = vec![0; NUM_PQ_CHUNKS * neighbor_vector_ids.len()];
@@ -38,7 +36,7 @@ pub fn benchmark_compute_pq_iai(data: (Vec<u32>, AlignedSlice<f32>, Vec<u8>)) {
     .unwrap();
 }
 
-fn generate_benchmark_data() -> (Vec<u32>, AlignedSlice<f32>, Vec<u8>) {
+fn generate_benchmark_data() -> (Vec<u32>, Vec<f32>, Vec<u8>) {
     let n_pts = NUM_POINTS;
     let n_nbrs = MAX_DEGREE;
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
@@ -47,17 +45,13 @@ fn generate_benchmark_data() -> (Vec<u32>, AlignedSlice<f32>, Vec<u8>) {
         .map(|_| rng.random_range(0..n_pts) as u32)
         .collect();
 
-    let mut query_centroid_l2_distance = aligned_slice(
-        NUM_PQ_CENTROIDS * NUM_PQ_CHUNKS,
-        PowerOfTwo::new(256).unwrap(),
-    )
-    .unwrap();
+    let mut query_centroid_l2_distance = vec![0.0f32; NUM_PQ_CENTROIDS * NUM_PQ_CHUNKS];
     let vec_256 = (0..NUM_PQ_CENTROIDS)
         .map(|i| i as f32)
         .collect::<Vec<f32>>();
     // mock query_centroid_l2_distance, distance from query to each centroid i = (i) for each chunk, just for simple calculation.
     let pool = create_thread_pool_for_bench();
-    query_centroid_l2_distance[0..NUM_PQ_CHUNKS * NUM_PQ_CENTROIDS]
+    query_centroid_l2_distance
         .par_chunks_mut(NUM_PQ_CENTROIDS)
         .enumerate()
         .for_each_in_pool(&pool, |(_, chunk)| chunk.copy_from_slice(&vec_256));

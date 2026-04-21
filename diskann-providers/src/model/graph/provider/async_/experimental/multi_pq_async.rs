@@ -80,7 +80,7 @@ impl TestMultiPQProviderAsync {
         T: Copy + Into<f32>,
     {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
         Ok(NoneToInfinity(QueryComputer::new(
             table,
@@ -91,9 +91,9 @@ impl TestMultiPQProviderAsync {
 
     pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer>> {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
-        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)?))
+        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)))
     }
 
     pub fn get_vector(&self, id: usize) -> ANNResult<Guard<Arc<VersionedPQVector>>> {
@@ -302,7 +302,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(
@@ -438,7 +437,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let config_new = test_utils::TableConfig {
@@ -446,7 +444,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 2.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(

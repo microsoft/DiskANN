@@ -91,13 +91,7 @@ where
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(
-        dim,
-        full_pivot_data.into(),
-        centroid.into(),
-        offsets.into(),
-        None,
-    )
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -173,7 +167,7 @@ pub(crate) mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
             glue::{
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
@@ -504,7 +498,7 @@ pub(crate) mod tests {
         full_strategy: FS,
         quant_strategy: QS,
     ) where
-        DP: DataProvider<InternalId = u32, Context = DefaultContext>,
+        DP: DataProvider<InternalId = u32, Context: Default>,
         FS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         QS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
@@ -520,7 +514,7 @@ pub(crate) mod tests {
         // all-zeros query is as far from the entry point as possible.
         let query = vec![T::default(); dim];
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -578,9 +572,6 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
-                return Err(Box::new("start point should not be returned"));
-            }
             if id as usize != num_points - 2 {
                 return Err(Box::new(format!(
                     "expected {} as the nearest id",
@@ -615,7 +606,7 @@ pub(crate) mod tests {
 
         // Paged Search
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -804,7 +795,7 @@ pub(crate) mod tests {
         // Build with full-precision single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index
                     .insert(FullPrecision, &ctx, &(i as u32), v)
@@ -818,7 +809,7 @@ pub(crate) mod tests {
         // Build with quantized single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
@@ -829,7 +820,7 @@ pub(crate) mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
 
             // Partition by `max_minibatch_par`.
             let chunk_size = 2 * minibatch_par;
@@ -857,7 +848,7 @@ pub(crate) mod tests {
         // Build with quantized multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
+            let ctx = Default::default();
             let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
             let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
@@ -894,10 +885,13 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use diskann_utils::sampling::random::WithApproximateNorm;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors = Vec::with_capacity(num);
+                    for _ in 0..num {
+                        let vector = <$T>::with_approximate_norm(dim, radius, rng);
+                        vectors.push(vector);
+                    }
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
@@ -941,7 +935,7 @@ pub(crate) mod tests {
             num_queries,
         } = params;
 
-        let ctx = &DefaultContext;
+        let ctx = &Default::default();
         let l_search = 10;
 
         let (config, params) =
@@ -970,7 +964,7 @@ pub(crate) mod tests {
         let distance = T::distance(metric, None);
 
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 20,
             search_k: 10,
             to_check: 10,
@@ -1149,7 +1143,7 @@ pub(crate) mod tests {
         // then walk through the list, verifying monotonicity and that the filter was
         // applied properly.
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 40,
             search_k: 20,
             to_check: 20,
@@ -1562,7 +1556,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1622,7 +1615,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1699,7 +1691,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1805,7 +1796,6 @@ pub(crate) mod tests {
             Box::new([0.0]),
             Box::new([0.0]),
             Box::new([0, 1]),
-            None,
         )
         .unwrap();
 
@@ -1926,7 +1916,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2048,7 +2037,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2977,10 +2965,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 
@@ -3617,81 +3602,6 @@ pub(crate) mod tests {
 
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
         }
-    }
-
-    // This test uses a "Flaky" accessor that spuriously fails with non-critical errors to
-    // check that such errors are not propagated by DiskANN.
-    #[tokio::test]
-    async fn test_flaky_consolidate() {
-        // What we need to do is populate a graph with an element that has an adjacency list
-        // that exceeds the configured maximum degree.
-        //
-        // We then need to try to consolidate that element and ensure that retrieval of
-        // that element's data results in a transient error.
-
-        // create small index instance
-        let dim = 2;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            4,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            10,         // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        let start_point: &[f32] = &[0.5, 0.5];
-
-        index
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-            .unwrap();
-
-        // vectors are the four corners of a square, with the start point in the middle
-        // the middle point forms an edge to each corner, while corners form an edge
-        // to their opposite vertex vertically and horizontally as well as the middle
-        let vectors = [
-            vec![0.0, 0.0], // point 0
-            vec![0.0, 1.0], // point 1
-            vec![1.0, 0.0], // point 2
-            vec![1.0, 1.0], // point 3
-            vec![2.0, 2.0], // point 4
-            vec![0.0, 2.0], // point 5
-            vec![2.0, 0.0], // point 6
-        ];
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0
-            AdjacencyList::from_iter_untrusted([4, 0, 3, 6]),    // point 1
-            AdjacencyList::from_iter_untrusted([4, 3, 0, 6]),    // point 2
-            AdjacencyList::from_iter_untrusted([4, 2, 1, 6]),    // point 3
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 6]), // point 4
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 6]), // point 5
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 3]), // point 6 -- start point
-        ];
-
-        let ctx = &DefaultContext;
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, ctx, &vectors).await;
-
-        let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
-            .await
-            .unwrap();
-        assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
     }
 
     async fn create_retry_saturated_index(
@@ -4433,14 +4343,7 @@ pub(crate) mod tests {
         }
 
         let query_count: usize = 1;
-        let mut queries =
-            crate::common::aligned_alloc::<half::f16>(query_count * VECTORS_DIMENSION, 32).unwrap();
-
-        for i in 0..query_count {
-            for val in queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION].iter_mut() {
-                *val = half::f16::from_f32(0f32);
-            }
-        }
+        let queries: Vec<half::f16> = vec![half::f16::default(); query_count * VECTORS_DIMENSION];
 
         let top_k = l_build;
         let search_l = l_build;

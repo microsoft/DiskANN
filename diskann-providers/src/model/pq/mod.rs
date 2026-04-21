@@ -20,12 +20,6 @@ pub use pq_construction::{
 /// all metadata of individual sub-component files is written in first 4KB for unified files
 pub(crate) const METADATA_SIZE: usize = 4096;
 
-mod pq_compressed_data;
-pub use pq_compressed_data::PQCompressedData;
-
-pub(crate) mod pq_dataset;
-pub use pq_dataset::PQData;
-
 pub mod debug;
 pub mod distance;
 pub mod strided;
@@ -33,6 +27,3 @@ pub mod views;
 
 pub mod generate_pivot_arguments;
 pub use generate_pivot_arguments::{GeneratePivotArguments, GeneratePivotArgumentsError};
-
-pub mod quantizer_preprocess;
-pub use quantizer_preprocess::quantizer_preprocess;

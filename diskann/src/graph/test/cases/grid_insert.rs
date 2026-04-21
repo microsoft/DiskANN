@@ -132,7 +132,7 @@ fn run_build(
         None => {
             for (id, vector) in data.row_iter().enumerate() {
                 runtime
-                    .block_on(index.insert(strategy, &context, &(id as u32), vector))
+                    .block_on(index.insert(strategy.clone(), &context, &(id as u32), vector))
                     .unwrap();
             }
         }
@@ -143,7 +143,7 @@ fn run_build(
                 let batch = Arc::new(data.subview(start..stop).unwrap().to_owned());
                 runtime
                     .block_on(index.multi_insert::<test_provider::Strategy, _>(
-                        strategy,
+                        strategy.clone(),
                         &context,
                         batch,
                         (start..stop).map(|i| i as u32).collect(),

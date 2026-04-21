@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use crate::data_model::GraphDataType;
 use diskann::ANNResult;
-use diskann_providers::model::graph::traits::GraphDataType;
 
 use super::VertexProvider;
 use crate::data_model::GraphHeader;

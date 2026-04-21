@@ -3,20 +3,7 @@
  * Licensed under the MIT license.
  */
 pub mod file_util;
-pub use file_util::{
-    copy_aligned_data_from_file, file_exists, get_file_size, load_aligned_bin,
-    load_ids_to_delete_from_file, load_metadata_from_bytes, load_metadata_from_file,
-    open_file_to_write,
-};
-
-mod normalizing_util;
-pub use normalizing_util::{
-    normalize_data_file, normalize_data_internal, normalize_data_internal_no_cblas,
-};
-
-#[allow(clippy::module_inception)]
-mod utils;
-pub use utils::DatasetDto;
+pub use file_util::{file_exists, load_metadata_from_file};
 
 mod bridge_error;
 pub use bridge_error::{Bridge, BridgeErr};
@@ -29,15 +16,6 @@ pub use rayon_util::{
 
 mod timer;
 pub use timer::Timer;
-
-pub mod math_util;
-pub use math_util::{
-    compute_closest_centers, compute_closest_centers_in_block, compute_vec_l2sq, compute_vecs_l2sq,
-    convert_usize_to_u64, generate_vectors_with_norm, process_residuals,
-};
-
-mod kmeans;
-pub use kmeans::{k_means_clustering, k_meanspp_selecting_pivots, run_lloyds};
 
 /// Read/write block size (64 MB) for cached I/O operations such as CachedReader and CachedWriter
 pub const READ_WRITE_BLOCK_SIZE: u64 = 64 * 1024 * 1024;
@@ -67,8 +45,7 @@ pub mod generate_synthetic_labels_utils;
 
 mod storage_utils;
 pub use storage_utils::{
-    copy_aligned_data, load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions,
-    write_bin_from,
+    load_vector_ids, read_bin_from, save_bytes, save_data_in_base_dimensions, write_bin_from,
 };
 
 mod sampling;
