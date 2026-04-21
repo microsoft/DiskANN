@@ -632,11 +632,9 @@ where
             },
         )?;
 
-        scratch.pq_scratch.set(
-            provider.graph_header.metadata().dims,
-            query,
-            1.0_f32, // Normalization factor
-        )?;
+        scratch
+            .pq_scratch
+            .set(provider.graph_header.metadata().dims, query)?;
         let start_vertex_id = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();
