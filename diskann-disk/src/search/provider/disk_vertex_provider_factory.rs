@@ -132,7 +132,6 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 
                 let graph_metadata = self.get_header()?;
                 let graph_metadata = graph_metadata.metadata();
-                let memory_aligned_dimension = graph_metadata.dims.next_multiple_of(8);
 
                 if num_nodes_to_cache > graph_metadata.num_pts as usize {
                     info!(
@@ -146,7 +145,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
                 self.cache = Some(Arc::new(self.build_cache_via_bfs(
                     start_node,
                     num_nodes_to_cache,
-                    memory_aligned_dimension,
+                    graph_metadata.dims,
                 )?));
             }
             CachingStrategy::None => {}
