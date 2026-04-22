@@ -42,6 +42,7 @@ use crate::{
     provider::DataProvider,
 };
 
+mod greedy_filter_search;
 mod knn_search;
 mod multihop_search;
 mod range_search;
@@ -61,6 +62,7 @@ pub(crate) mod scratch;
 /// - [`Range`] - Range-based search within a distance radius
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
+/// - [`AdaptiveLGreedySearch`] - Pure greedy filtered search with adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<DP, S, T>
 where
@@ -107,6 +109,7 @@ where
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
+pub use greedy_filter_search::AdaptiveLGreedySearch;
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError};
