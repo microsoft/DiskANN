@@ -27,7 +27,7 @@ pub use diverse_priority_queue::{
 #[derive(Debug, Clone, Copy)]
 pub struct Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     /// The id of the node
     pub id: VectorIdType,
@@ -38,7 +38,7 @@ where
 
 impl<VectorIdType> Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     /// Create the neighbor node and it has not been visited
     pub fn new(id: VectorIdType, distance: f32) -> Self {
@@ -65,7 +65,7 @@ where
 
 impl<VectorIdType> PartialEq for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -73,13 +73,13 @@ where
     }
 }
 
-impl<VectorIdType> Eq for Neighbor<VectorIdType> where VectorIdType: Default + Eq {}
+impl<VectorIdType> Eq for Neighbor<VectorIdType> where VectorIdType: Eq {}
 
 /// PERF SENSITIVE: does not do well with comparing item with self.
 /// Not doing so, allows for a 1% gain. So use it with care.
 impl<VectorIdType> Ord for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq + Debug,
+    VectorIdType: Eq + Debug,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         debug_assert!(
@@ -98,7 +98,7 @@ where
 /// Not doing so, allows for a 1% gain. So use it with care.
 impl<VectorIdType> PartialOrd for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq + Debug,
+    VectorIdType: Eq + Debug,
 {
     #[inline]
     fn lt(&self, other: &Self) -> bool {
@@ -121,7 +121,7 @@ where
 #[derive(Debug)]
 pub struct BackInserter<'a, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     buffer: &'a mut [Neighbor<I>],
     position: usize,
@@ -129,7 +129,7 @@ where
 
 impl<'a, I> BackInserter<'a, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     /// Construct a new [`BackInserter`] around the provided slice.
     ///
@@ -149,7 +149,7 @@ where
 
 impl<I> SearchOutputBuffer<I> for BackInserter<'_, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     fn size_hint(&self) -> Option<usize> {
         // We maintain the invariant that `self.position <= self.buffer.len()`, so this
@@ -197,7 +197,7 @@ where
 
 impl<I> SearchOutputBuffer<I> for Vec<Neighbor<I>>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     fn size_hint(&self) -> Option<usize> {
         None
