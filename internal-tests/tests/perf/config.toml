@@ -98,9 +98,9 @@ quantization_type = "FP"
 distance = "CosineNormalized"
 [scenario.build_algorithm]
 algorithm = "PiPNN"
-c_max = 512
-c_min = 128
-p_samp = 0.001
+c_max = 256
+c_min = 16
+p_samp = 0.005
 fanout = [8, 3]
 leaf_k = 2
 replicas = 1

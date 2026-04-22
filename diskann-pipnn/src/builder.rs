@@ -21,10 +21,11 @@ use rayon::prelude::*;
 
 use crate::hash_prune::HashPrune;
 use crate::leaf_build;
-use crate::partition::{self, PartitionConfig};
+use crate::partition::PartitionConfig;
 use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
 
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
+
 
 /// Create a DiskANN distance functor for the given metric.
 ///
@@ -561,17 +562,16 @@ fn build_internal_sq_impl(
     for replica in 0..config.replicas {
         let seed = 1000 + replica as u64 * 7919;
         let t1 = Instant::now();
-        let partition_config = crate::partition::PartitionConfig {
+        let partition_config = PartitionConfig {
             c_max: config.c_max,
             c_min: config.c_min,
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
             metric: config.metric,
         };
-        let indices: Vec<usize> = (0..npoints).collect();
-        let leaves = crate::partition::parallel_partition_quantized(
+        let leaves = crate::partition_v2::partition_quantized(
             &qdata,
-            &indices,
+            npoints,
             &partition_config,
             seed,
         );
@@ -694,11 +694,10 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             metric: config.metric,
         };
 
-        let indices: Vec<usize> = (0..npoints).collect();
         let leaves = if let Some(ref q) = qdata {
-            partition::parallel_partition_quantized(q, &indices, &partition_config, seed)
+            crate::partition_v2::partition_quantized(q, npoints, &partition_config, seed)
         } else {
-            partition::parallel_partition(data, ndims, &indices, &partition_config, seed)
+            crate::partition_v2::partition(data, ndims, npoints, &partition_config, seed)
         };
         partition_secs += t1.elapsed().as_secs_f64();
 
@@ -735,6 +734,8 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         use std::sync::atomic::{AtomicUsize, Ordering};
         let total_edges = AtomicUsize::new(0);
 
+        // Leaves processed in parallel. Large leaves (n≥512) use faer's parallel
+        // GEMM internally; small leaves use sequential GEMM.
         leaves.par_iter().for_each(|leaf| {
             let indices_usize: Vec<usize> = leaf.indices.iter().map(|&i| i as usize).collect();
             let edges = if let Some(ref q) = qdata {
@@ -782,6 +783,16 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             config.max_degree,
             config.l_max
         );
+        // Log candidate stats before pruning.
+        let total_candidates: usize = candidates.iter().map(|c| c.len()).sum();
+        let nodes_over_degree = candidates.iter().filter(|c| c.len() > config.max_degree).count();
+        let max_cand = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+        let avg_cand = if candidates.is_empty() { 0.0 } else { total_candidates as f64 / candidates.len() as f64 };
+        println!(
+            "  Final prune input: {} nodes, avg {:.1} candidates, max {}, {} nodes over max_degree({})",
+            candidates.len(), avg_cand, max_cand, nodes_over_degree, config.max_degree
+        );
+
         let adj = final_prune_from_candidates(
             data,
             ndims,
@@ -790,6 +801,16 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             config.metric,
             config.alpha,
         );
+
+        // Log output stats after pruning.
+        let total_edges: usize = adj.iter().map(|a| a.len()).sum();
+        let avg_degree = if adj.is_empty() { 0.0 } else { total_edges as f64 / adj.len() as f64 };
+        let pruned_count = candidates.iter().zip(adj.iter()).filter(|(c, a)| a.len() < c.len()).count();
+        println!(
+            "  Final prune output: avg degree {:.1}, {} nodes actually pruned ({:.1}%)",
+            avg_degree, pruned_count, 100.0 * pruned_count as f64 / candidates.len().max(1) as f64
+        );
+
         let final_prune_secs = t4.elapsed().as_secs_f64();
         (adj, extract_secs, final_prune_secs)
     } else {
@@ -852,10 +873,10 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     metric: Metric,
     alpha: f32,
 ) -> Vec<Vec<u32>> {
-    // f32 SIMD distance for inter-candidate occlusion checks.
-    // T→f32 conversion is done lazily per pair via two small buffers.
+    // Paper's Algorithm 2 (RobustPrune): single-pass greedy with fixed alpha.
+    // Unlike DiskANN's iterative occlude_list (which starts at alpha=1.0 and relaxes),
+    // the paper uses the configured alpha directly — less aggressive, keeps more edges.
     let dist_fn = make_dist_fn(metric);
-    let increment = alpha.min(1.2);
 
     candidates_per_node
         .par_iter()
@@ -865,70 +886,57 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             }
 
             let nc = candidates.len();
-            let mut buf_sel = vec![0.0f32; ndims];
-            let mut buf_cand = vec![0.0f32; ndims];
 
-            let mut occlude_factor = vec![0.0f32; nc];
-            let mut last_checked = vec![0usize; nc];
-            let mut selected_idx: Vec<usize> = Vec::with_capacity(max_degree);
-
-            let mut current_alpha = 1.0f32;
-            loop {
-                for i in 0..nc {
-                    if selected_idx.len() >= max_degree {
-                        break;
-                    }
-                    if occlude_factor[i] > current_alpha {
-                        continue;
-                    }
-
-                    let cand_id = candidates[i].0 as usize;
-                    let cand_dist = candidates[i].1;
-                    T::as_f32_into(&data[cand_id * ndims..(cand_id + 1) * ndims], &mut buf_cand)
-                        .expect("f32 conversion");
-
-                    let mut skip = false;
-                    while last_checked[i] < selected_idx.len() {
-                        let sel_pos = selected_idx[last_checked[i]];
-                        last_checked[i] += 1;
-
-                        if sel_pos >= i { continue; }
-
-                        let sel_id = candidates[sel_pos].0 as usize;
-                        T::as_f32_into(&data[sel_id * ndims..(sel_id + 1) * ndims], &mut buf_sel)
-                            .expect("f32 conversion");
-                        let dist_sel_cand = dist_fn.call(&buf_sel, &buf_cand);
-
-                        // Triangle inequality occlusion: ratio of distances.
-                        let ratio = if dist_sel_cand == 0.0 {
-                            f32::MAX
-                        } else {
-                            cand_dist / dist_sel_cand
-                        };
-                        occlude_factor[i] = occlude_factor[i].max(ratio);
-
-                        if occlude_factor[i] > current_alpha {
-                            skip = true;
-                            break;
-                        }
-                    }
-
-                    if skip || occlude_factor[i] > current_alpha {
-                        continue;
-                    }
-
-                    // Accept this candidate.
-                    occlude_factor[i] = f32::MAX;
-                    selected_idx.push(i);
-                }
-
-                if current_alpha >= alpha || selected_idx.len() >= max_degree {
-                    break;
-                }
-                current_alpha = (current_alpha * increment).min(alpha);
+            // Skip prune if already at or below max_degree.
+            if nc <= max_degree {
+                return candidates.iter().map(|&(id, _)| id).collect();
             }
 
-            selected_idx.iter().map(|&i| candidates[i].0).collect()
+            // Paper's Algorithm 2: greedy selection with occlusion removal.
+            // Candidates are sorted by distance (closest first from reservoir).
+            // Pick closest, remove all occluded by it, repeat.
+            let mut alive = vec![true; nc];
+            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+            let mut buf_sel = vec![0.0f32; ndims];
+            let mut buf_z = vec![0.0f32; ndims];
+
+            for i in 0..nc {
+                if selected.len() >= max_degree {
+                    break;
+                }
+                if !alive[i] {
+                    continue;
+                }
+
+                // Select candidate i (closest alive).
+                let y_id = candidates[i].0 as usize;
+                selected.push(candidates[i].0);
+                alive[i] = false;
+
+                // Load y's vector for occlusion checks.
+                T::as_f32_into(&data[y_id * ndims..(y_id + 1) * ndims], &mut buf_sel)
+                    .expect("f32 conversion");
+
+                // Remove all remaining candidates occluded by y.
+                for j in (i + 1)..nc {
+                    if !alive[j] {
+                        continue;
+                    }
+                    let z_id = candidates[j].0 as usize;
+                    let dist_x_z = candidates[j].1; // dist(node, z)
+
+                    T::as_f32_into(&data[z_id * ndims..(z_id + 1) * ndims], &mut buf_z)
+                        .expect("f32 conversion");
+                    let dist_y_z = dist_fn.call(&buf_sel, &buf_z); // dist(y, z)
+
+                    // Paper line 6: if alpha * ||y, z|| < ||x, z|| then remove z
+                    if alpha * dist_y_z < dist_x_z {
+                        alive[j] = false;
+                    }
+                }
+            }
+
+            selected
         })
         .collect()
 }
