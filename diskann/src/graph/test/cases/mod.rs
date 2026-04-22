@@ -4,6 +4,8 @@
  */
 
 mod consolidate;
+#[cfg(feature = "experimental_diversity_search")]
+mod diverse_search;
 mod grid_insert;
 mod grid_search;
 mod helpers;
