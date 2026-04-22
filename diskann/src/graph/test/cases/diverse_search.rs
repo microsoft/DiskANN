@@ -106,7 +106,15 @@ fn run_diverse_search(
     diverse_results_k: usize,
     attribute_provider: Arc<TestAttributeProvider>,
 ) -> (usize, Vec<(u32, f32)>) {
-    run_diverse_search_with_beam(index, query, k, l, diverse_results_k, None, attribute_provider)
+    run_diverse_search_with_beam(
+        index,
+        query,
+        k,
+        l,
+        diverse_results_k,
+        None,
+        attribute_provider,
+    )
 }
 
 /// Run a diverse search with explicit beam width control.
@@ -148,10 +156,7 @@ fn run_diverse_search_with_beam(
 }
 
 /// Count attribute occurrences in search results.
-fn count_attributes(
-    results: &[(u32, f32)],
-    attr: &TestAttributeProvider,
-) -> HashMap<u32, usize> {
+fn count_attributes(results: &[(u32, f32)], attr: &TestAttributeProvider) -> HashMap<u32, usize> {
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for (id, _) in results {
         if let Some(val) = attr.get(*id) {
@@ -185,7 +190,10 @@ fn diverse_search_returns_results() {
     let query = vec![-0.7f32, 0.3];
     let (count, results) = run_diverse_search(&index, &query, 10, 20, 5, attr);
 
-    assert!(count > 0, "diverse search should return at least one result");
+    assert!(
+        count > 0,
+        "diverse search should return at least one result"
+    );
 
     // Distances should be non-negative and sorted.
     for (_, dist) in &results {
@@ -213,10 +221,8 @@ fn diverse_search_produces_multiple_labels_2d() {
 
     assert!(count > 0);
 
-    let unique_labels: std::collections::HashSet<_> = results
-        .iter()
-        .filter_map(|(id, _)| attr.get(*id))
-        .collect();
+    let unique_labels: std::collections::HashSet<_> =
+        results.iter().filter_map(|(id, _)| attr.get(*id)).collect();
 
     assert!(
         unique_labels.len() >= 2,
@@ -234,10 +240,8 @@ fn diverse_search_produces_multiple_labels_3d() {
 
     assert!(count > 0, "3D diverse search should return results");
 
-    let unique_labels: std::collections::HashSet<_> = results
-        .iter()
-        .filter_map(|(id, _)| attr.get(*id))
-        .collect();
+    let unique_labels: std::collections::HashSet<_> =
+        results.iter().filter_map(|(id, _)| attr.get(*id)).collect();
 
     assert!(
         unique_labels.len() >= 2,
@@ -315,20 +319,10 @@ fn diverse_search_beam_width_variations() {
     // Exercise the same diverse search with beam widths 1, 2, 4
     // (mirrors the BEAM_WIDTHS pattern from grid_search.rs).
     for beam_width in [1, 2, 4] {
-        let (count, results) = run_diverse_search_with_beam(
-            &index,
-            &query,
-            10,
-            20,
-            2,
-            Some(beam_width),
-            attr.clone(),
-        );
+        let (count, results) =
+            run_diverse_search_with_beam(&index, &query, 10, 20, 2, Some(beam_width), attr.clone());
 
-        assert!(
-            count > 0,
-            "beam_width={beam_width}: expected results",
-        );
+        assert!(count > 0, "beam_width={beam_width}: expected results",);
 
         // Result count should never exceed k.
         assert!(
@@ -376,7 +370,10 @@ fn diverse_search_all_attributes_none() {
     let query = vec![0.0f32; 2];
     let (count, _results) = run_diverse_search(&index, &query, 10, 20, 5, attr);
 
-    assert_eq!(count, 0, "with no attributes, no results should be returned");
+    assert_eq!(
+        count, 0,
+        "with no attributes, no results should be returned"
+    );
 }
 
 // ─── diverse_results_l boundary: div_l = 0 panics ────────────────────────────
