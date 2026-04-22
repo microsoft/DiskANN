@@ -628,6 +628,20 @@ impl From<InvalidId> for ANNError {
     }
 }
 
+impl IntoIterator for &Provider {
+    type Item = u32;
+    type IntoIter = std::vec::IntoIter<u32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.terms
+            .iter()
+            .map(|entry| *entry.key())
+            .filter(|id| !self.config.start_points.contains_key(id))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
 impl provider::DataProvider for Provider {
     type Context = Context;
     type InternalId = u32;
@@ -1088,6 +1102,13 @@ impl glue::SearchExt for Accessor<'_> {
 }
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
+
+impl glue::IdIterator<std::vec::IntoIter<u32>> for Accessor<'_> {
+    async fn id_iterator(&mut self) -> Result<std::vec::IntoIter<u32>, ANNError> {
+        let ids: Vec<u32> = self.provider.terms.iter().map(|r| *r.key()).collect();
+        Ok(ids.into_iter())
+    }
+}
 
 impl provider::CacheableAccessor for Accessor<'_> {
     type Map = diskann_utils::lifetime::Slice<f32>;
