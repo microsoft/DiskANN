@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "diskann"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-core"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "diskann",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-runner"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-simd"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "diskann-benchmark-runner",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-disk"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "approx",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-linalg"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "approx",
  "cfg-if",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-platform"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "io-uring",
  "libc",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-providers"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "approx",
  "arc-swap",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-quantization"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -893,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-tools"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-utils"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-vector"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "approx",
  "cfg-if",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-wide"
-version = "0.50.0"
+version = "0.50.1"
 dependencies = [
  "cfg-if",
  "half",
