@@ -118,9 +118,10 @@ fn insert_tolerates_transient_prune_errors() {
 
     let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
 
-    // Make a handful of IDs flaky during pruning. These won't exist when first
-    // inserted, but will be flaky when later inserts try to read them during
-    // prune.
+    // Make a handful of IDs flaky during pruning so `get_element` can fail
+    // transiently for some existing IDs. This exercises that insert/prune
+    // tolerates those transient read failures, both during an ID's own insert
+    // and when later inserts encounter that ID during prune.
     let flaky_strategy = test_provider::Strategy::with_transient(true, [3, 7, 12, 18]);
 
     let ctx = test_provider::Context::new();

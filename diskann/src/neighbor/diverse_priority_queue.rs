@@ -447,11 +447,14 @@ mod diverse_priority_queue_test {
 
         // Verify local queue cleanup: ID 6 (attribute 2) was evicted from the
         // global queue, so it must also be removed from attribute 2's local queue.
-        assert_eq!(
-            queue.local_queue_map[&2].size(),
-            0,
-            "Evicted item should be removed from its local queue"
-        );
+        if let Some(local_queue) = queue.local_queue_map.get(&2) {
+            assert_eq!(
+                local_queue.size(),
+                0,
+                "Evicted item should be removed from its local queue"
+            );
+        }
+        // Key removed entirely (get returns None) is also valid.
 
         // The new item's local queue should have exactly one entry.
         assert_eq!(queue.local_queue_map[&3].size(), 1);
