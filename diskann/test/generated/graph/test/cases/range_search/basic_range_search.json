@@ -1,0 +1,65 @@
+{
+  "file": "diskann/src/graph/test/cases/range_search.rs",
+  "test": "graph/test/cases/range_search/basic_range_search",
+  "payload": {
+    "comparisons": 54,
+    "grid_size": 5,
+    "hops": 33,
+    "inner_radius": null,
+    "query": [
+      5.0,
+      5.0,
+      5.0
+    ],
+    "radius": 12.0,
+    "range_search_second_round": false,
+    "result_count": 11,
+    "results": [
+      [
+        124,
+        3.0
+      ],
+      [
+        123,
+        6.0
+      ],
+      [
+        119,
+        6.0
+      ],
+      [
+        99,
+        6.0
+      ],
+      [
+        94,
+        9.0
+      ],
+      [
+        118,
+        9.0
+      ],
+      [
+        98,
+        9.0
+      ],
+      [
+        74,
+        11.0
+      ],
+      [
+        114,
+        11.0
+      ],
+      [
+        122,
+        11.0
+      ],
+      [
+        93,
+        12.0
+      ]
+    ],
+    "starting_l": 32
+  }
+}
