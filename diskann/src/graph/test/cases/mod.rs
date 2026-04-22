@@ -9,6 +9,7 @@ mod grid_search;
 mod helpers;
 mod index;
 mod inplace_delete;
+mod paged_search;
 
 /// Set to `true` and recompile to include full adjacency list state in participating
 /// baselines.
