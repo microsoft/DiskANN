@@ -165,6 +165,7 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
@@ -207,7 +208,7 @@ pub(crate) mod tests {
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+        utils::{VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -278,6 +279,17 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn grid_from_dim(dim: usize) -> Grid {
+        Grid::from_dim(dim)
+            .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
+    }
+
+    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+        (0..matrix.nrows())
+            .map(|i| matrix.row(i).to_vec())
+            .collect()
+    }
+
     // Grid generators for different types //
     pub(crate) trait GenerateGrid: Sized {
         /// Generate a synthetic dataset that is a hypercube of point beginning at the
@@ -295,34 +307,19 @@ pub(crate) mod tests {
 
     impl GenerateGrid for f32 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_f32(size as u32),
-                3 => utils::generate_3d_grid_vectors_f32(size as u32),
-                4 => utils::generate_4d_grid_vectors_f32(size as u32),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data(size))
         }
     }
 
     impl GenerateGrid for i8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_i8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_i8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_i8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| i8::try_from(v).unwrap()))
         }
     }
 
     impl GenerateGrid for u8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_u8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_u8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_u8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| u8::try_from(v).unwrap()))
         }
     }
 
@@ -656,12 +653,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = match dim {
-            1 => utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let mut adjacency_lists = grid_from_dim(dim).neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1110,7 +1102,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1227,7 +1219,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1389,7 +1381,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -3622,7 +3614,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -3685,7 +3677,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -3753,7 +3745,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -3900,7 +3892,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
