@@ -7,6 +7,7 @@ mod consolidate;
 mod grid_insert;
 mod grid_search;
 mod inplace_delete;
+mod multihop;
 mod paged_search;
 mod range_search;
 
