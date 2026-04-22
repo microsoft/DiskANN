@@ -106,9 +106,22 @@ fn run_diverse_search(
     diverse_results_k: usize,
     attribute_provider: Arc<TestAttributeProvider>,
 ) -> (usize, Vec<(u32, f32)>) {
+    run_diverse_search_with_beam(index, query, k, l, diverse_results_k, None, attribute_provider)
+}
+
+/// Run a diverse search with explicit beam width control.
+fn run_diverse_search_with_beam(
+    index: &DiskANNIndex<test_provider::Provider>,
+    query: &[f32],
+    k: usize,
+    l: usize,
+    diverse_results_k: usize,
+    beam_width: Option<usize>,
+    attribute_provider: Arc<TestAttributeProvider>,
+) -> (usize, Vec<(u32, f32)>) {
     let rt = current_thread_runtime();
 
-    let knn = Knn::new(k, l, None).unwrap();
+    let knn = Knn::new(k, l, beam_width).unwrap();
     let diverse_params = DiverseSearchParams::new(0, diverse_results_k, attribute_provider);
     let diverse = Diverse::new(knn, diverse_params);
 
@@ -289,5 +302,174 @@ fn diverse_search_sorted_distances_various_params() {
                 window[1].1,
             );
         }
+    }
+}
+
+// ─── Beam width variation ────────────────────────────────────────────────────
+
+#[test]
+fn diverse_search_beam_width_variations() {
+    let (index, attr) = setup_diverse_grid(Grid::Two, 5, 3);
+    let query = vec![2.3f32, 1.7];
+
+    // Exercise the same diverse search with beam widths 1, 2, 4
+    // (mirrors the BEAM_WIDTHS pattern from grid_search.rs).
+    for beam_width in [1, 2, 4] {
+        let (count, results) = run_diverse_search_with_beam(
+            &index,
+            &query,
+            10,
+            20,
+            2,
+            Some(beam_width),
+            attr.clone(),
+        );
+
+        assert!(
+            count > 0,
+            "beam_width={beam_width}: expected results",
+        );
+
+        // Result count should never exceed k.
+        assert!(
+            count <= 10,
+            "beam_width={beam_width}: result_count {} exceeds k=10",
+            count,
+        );
+
+        // Distances should remain sorted regardless of beam width.
+        for window in results.windows(2) {
+            assert!(
+                window[0].1 <= window[1].1,
+                "beam_width={beam_width}: distances not sorted: {} > {}",
+                window[0].1,
+                window[1].1,
+            );
+        }
+    }
+}
+
+// ─── Empty attribute provider (all None) ─────────────────────────────────────
+
+#[test]
+fn diverse_search_all_attributes_none() {
+    // When no vector has an attribute, every insert into the diverse queue
+    // is skipped. The search should complete without error and return 0 results.
+    let grid = Grid::Two;
+    let size = 4;
+    let provider = test_provider::Provider::grid(grid, size).unwrap();
+
+    // Empty attribute provider — get() always returns None.
+    let attr = Arc::new(TestAttributeProvider::new());
+
+    let index_config = graph::config::Builder::new(
+        provider.max_degree(),
+        graph::config::MaxDegree::same(),
+        100,
+        Metric::L2.into(),
+    )
+    .build()
+    .unwrap();
+
+    let index = DiskANNIndex::new(index_config, provider, None);
+
+    let query = vec![0.0f32; 2];
+    let (count, _results) = run_diverse_search(&index, &query, 10, 20, 5, attr);
+
+    assert_eq!(count, 0, "with no attributes, no results should be returned");
+}
+
+// ─── diverse_results_l boundary: div_l = 0 panics ────────────────────────────
+
+#[test]
+#[should_panic]
+fn diverse_search_div_l_zero_panics() {
+    // When diverse_results_k * l_value / k_value rounds to 0, local queues
+    // have capacity 0. The first insert with an attribute triggers Case 2
+    // (local queue "full" at size 0 == capacity 0), which indexes at
+    // diverse_results_l - 1 = usize::MAX. This is an unchecked edge case.
+    let (index, attr) = setup_diverse_grid(Grid::Two, 4, 3);
+
+    let query = vec![0.0f32; 2];
+    // k=10, l=5, div_k=1 → diverse_results_l = 1 * 5 / 10 = 0
+    let _result = run_diverse_search(&index, &query, 10, 10, 0, attr);
+}
+
+// ─── diverse_results_l = 1: tightest non-degenerate local queues ─────────────
+
+#[test]
+fn diverse_search_div_l_one() {
+    // k = l = 10, diverse_results_k = 1 → diverse_results_l = 1.
+    // Each local queue holds exactly 1 item. This is the tightest non-degenerate
+    // configuration and exercises Case 2 (local full) on every second insert
+    // for a given attribute.
+    let (index, attr) = setup_diverse_grid(Grid::Two, 5, 3);
+
+    let query = vec![1.3f32, 0.7];
+    let (count, results) = run_diverse_search(&index, &query, 10, 10, 1, attr.clone());
+
+    assert!(count > 0, "div_l=1 search should still return results");
+    assert!(count <= 10, "result_count should not exceed k");
+
+    for window in results.windows(2) {
+        assert!(
+            window[0].1 <= window[1].1,
+            "div_l=1: distances not sorted: {} > {}",
+            window[0].1,
+            window[1].1,
+        );
+    }
+}
+
+// ─── diverse_results_k > k: over-provisioned diversity ───────────────────────
+
+#[test]
+fn diverse_search_div_k_exceeds_k() {
+    // diverse_results_k = 20 with k = 5. The diversity cap is wider than the
+    // result count, so post_process should effectively be a no-op (no local
+    // queue exceeds 20). This exercises the "no trimming needed" path through
+    // post_process.
+    let (index, attr) = setup_diverse_grid(Grid::Two, 5, 3);
+
+    let query = vec![2.1f32, 1.9];
+    let (count, results) = run_diverse_search(&index, &query, 5, 20, 20, attr.clone());
+
+    assert!(count > 0);
+    assert!(count <= 5, "result_count should not exceed k=5");
+
+    for window in results.windows(2) {
+        assert!(
+            window[0].1 <= window[1].1,
+            "div_k>k: distances not sorted: {} > {}",
+            window[0].1,
+            window[1].1,
+        );
+    }
+}
+
+// ─── result_count <= k invariant across many configurations ──────────────────
+
+#[test]
+fn diverse_search_result_count_bounded_by_k() {
+    let (index, attr) = setup_diverse_grid(Grid::Two, 6, 4);
+
+    let configs: &[(usize, usize, usize)] = &[
+        // (k, l, div_k)
+        (5, 15, 1),
+        (5, 15, 5),
+        (10, 10, 1),
+        (10, 30, 3),
+        (15, 15, 10),
+        (3, 30, 1),
+    ];
+
+    let query = vec![2.5f32, 3.1];
+    for &(k, l, div_k) in configs {
+        let (count, _) = run_diverse_search(&index, &query, k, l, div_k, attr.clone());
+
+        assert!(
+            count <= k,
+            "k={k}, l={l}, div_k={div_k}: result_count {count} exceeds k",
+        );
     }
 }
