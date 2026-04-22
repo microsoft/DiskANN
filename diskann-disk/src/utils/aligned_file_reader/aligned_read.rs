@@ -7,7 +7,7 @@ use diskann::{ANNError, ANNResult};
 
 pub const DISK_IO_ALIGNMENT: usize = 512;
 
-/// Aligned read struct for disk IO, it takes the ownership of the AlignedBoxedSlice and returns the AlignedBoxWithSlice data immutably.
+/// Aligned read struct for disk IO.
 pub struct AlignedRead<'a, T> {
     /// where to read from
     /// offset needs to be aligned with DISK_IO_ALIGNMENT
