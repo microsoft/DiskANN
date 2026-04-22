@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 
 use diskann::utils::VectorRepr;
-use diskann_vector::distance::SquaredL2;
+use diskann_vector::distance::{DistanceProvider, Metric, SquaredL2};
 use diskann_vector::PureDistanceFunction;
 
 /// Thread-local reusable buffers for leaf building.
@@ -85,7 +85,9 @@ impl QuantLeafBuffers {
 }
 
 thread_local! {
-    static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
+    /// Thread-local reusable buffers for leaf building. Public so builder can
+    /// batch multiple leaves per TLS access (amortizes the `with()` overhead).
+    pub static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
     static QUANT_BUFFERS: RefCell<QuantLeafBuffers> = RefCell::new(QuantLeafBuffers::new());
 }
 
@@ -122,45 +124,132 @@ pub struct Edge {
 
 /// Extract k nearest neighbors for each point from the distance matrix.
 ///
-/// Uses index-sort: partitions a u32 index array by indirect distance comparison.
-/// Sorting 4-byte indices instead of 8-byte (index, distance) pairs reduces memory
-/// movement during quickselect, yielding ~1.5x speedup over the pair-based approach.
+/// For small k (≤3), uses a direct linear scan tracking top-k — O(n) per row
+/// with minimal overhead. For larger k, uses index-based quickselect.
 fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
     if n <= 1 || k == 0 {
         return Vec::new();
     }
     let actual_k = k.min(n - 1);
-    let mut edges = Vec::with_capacity(n * actual_k);
+    if actual_k <= 3 {
+        return extract_knn_small(dist_matrix, n, actual_k);
+    }
+    extract_knn_general(dist_matrix, n, actual_k)
+}
 
-    // Reuse index buffer across all rows (4 bytes per element vs 8 for pairs).
+/// Specialized extraction for k ≤ 3: AVX-512 SIMD scan tracking top-k per row.
+/// Processes 16 distances per cycle, only drops to scalar for the rare lanes
+/// that beat the current threshold. Same pattern as the partition SIMD top-k.
+fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
+    debug_assert!(k <= 3 && k < n);
+    let mut edges = Vec::with_capacity(n * k);
+
+    for i in 0..n {
+        let row = &dist_matrix[i * n..(i + 1) * n];
+        let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
+        let threshold_idx = k - 1;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::*;
+            let chunks = n / 16;
+            unsafe {
+                // Set self-distance slot to MAX so it's never selected.
+                // (dist_matrix diagonal is already MAX, but be safe.)
+                for chunk in 0..chunks {
+                    let base = chunk * 16;
+                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                    let dists = _mm512_loadu_ps(row.as_ptr().add(base));
+                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(dists, thresh);
+                    if mask != 0 {
+                        let mut d_arr = [0.0f32; 16];
+                        _mm512_storeu_ps(d_arr.as_mut_ptr(), dists);
+                        let mut m = mask;
+                        while m != 0 {
+                            let lane = m.trailing_zeros() as usize;
+                            m &= m - 1;
+                            let j = base + lane;
+                            if j == i { continue; }
+                            let d = d_arr[lane];
+                            if d < top[threshold_idx].1 {
+                                top[threshold_idx] = (j as u32, d);
+                                for t in (1..k).rev() {
+                                    if top[t].1 < top[t - 1].1 {
+                                        top.swap(t, t - 1);
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Remainder
+                for j in (chunks * 16)..n {
+                    if j == i { continue; }
+                    let d = *row.get_unchecked(j);
+                    if d < top[threshold_idx].1 {
+                        top[threshold_idx] = (j as u32, d);
+                        for t in (1..k).rev() {
+                            if top[t].1 < top[t - 1].1 {
+                                top.swap(t, t - 1);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            for j in 0..n {
+                if j == i { continue; }
+                let d = unsafe { *row.get_unchecked(j) };
+                if d < top[threshold_idx].1 {
+                    top[threshold_idx] = (j as u32, d);
+                    for t in (1..k).rev() {
+                        if top[t].1 < top[t - 1].1 {
+                            top.swap(t, t - 1);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        for t in 0..k {
+            edges.push((i, top[t].0 as usize, top[t].1));
+        }
+    }
+
+    edges
+}
+
+/// General extraction using quickselect on an index array.
+fn extract_knn_general(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
+    let mut edges = Vec::with_capacity(n * k);
     let mut indices: Vec<u32> = (0..n as u32).collect();
 
     for i in 0..n {
         let row = &dist_matrix[i * n..(i + 1) * n];
 
-        // Reset indices for this row.
         for j in 0..n {
-            // SAFETY: `j` is in 0..n and `indices` has length n, so the access is in bounds.
             unsafe {
                 *indices.get_unchecked_mut(j) = j as u32;
             }
         }
 
-        if actual_k < n {
-            indices.select_nth_unstable_by(actual_k - 1, |&a, &b| {
-                // SAFETY: `a` originates from the `indices` array which contains
-                // values in 0..n, and `row` has length n, so the access is in bounds.
+        if k < n {
+            indices.select_nth_unstable_by(k - 1, |&a, &b| {
                 let da = unsafe { *row.get_unchecked(a as usize) };
-                // SAFETY: `b` originates from the `indices` array which contains
-                // values in 0..n, and `row` has length n, so the access is in bounds.
                 let db = unsafe { *row.get_unchecked(b as usize) };
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
 
-        for idx in 0..actual_k {
-            // SAFETY: `idx` is in 0..actual_k where actual_k <= n, and `indices`
-            // has length n, so the access is in bounds.
+        for idx in 0..k {
             let j = unsafe { *indices.get_unchecked(idx) } as usize;
             edges.push((i, j, row[j]));
         }
@@ -190,7 +279,9 @@ pub fn build_leaf<T: VectorRepr>(
     })
 }
 
-fn build_leaf_with_buffers<T: VectorRepr>(
+/// Build a leaf using caller-provided buffers, bypassing thread-local access.
+/// Use this when processing multiple leaves in a batch to amortize TLS overhead.
+pub fn build_leaf_with_buffers<T: VectorRepr>(
     data: &[T],
     ndims: usize,
     indices: &[usize],
@@ -285,6 +376,104 @@ fn build_leaf_with_buffers<T: VectorRepr>(
     let seen = &mut bufs.seen[..n * n];
     seen.fill(false);
     make_bidirected_edges(&local_edges, dist_matrix, n, indices, seen)
+}
+
+/// Build a leaf using direct pairwise SIMD distance — no GEMM, no f32 conversion.
+///
+/// Computes distances directly on native T (f16) data using DiskANN's SIMD distance
+/// functions. Eliminates: f16→f32 gather, norm computation, n×n GEMM, distance matrix
+/// conversion, and separate extract_knn pass. Fuses distance computation with top-k
+/// tracking for each point.
+///
+/// This approach is faster than GEMM for low-dimensional data (d≤128) because:
+/// - No f16→f32 conversion (6.8% of build)
+/// - No n×n matrix allocation (64KB per 128-point leaf)
+/// - Distance + top-k fused in one pass per row
+/// - SIMD distance on f16 uses F16C internally (same throughput as f32 GEMM)
+pub fn build_leaf_direct<T: VectorRepr + diskann_vector::distance::DistanceProvider<T>>(
+    data: &[T],
+    ndims: usize,
+    indices: &[usize],
+    k: usize,
+    metric: Metric,
+    dist_fn: &diskann_vector::distance::Distance<T, T>,
+) -> Vec<Edge> {
+    let n = indices.len();
+    if n <= 1 {
+        return Vec::new();
+    }
+    let actual_k = k.min(n - 1);
+
+    // Compute top-k nearest for each point using direct distance.
+    let mut local_edges: Vec<(usize, usize, f32)> = Vec::with_capacity(n * actual_k);
+    let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
+
+    for i in 0..n {
+        let a = &data[indices[i] * ndims..(indices[i] + 1) * ndims];
+
+        // Reset top-k.
+        for t in top[..actual_k].iter_mut() {
+            *t = (u32::MAX, f32::MAX);
+        }
+        let threshold_idx = actual_k - 1;
+
+        for j in 0..n {
+            if j == i {
+                continue;
+            }
+            let b = &data[indices[j] * ndims..(indices[j] + 1) * ndims];
+            let d = dist_fn.call(a, b);
+            if d < top[threshold_idx].1 {
+                top[threshold_idx] = (j as u32, d);
+                for t in (1..actual_k).rev() {
+                    if top[t].1 < top[t - 1].1 {
+                        top.swap(t, t - 1);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        for t in 0..actual_k {
+            local_edges.push((i, top[t].0 as usize, top[t].1));
+        }
+    }
+
+    // Create bidirected edges. For symmetric metrics, we need the reverse distance.
+    // Recompute for the reverse edge (cheaper than storing n×n matrix).
+    let mut edges = Vec::with_capacity(local_edges.len() * 2);
+    // Use a simple HashSet-like dedup via sorted insert to a small buffer.
+    // For n≤256 and k≤3, the edge count is small enough for a flat scan.
+    let mut seen_set: Vec<(usize, usize)> = Vec::with_capacity(local_edges.len() * 2);
+
+    for &(src_local, dst_local, dist) in &local_edges {
+        let src_global = indices[src_local];
+        let dst_global = indices[dst_local];
+
+        if !seen_set.contains(&(src_local, dst_local)) {
+            seen_set.push((src_local, dst_local));
+            edges.push(Edge {
+                src: src_global,
+                dst: dst_global,
+                distance: dist,
+            });
+        }
+        if !seen_set.contains(&(dst_local, src_local)) {
+            seen_set.push((dst_local, src_local));
+            // Compute reverse distance.
+            let b = &data[dst_global * ndims..(dst_global + 1) * ndims];
+            let a = &data[src_global * ndims..(src_global + 1) * ndims];
+            let rev_dist = dist_fn.call(b, a);
+            edges.push(Edge {
+                src: dst_global,
+                dst: src_global,
+                distance: rev_dist,
+            });
+        }
+    }
+
+    edges
 }
 
 /// Build a leaf using 1-bit quantized vectors with Hamming distance.
