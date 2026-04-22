@@ -278,6 +278,18 @@ impl Grid {
         }
     }
 
+    /// Construct a `Grid` from a dimension count, if supported.
+    ///
+    /// Returns `None` if `dim` is not a supported dimension (1, 3, or 4).
+    pub fn from_dim(dim: usize) -> Option<Self> {
+        match dim {
+            1 => Some(Self::One),
+            3 => Some(Self::Three),
+            4 => Some(Self::Four),
+            _ => None,
+        }
+    }
+
     /// Return the number of points in a grid with the given edge size.
     pub fn num_points(self, size: usize) -> usize {
         size.pow(self.dim().into())
@@ -426,5 +438,21 @@ mod tests {
 
         increment(&mut v, 2);
         assert_eq!(v, [0, 0, 0]);
+    }
+
+    #[test]
+    fn test_from_dim_roundtrip() {
+        for grid in [Grid::One, Grid::Three, Grid::Four] {
+            assert_eq!(
+                Grid::from_dim(grid.dim() as usize).unwrap().dim(),
+                grid.dim()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_dim_unsupported() {
+        assert!(Grid::from_dim(2).is_none());
+        assert!(Grid::from_dim(5).is_none());
     }
 }
