@@ -6,6 +6,8 @@
 mod consolidate;
 mod grid_insert;
 mod grid_search;
+mod helpers;
+mod index;
 mod inplace_delete;
 mod paged_search;
 mod range_search;
