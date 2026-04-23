@@ -66,3 +66,53 @@ where
         std::future::ready(Ok(count))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestAccessor {
+        deleted_ids: Vec<u32>,
+    }
+
+    impl DeletionCheck for TestAccessor {
+        fn deletion_check(&self, id: u32) -> bool {
+            self.deleted_ids.contains(&id)
+        }
+    }
+
+    impl AsDeletionCheck for TestAccessor {
+        type Checker = Self;
+        fn as_deletion_check(&self) -> &Self::Checker {
+            self
+        }
+    }
+
+    #[test]
+    fn deletion_check_returns_true_for_deleted() {
+        let checker = TestAccessor {
+            deleted_ids: vec![1, 5, 10],
+        };
+        assert!(checker.deletion_check(1));
+        assert!(checker.deletion_check(5));
+        assert!(checker.deletion_check(10));
+    }
+
+    #[test]
+    fn deletion_check_returns_false_for_not_deleted() {
+        let checker = TestAccessor {
+            deleted_ids: vec![1, 5, 10],
+        };
+        assert!(!checker.deletion_check(0));
+        assert!(!checker.deletion_check(4));
+        assert!(!checker.deletion_check(9));
+    }
+
+    #[test]
+    fn deletion_check_empty_deletes() {
+        let checker = TestAccessor {
+            deleted_ids: vec![],
+        };
+        assert!(!checker.deletion_check(0));
+    }
+}

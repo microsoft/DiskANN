@@ -12,13 +12,11 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
 pub use diskann_provider_core::{
-    CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
-    Quantized, StartPoints, TableBasedDeletes, Unseeded,
+    CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics,
+    PrefetchCacheLineLevel, Quantized, StartPoints, TableBasedDeletes, Unseeded,
 };
 
-use crate::{
-    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
-};
+use crate::storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 
 pub struct VectorGuard<T> {
     inner: Guard<Arc<Vec<T>>>,
@@ -286,38 +284,5 @@ impl VectorStore for NoStore {
 impl<T> SetElementHelper<T> for NoStore {
     fn set_element(&self, _index: &u32, _element: &[T]) -> ANNResult<()> {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroUsize;
-
-    use super::*;
-
-    #[test]
-    fn new_creates_correct_range() {
-        // valid_points of ten with five frozen points gives range 10..15
-        let sp = StartPoints::new(10, NonZeroUsize::new(5).unwrap())
-            .expect("should construct without overflow");
-        let r = sp.range().collect::<Vec<_>>();
-        assert_eq!(r, vec![10, 11, 12, 13, 14]);
-        assert_eq!(sp.end(), 15);
-    }
-
-    #[test]
-    fn new_returns_error_on_overflow() {
-        // valid_points at u32::MAX plus one frozen point must overflow
-        let max = u32::MAX;
-        let res = StartPoints::new(max, NonZeroUsize::new(1).unwrap());
-        assert!(res.is_err(), "expected an error when sum exceeds u32::MAX");
-        if let Err(err) = res {
-            let msg = err.to_string();
-            assert!(
-                msg.contains("Sum of valid points and frozen points exceeds u32::MAX"),
-                "unexpected error message: {}",
-                msg
-            );
-        }
     }
 }
