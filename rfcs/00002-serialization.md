@@ -5,46 +5,50 @@
 | **Authors** | Suhas Jayaram Subramanya |
 | **Contributors** | Mark Hildebrand |
 | **Created** | 2026-01-15 |
-| **Updated** | 2026-03-02 |
+| **Updated** | 2026-04-23 |
 
 ## Summary
 
-This RFC standardizes DiskANN index serialization with a *SemVer* compatibility contract. It requires immediate predecessor compatibility (`N-1`) and allows broader support through `load_legacy`. The model is **context-first**: context discovers persisted metadata and file relationships, while `aux` is reserved for runtime-only inputs.
+This RFC standardizes DiskANN index serialization with a SemVer compatibility contract and a context-first manifest model. Each persistable component carries its own version. A recursive JSON manifest describes the full component tree and its artifacts. Loaders detect the manifest at the root and dispatch per-component; legacy indices without the manifest remain loadable via an explicit fallback path.
 
 ## Motivation
 
 ### Background
 
-DiskANN internals evolve over time (new fields, reordered layouts, changed semantics). Without explicit format versioning and compatibility rules, upgrades can force full index rebuilds, which is costly for large datasets.
-
-The library currently employs divergent approaches:
-
-| Crate | Mechanism | Notes |
-|-------|-----------|-------|
-| `diskann-disk` | `GraphHeader` with `GraphLayoutVersion` | Sector-aligned; validates disk layout. |
-| `diskann` | `SaveWith` / `LoadWith` with provider contexts | Persists graph (`save_graph`/`load_graph`), vector data (`.data` via `.bin`), and quantization artifacts (PQ/SQ), but without a unified recursive metadata contract. |
+DiskANN is used in many different ways and below are three common patterns:
+- **In-process library**: Here, the caller owns all data buffers and supplies providers to DiskANN to access vector and graph data. This pattern does not rely on file-based serialization and the caller is responsible for managing the lifecycle of all data. 
+- **File-based builder**: Here, the caller invokes `DiskANNIndexBuilder::build()` with input files (e.g., `vectors.bin`) and DiskANN produces output files (e.g., `diskann.index`, `diskann_pq_pivots.bin`, `diskann_pq_compressed.bin`). The caller is responsible for managing these files and supplying storage providers to access them at query time. This pattern relies on the stability of DiskANN's file-based serialization.
+- **Dynamic index with checkpointing support**: Here, the caller builds an in-memory index that is mutable (supports insert/deletes) and periodically checkpoints it to durable storage. The caller should be able to load a checkpoint without rebuilding the entire index from the original vectors. This pattern relies on a stable serialization format for in-memory indexes.
 
 ### Problem Statement
 
-There is no unified serialization contract across DiskANN crates. Each crate uses its own ad hoc mechanism for versioning and persistence, making it impossible to reliably detect index format versions, guarantee backward compatibility, or evolve components independently. This leads to costly full index rebuilds on upgrades and fragile loader code.
+Each crate uses its own ad hoc versioning and persistence mechanism. This makes it impossible to reliably detect binary format versions, guarantee backward compatibility, or evolve components independently while maintaining compatibility with indexes built using prior library versions. Internal layout changes risk breaking existing workflows, and currently the only safe recovery is a full index rebuild starting with the full-precision vectors. This is infeasible for large indices because it requires rebuilding the entire graph and retraining PQ from scratch even for minor changes.
+
+### Target Scenarios
+
+This RFC is intended to solve a bounded set of persistence scenarios rather than provide a generic framework for every storage pattern DiskANN might support in the future. Here are a few concrete scenarios we want to enable:
+
+1. **Durable immutable indices**. A service may build a DiskANN index today, store it in durable storage (like an object store) or as an index attached to Iceberg tables and may use a newer DiskANN library version to load it at a later point in time. 
+2. **Artifact discovery for file-based builders**. A caller that uses `DiskANNIndexBuilder::build()` should be able to discover the complete set of files that belong to the produced index without hard-coding quantizer-specific or index-specific file naming conventions. Should the caller choose a different quantizer or index type, they need not be familiar with that component's file contract to discover and manage its artifacts. This helps surface the full set of artifacts to users and also enables new index types and quantizers to be added without requiring developers to update caller-side file management logic. Additionally, the manifest can record component-local scalar parameters (e.g., num. PQ chunks, bits-per-chunk) that can be used to setup runtime structures (e.g., buffers and scratch spaces) without needing to parse binary artifacts.
+3. **Checkpoint and restore for in-memory indices**. A caller should be able to pause insert/deletes, save an in-memory index, shut down the process and/or move the checkpoint to another machine, and load the index back without rebuilding the graph or retraining quantization artifacts from the original vectors.
+4. **Ease of adoption by new library clients**. A new DiskANN consumer, including public table-format integrations such as Iceberg, should be able to treat a persisted index as a self-describing unit instead of re-deriving DiskANN-specific file contracts or inventing a separate manifest format to track DiskANN artifacts.
+
+These scenarios are specifically about cases where DiskANN owns, emits, or describes persisted artifacts. They do not change the existing storage-agnostic provider model where the client owns the physical layout and its schema evolution strategy.
 
 ### Goals
 
-1. Reliably detect index format versions from root + component metadata
-2. Load indices saved by the immediate SemVer predecessor (major version) using current code. May also support older versions via explicit legacy converters.
-3. Define a minimal, explicit contract for custom legacy conversion logic
-4. Keep persisted structure self-discoverable via context (not caller-provided paths)
-5. Support optional preflight (`can_load`) and summary loading without changing full-load semantics
-6. Preserve a uniform API across primitive and container types (for example, `Vec<T>`)
+1. Detect index format versions reliably from a root manifest and per-component metadata.
+2. Load indices saved by the immediate SemVer predecessor (N-1) within the same major version.
+3. Keep persisted structure self-discoverable via context (callers should not need to supply file paths).
+4. Define a clear transition path for users to adopt the new serialization without requiring a one-time conversion step.
 
 ## Proposal
 
-### 1. Version Primitive
+### Version Primitive
 
-A simple, copyable version struct to be placed in `diskann-utils`:
+A simple, copyable version struct in `diskann-utils`:
 
 ```rust
-/// Represents a semantic version for index file formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
     pub major: u32,
@@ -57,403 +61,111 @@ impl Version {
         Self { major, minor, patch }
     }
 
-    /// Returns true if `self` is the immediate SemVer predecessor of `other`
-    /// within the same major (e.g., 0.2.5 -> 0.3.0 or 1.4.2 -> 1.4.3).
-    /// Used to validate required N-1 compatibility.
-    pub fn is_prev_of(&self, other: &Version) -> bool {
-        if self.major != other.major {
-            return false;
-        }
-
-        if self.minor == other.minor {
-            self.patch + 1 == other.patch
-        } else {
-            self.minor + 1 == other.minor && other.patch == 0
-        }
-    }
-
-    /// Returns true if `self` is compatible with `other` by SemVer major.
-    /// This allows loading any version <= `other` within the same major.
+    /// True if `self` can be loaded by code at version `other`
+    /// (same major, self <= other).
     pub fn is_compatible_with(&self, other: &Version) -> bool {
         self.major == other.major && self <= other
     }
 }
 ```
 
-#### 1.1 Component Version Contract
+Every persistable component defines a `const VERSION: Version`. Bump it when serialized layout, fields, or field semantics change. Components version independently allowing nested components to evolve at different rates.
 
-Every persistable component/struct must define a static `VERSION` constant.
+### Serialization Trait Architecture
 
-Versioning rule:
-- Increment the component `VERSION` whenever any of the following changes:
-  - serialized layout changes,
-  - fields are added/removed/renamed/retyped,
-  - field semantics or interpretation changes,
-  - member usage changes that affect reconstruction behavior.
+Serialization uses a three-layer design:
 
-This rule applies independently to each component, so nested components can evolve at different rates.
+1. **Public API**: a `save()` free function and a `save_fields!` macro. All recursive serialization goes through these. They are the only entry points for writing child values.
+2. **Dispatch trait (`Persist`)**: a universal trait that all serializable types implement. The free function delegates here. Primitives (`u32`, `f32`, `String`, etc.), containers (`Vec<T>`, `Option<T>`), and versioned components all implement `Persist`, so they serialize uniformly without requiring different traits for primitives and components.
+3. **Component traits (`Save` / `Load`)**: what most user-defined structs implement. Carries `VERSION`, `load_compatible`, `load_legacy`. A blanket `impl<T: Save> Persist for T` bridges components into the dispatch layer.
 
-### 2. Core `Load` and `Save` Contracts (Context-First, Async)
+Primitives implement `Persist` directly. Instead, they write a scalar into the current scope and carry no version. Containers like `Vec<T>` are generic over `T: Persist`, so `Vec<u32>` and `Vec<Graph>` both work without special-casing.
 
-All persistable index/component types implement async contracts that take a context. Context owns discovery, metadata traversal, and artifact resolution.
+#### Component traits
 
-This provides a clean separation:
-- `VERSION`: the version this implementation writes and natively understands.
-- `load()`: dispatches to `load_compatible()` for compatible versions; otherwise to `load_legacy()`.
-- `load_compatible()`: loads compatible versions and may recursively delegate legacy conversion for nested components.
-- `load_legacy()`: handles on-the-fly conversion from older versions.
-- `save()`: writes only current version format (`Self::VERSION`) for the current component.
-
-```text
-trait Load<Aux> {
-  const VERSION
-
-  async load(context, aux):
-    version = context.current_component_version()
-    if version is compatible with VERSION:
-      return load_compatible(context, aux, version)
-    else:
-      return load_legacy(context, aux, version)
-
-  async load_compatible(context, aux, version)
-  async load_legacy(context, aux, version)
+```rust
+trait Save {
+    const VERSION: Version;
+    fn save(&self, component: Component<'_>) -> Written;
 }
 
-trait Save<Aux> {
-  const VERSION
-  async save(self, context, aux)
+trait Load: Sized {
+    const VERSION: Version;
+    fn load_compatible(component: Component<'_>, stored: Version) -> Self;
+    fn load_legacy(component: Component<'_>, stored: Version) -> Self;
 }
 ```
 
-#### 2.1 Context Responsibilities
+- `save()` always writes `Self::VERSION`.
+- On load, the dispatch layer compares the stored version against `Self::VERSION` and routes to `load_compatible` or `load_legacy` accordingly.
+- `load_legacy()` must handle N-1 and may handle older versions.
 
-`DeserializationContext` / `SerializationContext` are the canonical orchestrators:
+#### Written proof tokens
 
-1. Discover root manifest and component graph (including file ownership).
-2. Read/validate per-component metadata and expose per-component version.
-3. Resolve file entries to provider-backed readers/writers.
-4. Enforce deterministic naming and collision disambiguation for artifacts.
-5. Track component path/provenance for deterministic error messages.
-6. Optionally expose preflight APIs (`can_load`, summary load path).
+Each `save()` call returns a `Written` token that carries that node's manifest data (version, scalars, file entries). A parent produces its own `Written` via `Written::new(&[("field_name", child_token), ...])`, which composes the children's manifest nodes into the parent's JSON object. This serves two purposes: it proves all children were serialized (enforced by the type system, not runtime checks), and it builds the `UUID-metadata.json` manifest recursively as the `save()` call tree unwinds. No separate manifest-generation pass is needed!
 
-The provider abstraction remains intact: contexts can be built on existing `StorageReadProvider` / `StorageWriteProvider` APIs.
+#### Example usage
 
-#### 2.2 Auxiliary (`aux`) Contract
+```rust
+impl Save for Quantization {
+    const VERSION: Version = Version::new(0, 1, 3);
 
-`aux` is reserved for **runtime-only** inputs that are orthogonal to persisted representation.
-
-Allowed in `aux`:
-- allocator handles / arenas
-- execution policy and runtime knobs
-- preallocated scratch factories
-- summary-derived runtime inputs (for example, sizing decisions produced by a preflight summary pass)
-
-Must **not** be required in `aux`:
-- persisted file names
-- persisted component versions
-- persisted dimensions/chunk sizes that can be discovered from metadata/payload
-
-If runtime setup needs persisted facts (for example, allocator sizing), use summary/preflight (Section 3).
-
-#### 2.3 How JSON Ties to `Load` / `Save`
-
-The recursive manifest JSON is the contract consumed by `Load` and produced by `Save`.
-
-At save time:
-1. `Save::save` begins component scope in `SerializationContext`.
-2. `Save::save` explicitly passes the component's static `VERSION` when entering component scope.
-3. Context records that version into the component JSON node.
-4. Component writes fields and binary payloads through context APIs.
-5. Context records owned artifacts and emits/updates that component's manifest node.
-6. Parent component links child component nodes by key.
-
-At load time:
-1. `DeserializationContext` resolves current component node from manifest path.
-2. Context reads that node's stored version.
-3. `Load::load` compares node version with component static `VERSION` and dispatches `load_compatible`/`load_legacy`.
-4. Component resolves owned artifacts through context (not caller-provided names).
-5. Child loads are executed by descending into child manifest nodes.
-
-Practical rule: component implementations only need to:
-- create scoped component/file guards,
-- read/write typed fields,
-- open artifacts by logical key and write/read incrementally.
-
-Physical file layout is a context concern, not component business logic.
-
-#### 2.4 `SerializationContext` Structure
-
-`SerializationContext` is explicit and minimal. In v1 it targets file-per-artifact output.
-
-Component and file APIs SHOULD be scoped/RAII-style to avoid missed cleanup on early returns.
-
-Pseudocode shape:
-
-```text
-struct SerializationContext {
-  provider
-  root_json
-  component_stack
-  uuid
-
-  // component scope
-  begin_component(name, component_version) -> ComponentScope
-
-  // scalar metadata writes (for primitive values)
-  put_scalar<T>(key, value: T)
-
-  // artifact writes
-  open_file(key) -> FileWriter
+    fn save(&self, mut c: Component<'_>) -> Written {
+        // save_fields! stamps each field name into the manifest key,
+        // the struct accessor, and the context field name.
+        save_fields!(c, self, [num_chunks, ncenters])
+    }
 }
 
-struct FileWriter {
-  key
-  write_chunk(bytes: &[u8])
-  finalize() -> size
+impl Save for Graph {
+    const VERSION: Version = Version::new(0, 2, 0);
+
+    fn save(&self, mut c: Component<'_>) -> Written {
+        // Binary artifact: direct context API
+        let mut f = c.open_file("graph_payload");
+        // write graph data into f using whatever format it wants
+        f.write_chunk(&self.payload);
+        // finalize allows us to record the artifact's name 
+        // and size in the manifest
+        f.finalize();
+
+        // Serialize other scalar and nested fields via the macro
+        save_fields!(c, self, [max_degree, alpha, quantization])
+    }
 }
 ```
 
-Required behavior for `begin_component` / `open_file(key)` / `write_chunk` / `finalize`:
+`Graph` and `Quantization` get `Persist` for free via the blanket impl. `Vec<Graph>` works because each element goes through `save()` → dispatch → `Graph::save()`. `Vec<u32>` works because `u32` implements `Persist` directly.
 
-1. `begin_component` enters a child component scope and writes that component's `version` into the scoped JSON node.
-2. Component scope finalization (explicit `finalize` or scope `Drop`) performs `exit_component` behavior.
-3. `open_file(key)` resolves `key` to filename deterministically as `UUID-lineage-key.data`, where `lineage` is the current component path joined by `-`.
-4. File writers support incremental writes via repeated `write_chunk(&[u8])`; callers do not need to materialize full payloads up front.
-5. On file finalization (explicit `finalize` or scope drop), context computes final `size`.
-6. Context records key-to-file mapping (`key -> name`) and adds `{ key, name, size }` under current component's `files` array in JSON.
-7. Within a single component scope, keys are write-once. A second write to a previously written key MUST return a deterministic duplicate-key error.
+### Context Objects
 
-Concurrency rule: within a component scope, contexts MAY restrict to one active artifact writer. Implementations SHOULD document this.
+The context is represented by a `Ctx` value that is consumed (moved) on use. When the dispatch layer encounters a `Save` component, it converts `Ctx` into a `Component` scope (recording the component's version in the manifest). For primitives, `Ctx` converts into a `Primitive` scope. For containers, `Ctx` converts into a `Seq` scope. These conversions are mutually exclusive: a `Ctx` can only become one of the three.
 
-Key/value write behavior:
+A `Component` scope provides:
+- `field(key)`: returns a child `Ctx` for a named field (used for recursion).
+- `open_file(key)`: returns a `FileWriter` for binary artifacts.
+- `stored_version()`: returns the version recorded in the manifest for this component (used on the load path).
 
-- `put_scalar<T>` always writes into the JSON node of the **current component scope**.
-- For example, if current scope is `graph`, then `put_scalar("k", v)` writes `JSON["graph"]["k"] = v`.
-- Additional example: If inside `graph` and a nested component `comp` is entered, then `put_scalar<T>` writes into `JSON["graph"]["comp"][...]`.
+Physical file layout (naming, collision disambiguation) is entirely a context concern. Components only interact with logical keys. Each `field(key)` call appends `key` to the context's internal lineage path, so when `open_file("graph_payload")` is called inside the `"graph"` component scope, the context derives the filename `UUID-graph-graph_payload.data` automatically from the accumulated lineage.
 
-#### 2.5 `DeserializationContext` Structure
+The `aux` parameter on `Load` is reserved for runtime-only inputs (allocators, execution policy, scratch factories). Anything discoverable from the manifest must *not* go in `aux`.
 
-`DeserializationContext` is a lightweight runtime object with three responsibilities:
+### Manifest Schema
 
-1. **Manifest navigation:** find the current component node and move into child nodes.
-2. **Validation:** enforce version checks and root-format detection rules.
-3. **Artifact resolution:** open artifact content by key from the current component's `files` list.
+A single recursive JSON manifest (`UUID-metadata.json`) describes the full component tree. Each component node carries:
 
-`DeserializationContext` should mirror `SerializationContext` operations where possible.
+- `version`: the component's format version
+- `files`: owned artifacts (`key`, `name`, `size`)
+- nested child components
+- component-local scalar parameters
 
-Pseudocode shape:
-
-```text
-struct DeserializationContext {
-  provider
-  root_json
-  component_stack
-  uuid
-
-  // component scope
-  begin_component(name) -> ComponentScope
-
-  // scalar metadata reads (for primitive values)
-  get_scalar<T>(key) -> T
-  current_component_version() -> Version
-
-  // artifact reads
-  open_file(key) -> FileReader
-}
-
-struct FileReader {
-  key
-  read_chunk() -> &[u8]
-  read_to_end() -> Vec<u8>
-}
-```
-
-Version behavior:
-- `SerializationContext.begin_component(name, component_version)` writes `JSON[path]["version"] = component_version`.
-- `DeserializationContext.current_component_version()` reads `JSON[path]["version"]`.
-
-Required behavior for `begin_component` / `open_file(key)` / file reads:
-
-1. `begin_component` enters a child component scope and moves manifest cursor to that node.
-2. Component scope finalization performs `exit_component` behavior.
-3. `open_file(key)` resolves `key` from current component's `files` list.
-4. Context opens the mapped `name` via provider and returns a reader that supports incremental reads and `read_to_end`.
-
-Lineage behavior is symmetric with save:
-- For example, inside `graph`, `get_scalar("k")` resolves from `JSON["graph"]["k"]`.
-- Additional example: Inside nested `comp` under `graph`, `get_scalar("x")` resolves from `JSON["graph"]["comp"]["x"]`.
-
-#### 2.6 File-Per-Artifact Storage (v1)
-
-For now, this RFC proposes only one storage mode: **one file per artifact**.
-
-Rules:
-- Every persisted binary artifact is emitted as its own file.
-- Each file is registered under the current component node's `files` array.
-- File names are resolved from logical keys via context-managed naming.
-- Collision disambiguation and filename assignment remain context-managed.
-- A single `uuid` is used for all files produced by one `SerializationContext` instance.
-- Backends MAY still implement internal append/packing behavior; this must remain transparent to `Load`/`Save` implementors.
-
-#### 2.7 Primitive and Generic Type Behavior (`SaveValue` / `LoadValue`)
-
-To avoid ambiguity, this RFC separates **component contracts** from **value contracts**:
-
-- Component/struct types use `Load` / `Save` and participate in component scope + version dispatch.
-- Primitive/value-like types use `LoadValue` / `SaveValue` and read/write under an explicit key in the current scope.
-
-Pseudocode shape:
-
-```text
-trait SaveValue {
-  async save_value(context, key)
-}
-
-trait LoadValue {
-  async load_value(context, key)
-}
-```
-
-Rules:
-1. Primitive values (`u64`, `u32`, `i32`, `i64`, `f32`, `f16`, `String`) do not create component scopes.
-2. Primitive values are encoded as key/value entries within the current component scope through `put_scalar<T>` / `get_scalar<T>`.
-3. Primitive values do not carry their own `version` nodes.
-4. Persisted component/struct types MUST carry versions as defined in Section 1.1.
-5. Generic containers (for example, `Vec<T>`) MUST work uniformly whether `T` is primitive or composite.
-6. For `Vec<T>` under container key `container`, the component name for the i-th element MUST be `container.index-i`.
-7. If `T` is primitive, each element uses the value contract (`SaveValue` / `LoadValue`) under the element key.
-8. If `T` is composite, each element uses the component contract (`Save` / `Load`) with normal version dispatch.
-9. Field/key names SHOULD be supplied by the caller or derive macro expansion (for example, from field identifiers), not inferred at runtime from primitive values.
-
-### 3. Dispatch Logic and Optional Summary/Preflight
-
-`Load::load(ctx, aux)` is the canonical entrypoint and performs first-level dispatch:
-
-```text
-context = DeserializationContext.open(provider, root)
-index = Index.load(context, runtime_aux)
-```
-
-Callers can optionally run a summary/preflight pass before full materialization:
-
-```text
-preflight_context = DeserializationContext.open(provider, root)
-summary = IndexSummary.load(preflight_context, NoAux)
-runtime_aux = RuntimeAux.from_summary(summary)
-
-full_context = DeserializationContext.open(provider, root)
-index = Index.load(full_context, runtime_aux)
-```
-
-Not every component needs a summary type; summaries are optional.
-
-Preflight contract:
-- `can_load` is a lightweight check that validates root manifest readability and basic compatibility viability.
-- Summary loading is optional and returns enough persisted info for runtime sizing/policy decisions (e.g., for allocators and scratch spaces) before full materialization.
-- Full load semantics remain unchanged (`Load::load(ctx, aux)` is still the canonical path).
-
-#### 3.1 Root Format Selection (No One-Time Conversion Required)
-
-Loader behavior is strictly dual-path:
-
-1. If the new RFC root format is present (`UUID-metadata.json` root manifest), load using the normal context-first path.
-2. If the new RFC root format is absent, use the explicit legacy path that loads each component using existing legacy readers.
-
-No one-time conversion step is required. Legacy artifacts remain loadable via explicit legacy loaders.
-
-#### 3.2 Root Manifest Validation
-
-When `UUID-metadata.json` is present, context-first loading MUST validate the root manifest before descending into components.
-
-Minimum required root fields:
-- `uuid`
-- `index_type`
-- `version`
-
-Validation behavior:
-1. If root manifest is missing, use the legacy root path (Section 3.1).
-2. If root manifest is present but unreadable/invalid JSON, return a deterministic root-manifest parse error.
-3. If root manifest is present but required fields are missing or malformed, return a deterministic root-manifest validation error.
-4. If root manifest is valid, component-level version handling and recursive dispatch proceed normally.
-
-### 4. Version Ownership and Precedence
-
-Versioning is owned per component via metadata fields in the manifest hierarchy.
-
-Precedence rules:
-
-1. Manifest version in each component node is the source of truth for that component.
-2. Component-internal metadata versions (for example, protobuf-backed metadata) must be validated according to component rules.
-3. Root manifest version and component version must satisfy compatibility rules in this RFC.
-4. On mismatch:
-   - if safely recoverable by documented converter, route to `load_legacy`.
-   - otherwise return a deterministic compatibility error with component path provenance.
-
-This avoids ambiguity when nested components evolve at different rates.
-
-### 5. Artifact Keys, Component Keys, and Disambiguation
-
-Artifact naming is context-managed, not ad hoc.
-
-Required behavior:
-
-1. Components are addressed by a component key (manifest path segment); artifacts are addressed by an artifact key (file entry key). These are distinct concepts.
-2. Components request logical artifact keys within their current component scope.
-3. In v1, concrete file names follow `UUID-lineage-key.data` and **root** metadata file is `UUID-metadata.json`.
-4. Within a single component scope, duplicate artifact keys are disallowed. If a second write is attempted for an existing key, context MUST return a deterministic duplicate-key error.
-5. If two distinct keys still map to the same concrete filename after normalization, context MAY apply stable suffixing (for example, `-1`, `-2`) to preserve physical filename uniqueness.
-6. Manifest records concrete `name`, `key`, and `size` under owning component path.
-7. For collection-like components, lineage SHOULD include deterministic index segments so artifact names remain stable across load/save.
-
-### 6. Format Divergence
-
-This RFC does not unify the **different payload formats** for in-memory and disk indices. It simply adds a metadata-layer so that the same **manifest-driven contract** and context APIs can be used for both formats, but payload content diverges after component dispatch.
-
-### 7. Unified Metadata JSON Schema
-
-We propose a **single recursive manifest JSON** with **per-component versioning** model. This avoids cascading version bumps when only a smaller component (for example, PQ/SQ) evolves.
-
-Each component node carries its own:
-- `version`
-- `files` (owned artifacts with `key`, `name`, `size`)
-- optional nested components
-- component-local config/parameters
-
-Any persisted component MUST have a `version`. Other fields are optional unless required by the active index type.
-
-Rule for nested objects in examples and manifests: any nested component SHOULD carry its own `version`; purely flat key/value objects (where values are not nested components) SHOULD omit `version`.
-
-This schema is the persisted IO contract for the context APIs in Section 2.3:
-- `Save` writes component state *through context*, and context emits this schema.
-- `Load` reads component state *through context*, and context resolves this schema.
-
-#### 7.1 Metadata Generation Flow
-
-`UUID-metadata.json` is generated during `Save` finalization on the root context. The flow is:
-
-1. Each component save writes its payload files and component metadata.
-2. Context records component-local file entries `(key, name, size)` under that component node.
-3. Save serializes a single metadata object to `UUID-metadata.json`.
-4. Metadata write happens last (preferably atomic, e.g., temp + rename) so it represents a complete snapshot.
-
-`load_compatible` uses this JSON manifest for component discovery and cross-file validation.
-
-#### 7.2 Example for In-Memory Index
-
-For in-memory indices, `index_type` is `"vamana"` and `disk_layout` is `null`:
-
-**File:** `UUID-metadata.json`
+Example (in-memory index, cut short for brevity):
 
 ```json
 {
-  "uuid": "52b4d2a0-39a0-4c2d-b832-3c3f6d2826c4",
-  "index_tag": "my-index-2026-01-15",
-  "created_at": "2026-01-15T10:30:00Z",
-
+  "uuid": "52b4d2a0-...",
   "index_type": "vamana",
-
   "version": { "major": 0, "minor": 2, "patch": 0 },
-  
   "common": {
     "version": { "major": 0, "minor": 2, "patch": 0 },
     "num_points": 1000000,
@@ -461,300 +173,77 @@ For in-memory indices, `index_type` is `"vamana"` and `disk_layout` is `null`:
     "metric": "l2",
     "vector_type": "f32"
   },
-  
   "graph": {
     "version": { "major": 0, "minor": 2, "patch": 0 },
-    "prune_kind": "triangle_inequality",
     "max_degree": 64,
-    "pruned_degree": 32,
-    "alpha": 1.2,
-    "l_build": 100,
-    "max_occlusion_size": 750,
-    "max_backedges": 32,
-    "max_minibatch_par": 1,
-    "intra_batch_candidates": "all",
-    "saturate_after_prune": true,
     "files": [
-      {
-        "key": "graph_payload",
-        "name": "52b4d2a0-39a0-4c2d-b832-3c3f6d2826c4-graph-graph_payload.data",
-        "size": 1048576
-      }
+      { "key": "graph_payload", "name": "52b4d2a0-graph-graph_payload.data", "size": 1048576 }
     ]
   },
-  
-  "start_points": {
-    "version": { "major": 0, "minor": 2, "patch": 0 },
-    "strategy": {
-      "kind": "medoid"
-    },
-    "count": 1
-  },
-  
   "quantization": {
     "version": { "major": 0, "minor": 1, "patch": 3 },
     "kind": "product",
     "product": {
       "version": { "major": 0, "minor": 1, "patch": 3 },
       "num_chunks": 96,
-      "ncenters": 256,
-      "chunk_offsets": [0, 8, 16, 24, 32, "...truncated...", 768],
-      "trainer": {
-        "version": { "major": 0, "minor": 1, "patch": 3 },
-        "algorithm": "LightPQTrainingParameters",
-        "lloyds_reps": 12
-      }
+      "ncenters": 256
     },
     "files": [
-      {
-        "key": "pq_pivots",
-        "name": "52b4d2a0-39a0-4c2d-b832-3c3f6d2826c4-quantization-pq_pivots.data",
-        "size": 4096
-      },
-      {
-        "key": "pq_codes",
-        "name": "52b4d2a0-39a0-4c2d-b832-3c3f6d2826c4-quantization-pq_codes.data",
-        "size": 96000000
-      }
+      { "key": "pq_pivots", "name": "52b4d2a0-quantization-pq_pivots.data", "size": 4096 },
+      { "key": "pq_codes", "name": "52b4d2a0-quantization-pq_codes.data", "size": 96000000 }
     ]
   },
-
   "vector_data": {
     "version": { "major": 0, "minor": 2, "patch": 0 },
-    "format": "bin",
     "files": [
-      {
-        "key": "vectors_fp",
-        "name": "52b4d2a0-39a0-4c2d-b832-3c3f6d2826c4-vector_data-vectors_fp.data",
-        "size": 768000000
-      }
+      { "key": "vectors_fp", "name": "52b4d2a0-vector_data-vectors_fp.data", "size": 768000000 }
     ]
   },
-  
   "disk_layout": null
 }
 ```
 
-Simplified save call graph for this in-memory shape:
+For disk indices, `index_type` is `"diskann"` and `disk_layout` is populated with graph header, block size, and layout version metadata.
 
-```text
-index.save()
-|- common.save()        [num_points, dimensions, metric, vector_type]
-|- graph.save()         [prune_kind, max_degree, pruned_degree, alpha, l_build, ...]
-|  |- graph_payload.save()
-|- start_points.save()  [strategy.kind, count]
-|- quantization.save()
-|  |- kind.save()
-|  |- product.save()    [num_chunks, ncenters, chunk_offsets, trainer.{algorithm, lloyds_reps}]
-|  |- pq_pivots.save()
-|  |- pq_codes.save()
-|- vector_data.save()   [format, vectors_fp]
-```
+The manifest is written last during save (ideally via atomic temp + rename) so it always represents a complete snapshot. Within a component scope, artifact keys are write-once by design (macro enforces this) so the manifest can be treated as a source of truth for what was written.
 
-Simplified load call graph for the same in-memory shape:
+### Backward Compatibility Policy
+Each component carries its own version and compatibility contract. The library must guarantee that any component at version N can be loaded by code that supports N and N-1. Support for older versions (N-2, N-3, etc.) is optional but encouraged, especially for stable components like quantization that are less likely to require breaking changes.
 
-```text
-index.load()
-|- common.load()        [num_points, dimensions, metric, vector_type]
-|- graph.load()         [prune_kind, max_degree, pruned_degree, alpha, l_build, ...]
-|  |- graph_payload.load()
-|- start_points.load()  [strategy.kind, count]
-|- quantization.load()
-|  |- kind.load()
-|  |- product.load()    [num_chunks, ncenters, chunk_offsets, trainer.{algorithm, lloyds_reps}]
-|  |- pq_pivots.load()
-|  |- pq_codes.load()
-|- vector_data.load()   [format, vectors_fp]
-```
+| Current Component Version | Support for Component Versions | Optional |
+|--------------|------------------|----------|
+| `0.5.x` |`0.5.x`, ... `0.2.x`, `0.1.x` | — |
+| `1.2.x` | `1.1.x`, `1.0.x` | `0.y.x` via `load_compatible` |
+| `2.2.x` | `2.1.x`, `2.0.x` | `1.x` via `load_compatible`, support for `0.y.x` not guaranteed |
 
-Version dispatch occurs at each component boundary (`load` → `load_compatible` or `load_legacy`).
+Version dispatch is per-component. A root index at version `2.2.0` may contain a quantization component still at `1.0.0`and that component's `load()` dispatches to its own `load_compatible` or `load_legacy` independently.
 
-#### 7.3 Example for Disk-Based Index
+Release notes **must** document breaking changes, especially if it impacts the manifest schema or a component's serialized representation. A breaking change to a component requires a major version bump for *that* component, but not necessarily for the entire library. This allows for more granular evolution and clearer communication of compatibility guarantees.
 
-For disk indices, `index_type` is `"diskann"` and `disk_layout` is populated:
+Any incompatible loads must panic with a clear error message indicating the expected and found versions, and which component is affected. This helps users identify when they are trying to load an index with an incompatible library version. 
 
-**File:** `UUID-metadata.json`
+### Legacy Fallback
 
-```json
-{
-  "uuid": "d3f90f3c-6e8d-4baf-875b-bf4c4b2c3f9f",
-  "index_tag": "billion-scale-index",
-  "created_at": "2026-01-15T10:30:00Z",
-  
-  "index_type": "diskann",
+Root detection selects the loader path:
 
-  "version": { "major": 0, "minor": 2, "patch": 0 },
-  
-  "common": {
-    "version": { "major": 0, "minor": 2, "patch": 0 },
-    "num_points": 1000000000,
-    "dimensions": 768,
-    "metric": "cosine",
-    "vector_type": "f16"
-  },
-  
-  "graph": {
-    "version": { "major": 0, "minor": 2, "patch": 0 },
-    "prune_kind": "triangle_inequality",
-    "max_degree": 64,
-    "pruned_degree": 32,
-    "alpha": 1.2,
-    "l_build": 100,
-    "max_occlusion_size": 750,
-    "max_backedges": 32,
-    "max_minibatch_par": 1,
-    "intra_batch_candidates": "all",
-    "saturate_after_prune": true,
-    "files": [
-      {
-        "key": "disk_graph_payload",
-        "name": "d3f90f3c-6e8d-4baf-875b-bf4c4b2c3f9f-graph-disk_graph_payload.data",
-        "size": 1008000000000
-      }
-    ]
-  },
-  
-  "start_points": {
-    "version": { "major": 0, "minor": 2, "patch": 0 },
-    "strategy": {
-      "kind": "medoid"
-    },
-    "count": 1
-  },
-  
-  "quantization": {
-    "version": { "major": 1, "minor": 0, "patch": 0 },
-    "kind": "product",
-    "product": {
-      "version": { "major": 1, "minor": 0, "patch": 0 },
-      "num_chunks": 96,
-      "ncenters": 256,
-      "trainer": {
-        "version": { "major": 1, "minor": 0, "patch": 0 },
-        "algorithm": "LightPQTrainingParameters",
-        "lloyds_reps": 12
-      }
-    },
-    "files": [
-      {
-        "key": "pq_pivots",
-        "name": "d3f90f3c-6e8d-4baf-875b-bf4c4b2c3f9f-quantization-pq_pivots.data",
-        "size": 4096
-      },
-      {
-        "key": "pq_codes",
-        "name": "d3f90f3c-6e8d-4baf-875b-bf4c4b2c3f9f-quantization-pq_codes.data",
-        "size": 96000000
-      }
-    ]
-  },
-  
-  "disk_layout": {
-    "version": { "major": 1, "minor": 0, "patch": 0 },
-    "graph_header": {
-      "version": { "major": 1, "minor": 0, "patch": 0 },
-      "layout_version": {
-        "major": 1,
-        "minor": 0
-      },
-      "block_size": 4096
-    },
-    "graph_metadata": {
-      "version": { "major": 1, "minor": 0, "patch": 0 },
-      "num_pts": 1000000000,
-      "dims": 768,
-      "medoid": 500000,
-      "node_len": 1008,
-      "num_nodes_per_block": 4,
-      "vamana_frozen_num": 1,
-      "vamana_frozen_loc": 1000000000,
-      "disk_index_file_size": 1008000000000,
-      "associated_data_length": 0
-    }
-  }
-}
-```
+1. **Manifest present** (`UUID-metadata.json`): use the context-first path described above.
+2. **Manifest absent**: invoke the legacy loading path using existing per-crate readers.
 
-### 8. Backward Compatibility Policy
+Writers always emit the new manifest format. No one-time conversion is required — legacy artifacts are loadable as long as the legacy path is maintained.
 
-This RFC proposes **minimum N-1 compatibility** within the same major:
+### Incremental Adoption
 
-| Code Version | Required Support | Optional Support |
-|--------------|------------------|------------------|
-| `0.2.x`      | `0.2.x`, `0.1.x` | none             |
-| `0.3.x`      | `0.3.x`, `0.2.x` | `0.1.x` via explicit converters |
-| `1.4.x`      | `1.4.x`, `1.3.x` | older `1.x` via explicit converters |
+Because dispatch is per-component, migration can happen one component at a time. A component's `save()` can write its binary artifact in the existing format — it just registers the file with `open_file` and returns a `Written` token. Its `load_compatible()` can internally delegate to the old reader code to parse that artifact. Meanwhile, a sibling component (e.g., quantization) can fully adopt a new format. The manifest records what each component produced without dictating the byte layout inside any artifact. This means a user can migrate PQ first, then graph, then vector data, each at its own pace, without touching the others.
 
-**Rules:**
-1. `load(ctx, auxiliary)` dispatches to `load_compatible` when `version <= VERSION` within the same major; otherwise it dispatches to `load_legacy`.
-2. `load_compatible()` may recursively invoke component loaders, including component-level `load_legacy`, when nested component versions are older.
-3. `load_legacy()` must support the immediate predecessor version (`N-1`). It may also support older versions via explicit conversion logic.
-4. Final accept/reject for newer major or incompatible payloads is determined by `load_legacy()`; it may convert or throw `unsupported version` error.
+### Expected Impact
+- For users that do not persist DiskANN artifacts, there should be no impact. They can continue to use providers and manage their own storage as before. The new serialization and manifest are additive features that do not change the existing provider-based data access pattern.
+- For users that do persist DiskANN artifacts, there will be an initial impact to adopt the new manifest-based serialization. However, the design includes a legacy fallback path, so existing indices should remain loadable without modification. New indices will include the manifest, and loaders will handle both old and new formats transparently during a rolling upgrade.
 
-#### 8.1 Legacy Runtime Fallback Strategy
-
-Root detection determines the active loader path:
-
-1. **New format present at root:** use context-first manifest path.
-2. **New format missing at root:** invoke explicit legacy component loading path.
-
-Writers always emit the new format. Readers support both paths via root detection, with no required one-time conversion.
-
-## Trade-offs
-
-### Context-First vs. Caller-Provided Paths
-
-**Chosen: context-first discovery.** The context object discovers persisted metadata and resolves file relationships from the manifest, rather than requiring callers to supply file paths.
-
-- *Pro:* Self-discoverable; reduces coupling between caller and persisted layout.
-- *Pro:* Enables manifest-driven validation and deterministic error messages with component provenance.
-- *Con:* Adds complexity to the context implementation.
-- *Alternative:* Caller-provided paths (current `SaveWith`/`LoadWith` approach) are simpler but fragile when file layouts change (and inconsistent/ambiguous when multiple files are involved across different components).
-
-### Recursive Per-Component Versioning vs. Single Root Version
-
-**Chosen: per-component versioning.** Each component in the manifest carries its own `version`, allowing independent evolution.
-
-- *Pro:* Avoids cascading version bumps when only one component (e.g., PQ) changes.
-- *Pro:* Enables fine-grained `load_legacy` dispatch at the component level.
-- *Con:* More metadata to maintain; version consistency across components must be validated.
-- *Alternative:* Single root version — simpler but forces all components to bump in lockstep.
-
-### File-Per-Artifact vs. Packed/Concatenated Archive
-
-**Chosen: file-per-artifact (v1).** Each binary artifact is its own file.
-
-- *Pro:* Simple to implement, debug, and inspect.
-- *Pro:* Works well with existing provider abstractions.
-- *Con:* Many small files on disk for complex indices.
-- *Alternative:* Packed archive format — fewer files but adds complexity; deferred to future work.
-
-### Dual-Path Legacy Loading vs. One-Time Migration
-
-**Chosen: dual-path loading with no required migration.** Readers detect the root format and dispatch to either the new context-first path or the legacy path.
-
-- *Pro:* No forced migration step; legacy indices remain loadable indefinitely.
-- *Pro:* Writers always emit the new format, so the ecosystem naturally converges.
-- *Con:* Must maintain two loader paths until legacy support is dropped.
-- *Alternative:* One-time migration tool — simpler reader code but imposes a mandatory upgrade step on users.
-
-## Benchmark Results
-
-N/A — this RFC does not change binary payload formats and therefore does not require benchmark comparison.
 
 ## Future Work
 
-- [ ] Derive macro for automatic `Load`/`Save` implementation from struct field annotations
-- [ ] Formal JSON schema (e.g., JSON Schema draft) for manifest validation tooling
+- [ ] Derive `save_fields!` macro for automatic `Load`/`Save` from struct annotations
+- [ ] Formal JSON schema for manifest validation tooling
 - [ ] Cross-major-version migration tooling
-- [ ] Manifest digital signatures or checksums for integrity verification
-- [ ] Packed/concatenated archive storage mode (beyond file-per-artifact)
-
-## References
-
-1. [Current `SaveWith`/`LoadWith` traits](../diskann-providers/src/storage/api.rs)
-2. [Current file naming conventions](../diskann-providers/src/storage/path_utility.rs)
-3. [Graph serialization (`save_graph`/`load_graph`)](../diskann-providers/src/storage/bin.rs)
-4. [PQ storage (`PQStorage::write_pivot_data`)](../diskann-providers/src/storage/pq_storage.rs)
-5. [Disk index `GraphHeader`/`GraphMetadata`](../diskann-disk/src/data_model/)
-6. [Semantic Versioning 2.0.0](https://semver.org/)
+- [ ] Serialize in-memory indexes while under insert/delete operations (?)
+- [ ] Packed archive storage mode (?)
