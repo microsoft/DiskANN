@@ -36,7 +36,7 @@ use serde::Serialize;
 
 use super::{
     build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-    product, scalar, search, spherical,
+    multi, product, scalar, search, spherical,
 };
 use crate::{
     backend::index::{
@@ -71,6 +71,7 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     product::register_benchmarks(benchmarks);
     scalar::register_benchmarks(benchmarks);
     spherical::register_benchmarks(benchmarks);
+    multi::register_benchmarks(benchmarks);
 }
 
 //////////////

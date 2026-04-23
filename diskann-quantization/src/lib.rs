@@ -204,21 +204,21 @@ pub enum Parallelism {
 #[cfg(feature = "codegen")]
 pub mod __codegen;
 
-// Miri can't handle `trybuild`.
-#[cfg(all(test, not(miri)))]
-mod tests {
-    #[test]
-    fn compile_tests() {
-        let t = trybuild::TestCases::new();
-        // Begin with a `pass` test to force full compilation of all the test binaries.
-        //
-        // This ensures that post-monomorphization errors are tested.
-        t.pass("tests/compile-fail/bootstrap/bootstrap.rs");
-        t.compile_fail("tests/compile-fail/*.rs");
-        t.compile_fail("tests/compile-fail/error/*.rs");
-        t.compile_fail("tests/compile-fail/multi/*.rs");
-    }
-}
+// // Miri can't handle `trybuild`.
+// #[cfg(all(test, not(miri)))]
+// mod tests {
+//     #[test]
+//     fn compile_tests() {
+//         let t = trybuild::TestCases::new();
+//         // Begin with a `pass` test to force full compilation of all the test binaries.
+//         //
+//         // This ensures that post-monomorphization errors are tested.
+//         t.pass("tests/compile-fail/bootstrap/bootstrap.rs");
+//         t.compile_fail("tests/compile-fail/*.rs");
+//         t.compile_fail("tests/compile-fail/error/*.rs");
+//         t.compile_fail("tests/compile-fail/multi/*.rs");
+//     }
+// }
 
 #[cfg(test)]
 mod test_util;

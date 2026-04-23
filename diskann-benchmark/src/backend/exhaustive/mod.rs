@@ -11,6 +11,7 @@
 mod algos;
 
 mod minmax;
+mod multi;
 mod product;
 mod spherical;
 
@@ -20,4 +21,5 @@ pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     spherical::register_benchmarks(benchmarks);
     minmax::register_benchmarks(benchmarks);
     product::register_benchmarks(benchmarks);
+    multi::register_benchmarks(benchmarks);
 }

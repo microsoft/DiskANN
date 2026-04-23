@@ -19,6 +19,7 @@ use crate::{
 /// Represents a range of start points for an index.
 /// The range includes `start` and excludes `end`.
 /// `start` is the first valid point, and `end - 1` is the last valid point.
+#[derive(Debug, Clone, Copy)]
 pub struct StartPoints {
     start: u32,
     end: u32,
@@ -84,6 +85,7 @@ impl<T> Deref for VectorGuard<T> {
 /// each vector starts on a cache-aligned boundary (64 byte aligned).
 /// To achieve this, vectors may not be densely packed into the underlying
 /// buffer.
+#[derive(Debug)]
 pub struct AlignedMemoryVectorStore<T: bytemuck::Pod> {
     store: UnsafeCell<Vec<T>>,
     max_vectors: usize,
@@ -425,6 +427,7 @@ impl Hybrid {
 }
 
 #[cfg(test)]
+#[derive(Debug)]
 pub struct TestCallCount {
     count: std::sync::atomic::AtomicUsize,
 }
@@ -452,6 +455,7 @@ impl TestCallCount {
 }
 
 #[cfg(not(test))]
+#[derive(Debug)]
 pub struct TestCallCount {}
 
 #[cfg(not(test))]
