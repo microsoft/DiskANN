@@ -1178,7 +1178,10 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
         provider: &'a Provider,
         _context: &'a Context,
     ) -> Result<Accessor<'a>, Infallible> {
-        Ok(Accessor::new(provider))
+        match &self.transient_ids {
+            Some(ids) => Ok(Accessor::flaky(provider, Cow::Borrowed(ids))),
+            None => Ok(Accessor::new(provider)),
+        }
     }
 }
 

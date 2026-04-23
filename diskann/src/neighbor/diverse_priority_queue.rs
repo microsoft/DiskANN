@@ -444,6 +444,26 @@ mod diverse_priority_queue_test {
 
         assert_eq!(queue.size(), 3);
         assert_eq!(queue.get(0).id, 9); // Best should be the new one
+
+        // Verify local queue cleanup: ID 6 (attribute 2) was evicted from the
+        // global queue, so it must also be removed from attribute 2's local queue.
+        if let Some(local_queue) = queue.local_queue_map.get(&2) {
+            assert_eq!(
+                local_queue.size(),
+                0,
+                "Evicted item should be removed from its local queue"
+            );
+        }
+        // Key removed entirely (get returns None) is also valid.
+
+        // The new item's local queue should have exactly one entry.
+        assert_eq!(queue.local_queue_map[&3].size(), 1);
+        assert_eq!(queue.local_queue_map[&3].get(0).id, 9);
+
+        // Global queue should contain the 3 survivors in distance order.
+        assert_eq!(queue.get(0).id, 9); // 0.5
+        assert_eq!(queue.get(1).id, 3); // 0.8
+        assert_eq!(queue.get(2).id, 0); // 1.0
     }
 
     #[test]
@@ -832,5 +852,60 @@ mod diverse_priority_queue_test {
         // Verify ID 1 is not in the queue
         let ids: Vec<u32> = queue.iter().map(|n| n.id).collect();
         assert_eq!(ids, vec![2, 0], "Queue should only contain IDs 2 and 0");
+    }
+
+    #[test]
+    fn test_post_process_empty_queue() {
+        let attribute_provider = create_test_attribute_provider();
+        let mut queue =
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 3, attribute_provider);
+
+        // post_process on an empty queue should be a no-op, not panic.
+        queue.post_process();
+
+        assert_eq!(queue.size(), 0);
+        assert!(queue.local_queue_map.is_empty());
+    }
+
+    #[test]
+    fn test_post_process_no_trimming_needed() {
+        let mut attribute_provider = TestAttributeValueProvider::new();
+        for i in 0..9 {
+            attribute_provider.insert(i, i / 3);
+        }
+
+        // diverse_results_k = 5, but each attribute only has 3 items.
+        // No local queue exceeds the limit, so post_process should be a no-op.
+        let mut queue = TestDiverseQueue::new(
+            20,
+            NonZeroUsize::new(5).unwrap(),
+            5,
+            Arc::new(attribute_provider),
+        );
+
+        queue.insert(Neighbor::new(0, 1.0)); // attribute 0
+        queue.insert(Neighbor::new(1, 0.5)); // attribute 0
+        queue.insert(Neighbor::new(2, 1.5)); // attribute 0
+        queue.insert(Neighbor::new(3, 0.8)); // attribute 1
+        queue.insert(Neighbor::new(4, 1.2)); // attribute 1
+        queue.insert(Neighbor::new(5, 0.6)); // attribute 1
+        queue.insert(Neighbor::new(6, 0.7)); // attribute 2
+        queue.insert(Neighbor::new(7, 1.1)); // attribute 2
+        queue.insert(Neighbor::new(8, 0.9)); // attribute 2
+
+        assert_eq!(queue.size(), 9);
+
+        queue.post_process();
+
+        // Everything should be unchanged.
+        assert_eq!(queue.size(), 9);
+        assert_eq!(queue.local_queue_map[&0].size(), 3);
+        assert_eq!(queue.local_queue_map[&1].size(), 3);
+        assert_eq!(queue.local_queue_map[&2].size(), 3);
+
+        // Global order preserved.
+        assert_eq!(queue.get(0).id, 1); // 0.5
+        assert_eq!(queue.get(1).id, 5); // 0.6
+        assert_eq!(queue.get(2).id, 6); // 0.7
     }
 }
