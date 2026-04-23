@@ -3,62 +3,22 @@
  * Licensed under the MIT license.
  */
 
-use std::{cell::UnsafeCell, mem, num::NonZeroUsize, ops::Deref, slice, sync::Arc};
+use std::{cell::UnsafeCell, mem, ops::Deref, slice, sync::Arc};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::Guard;
-use diskann::{ANNError, ANNResult, always_escalate, utils::IntoUsize};
+use diskann::{ANNError, ANNResult};
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
-use crate::{
-    model::graph::provider::async_::{TableDeleteProviderAsync, postprocess},
-    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
+pub use diskann_provider_core::{
+    CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
+    Quantized, StartPoints, TableBasedDeletes, Unseeded,
 };
 
-/// Represents a range of start points for an index.
-/// The range includes `start` and excludes `end`.
-/// `start` is the first valid point, and `end - 1` is the last valid point.
-pub struct StartPoints {
-    start: u32,
-    end: u32,
-}
-
-impl StartPoints {
-    pub fn new(valid_points: u32, frozen_points: NonZeroUsize) -> ANNResult<Self> {
-        Ok(Self {
-            start: valid_points,
-            end: match valid_points.checked_add(frozen_points.get() as u32) {
-                Some(end) => end,
-                None => {
-                    return Err(ANNError::log_index_error(
-                        "Sum of valid points and frozen points exceeds u32::MAX",
-                    ));
-                }
-            },
-        })
-    }
-
-    pub fn range(&self) -> std::ops::Range<u32> {
-        self.start..self.end
-    }
-
-    pub fn len(&self) -> usize {
-        (self.end - self.start).into_usize()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn start(&self) -> u32 {
-        self.start
-    }
-
-    pub fn end(&self) -> u32 {
-        self.end
-    }
-}
+use crate::{
+    storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
+};
 
 pub struct VectorGuard<T> {
     inner: Guard<Arc<Vec<T>>>,
@@ -192,130 +152,9 @@ impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
     }
 }
 
-/// Prefetch cache line level.
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
-pub enum PrefetchCacheLineLevel {
-    /// 4 cache lines
-    CacheLine4,
-    /// 8 cache lines
-    CacheLine8,
-    /// 16 cache lines
-    #[default]
-    CacheLine16,
-    /// prefetch all cache lines
-    All,
-}
-
 //////////////////////////////////////////////////////////
 // Common data structure and traits for async providers //
 //////////////////////////////////////////////////////////
-
-/// A ZST for [`MultiInsertStrategy::seed`](diskann::graph::glue::MultiInsertStrategy::Seed)
-/// indicating no use of the input batch.
-///
-/// Inmem providers typically don't use a working set at all, instead passing through accesses
-/// directly to the underlying provider. As such, no seeding is needed.
-#[derive(Debug, Clone, Copy)]
-pub struct Unseeded;
-
-/// A helper trait to set element in the Async index.
-pub trait SetElementHelper<T> {
-    /// Set an element in the index.
-    fn set_element(&self, index: &u32, element: &[T]) -> ANNResult<()>;
-}
-
-/// A helper trait to select the quant vector store.
-///
-/// This is also implemented for [`NoStore`], which explicitly disables deletion
-/// related functionality.
-pub trait CreateVectorStore {
-    /// The type of the created vector store.
-    type Target: VectorStore;
-
-    /// Create a quant provider capable of tracking `max_points`.
-    fn create(
-        self,
-        max_points: usize,
-        metric: Metric,
-        prefetch_lookahead: Option<usize>,
-    ) -> Self::Target;
-}
-
-/// A helper trait to select the delete provider.
-///
-/// This is also implemented for [`NoDeletes`], which explicitly disables deletion
-/// related functionality.
-pub trait CreateDeleteProvider {
-    /// The type of the created delete provider.
-    type Target;
-
-    /// Create a delete provider capable of tracking `total_points` number of deletes
-    /// (or disabling deletion check all together).
-    ///
-    /// NOTE: The value `total_points` consists of the sum of `max_points` and
-    /// `frozen_points`.
-    fn create(self, total_points: usize) -> Self::Target;
-}
-
-pub trait VectorStore: AsyncFriendly {
-    /// Total number of vectors in the store.
-    fn total(&self) -> usize;
-
-    /// Return the number of vector reads for a vector store.
-    fn count_for_get_vector(&self) -> usize;
-}
-
-/// A tag type indicating that a method fails via panic instead of returning an error.
-///
-/// This is an enum with no alternatives, so is impossible to construct. Therefore, we know
-/// that there can never be an actual value with this type.
-///
-#[derive(Debug)]
-pub enum Panics {}
-
-impl std::fmt::Display for Panics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "panics")
-    }
-}
-
-impl std::error::Error for Panics {}
-impl From<Panics> for ANNError {
-    #[cold]
-    fn from(_: Panics) -> ANNError {
-        ANNError::log_async_error("unreachable")
-    }
-}
-
-always_escalate!(Panics);
-
-/// A tag type used to indicate that no store should be used.
-///
-/// Typically this would be for full precision only or quant only setups.
-#[derive(Debug, Clone, Copy)]
-pub struct NoStore;
-
-impl CreateVectorStore for NoStore {
-    type Target = NoStore;
-    fn create(
-        self,
-        _max_points: usize,
-        _metric: Metric,
-        _prefetch_lookahead: Option<usize>,
-    ) -> Self::Target {
-        self
-    }
-}
-
-impl VectorStore for NoStore {
-    fn total(&self) -> usize {
-        0
-    }
-
-    fn count_for_get_vector(&self) -> usize {
-        0
-    }
-}
 
 impl LoadWith<AsyncQuantLoadContext> for NoStore {
     type Error = ANNError;
@@ -323,7 +162,7 @@ impl LoadWith<AsyncQuantLoadContext> for NoStore {
     where
         P: StorageReadProvider,
     {
-        Ok(Self)
+        Ok(NoStore)
     }
 }
 
@@ -335,92 +174,6 @@ impl SaveWith<AsyncIndexMetadata> for NoStore {
         P: StorageWriteProvider,
     {
         Ok(0)
-    }
-}
-
-impl<T> SetElementHelper<T> for NoStore {
-    fn set_element(&self, _index: &u32, _element: &[T]) -> ANNResult<()> {
-        Ok(())
-    }
-}
-
-/// A tag type to indicate that no deletes are allowed for this provider.
-///
-/// This effectively disables deletion support at compile-time.
-#[derive(Debug, Clone, Copy)]
-pub struct NoDeletes;
-
-impl postprocess::DeletionCheck for NoDeletes {
-    /// Always mark IDs as not deleted.
-    ///
-    /// We rely on constant propagation and dead-code elimination to optimize call-sites
-    /// accordingly.
-    #[inline(always)]
-    fn deletion_check(&self, _: u32) -> bool {
-        false
-    }
-}
-
-impl CreateDeleteProvider for NoDeletes {
-    type Target = Self;
-    fn create(self, _: usize) -> Self {
-        Self
-    }
-}
-
-/// A tag type used to indicate that the `TableDeleteProviderAsync` should be used.
-#[derive(Debug, Clone, Copy)]
-pub struct TableBasedDeletes;
-
-impl CreateDeleteProvider for TableBasedDeletes {
-    type Target = TableDeleteProviderAsync;
-    fn create(self, total_points: usize) -> Self::Target {
-        TableDeleteProviderAsync::new(total_points)
-    }
-}
-
-/// Operates entirely in full precision.
-///
-/// All indexing and search operations use the uncompressed full-precision vectors.
-#[derive(Debug, Clone, Copy)]
-pub struct FullPrecision;
-
-/// Operates entirely in the quantized space.
-///
-/// All indexing and search operations use quantized vectors.
-/// If full-precision vectors are available, they are only used for the final reranking step.
-#[derive(Debug, Clone, Copy)]
-pub struct Quantized;
-
-/// Operates primarily in the quantized space with selective use of full precision.
-///
-/// # Search
-/// Search is performed in the quantized space. Full-precision vectors are used only
-/// to rerank the final candidate set.
-///
-/// # Insert and Prune
-/// During insert operations, the search step uses quantized vectors.
-/// Pruning then combines quantized vectors with a limited number of full-precision vectors.
-///
-/// The number of full-precision vectors used in pruning can be configured with
-/// the `max_fp_vecs_per_prune` option when constructing a `BfTreeProvider`.
-#[derive(Debug, Clone, Copy)]
-pub struct Hybrid {
-    /// Maximum number of full-precision vectors to use during pruning.
-    /// This field is ignored during search, where full-precision vectors are never used.
-    /// `None` defaults to use all full-precision vectors.
-    pub max_fp_vecs_per_prune: Option<usize>,
-}
-
-impl Hybrid {
-    /// Create a new `Hybrid` strategy with the specified maximum number of full-precision vectors
-    /// to use during pruning.
-    ///
-    /// If `max_fp_vecs_per_prune` is `None`, use all full-precision vectors.
-    pub fn new(max_fp_vecs_per_prune: Option<usize>) -> Self {
-        Self {
-            max_fp_vecs_per_prune,
-        }
     }
 }
 
@@ -474,6 +227,65 @@ impl TestCallCount {
 impl Default for TestCallCount {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A helper trait to select the quant vector store.
+///
+/// This is also implemented for [`NoStore`], which explicitly disables deletion
+/// related functionality.
+pub trait CreateVectorStore {
+    /// The type of the created vector store.
+    type Target: VectorStore;
+
+    /// Create a quant provider capable of tracking `max_points`.
+    fn create(
+        self,
+        max_points: usize,
+        metric: Metric,
+        prefetch_lookahead: Option<usize>,
+    ) -> Self::Target;
+}
+
+/// A helper trait to set element in the Async index.
+pub trait SetElementHelper<T> {
+    /// Set an element in the index.
+    fn set_element(&self, index: &u32, element: &[T]) -> ANNResult<()>;
+}
+
+pub trait VectorStore: AsyncFriendly {
+    /// Total number of vectors in the store.
+    fn total(&self) -> usize;
+
+    /// Return the number of vector reads for a vector store.
+    fn count_for_get_vector(&self) -> usize;
+}
+
+impl CreateVectorStore for NoStore {
+    type Target = NoStore;
+    fn create(
+        self,
+        _max_points: usize,
+        _metric: diskann_vector::distance::Metric,
+        _prefetch_lookahead: Option<usize>,
+    ) -> Self::Target {
+        self
+    }
+}
+
+impl VectorStore for NoStore {
+    fn total(&self) -> usize {
+        0
+    }
+
+    fn count_for_get_vector(&self) -> usize {
+        0
+    }
+}
+
+impl<T> SetElementHelper<T> for NoStore {
+    fn set_element(&self, _index: &u32, _element: &[T]) -> ANNResult<()> {
+        Ok(())
     }
 }
 

@@ -14,6 +14,7 @@ members = [
     "diskann",
     # Providers
     "diskann-providers",
+    "diskann-provider-core",
     "diskann-disk",
     "diskann-label-filter",
     "diskann-garnet",
@@ -58,6 +59,7 @@ diskann-platform = { path = "diskann-platform", version = "0.50.1" }
 diskann = { path = "diskann", version = "0.50.1" }
 # Providers
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.50.1" }
+diskann-provider-core = { path = "diskann-provider-core", version = "0.50.1" }
 diskann-disk = { path = "diskann-disk", version = "0.50.1" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.50.1" }
 # Infra

@@ -830,6 +830,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-provider-core"
+version = "0.50.1"
+dependencies = [
+ "diskann",
+]
+
+[[package]]
 name = "diskann-providers"
 version = "0.50.1"
 dependencies = [
@@ -843,6 +850,7 @@ dependencies = [
  "criterion",
  "diskann",
  "diskann-platform",
+ "diskann-provider-core",
  "diskann-quantization",
  "diskann-utils",
  "diskann-vector",

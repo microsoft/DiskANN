@@ -1,0 +1,21 @@
+[package]
+name = "diskann-provider-core"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+diskann = { workspace = true }
+
+[dev-dependencies]
+diskann = { workspace = true, features = ["testing"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[lints.clippy]
+uninlined_format_args = "allow"
+
