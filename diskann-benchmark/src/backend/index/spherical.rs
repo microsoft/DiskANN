@@ -460,6 +460,56 @@ mod imp {
                             writeln!(output, "\n\n{}", result)?;
                             Ok(result)
                         }
+                        SearchPhase::TopkHighSelectivityMultihopFilter(search_phase) => {
+                            // Handle MultiHop Topk search with high-selectivity optimization
+
+                            // Save construction stats before running queries.
+                            _checkpoint.checkpoint(&result)?;
+
+                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
+                                datafiles::BinFile(&search_phase.queries),
+                            )?);
+
+                            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(
+                                &search_phase.groundtruth,
+                            ))?;
+
+                            let steps = search::knn::SearchSteps::new(
+                                search_phase.reps,
+                                &search_phase.num_threads,
+                                &search_phase.runs,
+                            );
+
+                            let bit_maps = generate_bitmaps(
+                                &search_phase.query_predicates,
+                                &search_phase.data_labels,
+                            )?;
+
+                            let bit_map_filters: Arc<[_]> = bit_maps
+                                .into_iter()
+                                .map(utils::filters::as_high_selectivity_query_label_provider)
+                                .collect();
+
+                            for &layout in self.input.query_layouts.iter() {
+                                let multihop = benchmark_core::search::graph::MultiHop::new(
+                                    index.clone(),
+                                    queries.clone(),
+                                    benchmark_core::search::graph::Strategy::broadcast(
+                                        inmem::spherical::Quantized::search(layout.into()),
+                                    ),
+                                    bit_map_filters.clone(),
+                                )?;
+
+                                let search_results =
+                                    search::knn::run(&multihop, &groundtruth, steps)?;
+                                result.append(SearchRun {
+                                    layout,
+                                    results: AggregatedSearchResults::Topk(search_results),
+                                });
+                            }
+                            writeln!(output, "\n\n{}", result)?;
+                            Ok(result)
+                        }
                     }
                 }
             }
