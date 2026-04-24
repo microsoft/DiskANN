@@ -19,6 +19,7 @@ use diskann::{
 use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
+    views::calculate_chunk_offsets,
 };
 use diskann_utils::{
     io::Metadata,
@@ -326,35 +327,6 @@ pub fn move_train_data_by_centroid(
             *r -= *c;
         }
     }
-}
-
-/// Calculate the number of chunks for the product quantization algorithm.  Returns a vector of offsets where
-/// each offset corresponds to a chunk based on the index of the chunk in the vector.
-///
-/// # Arguments
-/// * `dimensions` Number of dimensions of the input data
-/// * `num_pq_chunks` - Number of chunks that will be used in the PQ calculation.  Each vector will be split into these
-///   number of chunks and each chunk will be compressed down to one byte.
-/// * `offsets` - An output vector of offsets, where the size is equal to the number of pq chunks + 1.
-#[inline]
-pub fn calculate_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets: &mut [usize]) {
-    // Calculate each chunk's offset
-    // If we have 8 dimension and 3 chunks then offsets would be [0,3,6,8]
-    let mut chunk_offset: usize = 0;
-    offsets[0] = chunk_offset;
-    for chunk_index in 0..num_pq_chunks {
-        chunk_offset += dimensions / num_pq_chunks;
-        if chunk_index < (dimensions % num_pq_chunks) {
-            chunk_offset += 1;
-        }
-        offsets[chunk_index + 1] = chunk_offset;
-    }
-}
-
-pub fn calculate_chunk_offsets_auto(dimensions: usize, num_pq_chunks: usize) -> Vec<usize> {
-    let mut offsets = vec![0; num_pq_chunks + 1];
-    calculate_chunk_offsets(dimensions, num_pq_chunks, offsets.as_mut_slice());
-    offsets
 }
 
 /// Add the row `y` to every row in `x`.

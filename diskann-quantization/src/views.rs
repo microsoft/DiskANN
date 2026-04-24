@@ -205,6 +205,39 @@ impl<'a> From<ChunkOffsetsView<'a>> for &'a [usize] {
     }
 }
 
+/// Calculate the chunk offsets for the product quantization algorithm.  Fills `offsets`
+/// with the prefix-sum partitioning of `dimensions` into `num_pq_chunks` chunks, where
+/// the first `dimensions % num_pq_chunks` chunks are one element larger than the rest.
+///
+/// # Arguments
+/// * `dimensions` - Number of dimensions of the input data.
+/// * `num_pq_chunks` - Number of chunks that will be used in the PQ calculation.  Each
+///   vector will be split into these number of chunks and each chunk will be compressed
+///   down to one byte.
+/// * `offsets` - An output slice of offsets, where the length must equal `num_pq_chunks + 1`.
+#[inline]
+pub fn calculate_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets: &mut [usize]) {
+    // Calculate each chunk's offset
+    // If we have 8 dimension and 3 chunks then offsets would be [0,3,6,8]
+    let mut chunk_offset: usize = 0;
+    offsets[0] = chunk_offset;
+    for chunk_index in 0..num_pq_chunks {
+        chunk_offset += dimensions / num_pq_chunks;
+        if chunk_index < (dimensions % num_pq_chunks) {
+            chunk_offset += 1;
+        }
+        offsets[chunk_index + 1] = chunk_offset;
+    }
+}
+
+/// Allocating wrapper around [`calculate_chunk_offsets`] that returns a fresh
+/// `Vec<usize>` of length `num_pq_chunks + 1`.
+pub fn calculate_chunk_offsets_auto(dimensions: usize, num_pq_chunks: usize) -> Vec<usize> {
+    let mut offsets = vec![0; num_pq_chunks + 1];
+    calculate_chunk_offsets(dimensions, num_pq_chunks, offsets.as_mut_slice());
+    offsets
+}
+
 ///////////////
 // ChunkView //
 ///////////////
