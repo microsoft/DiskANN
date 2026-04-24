@@ -353,7 +353,7 @@ mod tests {
         let c = provider.query_computer(&[-0.5, -0.5]).unwrap();
         let expected: f32 = 1.5 * 1.5 * 2.0;
         assert_eq!(
-            c.evaluate_similarity(&provider.get_vector_sync(3).unwrap()),
+            c.evaluate_similarity(provider.get_vector_sync(3).unwrap().as_slice()),
             expected
         );
 
@@ -361,15 +361,15 @@ mod tests {
         let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
-                &provider.get_vector_sync(0).unwrap(),
-                &provider.get_vector_sync(3).unwrap()
+                provider.get_vector_sync(0).unwrap().as_slice(),
+                provider.get_vector_sync(3).unwrap().as_slice()
             ),
             2.0
         );
 
         let slice: &[f32] = &[-0.5, -0.5];
         assert_eq!(
-            d.evaluate_similarity(slice, &provider.get_vector_sync(3).unwrap()),
+            d.evaluate_similarity(slice, provider.get_vector_sync(3).unwrap().as_slice()),
             expected,
         );
     }
