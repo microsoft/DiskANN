@@ -29,12 +29,8 @@ mod scalar;
 #[cfg(target_arch = "x86_64")]
 mod v3;
 
-// ── F32 kernel ───────────────────────────────────────────────────
-
 /// Zero-sized kernel type for f32 micro-kernels with block size `GROUP`.
 pub(crate) struct F32Kernel<const GROUP: usize>;
-
-// ── Public entry point ───────────────────────────────────────────
 
 #[inline(never)]
 #[cold]
@@ -110,8 +106,6 @@ pub(super) fn max_ip_kernel<A: Architecture, T: Copy, const GROUP: usize>(
     }
 }
 
-// ── Target3 dispatch ─────────────────────────────────────────────
-
 impl<A, const GROUP: usize>
     diskann_wide::arch::Target3<
         A,
@@ -137,160 +131,5 @@ where
         scratch: &mut [f32],
     ) {
         max_ip_kernel(arch, lhs, rhs, scratch, TileBudget::default());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::multi_vector::{Chamfer, MaxSim, QueryComputer, QueryMatRef};
-    use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
-
-    /// Helper to create a MatRef from raw data.
-    fn make_query_mat(data: &[f32], nrows: usize, ncols: usize) -> MatRef<'_, Standard<f32>> {
-        MatRef::new(Standard::new(nrows, ncols).unwrap(), data).unwrap()
-    }
-
-    /// Generate deterministic test data.
-    fn make_test_data(len: usize, ceil: usize, shift: usize) -> Vec<f32> {
-        (0..len).map(|v| ((v + shift) % ceil) as f32).collect()
-    }
-
-    /// Test cases: (num_queries, num_docs, dim).
-    const TEST_CASES: &[(usize, usize, usize)] = &[
-        (1, 1, 1),   // Degenerate single-element
-        (1, 1, 2),   // Minimal non-trivial
-        (1, 1, 4),   // Single query, single doc
-        (1, 5, 8),   // Single query, multiple docs
-        (5, 1, 8),   // Multiple queries, single doc
-        (3, 2, 3),   // Prime k
-        (3, 4, 16),  // General case
-        (5, 3, 5),   // Prime k, A-remainder on aarch64
-        (7, 7, 32),  // Square case
-        (2, 3, 7),   // k not divisible by SIMD lanes
-        (2, 3, 128), // Larger dimension
-        (16, 4, 64), // Exact A_PANEL on x86_64; two panels on aarch64
-        (17, 4, 64), // One more than A_PANEL (remainder)
-        (32, 5, 16), // Multiple full A-panels, remainder B-rows (5 % 4 = 1)
-        (48, 3, 16), // 3 A-tiles on x86_64; 6 on aarch64
-        (16, 6, 32), // Remainder B-rows (6 % 4 = 2)
-        (16, 7, 32), // Remainder B-rows (7 % 4 = 3)
-        (16, 8, 32), // No remainder B-rows (8 % 4 = 0)
-    ];
-
-    #[test]
-    fn chamfer_matches_fallback() {
-        for &(nq, nd, dim) in TEST_CASES {
-            let query_data = make_test_data(nq * dim, dim, dim / 2);
-            let doc_data = make_test_data(nd * dim, dim, dim);
-
-            let query_mat = make_query_mat(&query_data, nq, dim);
-            let doc = make_query_mat(&doc_data, nd, dim);
-
-            // Reference: fallback Chamfer
-            let simple_query: QueryMatRef<_> = query_mat.into();
-            let expected = Chamfer::evaluate(simple_query, doc);
-
-            // QueryComputer-dispatched
-            let computer = QueryComputer::<f32>::new(query_mat);
-            let actual = computer.chamfer(doc);
-
-            assert!(
-                (actual - expected).abs() < 1e-2,
-                "Chamfer mismatch for ({nq},{nd},{dim}): actual={actual}, expected={expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn max_sim_matches_fallback() {
-        for &(nq, nd, dim) in TEST_CASES {
-            let query_data = make_test_data(nq * dim, dim, dim / 2);
-            let doc_data = make_test_data(nd * dim, dim, dim);
-
-            let query_mat = make_query_mat(&query_data, nq, dim);
-            let doc = make_query_mat(&doc_data, nd, dim);
-
-            // Reference: fallback MaxSim
-            let mut expected_scores = vec![0.0f32; nq];
-            let simple_query: QueryMatRef<_> = query_mat.into();
-            let _ = MaxSim::new(&mut expected_scores)
-                .unwrap()
-                .evaluate(simple_query, doc);
-
-            // QueryComputer-dispatched
-            let computer = QueryComputer::<f32>::new(query_mat);
-            let mut actual_scores = vec![0.0f32; nq];
-            computer.max_sim(doc, &mut actual_scores);
-
-            for i in 0..nq {
-                assert!(
-                    (actual_scores[i] - expected_scores[i]).abs() < 1e-2,
-                    "MaxSim[{i}] mismatch for ({nq},{nd},{dim}): actual={}, expected={}",
-                    actual_scores[i],
-                    expected_scores[i]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn chamfer_with_zero_docs_returns_zero() {
-        let query_data = [1.0f32, 0.0, 0.0, 1.0];
-        let query_mat = make_query_mat(&query_data, 2, 2);
-        let computer = QueryComputer::<f32>::new(query_mat);
-
-        let doc = make_query_mat(&[], 0, 2);
-        let result = computer.chamfer(doc);
-        assert_eq!(result, 0.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "scores buffer not right size")]
-    fn max_sim_panics_on_size_mismatch() {
-        let query_data = [1.0f32, 2.0, 3.0, 4.0];
-        let query_mat = make_query_mat(&query_data, 2, 2);
-        let computer = QueryComputer::<f32>::new(query_mat);
-
-        let doc = make_query_mat(&[1.0, 1.0], 1, 2);
-        let mut scores = vec![0.0f32; 3]; // Wrong size
-        computer.max_sim(doc, &mut scores);
-    }
-
-    #[test]
-    fn negative_values_propagate() {
-        // Hand-crafted negative vectors: query = [[-1, -2], [-3, -4]], doc = [[-1, 0]]
-        let query_data = [-1.0f32, -2.0, -3.0, -4.0];
-        let doc_data = [-1.0f32, 0.0];
-
-        let query_mat = make_query_mat(&query_data, 2, 2);
-        let doc = make_query_mat(&doc_data, 1, 2);
-
-        let simple_query: QueryMatRef<_> = query_mat.into();
-        let expected = Chamfer::evaluate(simple_query, doc);
-
-        let computer = QueryComputer::<f32>::new(query_mat);
-        let actual = computer.chamfer(doc);
-
-        assert!(
-            (actual - expected).abs() < 1e-6,
-            "Chamfer mismatch with negative values: actual={actual}, expected={expected}"
-        );
-    }
-
-    #[test]
-    fn max_sim_with_zero_docs() {
-        let query_data = [1.0f32, 0.0, 0.0, 1.0];
-        let query_mat = make_query_mat(&query_data, 2, 2);
-        let computer = QueryComputer::<f32>::new(query_mat);
-
-        let doc = make_query_mat(&[], 0, 2);
-        let mut scores = vec![0.0f32; 2];
-        computer.max_sim(doc, &mut scores);
-
-        // With zero docs the scores buffer is left untouched.
-        for &s in &scores {
-            assert_eq!(s, 0.0, "zero-doc MaxSim should leave scores untouched");
-        }
     }
 }

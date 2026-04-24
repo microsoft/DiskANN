@@ -1,20 +1,26 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Generic tiling loop and shared reduction utilities.
+//! Generic tiling loop for reducing-GEMM micro-kernels.
 //!
 //! # Tiling Strategy
 //!
 //! This approach uses a reducing-GEMM pattern modeled after high-performance BLAS
 //! implementations:
 //!
-//! - **L2 cache**: Tiles of A (the transposed query) are sized to fit in L2.
-//! - **L1 cache**: Tiles of B (the document) plus one micro-panel of A are sized
-//!   to fit in L1.
+//! - **L2 cache**: Tiles of A (conventionally the query) are sized to fit in L2.
+//! - **L1 cache**: Tiles of B (conventionally the document) plus one micro-panel
+//!   of A are sized to fit in L1.
 //! - **Micro-kernel**: An `A_PANEL × B_PANEL` micro-kernel (e.g. 16×4 for f32 on V3)
 //!   processes a panel of A rows against a panel of B rows per invocation,
 //!   accumulating max-IP into a scratch buffer. The panel sizes are determined
 //!   by the `Kernel<A>` implementation for each element type.
+//!
+//! The loop itself is layout-agnostic: A and B are described by the generic
+//! `LA`/`LB` parameters and converted to the kernel's expected layouts via
+//! [`ConvertTo`] at tile boundaries. The current micro-kernels happen to want a
+//! block-transposed A and a row-major B, but `tiled_reduce` does not require
+//! either — any layout pair satisfying the `ConvertTo` bounds works.
 
 use diskann_wide::Architecture;
 
@@ -222,67 +228,6 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
     }
 }
 
-// ── Reduce trait for compile-time unroll reduction ───────────────
-
-/// Compile-time unroll reduction over fixed-size arrays.
-///
-/// Used by the micro-kernel to reduce `UNROLL` accumulators into a single value
-/// using a caller-supplied binary operator (e.g. `max_simd`).
-pub(super) trait Reduce {
-    type Element;
-    fn reduce<F>(&self, f: &F) -> Self::Element
-    where
-        F: Fn(Self::Element, Self::Element) -> Self::Element;
-}
-
-impl<T: Copy> Reduce for [T; 1] {
-    type Element = T;
-
-    #[inline(always)]
-    fn reduce<F>(&self, _f: &F) -> T
-    where
-        F: Fn(T, T) -> T,
-    {
-        self[0]
-    }
-}
-
-impl<T: Copy> Reduce for [T; 2] {
-    type Element = T;
-
-    #[inline(always)]
-    fn reduce<F>(&self, f: &F) -> T
-    where
-        F: Fn(T, T) -> T,
-    {
-        f(self[0], self[1])
-    }
-}
-
-impl<T: Copy> Reduce for [T; 3] {
-    type Element = T;
-
-    #[inline(always)]
-    fn reduce<F>(&self, f: &F) -> T
-    where
-        F: Fn(T, T) -> T,
-    {
-        f(f(self[0], self[1]), self[2])
-    }
-}
-
-impl<T: Copy> Reduce for [T; 4] {
-    type Element = T;
-
-    #[inline(always)]
-    fn reduce<F>(&self, f: &F) -> T
-    where
-        F: Fn(T, T) -> T,
-    {
-        f(f(self[0], self[1]), f(self[2], self[3]))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,115 +416,232 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reduce_folds_correctly() {
-        let max = |a: f32, b: f32| a.max(b);
-        assert_eq!([5.0f32].reduce(&max), 5.0);
-        assert_eq!([1.0f32, 3.0].reduce(&max), 3.0);
-        assert_eq!([2.0f32, 1.0, 4.0].reduce(&max), 4.0);
-        assert_eq!([3.0f32, 1.0, 4.0, 2.0].reduce(&max), 4.0);
-    }
+    // Shared shape matrix for the `tiled_reduce_*_matches_naive` tests.
+    // Sized to exercise degenerate, prime-`k`, exact-`A_PANEL`, off-by-one
+    // `A_PANEL`, multi-A-tile, and every B-row remainder class.
+    //
+    // Differs from `query_computer::tests::TEST_CASES` (the end-to-end
+    // shape matrix) by the inclusion of `(3, 2, 0)` and `(3, 0, 4)` —
+    // zero-`k` and zero-`b_nrows` are kernel-internal early-exit edges
+    // not relevant to the public `QueryComputer` API surface (which has
+    // dedicated `chamfer_with_zero_docs` / `max_sim_with_zero_docs`
+    // tests asserting different contracts) — and by `(8, 3, 4)` /
+    // `(16, 5, 8)`, which are Scalar-panel arithmetic edges that are
+    // already covered at the public layer by other shapes that cross the
+    // same boundaries.
+    //
+    // (a_nrows, b_nrows, dim)
+    const NAIVE_CASES: &[(usize, usize, usize)] = &[
+        (1, 1, 1),   // Degenerate single-element
+        (1, 1, 2),   // Minimal non-trivial
+        (1, 1, 4),   // Single query, single doc
+        (1, 5, 8),   // Single query, multiple docs
+        (5, 1, 8),   // Multiple queries, single doc
+        (3, 2, 0),   // Zero dimensions, both have rows
+        (3, 0, 4),   // Zero docs
+        (3, 2, 3),   // Prime k
+        (3, 4, 16),  // General case
+        (5, 3, 5),   // Prime k, A-remainder on aarch64
+        (7, 7, 32),  // Square case
+        (2, 3, 7),   // k not divisible by SIMD lanes
+        (2, 3, 128), // Larger dimension
+        (8, 3, 4),   // Single A-panel (Scalar), B remainder
+        (16, 5, 8),  // Two A-panels (Scalar), B remainder
+        (16, 4, 64), // Two A-panels (Scalar), no B remainder; one (V3)
+        (17, 4, 64), // A-panel remainder on both Scalar and V3
+        (32, 5, 16), // Multiple full A-panels, B remainder
+        (48, 3, 16), // 6 A-panels (Scalar) / 3 (V3)
+        (16, 6, 32), // V3 B remainder=2
+        (16, 7, 32), // V3 B remainder=3
+        (16, 8, 32), // No B remainder on either
+    ];
 
-    /// Verify the exact fold order of each `Reduce` impl using a
-    /// non-commutative operator (subtraction).
-    ///
-    /// - `[a; 1]`       → `a`
-    /// - `[a, b; 2]`    → `a - b`
-    /// - `[a, b, c; 3]` → `(a - b) - c`         (left fold)
-    /// - `[a, b, c, d; 4]` → `(a - b) - (c - d)` (balanced tree)
-    #[test]
-    fn reduce_fold_order() {
-        let sub = |a: f32, b: f32| a - b;
-        // [10]                          → 10
-        assert_eq!([10.0f32].reduce(&sub), 10.0);
-        // [10, 3]                       → 10 - 3 = 7
-        assert_eq!([10.0f32, 3.0].reduce(&sub), 7.0);
-        // [10, 3, 1]                    → (10 - 3) - 1 = 6
-        assert_eq!([10.0f32, 3.0, 1.0].reduce(&sub), 6.0);
-        // [10, 3, 1, 2]                 → (10 - 3) - (1 - 2) = 7 - (-1) = 8
-        assert_eq!([10.0f32, 3.0, 1.0, 2.0].reduce(&sub), 8.0);
-    }
-
-    #[test]
-    fn tiled_reduce_matches_naive() {
-        fn naive_max_ip(
-            a: &[f32],
-            a_nrows: usize,
-            b: &[f32],
-            b_nrows: usize,
-            k: usize,
-        ) -> Vec<f32> {
-            (0..a_nrows)
-                .map(|i| {
-                    (0..b_nrows)
-                        .map(|j| (0..k).map(|d| a[i * k + d] * b[j * k + d]).sum::<f32>())
-                        .fold(f32::MIN, f32::max)
-                })
-                .collect()
-        }
-
-        // Comprehensive cases matching the TEST_CASES arrays in f32/f16 modules,
-        // plus additional shapes to exercise multi-tile and no-remainder paths.
-        // (a_nrows, b_nrows, dim)
-        let cases: &[(usize, usize, usize)] = &[
-            (1, 1, 1),   // Degenerate single-element
-            (1, 1, 2),   // Minimal non-trivial
-            (1, 1, 4),   // Single query, single doc
-            (1, 5, 8),   // Single query, multiple docs
-            (5, 1, 8),   // Multiple queries, single doc
-            (3, 2, 0),   // Zero dimensions, both have rows
-            (3, 0, 4),   // Zero docs
-            (3, 2, 3),   // Prime k
-            (3, 4, 16),  // General case
-            (5, 3, 5),   // Prime k, A-remainder on aarch64
-            (7, 7, 32),  // Square case
-            (2, 3, 7),   // k not divisible by SIMD lanes
-            (2, 3, 128), // Larger dimension
-            (8, 3, 4),   // Single A-panel, B remainder (3 % 2 = 1)
-            (16, 5, 8),  // Two A-panels, B remainder (5 % 2 = 1)
-            (16, 4, 64), // Two A-panels, no B remainder
-            (17, 4, 64), // A-panel remainder
-            (32, 5, 16), // Multiple full A-panels, B remainder
-            (48, 3, 16), // 6 A-panels (Scalar GROUP=8)
-            (16, 6, 32), // B remainder = 0 (6 % 2 = 0)
-            (16, 8, 32), // No B remainder (8 % 2 = 0)
-        ];
-
-        // Two budgets: default exercises the peeled section only; tiny forces
-        // a_panels_per_tile=1 and b_panels_per_tile=1 so the main loop body
-        // (Loop 2) and multiple A-tile iterations (Loop 1) are entered.
-        let budgets = [
+    // Two budgets: `default` exercises the peeled tile section only; `tiny`
+    // forces `a_panels_per_tile=1` and `b_panels_per_tile=1`, which makes
+    // the main loop body (Loop 2) and multiple A-tile iterations (Loop 1)
+    // run for every shape.
+    fn naive_budgets() -> [(&'static str, TileBudget); 2] {
+        [
             ("default", TileBudget::default()),
             ("tiny", TileBudget { l2_a: 1, l1_b: 1 }),
-        ];
+        ]
+    }
 
-        for &(a_nrows, b_nrows, dim) in cases {
+    fn naive_max_ip_f32(
+        a: &[f32],
+        a_nrows: usize,
+        b: &[f32],
+        b_nrows: usize,
+        k: usize,
+    ) -> Vec<f32> {
+        (0..a_nrows)
+            .map(|i| {
+                (0..b_nrows)
+                    .map(|j| (0..k).map(|d| a[i * k + d] * b[j * k + d]).sum::<f32>())
+                    .fold(f32::MIN, f32::max)
+            })
+            .collect()
+    }
+
+    fn naive_max_ip_f16(
+        a: &[half::f16],
+        a_nrows: usize,
+        b: &[half::f16],
+        b_nrows: usize,
+        k: usize,
+    ) -> Vec<f32> {
+        (0..a_nrows)
+            .map(|i| {
+                (0..b_nrows)
+                    .map(|j| {
+                        (0..k)
+                            .map(|d| a[i * k + d].to_f32() * b[j * k + d].to_f32())
+                            .sum::<f32>()
+                    })
+                    .fold(f32::MIN, f32::max)
+            })
+            .collect()
+    }
+
+    /// Run `max_ip_kernel::<A, T, GROUP>` against the naive reference for
+    /// every budget in `naive_budgets()` for one shape, asserting per-row
+    /// agreement within `tol`. `arch_label` is included in failure
+    /// messages to identify which arch branch tripped.
+    #[allow(clippy::too_many_arguments)]
+    fn check_kernel<A, T, const GROUP: usize>(
+        arch: A,
+        arch_label: &str,
+        tol: f32,
+        a_data: &[T],
+        a_nrows: usize,
+        b_data: &[T],
+        b_nrows: usize,
+        dim: usize,
+        expected: &[f32],
+    ) where
+        A: Architecture,
+        T: Copy + Default,
+        F32Kernel<GROUP>: Kernel<A>,
+        layouts::BlockTransposed<T, GROUP>:
+            ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + Layout<Element = T>,
+        layouts::RowMajor<T>:
+            ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
+    {
+        for &(budget_label, budget) in &naive_budgets() {
+            let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), a_data).unwrap();
+            let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
+            let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), b_data).unwrap();
+
+            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
+            max_ip_kernel::<A, T, GROUP>(arch, a_bt.as_view(), b_mat, &mut scratch, budget);
+
+            for i in 0..a_nrows {
+                let actual = scratch[i];
+                let exp = expected[i];
+                assert!(
+                    (actual - exp).abs() < tol,
+                    "[{arch_label}] row {i} mismatch for ({a_nrows},{b_nrows},{dim}) budget={budget_label}: actual={actual}, expected={exp}",
+                );
+            }
+        }
+    }
+
+    /// Exercise the f32 micro-kernels (`F32Kernel<8>` Scalar and, on
+    /// x86_64 hosts with AVX2+FMA, `F32Kernel<16>` V3) through
+    /// `tiled_reduce` with both `default` and `tiny` budgets.
+    ///
+    /// The `tiny` budget combined with the `NAIVE_CASES` matrix is the
+    /// only place that drives Loop 1 / Loop 2 of the tiling nest for
+    /// each registered f32 micro-kernel — the `QueryComputer`-based
+    /// tests always use the production cache budget and so never enter
+    /// those loops.
+    ///
+    /// The V3 branch compiles on all targets but only executes on
+    /// x86_64 hosts that expose AVX2+FMA at runtime; silently skips
+    /// otherwise. CI's native x86_64 runners and `sde-avx512-tests`
+    /// (Sapphire Rapids ⊇ V3) cover this path.
+    #[test]
+    fn tiled_reduce_f32_matches_naive() {
+        for &(a_nrows, b_nrows, dim) in NAIVE_CASES {
             let a_data: Vec<f32> = (0..a_nrows * dim).map(|i| (i + 1) as f32).collect();
             let b_data: Vec<f32> = (0..b_nrows * dim).map(|i| ((i + 1) * 2) as f32).collect();
-            let expected = naive_max_ip(&a_data, a_nrows, &b_data, b_nrows, dim);
+            let expected = naive_max_ip_f32(&a_data, a_nrows, &b_data, b_nrows, dim);
 
-            for &(label, budget) in &budgets {
-                let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), &a_data).unwrap();
-                let a_bt = BlockTransposed::<f32, 8>::from_matrix_view(a_mat.as_matrix_view());
-                let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
+            check_kernel::<_, f32, 8>(
+                Scalar::new(),
+                "scalar",
+                1e-6,
+                &a_data,
+                a_nrows,
+                &b_data,
+                b_nrows,
+                dim,
+                &expected,
+            );
 
-                let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
-                max_ip_kernel::<Scalar, _, 8>(
-                    Scalar::new(),
-                    a_bt.as_view(),
-                    b_mat,
-                    &mut scratch,
-                    budget,
+            #[cfg(target_arch = "x86_64")]
+            if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+                check_kernel::<_, f32, 16>(
+                    arch,
+                    "x86-64-v3",
+                    1e-6,
+                    &a_data,
+                    a_nrows,
+                    &b_data,
+                    b_nrows,
+                    dim,
+                    &expected,
                 );
+            }
+        }
+    }
 
-                for i in 0..a_nrows {
-                    assert!(
-                        (scratch[i] - expected[i]).abs() < 1e-6,
-                        "row {i} mismatch for ({a_nrows},{b_nrows},{dim}) budget={label}: actual={}, expected={}",
-                        scratch[i],
-                        expected[i],
-                    );
-                }
+    /// Exercise the f16 path (`F16Entry` via `F32Kernel` + `ConvertTo`)
+    /// through `tiled_reduce` with both `default` and `tiny` budgets.
+    ///
+    /// Combined with `tiny`, this drives the per-tile f16→f32 conversion
+    /// buffer through Loop 1 / Loop 2 of the tiling nest, validating
+    /// buffer reuse across multiple tiles. The V3 branch additionally
+    /// covers the V3-width conversion on x86_64 hosts with AVX2+FMA.
+    #[test]
+    fn tiled_reduce_f16_matches_naive() {
+        for &(a_nrows, b_nrows, dim) in NAIVE_CASES {
+            // Use a small ceil so values stay exactly representable in f16
+            // (bit-exact agreement with the f32 naive reference).
+            let ceil = dim.max(1);
+            let a_data: Vec<half::f16> = (0..a_nrows * dim)
+                .map(|i| diskann_wide::cast_f32_to_f16(((i + 1) % ceil) as f32))
+                .collect();
+            let b_data: Vec<half::f16> = (0..b_nrows * dim)
+                .map(|i| diskann_wide::cast_f32_to_f16((((i + 1) * 2) % ceil) as f32))
+                .collect();
+            let expected = naive_max_ip_f16(&a_data, a_nrows, &b_data, b_nrows, dim);
+
+            check_kernel::<_, half::f16, 8>(
+                Scalar::new(),
+                "scalar",
+                1e-1,
+                &a_data,
+                a_nrows,
+                &b_data,
+                b_nrows,
+                dim,
+                &expected,
+            );
+
+            #[cfg(target_arch = "x86_64")]
+            if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+                check_kernel::<_, half::f16, 16>(
+                    arch,
+                    "x86-64-v3",
+                    1e-1,
+                    &a_data,
+                    a_nrows,
+                    &b_data,
+                    b_nrows,
+                    dim,
+                    &expected,
+                );
             }
         }
     }

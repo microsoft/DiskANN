@@ -18,7 +18,7 @@ use diskann_wide::{SIMDMinMax, SIMDVector};
 
 use super::super::Kernel;
 use super::super::layouts;
-use super::super::tiled_reduce::Reduce;
+use super::super::reduce::Reduce;
 use super::F32Kernel;
 
 diskann_wide::alias!(f32s = <Scalar>::f32x8);

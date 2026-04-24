@@ -16,6 +16,7 @@
 pub(super) mod f16;
 pub(super) mod f32;
 mod layouts;
+mod reduce;
 mod tiled_reduce;
 
 // ── Tile budget ──────────────────────────────────────────────────

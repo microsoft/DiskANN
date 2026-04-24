@@ -120,8 +120,8 @@ pub(super) unsafe trait ConvertTo<A: Architecture, To: Layout>: Layout {
     /// # Safety
     ///
     /// * `src` must point to `rows * k` valid elements in `Self`'s layout.
-    /// * `buf` must come from [`new_buffer`](Self::new_buffer) with
-    ///   `max_tile_rows >= rows`.
+    /// * `buf` must come from [`new_buffer`](Self::new_buffer) with the
+    ///   same `k` and a `max_tile_rows >= rows`.
     unsafe fn convert(
         &self,
         buf: &mut Self::Buffer,

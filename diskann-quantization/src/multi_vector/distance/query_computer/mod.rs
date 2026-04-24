@@ -155,11 +155,42 @@ mod tests {
             .collect()
     }
 
+    /// Test cases: (num_queries, num_docs, dim).
+    ///
+    /// Sized to exercise:
+    /// * degenerate single-element shapes,
+    /// * `k` (dim) not divisible by SIMD lane count,
+    /// * exact and off-by-one A_PANEL boundaries on both `GROUP=8` (Scalar/Neon)
+    ///   and `GROUP=16` (V3/V4) configurations,
+    /// * every B-row remainder class for the active `B_PANEL` (1, 2, 3 on V3;
+    ///   1 on Scalar).
+    ///
+    /// Diverges from `kernels::tiled_reduce::tests::NAIVE_CASES`: the
+    /// kernel-level matrix additionally covers zero-`k` / zero-`b_nrows`
+    /// (kernel internal early-exit edges, with no public-API meaning —
+    /// the API contracts for empty docs are pinned by the dedicated
+    /// `chamfer_with_zero_docs` / `max_sim_with_zero_docs` tests) and a
+    /// pair of Scalar-panel arithmetic edges already crossed by the
+    /// shapes below.
     const TEST_CASES: &[(usize, usize, usize)] = &[
-        (1, 1, 4),   // Minimal
+        (1, 1, 1),   // Degenerate single-element
+        (1, 1, 2),   // Minimal non-trivial
+        (1, 1, 4),   // Single query, single doc
+        (1, 5, 8),   // Single query, multiple docs
+        (5, 1, 8),   // Multiple queries, single doc
+        (3, 2, 3),   // Prime k
         (3, 4, 16),  // General case
+        (5, 3, 5),   // Prime k, A-remainder on aarch64
         (7, 7, 32),  // Square case
+        (2, 3, 7),   // k not divisible by SIMD lanes
+        (2, 3, 128), // Larger dimension
+        (16, 4, 64), // Exact A_PANEL on x86_64; two panels on aarch64
         (17, 4, 64), // One more than A_PANEL (remainder)
+        (32, 5, 16), // Multiple full A-panels, remainder B-rows (5 % 4 = 1)
+        (48, 3, 16), // 3 A-tiles on x86_64; 6 on aarch64
+        (16, 6, 32), // Remainder B-rows (6 % 4 = 2)
+        (16, 7, 32), // Remainder B-rows (7 % 4 = 3)
+        (16, 8, 32), // No remainder B-rows (8 % 4 = 0)
     ];
 
     fn check_chamfer_matches<T: Copy + FromF32>(
@@ -236,15 +267,6 @@ mod tests {
         let computer = QueryComputer::<half::f16>::new(query);
 
         assert_eq!(computer.nrows(), 5);
-    }
-
-    #[test]
-    fn query_computer_single_vector() {
-        let data = vec![1.0f32; 4];
-        let query = make_mat(&data, 1, 4);
-        let computer = QueryComputer::<f32>::new(query);
-
-        assert_eq!(computer.nrows(), 1);
     }
 
     #[test]
