@@ -9,12 +9,9 @@ use std::sync::Arc;
 
 use bf_tree::{BfTree, Config};
 use bytemuck::bytes_of;
-use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
-    error::IntoANNResult,
-    utils::{VectorRepr, object_pool::ObjectPool},
-};
+use diskann::{ANNError, ANNErrorKind, ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 

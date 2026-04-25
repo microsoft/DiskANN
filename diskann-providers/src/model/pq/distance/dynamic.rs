@@ -5,7 +5,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::{ANNResult, utils::object_pool::ObjectPool};
+use diskann::ANNResult;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 // Concrete implementations

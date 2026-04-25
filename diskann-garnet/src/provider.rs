@@ -20,13 +20,11 @@ use diskann::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
         Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
-    utils::{
-        VectorRepr,
-        object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
-    },
+    utils::VectorRepr,
 };
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_utils::Reborrow;
+use diskann_utils::object_pool::{AsPooled, ObjectPool, PooledRef, Undef};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
     future, mem,
