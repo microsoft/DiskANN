@@ -52,9 +52,9 @@ use crate::{
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
         async_tools::{self, DynamicBalancer},
-        object_pool::{ObjectPool, PooledRef},
     },
 };
+use diskann_utils::object_pool::{ObjectPool, PooledRef};
 
 #[derive(Debug)]
 pub struct DiskANNIndex<DP: DataProvider> {

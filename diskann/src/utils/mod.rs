@@ -3,8 +3,6 @@
  * Licensed under the MIT license.
  */
 
-pub mod object_pool;
-
 pub mod async_tools;
 
 #[allow(clippy::module_inception)]
