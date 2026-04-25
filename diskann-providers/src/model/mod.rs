@@ -11,10 +11,10 @@ pub use configuration::IndexConfiguration;
 pub mod pq;
 pub use pq::{
     FixedChunkPQTable, GeneratePivotArguments, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ,
-    NUM_PQ_CENTROIDS, accum_row_inplace, compute_pq_distance,
-    compute_pq_distance_for_pq_coordinates, direct_distance_impl, distance,
-    generate_pq_data_from_pivots_from_membuf, generate_pq_data_from_pivots_from_membuf_batch,
-    generate_pq_pivots, generate_pq_pivots_from_membuf,
+    NUM_PQ_CENTROIDS, compute_pq_distance, compute_pq_distance_for_pq_coordinates,
+    direct_distance_impl, distance, generate_pq_data_from_pivots_from_membuf,
+    generate_pq_data_from_pivots_from_membuf_batch, generate_pq_pivots,
+    generate_pq_pivots_from_membuf,
 };
 
 pub mod statistics;

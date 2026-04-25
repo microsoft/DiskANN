@@ -23,7 +23,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MutMatrixView},
+    views::{MatrixView, MutMatrixView, accum_row_inplace},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -254,35 +254,6 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
     Ok(())
 }
 
-/// Gets all instances of a chunk from the training data for all records in the training data.  Each vector in the
-/// training dataset is divided into chunks and the PQ algorithm handles each vector chunk individually.  This method
-/// gets the same chunk from each vector in the training data and creates a new vector out of all of them.
-///
-/// # Example
-/// See tests for examples
-#[inline]
-pub fn get_chunk_from_training_data(
-    train_data: &[f32],
-    num_train: usize,
-    raw_vector_dim: usize,
-    chunk_size: usize,
-    chunk_offset: usize,
-) -> Vec<f32> {
-    let mut result: Vec<f32> = vec![0.0; num_train * chunk_size];
-
-    result
-        // group empty result data into chunks of chunk_size
-        .chunks_mut(chunk_size)
-        .enumerate()
-        // for each chunk, copy the chunk from the training data into the result vector
-        .for_each(|(chunk_number, result_chunk)| {
-            let train_data_start = chunk_number * raw_vector_dim + chunk_offset;
-            let train_data_end = train_data_start + chunk_size;
-            result_chunk.copy_from_slice(&train_data[train_data_start..train_data_end]);
-        });
-    result
-}
-
 /// Calculates the centroid if needed and moves the train_data to to the centroid
 /// # Arguments
 /// * `train_data` Dataset
@@ -327,23 +298,6 @@ pub fn move_train_data_by_centroid(
             *r -= *c;
         }
     }
-}
-
-/// Add the row `y` to every row in `x`.
-///
-/// # Panics
-///
-/// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
-where
-    T: Copy + std::ops::AddAssign,
-{
-    assert_eq!(x.ncols(), y.len());
-    x.row_iter_mut().for_each(|row| {
-        std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
-            *a += *b;
-        });
-    });
 }
 
 /// streams the base file (data_file), and computes the closest centers in each
@@ -654,6 +608,29 @@ mod pq_test {
         },
         utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
     };
+
+    /// Test helper: Gets all instances of a chunk from the training data for all records
+    /// in the training data. Each vector in the training dataset is divided into chunks
+    /// and the PQ algorithm handles each vector chunk individually. This helper gets the
+    /// same chunk from each vector in the training data and returns it as a flat vector.
+    fn get_chunk_from_training_data(
+        train_data: &[f32],
+        num_train: usize,
+        raw_vector_dim: usize,
+        chunk_size: usize,
+        chunk_offset: usize,
+    ) -> Vec<f32> {
+        let mut result: Vec<f32> = vec![0.0; num_train * chunk_size];
+        result
+            .chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_number, result_chunk)| {
+                let train_data_start = chunk_number * raw_vector_dim + chunk_offset;
+                let train_data_end = train_data_start + chunk_size;
+                result_chunk.copy_from_slice(&train_data[train_data_start..train_data_end]);
+            });
+        result
+    }
 
     #[test]
     fn test_move_train_data_by_centroid() {
