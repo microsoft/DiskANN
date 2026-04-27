@@ -1,0 +1,213 @@
+   Compiling diskann-providers v0.50.0 (C:\src\DiskANN\diskann-providers)
+warning: unused import: `create_thread_pool_for_bench`
+ --> diskann-providers\benches\benchmarks\kmeans_bench.rs:8:61
+  |
+8 |     RayonThreadPool, compute_vecs_l2sq, create_thread_pool, create_thread_pool_for_bench, k_means_clustering
+  |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `snrm2_benchmark_rust` is never used
+  --> diskann-providers\benches\benchmarks\kmeans_bench.rs:83:4
+   |
+83 | fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize, pool: &RayonThreadPool) {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `diskann-providers` (bench "bench_main") generated 2 warnings (run `cargo fix --bench "bench_main" -p diskann-providers` to apply 1 suggestion)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 27.65s
+     Running benches\bench_main.rs (target\release\deps\bench_main-6b5466bffa89ffe5.exe)
+Gnuplot not found, using plotters backend
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=4, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=4, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=4, threads=1): Collecting 50 samples in estimated 5.5429 s (500 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=4, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=4, threads=1)
+                        time:   [11.241 ms 11.497 ms 11.768 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=4, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=4, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=4, threads=1): Collecting 50 samples in estimated 5.2349 s (3825 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=4, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=4, threads=1)
+                        time:   [1.3464 ms 1.3710 ms 1.3968 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=32, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=32, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=32, threads=1): Collecting 50 samples in estimated 5.0239 s (350 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=32, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=32, threads=1)
+                        time:   [14.185 ms 14.514 ms 14.879 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) high mild
+  2 (4.00%) high severe
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=32, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=32, threads=1): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 6.7s, enable flat sampling, or reduce sample count to 30.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=32, threads=1): Collecting 50 samples in estimated 6.6871 s (1275 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=32, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=32, threads=1)
+                        time:   [5.0396 ms 5.1246 ms 5.2161 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) low mild
+  2 (4.00%) high mild
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=128, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=128, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=128, threads=1): Collecting 50 samples in estimated 5.7499 s (350 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=128, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=128, threads=1)
+                        time:   [15.780 ms 16.098 ms 16.490 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=128, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=128, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=128, threads=1): Collecting 50 samples in estimated 5.9239 s (300 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=128, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=128, threads=1)
+                        time:   [19.577 ms 19.801 ms 20.065 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=384, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=384, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=384, threads=1): Collecting 50 samples in estimated 5.8880 s (200 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=384, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=384, threads=1)
+                        time:   [27.607 ms 28.101 ms 28.636 ms]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=384, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=384, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=384, threads=1): Collecting 50 samples in estimated 6.4492 s (100 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=384, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=384, threads=1)
+                        time:   [62.426 ms 63.283 ms 64.249 ms]
+Found 6 outliers among 50 measurements (12.00%)
+  3 (6.00%) high mild
+  3 (6.00%) high severe
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=1): Collecting 50 samples in estimated 7.4252 s (150 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=768, threads=1)
+                        time:   [46.140 ms 46.938 ms 47.925 ms]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=1): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 7.3s, or reduce sample count to 30.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=1): Collecting 50 samples in estimated 7.2920 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=768, threads=1)
+                        time:   [143.46 ms 145.52 ms 147.80 ms]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=1024, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=1024, threads=1): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=1024, threads=1): Collecting 50 samples in estimated 5.9022 s (100 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=1024, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=1024, threads=1)
+                        time:   [56.886 ms 57.658 ms 58.434 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) low mild
+  2 (4.00%) high mild
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=1024, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=1024, threads=1): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 9.6s, or reduce sample count to 20.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=1024, threads=1): Collecting 50 samples in estimated 9.6329 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=1024, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=1024, threads=1)
+                        time:   [191.68 ms 193.69 ms 195.95 ms]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=3072, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=3072, threads=1): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 8.9s, or reduce sample count to 20.
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=3072, threads=1): Collecting 50 samples in estimated 8.8911 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=3072, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=3072, threads=1)
+                        time:   [168.78 ms 172.30 ms 176.20 ms]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=3072, threads=1)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=3072, threads=1): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 30.7s, or reduce sample count to 10.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=3072, threads=1): Collecting 50 samples in estimated 30.695 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=3072, threads=1): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=3072, threads=1)
+                        time:   [591.14 ms 596.86 ms 602.78 ms]
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=2)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=2): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=2): Collecting 50 samples in estimated 6.1939 s (150 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=2): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=768, threads=2)
+                        time:   [43.360 ms 44.858 ms 46.433 ms]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=2)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=2): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 8.0s, or reduce sample count to 30.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=2): Collecting 50 samples in estimated 7.9988 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=2): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=768, threads=2)
+                        time:   [162.71 ms 166.02 ms 169.56 ms]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=4)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=4): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=4): Collecting 50 samples in estimated 7.2745 s (150 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=4): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=768, threads=4)
+                        time:   [40.486 ms 41.709 ms 42.955 ms]
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=4)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=4): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 7.5s, or reduce sample count to 30.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=4): Collecting 50 samples in estimated 7.5188 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=4): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=768, threads=4)
+                        time:   [143.27 ms 145.04 ms 146.96 ms]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=8)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=8): Warming up for 3.0000 s
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=8): Collecting 50 samples in estimated 6.0375 s (100 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-providers (dim=768, threads=8): Analyzing
+kmeans-computation/K-Means from diskann-providers (dim=768, threads=8)
+                        time:   [54.279 ms 55.537 ms 56.886 ms]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=8)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=8): Warming up for 3.0000 s
+
+Warning: Unable to complete 50 samples in 5.0s. You may wish to increase target time to 7.2s, or reduce sample count to 30.
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=8): Collecting 50 samples in estimated 7.1890 s (50 iterations)
+Benchmarking kmeans-computation/K-Means from diskann-quantization (dim=768, threads=8): Analyzing
+kmeans-computation/K-Means from diskann-quantization (dim=768, threads=8)
+                        time:   [143.16 ms 144.79 ms 146.55 ms]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+
