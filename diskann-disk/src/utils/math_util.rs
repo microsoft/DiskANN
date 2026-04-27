@@ -267,12 +267,13 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
 
     forward_threadpool!(pool = pool);
 
-    let pts_norms_squared = if let Some(pts_norms) = pts_norms_squared {
-        pts_norms.to_vec()
+    let mut owned_pts_norms_squared;
+    let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
+        pts_norms
     } else {
-        let mut norms_squared = vec![0.0; num_points];
-        compute_vecs_l2sq(&mut norms_squared, data, num_points, dim, pool)?;
-        norms_squared
+        owned_pts_norms_squared = vec![0.0; num_points];
+        compute_vecs_l2sq(&mut owned_pts_norms_squared, data, num_points, dim, pool)?;
+        &owned_pts_norms_squared
     };
 
     let mut pivs_norms_squared = vec![0.0; num_centers];
