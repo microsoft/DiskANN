@@ -63,7 +63,7 @@ impl BuildQuantizer {
                         MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?,
                         num_chunks,
                         &mut rnd,
-                        &create_thread_pool(index_configuration.num_threads)?,
+                        create_thread_pool(index_configuration.num_threads)?.as_ref(),
                     )?
                 };
                 // Save at checkpoint. Note the the compressed data path and pivots path here

@@ -11,7 +11,7 @@ use std::{
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::utils::{
-    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPool, Timer,
+    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -101,7 +101,7 @@ where
     pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
-        pool: &RayonThreadPool,     // Thread pool for parallel processing
+        pool: RayonThreadPoolRef<'_>,     // Thread pool for parallel processing
         chunking_config: &ChunkingConfig, // Configuration for batching and checkpoint handling
     ) -> ANNResult<Progress>
     where
@@ -428,7 +428,7 @@ mod generator_tests {
         )
         .unwrap();
         // Run generator
-        let result = generator.generate_data(storage_provider, &pool, chunking_config);
+        let result = generator.generate_data(storage_provider, pool.as_ref(), chunking_config);
         (generator, result)
     }
 

@@ -52,6 +52,28 @@ impl RayonThreadPool {
     {
         self.0.install(op)
     }
+
+    pub fn as_ref(&self) -> RayonThreadPoolRef<'_> {
+        RayonThreadPoolRef(&self.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RayonThreadPoolRef<'a>(&'a rayon::ThreadPool);
+
+impl<'a> RayonThreadPoolRef<'a> {
+    /// Wrap an externally-owned `rayon::ThreadPool`.
+    pub fn new(pool: &'a rayon::ThreadPool) -> Self {
+        Self(pool)
+    }
+
+    pub fn install<OP, R>(self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.0.install(op)
+    }
 }
 
 // Allow use of disallowed methods within this trait to provide custom
@@ -59,14 +81,14 @@ impl RayonThreadPool {
 // within a specified thread pool.
 #[allow(clippy::disallowed_methods)]
 pub trait ParallelIteratorInPool: ParallelIterator + Sized {
-    fn for_each_in_pool<OP>(self, pool: &RayonThreadPool, op: OP)
+    fn for_each_in_pool<OP>(self, pool: RayonThreadPoolRef<'_>, op: OP)
     where
         OP: Fn(Self::Item) + Sync + Send,
     {
         pool.install(|| self.for_each(op));
     }
 
-    fn for_each_with_in_pool<OP, T>(self, pool: &RayonThreadPool, init: T, op: OP)
+    fn for_each_with_in_pool<OP, T>(self, pool: RayonThreadPoolRef<'_>, init: T, op: OP)
     where
         OP: Fn(&mut T, Self::Item) + Sync + Send,
         T: Send + Clone,
@@ -74,7 +96,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.for_each_with(init, op))
     }
 
-    fn for_each_init_in_pool<OP, INIT, T>(self, pool: &RayonThreadPool, init: INIT, op: OP)
+    fn for_each_init_in_pool<OP, INIT, T>(self, pool: RayonThreadPoolRef<'_>, init: INIT, op: OP)
     where
         OP: Fn(&mut T, Self::Item) + Sync + Send,
         INIT: Fn() -> T + Sync + Send,
@@ -82,7 +104,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.for_each_init(init, op))
     }
 
-    fn try_for_each_in_pool<OP, E>(self, pool: &RayonThreadPool, op: OP) -> Result<(), E>
+    fn try_for_each_in_pool<OP, E>(self, pool: RayonThreadPoolRef<'_>, op: OP) -> Result<(), E>
     where
         OP: Fn(Self::Item) -> Result<(), E> + Sync + Send,
         E: Send,
@@ -92,7 +114,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
 
     fn try_for_each_with_in_pool<OP, T, E>(
         self,
-        pool: &RayonThreadPool,
+        pool: RayonThreadPoolRef<'_>,
         init: T,
         op: OP,
     ) -> Result<(), E>
@@ -106,7 +128,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
 
     fn try_for_each_init_in_pool<OP, INIT, T, E>(
         self,
-        pool: &RayonThreadPool,
+        pool: RayonThreadPoolRef<'_>,
         init: INIT,
         op: OP,
     ) -> Result<(), E>
@@ -118,18 +140,18 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.try_for_each_init(init, op))
     }
 
-    fn count_in_pool(self, pool: &RayonThreadPool) -> usize {
+    fn count_in_pool(self, pool: RayonThreadPoolRef<'_>) -> usize {
         pool.install(|| self.count())
     }
 
-    fn collect_in_pool<C>(self, pool: &RayonThreadPool) -> C
+    fn collect_in_pool<C>(self, pool: RayonThreadPoolRef<'_>) -> C
     where
         C: rayon::iter::FromParallelIterator<Self::Item> + Send,
     {
         pool.install(|| self.collect())
     }
 
-    fn sum_in_pool<S>(self, pool: &RayonThreadPool) -> S
+    fn sum_in_pool<S>(self, pool: RayonThreadPoolRef<'_>) -> S
     where
         S: Send + std::iter::Sum<Self::Item> + std::iter::Sum<S>,
     {
@@ -219,11 +241,31 @@ mod tests {
     }
 
     #[test]
+    fn test_bring_your_own_pool() {
+        let external_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let pool_ref = RayonThreadPoolRef::new(&external_pool);
+
+        let res = Mutex::new(Vec::new());
+        (0..5).into_par_iter().for_each_in_pool(pool_ref, |x| {
+            let mut res = res.lock().unwrap();
+            res.push(x);
+            assert_run_in_rayon_thread();
+        });
+
+        let mut res = res.lock().unwrap();
+        res.sort();
+        assert_eq!(&res[..], &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
     fn test_for_each_in_pool() {
         let pool = create_thread_pool(4).unwrap();
 
         let res = Mutex::new(Vec::new());
-        (0..5).into_par_iter().for_each_in_pool(&pool, |x| {
+        (0..5).into_par_iter().for_each_in_pool(pool.as_ref(), |x| {
             let mut res = res.lock().unwrap();
             res.push(x);
             assert_run_in_rayon_thread();
@@ -241,7 +283,7 @@ mod tests {
 
         (0..5)
             .into_par_iter()
-            .for_each_with_in_pool(&pool, sender, |s, x| s.send(x).unwrap());
+            .for_each_with_in_pool(pool.as_ref(), sender, |s, x| s.send(x).unwrap());
 
         let mut res: Vec<_> = receiver.iter().collect();
 
@@ -255,7 +297,7 @@ mod tests {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
         iter.for_each_init_in_pool(
-            &pool,
+            pool.as_ref(),
             || 0,
             |s, i| {
                 assert_run_in_rayon_thread();
@@ -272,7 +314,7 @@ mod tests {
             assert_run_in_rayon_thread();
             i as f32
         });
-        let list = mapped_iter.collect_in_pool::<Vec<f32>>(&pool);
+        let list = mapped_iter.collect_in_pool::<Vec<f32>>(pool.as_ref());
         assert!(list.len() == 100);
     }
 
@@ -280,7 +322,7 @@ mod tests {
     fn test_try_for_each_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let result = iter.try_for_each_in_pool(&pool, |i| {
+        let result = iter.try_for_each_in_pool(pool.as_ref(), |i| {
             assert_run_in_rayon_thread();
             if i < 50 { Ok(()) } else { Err("Error") }
         });
@@ -292,7 +334,7 @@ mod tests {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
         let result = iter.try_for_each_init_in_pool(
-            &pool,
+            pool.as_ref(),
             || 0,
             |_, i| {
                 assert_run_in_rayon_thread();
@@ -306,7 +348,7 @@ mod tests {
     fn test_try_for_each_with_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let result = iter.try_for_each_with_in_pool(&pool, 0, |acc, i| {
+        let result = iter.try_for_each_with_in_pool(pool.as_ref(), 0, |acc, i| {
             assert_run_in_rayon_thread();
             if i < 50 {
                 *acc += i;
@@ -322,7 +364,7 @@ mod tests {
     fn test_count_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let count = iter.count_in_pool(&pool);
+        let count = iter.count_in_pool(pool.as_ref());
         assert_eq!(count, 100);
     }
 
@@ -330,7 +372,7 @@ mod tests {
     fn test_collect_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let vec = iter.collect_in_pool::<Vec<_>>(&pool);
+        let vec = iter.collect_in_pool::<Vec<_>>(pool.as_ref());
         assert_eq!(vec.len(), 100);
     }
 
@@ -338,7 +380,7 @@ mod tests {
     fn test_sum_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let sum: i32 = iter.sum_in_pool(&pool);
+        let sum: i32 = iter.sum_in_pool(pool.as_ref());
         assert_eq!(sum, (0..100).sum::<i32>());
     }
 }

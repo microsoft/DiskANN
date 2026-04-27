@@ -261,7 +261,7 @@ where
             .zip(statistics_vec.par_iter_mut())
             .zip(result_counts.par_iter_mut());
 
-        zipped.for_each_in_pool(&pool, |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+        zipped.for_each_in_pool(pool.as_ref(), |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
             let vector_filter = if search_params.vector_filters_file.is_none() {
                 None
             } else {

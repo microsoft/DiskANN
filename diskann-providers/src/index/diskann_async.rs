@@ -62,7 +62,7 @@ pub fn train_pq(
     data: diskann_utils::views::MatrixView<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
-    pool: &crate::utils::RayonThreadPool,
+    pool: crate::utils::RayonThreadPoolRef<'_>,
 ) -> ANNResult<model::pq::FixedChunkPQTable> {
     let dim = data.ncols();
     let pivot_args = model::GeneratePivotArguments::new(
@@ -664,7 +664,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -761,7 +761,7 @@ pub(crate) mod tests {
             matrix.map(|i| (*i).into()).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -937,7 +937,7 @@ pub(crate) mod tests {
                 train_data.as_view(),
                 2.min(dim),
                 rng,
-                &crate::utils::create_thread_pool(1).unwrap(),
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
             )
             .unwrap()
         };
@@ -1119,7 +1119,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1236,7 +1236,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1394,7 +1394,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xdd81b895605c73d4),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -2466,7 +2466,7 @@ pub(crate) mod tests {
                 data.as_view(),
                 32,
                 &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-                &crate::utils::create_thread_pool(1).unwrap(),
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
             )
             .unwrap();
 
@@ -2672,7 +2672,7 @@ pub(crate) mod tests {
             train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3627,7 +3627,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x1234567890abcdef),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3690,7 +3690,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xfedcba0987654321),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3758,7 +3758,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xabcdef1234567890),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3905,7 +3905,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x9876543210fedcba),
-            &crate::utils::create_thread_pool(1).unwrap(),
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 

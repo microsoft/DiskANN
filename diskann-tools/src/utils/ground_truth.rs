@@ -500,7 +500,7 @@ where
         queries_and_neighbor_queue
             .par_iter_mut()
             .enumerate()
-            .for_each_in_pool(&pool, |(idx_query, (query, ref mut neighbor_queue))| {
+            .for_each_in_pool(pool.as_ref(), |(idx_query, (query, ref mut neighbor_queue))| {
                 for (idx_in_batch, data) in data_batch.iter().enumerate() {
                     let idx = (num_base_points + idx_in_batch) as u32;
 
@@ -585,7 +585,7 @@ where
     query_multivecs_and_neighbor_queue
         .par_iter_mut()
         .enumerate()
-        .for_each_in_pool(&pool, |(query_idx, (query_multivec, neighbor_queue))| {
+        .for_each_in_pool(pool.as_ref(), |(query_idx, (query_multivec, neighbor_queue))| {
             for (idx_base, base_multivec) in base_vectors.iter().enumerate() {
                 // check if calculation is allowed by bitmap if present
                 let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {

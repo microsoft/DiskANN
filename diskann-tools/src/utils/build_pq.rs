@@ -80,7 +80,7 @@ pub fn build_pq<Data: GraphDataType>(
         &pq_storage,
         &storage_provider,
         random_provider,
-        &pool,
+        pool.as_ref(),
     )?;
 
     diskann_providers::model::pq::generate_pq_data_from_pivots::<f32, _>(
@@ -89,7 +89,7 @@ pub fn build_pq<Data: GraphDataType>(
         &mut pq_storage,
         &storage_provider,
         0,
-        &pool,
+        pool.as_ref(),
     )?;
 
     info!(

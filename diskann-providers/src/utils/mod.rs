@@ -10,8 +10,8 @@ pub use bridge_error::{Bridge, BridgeErr};
 
 pub mod rayon_util;
 pub use rayon_util::{
-    ParallelIteratorInPool, RayonThreadPool, create_thread_pool, create_thread_pool_for_bench,
-    create_thread_pool_for_test,
+    ParallelIteratorInPool, RayonThreadPool, RayonThreadPoolRef, create_thread_pool,
+    create_thread_pool_for_bench, create_thread_pool_for_test,
 };
 
 mod timer;
