@@ -300,6 +300,31 @@ else()
 endif()
 
 add_subdirectory(src)
+
+# StreamVByte library for graph compression
+add_subdirectory(external/streamvbyte)
+# Suppress warnings-as-errors for StreamVByte (third-party code)
+if(MSVC)
+    target_compile_options(streamvbyte PRIVATE /W0 /WX-)
+endif()
+
+# MaskedVByte library for graph compression
+add_library(maskedvbyte STATIC
+    external/MaskedVByte/src/varintdecode.c
+    external/MaskedVByte/src/varintencode.c)
+target_include_directories(maskedvbyte PUBLIC external/MaskedVByte/include)
+if(MSVC)
+    target_compile_options(maskedvbyte PRIVATE /W0 /WX-)
+    target_compile_definitions(maskedvbyte PRIVATE __restrict__=__restrict)
+endif()
+
+# LZ4 library for graph compression (lib only, BSD licensed)
+add_library(lz4 STATIC external/lz4/lib/lz4.c)
+target_include_directories(lz4 PUBLIC external/lz4/lib)
+if(MSVC)
+    target_compile_options(lz4 PRIVATE /W0 /WX-)
+endif()
+
 if (NOT PYBIND)
     add_subdirectory(apps)
     add_subdirectory(apps/utils)

@@ -4,6 +4,7 @@
 #include "in_mem_static_graph_store.h"
 #include "in_mem_graph_reformat_store.h"
 #include "in_mem_static_graph_reformat_store.h"
+#include "in_mem_compressed_graph_store.h"
 #include "in_mem_reorder_data_store.h"
 
 namespace diskann
@@ -112,6 +113,20 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const Gra
         return std::make_unique<InMemGraphReformatStore>(size, reserve_graph_degree);
     case GraphStoreStrategy::REFORMAT_STATICMEMORY:
         return std::make_unique<InMemStaticGraphReformatStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::COMPRESSED_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemCompressedGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::BITPACK_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemBitpackGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::REORDER_COMPRESSED_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemReorderCompressedGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::STREAMVBYTE_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemStreamVByteGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::REORDER_STREAMVBYTE_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemReorderStreamVByteGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::MASKEDVBYTE_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemMaskedVByteGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::LZ4_REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemLz4GraphStore>(size, reserve_graph_degree);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
     }

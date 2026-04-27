@@ -13,6 +13,7 @@ else()
         filter_match_proxy.cpp filter_utils.cpp
         in_mem_data_store.cpp in_mem_graph_reformat_store.cpp in_mem_graph_store.cpp
         in_mem_reorder_data_store.cpp in_mem_static_graph_reformat.cpp in_mem_static_graph_store.cpp
+        in_mem_compressed_graph_store.cpp
         index.cpp index_factory.cpp integer_label_vector.cpp
         label_bitmask.cpp label_helper.cpp linux_aligned_file_reader.cpp logger.cpp
         math_utils.cpp memory_mapper.cpp natural_number_map.cpp natural_number_set.cpp

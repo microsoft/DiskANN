@@ -7,6 +7,7 @@ add_library(${PROJECT_NAME} SHARED dllmain.cpp
     ../filter_match_proxy.cpp ../filter_utils.cpp
     ../in_mem_data_store.cpp ../in_mem_graph_reformat_store.cpp ../in_mem_graph_store.cpp
     ../in_mem_reorder_data_store.cpp ../in_mem_static_graph_reformat.cpp ../in_mem_static_graph_store.cpp
+    ../in_mem_compressed_graph_store.cpp
     ../index.cpp ../index_factory.cpp ../integer_label_vector.cpp
     ../label_bitmask.cpp ../label_helper.cpp ../logger.cpp
     ../math_utils.cpp ../memory_mapper.cpp ../natural_number_map.cpp ../natural_number_set.cpp
@@ -23,9 +24,15 @@ endif()
 target_compile_definitions(${PROJECT_NAME} PRIVATE _USRDLL _WINDLL)
 target_compile_options(${PROJECT_NAME} PRIVATE /GL)
 target_include_directories(${PROJECT_NAME} PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/external/streamvbyte/include)
+target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/external/MaskedVByte/include)
+target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/external/lz4/lib)
 
 target_link_options(${PROJECT_NAME} PRIVATE /DLL /IMPLIB:${DISKANN_DLL_IMPLIB} /LTCG)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${DISKANN_MKL_LINK_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} PRIVATE streamvbyte)
+target_link_libraries(${PROJECT_NAME} PRIVATE maskedvbyte)
+target_link_libraries(${PROJECT_NAME} PRIVATE lz4)
 target_link_libraries(${PROJECT_NAME} PRIVATE synchronization.lib)
 
 if (DISKANN_DLL_TCMALLOC_LINK_OPTIONS)
