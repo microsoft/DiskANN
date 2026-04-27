@@ -155,7 +155,7 @@ pub fn compute_closest_centers_in_block(
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
-            "ERROR: k ({}) > num_centers({})",
+            "k ({}) should be equal or less than num_centers ({})",
             k, num_centers
         )));
     }
@@ -268,7 +268,7 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
-            "k parameter ({}) should be equal or less than num_centers ({})",
+            "k ({}) should be equal or less than num_centers ({})",
             k, num_centers
         )));
     }
@@ -635,5 +635,131 @@ mod math_util_test {
             .unwrap_err()
             .to_string()
             .contains("pts_norms_squared.len() (5) should equal num_points (4)"));
+    }
+
+    #[test]
+    fn test_compute_vecs_l2sq_invalid_data_length() {
+        let num_points = 4;
+        let dim = 3;
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0]; // Wrong length (should be 12)
+        let mut vecs_l2sq = vec![0.0; num_points];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("data.len() 5 should be num_points 4 * dim 3"));
+    }
+
+    #[test]
+    fn test_compute_vecs_l2sq_invalid_output_length() {
+        let num_points = 4;
+        let dim = 3;
+        let data = vec![1.0; num_points * dim];
+        let mut vecs_l2sq = vec![0.0; num_points + 1]; // Wrong length
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("vecs_l2sq.len() 5 should be num_points 4"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_k_exceeds_num_centers() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 3; // k > num_centers
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("k (3) should be equal or less than num_centers (2)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_output_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 2;
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points]; // Wrong length (should be num_points * k)
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("closest_centers_ivf.len() (4) should equal num_points * k (8)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_in_block_k_exceeds_num_centers() {
+        let num_points = 2;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 3; // k > num_centers
+        let data = vec![1.0; num_points * dim];
+        let centers = vec![1.0; num_centers * dim];
+        let docs_l2sq = vec![1.0; num_points];
+        let centers_l2sq = vec![1.0; num_centers];
+        let mut center_index = vec![0u32; num_points * k];
+        let mut dist_matrix = vec![0.0; num_points * num_centers];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers_in_block(
+            &data,
+            num_points,
+            dim,
+            &centers,
+            num_centers,
+            &docs_l2sq,
+            &centers_l2sq,
+            &mut center_index,
+            &mut dist_matrix,
+            k,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("k (3) should be equal or less than num_centers (2)"));
     }
 }
