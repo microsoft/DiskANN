@@ -631,6 +631,9 @@ mod math_util_test {
             &pool,
         );
 
-        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pts_norms_squared.len() (5) should equal num_points (4)"));
     }
 }
