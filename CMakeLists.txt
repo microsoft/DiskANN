@@ -302,10 +302,18 @@ endif()
 add_subdirectory(src)
 
 # StreamVByte library for graph compression
-add_subdirectory(external/streamvbyte)
-# Suppress warnings-as-errors for StreamVByte (third-party code)
+add_library(streamvbyte STATIC
+    external/streamvbyte/src/streamvbyte_encode.c
+    external/streamvbyte/src/streamvbyte_decode.c
+    external/streamvbyte/src/streamvbyte_zigzag.c
+    external/streamvbyte/src/streamvbytedelta_encode.c
+    external/streamvbyte/src/streamvbytedelta_decode.c
+    external/streamvbyte/src/streamvbyte_0124_encode.c
+    external/streamvbyte/src/streamvbyte_0124_decode.c)
+target_include_directories(streamvbyte PUBLIC external/streamvbyte/include)
 if(MSVC)
     target_compile_options(streamvbyte PRIVATE /W0 /WX-)
+    target_compile_definitions(streamvbyte PRIVATE __restrict__=__restrict)
 endif()
 
 # MaskedVByte library for graph compression
