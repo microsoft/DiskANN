@@ -93,6 +93,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::build::chunking::checkpoint::checkpoint_record_manager::CheckpointManagerExt;
 
     // Helper function to clean up checkpoint files after tests
     fn clean_checkpoint_file(prefix: &str, identifier: u64) {
@@ -179,6 +180,95 @@ mod tests {
         // Clean up test files
         clean_checkpoint_file(&index_prefix, identifier);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_mark_as_invalid_persists_and_returns_zero_progress_on_resume() -> ANNResult<()> {
+        // mark_as_invalid must be durably written so that after a restart the same
+        // stage returns progress 0 (forcing a restart from the beginning of that stage).
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("test_invalid")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let identifier = 99;
+
+        clean_checkpoint_file(&index_prefix, identifier);
+
+        // Record partial progress on Start.
+        let mut manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        manager.update(Progress::Processed(50), WorkStage::TrainBuildQuantizer)?;
+        assert_eq!(manager.get_resumption_point(WorkStage::Start)?, Some(50));
+
+        // Mark the stage as invalid (e.g. crash during work).
+        manager.mark_as_invalid()?;
+
+        // After a simulated restart the resumption point for the same stage must be 0,
+        // not 50, so that the stage is retried from the beginning.
+        let restarted = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        assert_eq!(
+            restarted.get_resumption_point(WorkStage::Start)?,
+            Some(0),
+            "invalid checkpoint must restart the stage from offset 0"
+        );
+
+        clean_checkpoint_file(&index_prefix, identifier);
+        Ok(())
+    }
+
+    #[test]
+    fn test_execute_stage_skips_already_completed_stage() -> ANNResult<()> {
+        // When the checkpoint has already moved past a stage, execute_stage must
+        // invoke skip_handler rather than operation for that stage.
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("test_skip")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let identifier = 100;
+
+        clean_checkpoint_file(&index_prefix, identifier);
+
+        // Advance past Start -> checkpoint is now at QuantizeFPV.
+        let mut manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        manager.update(Progress::Completed, WorkStage::QuantizeFPV)?;
+
+        // Querying the old stage (Start) must now return None.
+        assert_eq!(manager.get_resumption_point(WorkStage::Start)?, None);
+
+        let mut operation_called = false;
+        let mut skip_called = false;
+
+        let result = manager.execute_stage(
+            WorkStage::Start,
+            WorkStage::QuantizeFPV,
+            || {
+                operation_called = true;
+                Ok(1_i32)
+            },
+            || {
+                skip_called = true;
+                Ok(0_i32)
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+        assert!(
+            !operation_called,
+            "operation must NOT be called for a stage that has already been completed"
+        );
+        assert!(
+            skip_called,
+            "skip_handler must be called for a stage that has already been completed"
+        );
+
+        clean_checkpoint_file(&index_prefix, identifier);
         Ok(())
     }
 }

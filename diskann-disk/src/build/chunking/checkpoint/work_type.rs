@@ -35,4 +35,36 @@ mod tests {
         let deserialized: WorkStage = bincode::deserialize(&serialized).unwrap();
         assert_eq!(stage, deserialized);
     }
+
+    #[test]
+    fn test_all_work_stage_variants_serialize_and_deserialize() {
+        // Every variant (including parameterized ones) must round-trip through bincode.
+        let variants = [
+            WorkStage::Start,
+            WorkStage::TrainBuildQuantizer,
+            WorkStage::QuantizeFPV,
+            WorkStage::InMemIndexBuild,
+            WorkStage::PartitionData,
+            WorkStage::BuildIndicesOnShards(0),
+            WorkStage::BuildIndicesOnShards(1),
+            WorkStage::MergeIndices,
+            WorkStage::WriteDiskLayout,
+            WorkStage::End,
+        ];
+
+        for stage in &variants {
+            let serialized = bincode::serialize(stage).unwrap();
+            let deserialized: WorkStage = bincode::deserialize(&serialized).unwrap();
+            assert_eq!(*stage, deserialized, "Round-trip failed for {:?}", stage);
+        }
+    }
+
+    #[test]
+    fn test_different_shard_indices_are_not_equal() {
+        // BuildIndicesOnShards is parameterized; two different shard numbers must be distinct.
+        assert_ne!(
+            WorkStage::BuildIndicesOnShards(0),
+            WorkStage::BuildIndicesOnShards(1)
+        );
+    }
 }

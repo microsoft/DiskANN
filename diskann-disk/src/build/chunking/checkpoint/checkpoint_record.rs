@@ -265,4 +265,38 @@ mod tests {
         assert_eq!(advanced.get_work_stage(), WorkStage::QuantizeFPV);
         assert!(advanced.is_valid());
     }
+
+    #[test]
+    fn test_advance_work_type_resets_progress() {
+        // Advancing to a new stage must reset progress to 0 regardless of prior progress.
+        let record = CheckpointRecord::new()
+            .update_progress(42)
+            .advance_work_type(WorkStage::QuantizeFPV)
+            .unwrap();
+        assert_eq!(
+            record.get_resumption_point(WorkStage::QuantizeFPV),
+            Some(0),
+            "progress should be reset to 0 after advancing"
+        );
+    }
+
+    #[test]
+    fn test_update_progress_on_invalid_record_revalidates() {
+        // update_progress always sets is_valid = true; calling it on an invalid record
+        // silently re-validates it, which is worth documenting explicitly.
+        let invalid_record = CheckpointRecord::new()
+            .update_progress(42)
+            .mark_as_invalid();
+        assert!(!invalid_record.is_valid());
+
+        let revalidated = invalid_record.update_progress(50);
+        assert!(
+            revalidated.is_valid(),
+            "update_progress should re-validate an invalid record"
+        );
+        assert_eq!(
+            revalidated.get_resumption_point(WorkStage::Start),
+            Some(50)
+        );
+    }
 }

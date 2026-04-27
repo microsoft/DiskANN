@@ -152,4 +152,16 @@ mod tests {
         let result = context.mark_as_invalid();
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_owned_checkpoint_context_get_resumption_point() {
+        let manager = Box::new(NaiveCheckpointRecordManager);
+        let mut context =
+            OwnedCheckpointContext::new(manager, WorkStage::QuantizeFPV, WorkStage::InMemIndexBuild);
+
+        let result = context.get_resumption_point();
+        assert!(result.is_ok());
+        // NaiveCheckpointRecordManager always returns Some(0)
+        assert_eq!(result.unwrap(), Some(0));
+    }
 }
