@@ -106,6 +106,14 @@ pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
         )));
     }
 
+    if vecs_l2sq.len() != num_points {
+        return Err(ANNError::log_pq_error(format_args!(
+            "vecs_l2sq.len() {} should be num_points {}",
+            vecs_l2sq.len(),
+            num_points
+        )));
+    }
+
     if dim < 5 {
         for (i, vec_l2sq) in vecs_l2sq.iter_mut().enumerate() {
             *vec_l2sq = compute_vec_l2sq(data, i, dim);
@@ -260,8 +268,15 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
-            "ERROR: k ({}) > num_centers({})",
+            "k parameter ({}) should be equal or less than num_centers ({})",
             k, num_centers
+        )));
+    }
+
+    if closest_centers_ivf.len() != num_points {
+        return Err(ANNError::log_index_error(format_args!(
+            "closest_centers_ivf.len() ({}) should equal num_points ({})",
+            closest_centers_ivf.len(), num_points
         )));
     }
 
@@ -269,6 +284,13 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
 
     let mut owned_pts_norms_squared;
     let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
+        if pts_norms.len() != num_points {
+            return Err(ANNError::log_pq_error(format_args!(
+                "pts_norms_squared.len() ({}) should equal num_points ({})",
+                pts_norms.len(),
+                num_points
+            )));
+        }
         pts_norms
     } else {
         owned_pts_norms_squared = vec![0.0; num_points];
@@ -530,5 +552,84 @@ mod math_util_test {
             vec.sort_unstable();
         }
         assert_eq!(inverted_index, vec![vec![0, 1], vec![2, 3]]);
+    }
+
+    #[test]
+    fn test_compute_closest_centers_with_precomputed_norms() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let data = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let pivot_data = vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0];
+        let k = 2;
+        let pool = create_thread_pool_for_test();
+
+        // Compute with None (baseline)
+        let mut closest_centers_none = vec![0u32; num_points];
+        compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_none,
+            None,
+            None,
+            &pool,
+        )
+        .unwrap();
+
+        // Compute with pre-computed norms
+        let mut pts_norms = vec![0.0; num_points];
+        compute_vecs_l2sq(&mut pts_norms, &data, num_points, dim, &pool).unwrap();
+        let mut closest_centers_precomputed = vec![0u32; num_points];
+        compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_precomputed,
+            None,
+            Some(&pts_norms),
+            &pool,
+        )
+        .unwrap();
+
+        assert_eq!(closest_centers_none, closest_centers_precomputed);
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_norms_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let data = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let pivot_data = vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0];
+        let k = 2;
+        let pool = create_thread_pool_for_test();
+
+        let invalid_norms = vec![0.0; num_points + 1]; // Wrong length
+        let mut closest_centers = vec![0u32; num_points];
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            Some(&invalid_norms),
+            &pool,
+        );
+
+        assert!(result.is_err());
     }
 }
