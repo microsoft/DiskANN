@@ -273,10 +273,11 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
         )));
     }
 
-    if closest_centers_ivf.len() != num_points {
+    if closest_centers_ivf.len() != num_points * k {
         return Err(ANNError::log_index_error(format_args!(
-            "closest_centers_ivf.len() ({}) should equal num_points ({})",
-            closest_centers_ivf.len(), num_points
+            "closest_centers_ivf.len() ({}) should equal num_points * k ({})",
+            closest_centers_ivf.len(),
+            num_points * k
         )));
     }
 
@@ -567,7 +568,7 @@ mod math_util_test {
         let pool = create_thread_pool_for_test();
 
         // Compute with None (baseline)
-        let mut closest_centers_none = vec![0u32; num_points];
+        let mut closest_centers_none = vec![0u32; num_points * k];
         compute_closest_centers(
             &data,
             num_points,
@@ -585,7 +586,7 @@ mod math_util_test {
         // Compute with pre-computed norms
         let mut pts_norms = vec![0.0; num_points];
         compute_vecs_l2sq(&mut pts_norms, &data, num_points, dim, &pool).unwrap();
-        let mut closest_centers_precomputed = vec![0u32; num_points];
+        let mut closest_centers_precomputed = vec![0u32; num_points * k];
         compute_closest_centers(
             &data,
             num_points,
@@ -616,7 +617,7 @@ mod math_util_test {
         let pool = create_thread_pool_for_test();
 
         let invalid_norms = vec![0.0; num_points + 1]; // Wrong length
-        let mut closest_centers = vec![0u32; num_points];
+        let mut closest_centers = vec![0u32; num_points * k];
         let result = compute_closest_centers(
             &data,
             num_points,
