@@ -752,4 +752,52 @@ mod math_util_test {
             .to_string()
             .contains("k (3) should be equal or less than num_centers (2)"));
     }
+
+    #[test]
+    fn test_compute_vecs_l2sq_overflow() {
+        let dim = usize::MAX;
+        // Create a scenario where vecs_l2sq_buffer.len() * dim overflows. usize::MAX * 2 overflows
+        let mut vecs_l2sq_buffer = [0.0f32; 2];
+        let data = &[];
+        let pool = create_thread_pool_for_test();
+
+        // 2 * usize::MAX overflows
+        let result = compute_vecs_l2sq(&mut vecs_l2sq_buffer, data, dim, &pool);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("vecs_l2sq.len() * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_overflow() {
+        // Create a scenario where num_points * k overflows
+        let num_points = usize::MAX;
+        let k = 2; // usize::MAX * 2 overflows
+        let dim = 3;
+        let num_centers = 5;
+        let data = &[];
+        let pivot_data = &[1.0f32; 15]; // num_centers * dim
+        let mut closest_centers_buffer = [];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_buffer,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_points * k overflowed"));
+    }
 }
