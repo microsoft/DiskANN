@@ -35,16 +35,9 @@
 pub mod index;
 pub mod iterator;
 pub mod post_process;
-pub mod search;
-pub mod stats;
 pub mod strategy;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test;
 
 pub use index::FlatIndex;
 pub use iterator::FlatIterator;
 pub use post_process::{CopyFlatIds, FlatPostProcess};
-pub use search::{KnnFlatError, validate_k};
-pub use stats::FlatSearchStats;
 pub use strategy::FlatSearchStrategy;

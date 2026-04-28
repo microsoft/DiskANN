@@ -11,17 +11,15 @@ use crate::{
     error::StandardError, flat::FlatIterator, graph::SearchOutputBuffer, neighbor::Neighbor, provider::HasId,
 };
 
-/// Hydrate / filter / transform the survivor candidates produced by a flat search and
+/// Post-process the survivor candidates produced by a flat search and
 /// write them into an output buffer.
 ///
 /// This is the flat counterpart to [`crate::graph::glue::SearchPostProcess`]. Processors
 /// receive `&mut S` so they can consult any iterator-owned lookup state (e.g., an
-/// `Id -> rich-record` table built up during the scan) when assembling outputs. As with
-/// the graph counterpart, [`Self::post_process`] is **async** so that processors can
-/// hydrate via I/O without blocking.
+/// `Id -> rich-record` table built up during the scan) when assembling outputs. 
 ///
 /// The `O` type parameter lets callers pick the output element type (raw `(Id, f32)`
-/// pairs, fully hydrated hits, etc.).
+/// pairs, fully hydrated hits etc.).
 pub trait FlatPostProcess<S, T, O = <S as HasId>::Id>
 where
     S: FlatIterator,

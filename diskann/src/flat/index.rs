@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! [`FlatIndex`] — the index wrapper for flat search.
+//! [`FlatIndex`] — the index wrapper for an on which we do flat search.
 
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
@@ -15,9 +15,9 @@ use crate::{
     ANNResult,
     error::IntoANNResult,
     flat::{
-        FlatIterator, FlatPostProcess, FlatSearchStats, FlatSearchStrategy,
+        FlatIterator, FlatPostProcess, FlatSearchStrategy,
     },
-    graph::SearchOutputBuffer,
+    graph::{SearchOutputBuffer, index::SearchStats},
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::DataProvider,
 };
@@ -56,7 +56,7 @@ impl<P: DataProvider> FlatIndex<P> {
     ///
     /// # Arguments
     /// - `k`: number of nearest neighbors to return.
-    /// - `strategy`: produces the per-query iterator and the query computer.
+    /// - `strategy`: produces the per-query iterator and the query computer. See [`FlatSearchStrategy`]
     /// - `processor`: post-processes the survivor candidates into the output type.
     /// - `context`: per-request context threaded through to the provider.
     /// - `query`: the query.
@@ -69,7 +69,7 @@ impl<P: DataProvider> FlatIndex<P> {
         context: &P::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<FlatSearchStats>>
+    ) -> impl SendFuture<ANNResult<SearchStats>>
     where
         S: FlatSearchStrategy<P, T>,
         T: ?Sized + Sync,
@@ -100,7 +100,12 @@ impl<P: DataProvider> FlatIndex<P> {
                 .await
                 .into_ann_result()? as u32;
 
-            Ok(FlatSearchStats { cmps, result_count })
+            Ok(SearchStats {
+                cmps,
+                hops: 0,
+                result_count,
+                range_search_second_round: false,
+            })
         }
     }
 }
