@@ -4,6 +4,5 @@
  */
 
 pub mod compute_pq_bench;
-pub mod copy_aligned_data_bench;
 pub mod diskann_bench;
 pub mod neighbor_bench;

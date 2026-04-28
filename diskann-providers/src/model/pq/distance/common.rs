@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann::utils::object_pool::{self, ObjectPool};
+use diskann_utils::object_pool::{self, ObjectPool};
 
 use crate::model::pq::fixed_chunk_pq_table::FixedChunkPQTable;
 

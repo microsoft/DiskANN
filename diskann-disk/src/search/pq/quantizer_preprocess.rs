@@ -26,7 +26,7 @@ pub fn quantizer_preprocess(
             let dim = table.dim();
             let expected_len = table.ncenters() * table.nchunks();
             let dst = diskann_utils::views::MutMatrixView::try_from(
-                &mut pq_scratch.aligned_pqtable_dist_scratch.as_mut_slice()[..expected_len],
+                &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
                 table.nchunks(),
                 table.ncenters(),
             )
@@ -69,13 +69,13 @@ pub fn quantizer_preprocess(
                     // Compute the distance between each chunk of the query to each pq centroids.
                     table.populate_chunk_distances(
                         pq_scratch.rotated_query.as_slice(),
-                        pq_scratch.aligned_pqtable_dist_scratch.as_mut_slice(),
+                        &mut pq_scratch.aligned_pqtable_dist_scratch,
                     )?;
                 }
                 Metric::InnerProduct => {
                     table.populate_chunk_inner_products(
                         pq_scratch.rotated_query.as_slice(),
-                        pq_scratch.aligned_pqtable_dist_scratch.as_mut_slice(),
+                        &mut pq_scratch.aligned_pqtable_dist_scratch,
                     )?;
                 }
             }
@@ -88,7 +88,7 @@ pub fn quantizer_preprocess(
         id_to_calculate_pq_distance,
         pq_data.get_num_chunks(),
         &pq_scratch.aligned_pqtable_dist_scratch,
-        pq_data.pq_compressed_data().get_data(),
+        pq_data.pq_compressed_data().as_slice(),
         &mut pq_scratch.aligned_pq_coord_scratch,
         &mut pq_scratch.aligned_dist_scratch,
     )?;
