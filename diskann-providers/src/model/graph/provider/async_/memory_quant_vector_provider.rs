@@ -14,9 +14,10 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::{ArcSwap, Guard};
 #[cfg(test)]
 use diskann::utils::VectorRepr;
-use diskann::{ANNError, ANNResult, utils::object_pool::ObjectPool};
+use diskann::{ANNError, ANNResult};
 #[cfg(test)]
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use super::{VectorGuard, common::TestCallCount};
