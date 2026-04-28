@@ -31,10 +31,7 @@ use diskann::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
         NeighborAccessor, NoopGuard,
     },
-    utils::{
-        object_pool::{ObjectPool, PoolOption, TryAsPooled},
-        IntoUsize, VectorRepr,
-    },
+    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
@@ -42,6 +39,7 @@ use diskann_providers::{
     model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
@@ -426,7 +424,6 @@ where
                 .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
-                .as_slice()
                 .to_vec(),
         })
     }
@@ -632,11 +629,9 @@ where
             },
         )?;
 
-        scratch.pq_scratch.set(
-            provider.graph_header.metadata().dims,
-            query,
-            1.0_f32, // Normalization factor
-        )?;
+        scratch
+            .pq_scratch
+            .set(provider.graph_header.metadata().dims, query)?;
         let start_vertex_id = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();

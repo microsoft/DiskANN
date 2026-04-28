@@ -11,8 +11,9 @@ use std::collections::VecDeque;
 
 use crate::{
     neighbor::{Neighbor, NeighborPriorityQueue},
-    utils::{VectorId, object_pool::AsPooled},
+    utils::VectorId,
 };
+use diskann_utils::object_pool::AsPooled;
 use hashbrown::HashSet;
 
 /// In-mem index related limits

@@ -14,12 +14,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{
-    ANNError, ANNResult,
-    error::IntoANNResult,
-    utils::{VectorRepr, object_pool::ObjectPool},
-};
+use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::distance::Metric;
 
 use super::common::{AlignedMemoryVectorStore, TestCallCount};

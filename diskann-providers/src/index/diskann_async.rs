@@ -165,6 +165,7 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
@@ -173,7 +174,7 @@ pub(crate) mod tests {
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
                 SearchStrategy,
             },
-            index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
+            index::{QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
         },
@@ -207,7 +208,7 @@ pub(crate) mod tests {
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+        utils::{VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -278,6 +279,17 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn grid_from_dim(dim: usize) -> Grid {
+        Grid::from_dim(dim)
+            .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
+    }
+
+    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+        (0..matrix.nrows())
+            .map(|i| matrix.row(i).to_vec())
+            .collect()
+    }
+
     // Grid generators for different types //
     pub(crate) trait GenerateGrid: Sized {
         /// Generate a synthetic dataset that is a hypercube of point beginning at the
@@ -295,34 +307,19 @@ pub(crate) mod tests {
 
     impl GenerateGrid for f32 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_f32(size as u32),
-                3 => utils::generate_3d_grid_vectors_f32(size as u32),
-                4 => utils::generate_4d_grid_vectors_f32(size as u32),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data(size))
         }
     }
 
     impl GenerateGrid for i8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_i8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_i8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_i8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| i8::try_from(v).unwrap()))
         }
     }
 
     impl GenerateGrid for u8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_u8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_u8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_u8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| u8::try_from(v).unwrap()))
         }
     }
 
@@ -656,12 +653,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = match dim {
-            1 => utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let mut adjacency_lists = grid_from_dim(dim).neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1110,7 +1102,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1227,7 +1219,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1389,7 +1381,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -1538,353 +1530,6 @@ pub(crate) mod tests {
     //////////////
     // Deletion //
     //////////////
-
-    async fn setup_inplace_delete_test() -> Arc<TestIndex> {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4]),
-            AdjacencyList::from_iter_untrusted([1, 3]),
-        ];
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        index
-    }
-
-    #[tokio::test]
-    async fn test_return_refs_to_deleted_vertex() {
-        let index = setup_inplace_delete_test().await;
-
-        // Expected outcome:
-        // * Index 0 is unchanged because it doesn't contain an edge to 1
-        // * Index 2's adjacency list should be changed to remove index 1.
-        // * Index 4's adjacency list should be changed to remove index 1.
-        //
-        // Indices 2 and 4 should be returned.
-
-        let candidates: Vec<u32> = vec![0, 2, 4];
-
-        let ret_list = index
-            .return_refs_to_deleted_vertex(&mut index.provider().neighbors(), 1, &candidates)
-            .await
-            .unwrap();
-
-        // Check that the return list contains only candidates 2 and 4.
-        assert_eq!(&ret_list, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_is_any_neighbor_deleted() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let ctx = DefaultContext;
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // expected outcome: adjacency lists 0, 1, 4 should return true
-        // adjacency lists 2, 3 should return false
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let msg = "Error in is_any_neighbor_deleted";
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 0))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 1))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 2))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 3))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 4))
-                .await
-                .expect(msg)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_drop_deleted_neighbors() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        let drop_msg = "Error in drop_deleted_neighbors";
-        let adj_msg = "Error in get_neighbors";
-
-        // call drop_deleted_neighbors on vertex 0 with check_delete = false
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 0, false)
-            .await
-            .expect(drop_msg);
-
-        let mut list0 = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(0, &mut list0)
-            .await
-            .expect(adj_msg);
-        list0.sort();
-        assert_eq!(&*list0, &[1, 2]);
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is not dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_before_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_before_drop)
-            .await
-            .expect(adj_msg);
-        list1_before_drop.sort();
-        assert_eq!(&*list1_before_drop, &[2, 3, 4]);
-
-        // drop vertex 3's adjacency list
-
-        index
-            .drop_adj_list(neighbor_accessor, 3)
-            .await
-            .expect("Error in drop_adj_list");
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_after_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_after_drop)
-            .await
-            .expect(adj_msg);
-        list1_after_drop.sort();
-        assert_eq!(&*list1_after_drop, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_get_undeleted_neighbors() {
-        // create small index instance
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        index
-            .data_provider
-            .delete(&DefaultContext, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0 and 2
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1, 2]);
-            deleted.sort();
-            assert_eq!(&deleted, &[3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in deleted");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-        }
-
-        // delete id number 2
-        index
-            .data_provider
-            .delete(&DefaultContext, &2_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0, 2, and 3
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2, 3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 3)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[0, 4]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2]);
-        }
-    }
 
     #[tokio::test]
     async fn test_inplace_delete_2d() {
@@ -3969,7 +3614,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4032,7 +3677,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4100,7 +3745,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4247,7 +3892,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());

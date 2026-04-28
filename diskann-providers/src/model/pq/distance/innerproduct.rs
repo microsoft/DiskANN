@@ -5,10 +5,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::{
-    ANNResult,
-    utils::object_pool::{self, ObjectPool, PoolOption},
-};
+use diskann::ANNResult;
+use diskann_utils::object_pool::{self, ObjectPool, PoolOption};
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::common::get_lookup_table_size;
