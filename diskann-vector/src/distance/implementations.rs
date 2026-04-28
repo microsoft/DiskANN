@@ -7,49 +7,27 @@ use diskann_wide::{arch::Target2, Architecture, ARCH};
 
 /// Experimental traits for distance functions.
 use super::simd;
-use crate::{Half, MathematicalValue, PureDistanceFunction, SimilarityScore};
-
-trait ToSlice {
-    type Target;
-    fn to_slice(&self) -> &[Self::Target];
-}
-
-impl<T> ToSlice for &[T] {
-    type Target = T;
-    fn to_slice(&self) -> &[T] {
-        self
-    }
-}
-impl<T, const N: usize> ToSlice for &[T; N] {
-    type Target = T;
-    fn to_slice(&self) -> &[T] {
-        &self[..]
-    }
-}
-impl<T, const N: usize> ToSlice for [T; N] {
-    type Target = T;
-    fn to_slice(&self) -> &[T] {
-        &self[..]
-    }
-}
+use crate::{
+    AsUnaligned, Half, MathematicalValue, PureDistanceFunction, SimilarityScore, UnalignedSlice,
+};
 
 macro_rules! architecture_hook {
     ($functor:ty, $impl:path) => {
         impl<A, T, L, R> diskann_wide::arch::Target2<A, T, L, R> for $functor
         where
             A: Architecture,
-            L: ToSlice,
-            R: ToSlice,
-            $impl: simd::SIMDSchema<L::Target, R::Target, A>,
-            Self: PostOp<<$impl as simd::SIMDSchema<L::Target, R::Target, A>>::Return, T>,
+            L: AsUnaligned,
+            R: AsUnaligned,
+            $impl: simd::SIMDSchema<L::Element, R::Element, A>,
+            Self: PostOp<<$impl as simd::SIMDSchema<L::Element, R::Element, A>>::Return, T>,
         {
             #[inline(always)]
             fn run(self, arch: A, left: L, right: R) -> T {
                 Self::post_op(simd::simd_op(
                     &$impl,
                     arch,
-                    left.to_slice(),
-                    right.to_slice(),
+                    left.as_unaligned(),
+                    right.as_unaligned(),
                 ))
             }
         }
@@ -57,8 +35,8 @@ macro_rules! architecture_hook {
         impl<A, T, L, R> diskann_wide::arch::FTarget2<A, T, L, R> for $functor
         where
             A: Architecture,
-            L: ToSlice,
-            R: ToSlice,
+            L: AsUnaligned,
+            R: AsUnaligned,
             Self: diskann_wide::arch::Target2<A, T, L, R>,
         {
             #[inline(always)]
@@ -73,27 +51,23 @@ macro_rules! architecture_hook {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
 
-impl<A, T, L, R, const N: usize, F> diskann_wide::arch::FTarget2<A, T, &[L], &[R]>
+impl<A, T, L, R, const N: usize, F>
+    diskann_wide::arch::FTarget2<A, T, UnalignedSlice<'_, L>, UnalignedSlice<'_, R>>
     for Specialize<N, F>
 where
     A: Architecture,
-    F: for<'a, 'b> diskann_wide::arch::Target2<A, T, &'a [L; N], &'b [R; N]> + Default,
+    F: for<'a, 'b> diskann_wide::arch::Target2<A, T, UnalignedSlice<'a, L>, UnalignedSlice<'a, R>>
+        + Default,
 {
     #[inline(always)]
-    fn run(arch: A, x: &[L], y: &[R]) -> T {
+    fn run(arch: A, x: UnalignedSlice<'_, L>, y: UnalignedSlice<'_, R>) -> T {
         if (x.len() != N) | (y.len() != N) {
             fail_length_check(x, y, N);
         }
 
-        // SAFETY: We have checked that both arguments have the correct length.
-        //
-        // The alignment requirements of arrays are the alignment requirements of
-        // `Left` and `Right` respectively, which is provided by the corresponding slices.
-        arch.run2(
-            F::default(),
-            unsafe { &*(x.as_ptr() as *const [L; N]) },
-            unsafe { &*(y.as_ptr() as *const [R; N]) },
-        )
+        // The validation of `x.len()` and `y.len()` is sufficient (and indeed necessary)
+        // to trigger constant propagation and unrolling.
+        arch.run2(F::default(), x, y)
     }
 }
 
@@ -101,7 +75,7 @@ where
 // the top function. This keeps code generation extremely lightweight.
 #[inline(never)]
 #[allow(clippy::panic)]
-fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {
+fn fail_length_check<L, R>(x: UnalignedSlice<'_, L>, y: UnalignedSlice<'_, R>, len: usize) -> ! {
     let message = if x.len() != len {
         ("first", x.len())
     } else {
@@ -136,6 +110,7 @@ macro_rules! use_simd_implementation {
                 <$functor>::default().run(ARCH, x, y)
             }
         }
+
         // Statically Sized
         impl<const N: usize> PureDistanceFunction<&[$T; N], &[$U; N], SimilarityScore<f32>>
             for $functor
@@ -566,8 +541,11 @@ mod tests {
         let (x, y) = random_normal_arguments(DIM, -100.0, 100.0, 0x023457AA);
 
         let reference: f32 = SquaredL2::evaluate(x.as_slice(), y.as_slice());
-        let evaluated: f32 =
-            Specialize::<DIM, SquaredL2>::run(diskann_wide::ARCH, x.as_slice(), y.as_slice());
+        let evaluated: f32 = Specialize::<DIM, SquaredL2>::run(
+            diskann_wide::ARCH,
+            x.as_slice().as_unaligned(),
+            y.as_slice().as_unaligned(),
+        );
 
         // Equality should be exact.
         assert_eq!(reference, evaluated);
@@ -582,8 +560,11 @@ mod tests {
         let x = vec![0.0f32; DIM + 1];
         let y = vec![0.0f32; DIM];
         // Since `x` does not have the correct dimensions, this should panic.
-        let _: f32 =
-            Specialize::<DIM, SquaredL2>::run(diskann_wide::ARCH, x.as_slice(), y.as_slice());
+        let _: f32 = Specialize::<DIM, SquaredL2>::run(
+            diskann_wide::ARCH,
+            x.as_slice().as_unaligned(),
+            y.as_slice().as_unaligned(),
+        );
     }
 
     #[test]
@@ -595,8 +576,11 @@ mod tests {
         let x = vec![0.0f32; DIM];
         let y = vec![0.0f32; DIM + 1];
         // Since `y` does not have the correct dimensions, this should panic.
-        let _: f32 =
-            Specialize::<DIM, SquaredL2>::run(diskann_wide::ARCH, x.as_slice(), y.as_slice());
+        let _: f32 = Specialize::<DIM, SquaredL2>::run(
+            diskann_wide::ARCH,
+            x.as_slice().as_unaligned(),
+            y.as_slice().as_unaligned(),
+        );
     }
 
     ////////////////////
@@ -650,7 +634,7 @@ mod tests {
         To: GetInner + Copy,
         Callback: FnMut(To, To),
     {
-        let checker =
+        let mut checker =
             test_util::Checker::<L, R, To>::new(under_test, reference, |got, expected| {
                 // Invoke the callback with the received numbers.
                 cb(got, expected);
@@ -663,7 +647,7 @@ mod tests {
             });
 
         test_util::test_distance_function(
-            checker,
+            &mut checker,
             distribution.clone(),
             distribution.clone(),
             dim,

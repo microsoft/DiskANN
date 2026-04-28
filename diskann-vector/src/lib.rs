@@ -29,6 +29,9 @@ pub use traits::{
 mod value;
 pub use value::{MathematicalValue, SimilarityScore};
 
+mod unaligned;
+pub use unaligned::{AsUnaligned, UnalignedSlice};
+
 pub mod contains;
 pub mod conversion;
 pub mod distance;
