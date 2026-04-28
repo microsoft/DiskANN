@@ -93,24 +93,15 @@ fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
 pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
     vecs_l2sq: &mut [f32],
     data: &[f32],
-    num_points: usize,
     dim: usize,
     pool: Pool,
 ) -> ANNResult<()> {
-    if data.len() != num_points * dim {
+    if data.len() != vecs_l2sq.len() * dim {
         return Err(ANNError::log_pq_error(format_args!(
-            "data.len() {} should be num_points {} * dim {}",
+            "data.len() {} should be vecs_l2sq.len() {} * dim {}",
             data.len(),
-            num_points,
-            dim
-        )));
-    }
-
-    if vecs_l2sq.len() != num_points {
-        return Err(ANNError::log_pq_error(format_args!(
-            "vecs_l2sq.len() {} should be num_points {}",
             vecs_l2sq.len(),
-            num_points
+            dim
         )));
     }
 
@@ -295,12 +286,12 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
         pts_norms
     } else {
         owned_pts_norms_squared = vec![0.0; num_points];
-        compute_vecs_l2sq(&mut owned_pts_norms_squared, data, num_points, dim, pool)?;
+        compute_vecs_l2sq(&mut owned_pts_norms_squared, data, dim, pool)?;
         &owned_pts_norms_squared
     };
 
     let mut pivs_norms_squared = vec![0.0; num_centers];
-    compute_vecs_l2sq(&mut pivs_norms_squared, pivot_data, num_centers, dim, pool)?;
+    compute_vecs_l2sq(&mut pivs_norms_squared, pivot_data, dim, pool)?;
 
     let mut distance_matrix = vec![0.0; POINTS_PER_CHUNK * num_centers];
     let mut closest_center_indices = vec![0; POINTS_PER_CHUNK * k];
@@ -394,7 +385,7 @@ mod math_util_test {
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
 
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
 
         let expected = [14.0, 77.0];
 
@@ -412,7 +403,7 @@ mod math_util_test {
         let dim = 8;
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
 
         let expected = [204.0, 1292.0];
 
@@ -437,9 +428,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
         let mut center_index = vec![0; num_points];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
         let k = 1;
@@ -484,9 +475,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
         let k = 2;
         let mut center_index = vec![0; num_points * k];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
@@ -585,7 +576,7 @@ mod math_util_test {
 
         // Compute with pre-computed norms
         let mut pts_norms = vec![0.0; num_points];
-        compute_vecs_l2sq(&mut pts_norms, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut pts_norms, &data, dim, &pool).unwrap();
         let mut closest_centers_precomputed = vec![0u32; num_points * k];
         compute_closest_centers(
             &data,
@@ -638,22 +629,6 @@ mod math_util_test {
     }
 
     #[test]
-    fn test_compute_vecs_l2sq_invalid_data_length() {
-        let num_points = 4;
-        let dim = 3;
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0]; // Wrong length (should be 12)
-        let mut vecs_l2sq = vec![0.0; num_points];
-        let pool = create_thread_pool_for_test();
-
-        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool);
-
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("data.len() 5 should be num_points 4 * dim 3"));
-    }
-
-    #[test]
     fn test_compute_vecs_l2sq_invalid_output_length() {
         let num_points = 4;
         let dim = 3;
@@ -661,12 +636,12 @@ mod math_util_test {
         let mut vecs_l2sq = vec![0.0; num_points + 1]; // Wrong length
         let pool = create_thread_pool_for_test();
 
-        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool);
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool);
 
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("vecs_l2sq.len() 5 should be num_points 4"));
+            .contains("data.len() 12 should be vecs_l2sq.len() 5 * dim 3"));
     }
 
     #[test]
