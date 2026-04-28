@@ -6,13 +6,11 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 mod aligned;
-mod aligned_slice;
 mod bump;
 mod poly;
 mod traits;
 
 pub use aligned::{AlignedAllocator, NotPowerOfTwo};
-pub use aligned_slice::{AlignedSlice, aligned_slice};
 pub use bump::BumpAllocator;
 pub use poly::{CompoundError, Poly, TrustedIter, poly};
 pub use traits::{Allocator, AllocatorCore, AllocatorError};
