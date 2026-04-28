@@ -271,6 +271,40 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
         )));
     }
 
+    // Validate data slice length
+    let expected_data_len = num_points.checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_points * dim overflowed: num_points ({}) * dim ({})",
+            num_points, dim
+        ))
+    })?;
+
+    if data.len() != expected_data_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "data.len() ({}) should equal num_points ({}) * dim ({})",
+            data.len(),
+            num_points,
+            dim
+        )));
+    }
+
+    // Validate pivot_data slice length
+    let expected_pivot_len = num_centers.checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_centers * dim overflowed: num_centers ({}) * dim ({})",
+            num_centers, dim
+        ))
+    })?;
+
+    if pivot_data.len() != expected_pivot_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "pivot_data.len() ({}) should equal num_centers ({}) * dim ({})",
+            pivot_data.len(),
+            num_centers,
+            dim
+        )));
+    }
+
     let expected_closest_centers_len = num_points.checked_mul(k).ok_or_else(|| {
         ANNError::log_index_error(format_args!(
             "num_points * k overflowed: num_points ({}) * k ({})",
@@ -771,14 +805,16 @@ mod math_util_test {
     }
 
     #[test]
-    fn test_compute_closest_centers_overflow() {
-        // Create a scenario where num_points * k overflows
+    fn test_compute_closest_centers_output_buffer_overflow() {
+        // Test that num_points * k overflow is detected
+        // Note: This test checks data.len() validation overflow, not num_points * k,
+        // because data validation happens first
         let num_points = usize::MAX;
-        let k = 2; // usize::MAX * 2 overflows
-        let dim = 3;
-        let num_centers = 5;
+        let k = 2;
+        let dim = 2; // usize::MAX * 2 overflows
+        let num_centers = 2;
         let data = &[];
-        let pivot_data = &[1.0f32; 15]; // num_centers * dim
+        let pivot_data = &[1.0f32; 4];
         let mut closest_centers_buffer = [];
         let pool = create_thread_pool_for_test();
 
@@ -795,9 +831,130 @@ mod math_util_test {
             &pool,
         );
 
+        // Will hit num_points * dim overflow in data validation
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("num_points * k overflowed"));
+            .contains("num_points * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_data_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 1;
+        let data = vec![1.0; num_points * dim - 1]; // Wrong length (too short)
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("data.len() (11) should equal num_points (4) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_pivot_data_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 1;
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim + 2]; // Wrong length (too long)
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pivot_data.len() (8) should equal num_centers (2) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_data_overflow() {
+        let num_points = usize::MAX;
+        let dim = 2;
+        let num_centers = 2;
+        let k = 1;
+        let data = &[];
+        let pivot_data = &[1.0f32; 4]; // num_centers * dim = 2 * 2
+        let closest_centers = &mut [];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_points * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_pivot_overflow() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = usize::MAX;
+        let k = 1;
+        let data = &[1.0f32; 12];
+        let pivot_data = &[];
+        let closest_centers = &mut [0u32; 4];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_centers * dim overflowed"));
     }
 }
