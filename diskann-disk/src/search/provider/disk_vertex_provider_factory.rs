@@ -58,7 +58,7 @@ where
         let mut read_buf = Poly::broadcast(
             0u8,
             buffer_len,
-            AlignedAllocator::new(PowerOfTwo::new(buffer_len).unwrap()),
+            AlignedAllocator::new(PowerOfTwo::new(buffer_len).map_err(ANNError::log_index_error)?),
         )
         .map_err(ANNError::log_index_error)?;
         let aligned_read = AlignedRead::new(0_u64, &mut read_buf)?;

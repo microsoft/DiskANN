@@ -60,11 +60,11 @@ pub struct PowerOfTwo(NonZeroUsize);
 #[non_exhaustive]
 pub struct NotPowerOfTwo(usize);
 
-/// PowerOfTwo constants for all valid exponents (0..64)
+/// PowerOfTwo constants for all valid exponents (0..Usize::BITS-1) for 32 bit architectures
 ///
 /// # Safety
 ///
-/// 1 << N is a power of two for all N in 0..64.
+/// 1 << N is a power of two for all N in 0..Usize::BITS-1.
 #[allow(clippy::undocumented_unsafe_blocks)]
 impl PowerOfTwo {
     pub const P0: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 0).unwrap()) };
@@ -99,6 +99,16 @@ impl PowerOfTwo {
     pub const P29: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 29).unwrap()) };
     pub const P30: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 30).unwrap()) };
     pub const P31: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 31).unwrap()) };
+}
+
+/// PowerOfTwo constants for all valid exponents (32..Usize::BITS-1) for 64 bit architectures
+///
+/// # Safety
+///
+/// 1 << N is a power of two for all N in 0..Usize::BITS-1.
+#[cfg(target_pointer_width = "64")]
+#[allow(clippy::undocumented_unsafe_blocks)]
+impl PowerOfTwo {
     pub const P32: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 32).unwrap()) };
     pub const P33: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 33).unwrap()) };
     pub const P34: Self = unsafe { Self::new_unchecked(NonZeroUsize::new(1 << 34).unwrap()) };
@@ -167,6 +177,10 @@ impl PowerOfTwo {
     pub const V536870912: Self = Self::P29;
     pub const V1073741824: Self = Self::P30;
     pub const V2147483648: Self = Self::P31;
+}
+
+#[cfg(target_pointer_width = "64")]
+impl PowerOfTwo {
     pub const V4294967296: Self = Self::P32;
     pub const V8589934592: Self = Self::P33;
     pub const V17179869184: Self = Self::P34;
@@ -199,7 +213,9 @@ impl PowerOfTwo {
     pub const V2305843009213693952: Self = Self::P61;
     pub const V4611686018427387904: Self = Self::P62;
     pub const V9223372036854775808: Self = Self::P63;
+}
 
+impl PowerOfTwo {
     /// Create a new `PowerOfTwo` if the given value is greater a power of two.
     pub const fn new(value: usize) -> Result<Self, NotPowerOfTwo> {
         let v = match NonZeroUsize::new(value) {

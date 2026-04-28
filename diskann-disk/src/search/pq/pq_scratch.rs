@@ -37,11 +37,13 @@ impl PQScratch {
         num_centers: usize,
     ) -> ANNResult<Self> {
         let aligned_pq_coord_scratch =
-            Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128).unwrap();
+            Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128)
+                .map_err(ANNError::log_index_error)?;
         let aligned_pqtable_dist_scratch =
-            Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128).unwrap();
-        let aligned_dist_scratch =
-            Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128).unwrap();
+            Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128)
+                .map_err(ANNError::log_index_error)?;
+        let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
+            .map_err(ANNError::log_index_error)?;
         let rotated_query = vec![0.0f32; dim];
 
         Ok(Self {

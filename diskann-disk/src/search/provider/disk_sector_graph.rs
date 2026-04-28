@@ -79,9 +79,11 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
             sectors_data: Poly::broadcast(
                 0u8,
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
-                AlignedAllocator::new(PowerOfTwo::new(block_size).unwrap()),
+                AlignedAllocator::new(
+                    PowerOfTwo::new(block_size).map_err(ANNError::log_index_error)?,
+                ),
             )
-            .unwrap(),
+            .map_err(ANNError::log_index_error)?,
             cur_sector_idx: 0,
             num_nodes_per_sector,
             node_len,
@@ -98,7 +100,9 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
             self.sectors_data = Poly::broadcast(
                 0u8,
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
-                AlignedAllocator::new(PowerOfTwo::new(self.block_size).unwrap()),
+                AlignedAllocator::new(
+                    PowerOfTwo::new(self.block_size).map_err(ANNError::log_index_error)?,
+                ),
             )
             .map_err(ANNError::log_index_error)?;
         }
