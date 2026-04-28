@@ -50,11 +50,22 @@ Defined in
 
 ## Failure Notification
 
-When any matrix job fails, a `notify-on-failure` job creates a GitHub issue
-tagged `@microsoft/diskann-disk-maintainers` with labels `benchmark` and
-`A/A-failure`. The team should inspect the uploaded artifacts (retained 30
-days) to determine whether thresholds need tuning or there is a runner
-environment issue.
+Our reliability promise is **95%** — meaning 1 failure in 20 runs is expected
+due to environment noise. To avoid unnecessary alerts, a GitHub issue is only
+created when the failure rate exceeds 5% across the last 20 completed runs.
+
+When the threshold is breached, the `notify-on-failure` job:
+
+1. **Creates a GitHub issue** with:
+   - Title: `[Benchmark A/A] Daily stability test failed – <date>`
+   - A link to the failed workflow run
+   - The recent failure rate (e.g., `3/20 (15.0%)`)
+   - Labels: `benchmark`, `A/A-failure`
+2. **Tags** `@microsoft/diskann-disk-maintainers` for review.
+
+The team should then inspect the uploaded artifacts (retained 30 days) to
+determine whether thresholds need tuning or there is a runner environment
+issue.
 
 ## Comparison with A/B Benchmarks
 
