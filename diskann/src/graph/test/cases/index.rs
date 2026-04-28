@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square};
+use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
     graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
     provider::{Delete, NeighborAccessor},
@@ -20,7 +20,7 @@ verbose_eq!(DegreeStats {
 #[tokio::test(flavor = "current_thread")]
 async fn test_count_reachable_nodes() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
     let starting_point = [4];
 
@@ -62,7 +62,7 @@ async fn test_count_unreachable_isolated_nodes() {
         AdjacencyList::from_iter_untrusted([]),
         AdjacencyList::from_iter_untrusted([]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 1);
+    let index = setup_2d_square(adjacency_list, 1);
     let mut accessor = index.provider().neighbors();
     let starting_point = [4];
 
@@ -76,7 +76,7 @@ async fn test_count_unreachable_isolated_nodes() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_degree_stats() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
     let stats = index
         .get_degree_stats(&mut accessor, index.provider().non_start_points_ids())
@@ -94,7 +94,7 @@ async fn test_get_degree_stats() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_prune_range() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 1);
+    let index = setup_2d_square(adjacency_list, 1);
     let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
@@ -132,7 +132,7 @@ async fn test_count_reachable_nodes_multiple_starts() {
         AdjacencyList::from_iter_untrusted([2]),
         AdjacencyList::from_iter_untrusted([0, 1]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
 
     // From start (4) alone: reaches 4, 0, 1 = 3
@@ -168,7 +168,7 @@ async fn test_get_degree_stats_mixed() {
         AdjacencyList::from_iter_untrusted([2, 4]),
         AdjacencyList::from_iter_untrusted([1, 2, 3]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
     let stats = index
         .get_degree_stats(&mut accessor, index.provider().non_start_points_ids())
@@ -187,7 +187,7 @@ async fn test_get_degree_stats_mixed() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_is_any_neighbor_deleted() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -218,7 +218,7 @@ async fn test_is_any_neighbor_deleted() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -247,7 +247,7 @@ async fn test_drop_deleted_neighbors() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors_only_orphans() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -277,7 +277,7 @@ async fn test_drop_deleted_neighbors_only_orphans() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors_noop() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -295,7 +295,7 @@ async fn test_flat_search_basic() {
     use crate::graph::search_output_buffer::IdDistance;
 
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let strategy = test_provider::Strategy::new();
     let ctx = test_provider::Context::new();
 
@@ -336,7 +336,7 @@ async fn test_flat_search_with_filter() {
     use crate::graph::search_output_buffer::IdDistance;
 
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let strategy = test_provider::Strategy::new();
     let ctx = test_provider::Context::new();
 
