@@ -7,7 +7,6 @@
 
 use std::{iter, sync::Arc};
 
-use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 
 use crate::{
@@ -21,21 +20,16 @@ use crate::{
     provider::NeighborAccessor,
 };
 
-/// Generate the 2D unit square vectors using the synthetic grid infrastructure.
-pub(super) fn create_2d_unit_square() -> Matrix<f32> {
-    Grid::Two.data(2)
-}
-
 /// Build a 2D square index with a start point at (0.5, 0.5).
 ///
 /// The `pruned_degree` controls the index's target degree. The provider's max degree
 /// is set to the largest adjacency list size to allow pre-populating graphs that
 /// may exceed the index limit (useful for consolidation tests).
 pub(super) fn setup_2d_square(
-    vectors: Matrix<f32>,
     adjacency_lists: Vec<AdjacencyList<u32>>,
     pruned_degree: usize,
 ) -> Arc<DiskANNIndex<Provider>> {
+    let vectors = Grid::Two.data(2);
     let num_points = vectors.nrows();
     let dim = vectors.ncols();
     assert!(
