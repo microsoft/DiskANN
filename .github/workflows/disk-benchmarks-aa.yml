@@ -6,6 +6,8 @@
 # Runs main vs main at 9 AM UTC every day to detect environment noise.
 # If any threshold is breached, a GitHub issue is created to notify @microsoft/diskann-admin.
 # Can also be triggered manually for debugging.
+#
+# For more details see .github/docs/disk-benchmarks-aa.md
 
 name: Disk Benchmarks (A/A)
 
