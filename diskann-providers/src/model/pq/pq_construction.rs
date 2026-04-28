@@ -865,8 +865,15 @@ mod pq_test {
             pool.as_ref(),
         )
         .unwrap();
-        generate_pq_data_from_pivots::<f32, _>(2, 2, &mut pq_storage, &storage_provider, 0, pool.as_ref())
-            .unwrap();
+        generate_pq_data_from_pivots::<f32, _>(
+            2,
+            2,
+            &mut pq_storage,
+            &storage_provider,
+            0,
+            pool.as_ref(),
+        )
+        .unwrap();
         let compressed = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)

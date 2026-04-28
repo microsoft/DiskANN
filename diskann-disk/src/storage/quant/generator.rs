@@ -101,7 +101,7 @@ where
     pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
-        pool: RayonThreadPoolRef<'_>,     // Thread pool for parallel processing
+        pool: RayonThreadPoolRef<'_>, // Thread pool for parallel processing
         chunking_config: &ChunkingConfig, // Configuration for batching and checkpoint handling
     ) -> ANNResult<Progress>
     where
