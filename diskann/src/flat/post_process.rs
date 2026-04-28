@@ -8,7 +8,8 @@
 use diskann_utils::future::SendFuture;
 
 use crate::{
-    error::StandardError, flat::FlatIterator, graph::SearchOutputBuffer, neighbor::Neighbor, provider::HasId,
+    error::StandardError, flat::FlatIterator, graph::SearchOutputBuffer, neighbor::Neighbor,
+    provider::HasId,
 };
 
 /// Post-process the survivor candidates produced by a flat search and
@@ -16,7 +17,7 @@ use crate::{
 ///
 /// This is the flat counterpart to [`crate::graph::glue::SearchPostProcess`]. Processors
 /// receive `&mut S` so they can consult any iterator-owned lookup state (e.g., an
-/// `Id -> rich-record` table built up during the scan) when assembling outputs. 
+/// `Id -> rich-record` table built up during the scan) when assembling outputs.
 ///
 /// The `O` type parameter lets callers pick the output element type (raw `(Id, f32)`
 /// pairs, fully hydrated hits etc.).

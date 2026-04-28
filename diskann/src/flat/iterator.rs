@@ -33,17 +33,15 @@ pub trait FlatIterator: HasId + Send + Sync {
     ///
     /// Returns `Ok(None)` when the scan is exhausted. The yielded element borrows from
     /// the iterator and is invalidated by the next call to `next`.
+    #[allow(clippy::type_complexity)]
     fn next(
         &mut self,
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
 
     /// Drive the entire scan, invoking `f` for each yielded element.
     ///
-    /// The default implementation loops over [`Self::next`]. 
-    fn on_elements_unordered<F>(
-        &mut self,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    /// The default implementation loops over [`Self::next`].
+    fn on_elements_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>),
     {
@@ -55,4 +53,3 @@ pub trait FlatIterator: HasId + Send + Sync {
         }
     }
 }
-

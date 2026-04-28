@@ -14,9 +14,7 @@ use diskann_vector::PreprocessedDistanceFunction;
 use crate::{
     ANNResult,
     error::IntoANNResult,
-    flat::{
-        FlatIterator, FlatPostProcess, FlatSearchStrategy,
-    },
+    flat::{FlatIterator, FlatPostProcess, FlatSearchStrategy},
     graph::{SearchOutputBuffer, index::SearchStats},
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::DataProvider,
