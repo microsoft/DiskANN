@@ -112,7 +112,6 @@ impl PowerOfTwo {
 }
 
 #[cfg(target_pointer_width = "64")]
-#[allow(clippy::undocumented_unsafe_blocks)]
 impl PowerOfTwo {
     constants! {
         (P32, V4294967296) => 32,
