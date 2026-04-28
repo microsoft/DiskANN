@@ -123,7 +123,7 @@ mod tests {
 
     use super::*;
     use crate::utils::aligned_file_reader::AlignedRead;
-    use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
+    use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
     fn test_index_path() -> String {
         test_data_root()
@@ -170,7 +170,7 @@ mod tests {
         let read_length = 512; // adjust according to your logic
         let num_read = 10;
         let mut aligned_mem =
-            aligned_slice::<u8>(read_length * num_read, PowerOfTwo::new(512).unwrap()).unwrap();
+            Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
 
         // create and add AlignedReads to the vector
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
@@ -209,7 +209,7 @@ mod tests {
         let read_length = DEFAULT_DISK_SECTOR_LEN; // adjust according to your logic
         let num_sector = 10;
         let mut aligned_mem =
-            aligned_slice::<u8>(read_length * num_sector, PowerOfTwo::new(512).unwrap()).unwrap();
+            Poly::broadcast(0u8, read_length * num_sector, AlignedAllocator::A512).unwrap();
 
         // Each slice will be used as the buffer for a read request of a sector.
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
