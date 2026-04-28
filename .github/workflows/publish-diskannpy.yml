@@ -1,0 +1,200 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Workflow: Build and publish diskannpy Python wheels to PyPI
+#
+# Triggers:
+#   - Manual dispatch (workflow_dispatch) for testing
+#   - On GitHub Release publish (the primary release mechanism)
+#
+# Architecture:
+#   1. Build wheels for Linux (x86_64, aarch64) and Windows (x86_64) across
+#      Python 3.9-3.13 using maturin-action.
+#   2. Build an sdist for source distribution.
+#   3. Run tests on the built wheels to validate correctness.
+#   4. Publish to PyPI using Trusted Publishing (OIDC).
+
+name: Publish diskannpy to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (false = build only)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================================================
+  # Build manylinux wheels (x86_64)
+  # ===========================================================================
+  build-linux-x86_64:
+    name: Build Linux x86_64 (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist --manifest-path DiskAnnPy/Cargo.toml -i python${{ matrix.python }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux-x86_64-py${{ matrix.python }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # NOTE: aarch64 builds are disabled because DiskAnnPy currently only
+  # compiles on x86_64 (see lib.rs cfg_if guard). Re-enable once the
+  # aarch64 linking issue is resolved.
+
+  # ===========================================================================
+  # Build Windows wheels (x86_64)
+  # ===========================================================================
+  build-windows-x86_64:
+    name: Build Windows x86_64 (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist --manifest-path DiskAnnPy/Cargo.toml -i python${{ matrix.python }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows-x86_64-py${{ matrix.python }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # NOTE: macOS universal2 builds are disabled because DiskAnnPy currently
+  # only compiles on x86_64 (see lib.rs cfg_if guard). Re-enable once the
+  # aarch64 linking issue is resolved.
+
+  # ===========================================================================
+  # Build source distribution
+  # ===========================================================================
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path DiskAnnPy/Cargo.toml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Test the built wheels
+  # ===========================================================================
+  test-wheels:
+    name: Test wheel (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: [build-linux-x86_64, build-windows-x86_64]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+            artifact: wheel-linux-x86_64-py3.10
+          - os: ubuntu-latest
+            python: "3.12"
+            artifact: wheel-linux-x86_64-py3.12
+          - os: windows-latest
+            python: "3.10"
+            artifact: wheel-windows-x86_64-py3.10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+
+      - name: Install wheel and test dependencies
+        shell: bash
+        run: |
+          pip install dist/*.whl
+          pip install scikit-learn numpy
+
+      - name: Run tests
+        shell: bash
+        working-directory: DiskAnnPy
+        run: python -m unittest discover tests
+
+  # ===========================================================================
+  # Publish to PyPI
+  # ===========================================================================
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [test-wheels, build-sdist]
+    if: >-
+      (github.event_name == 'release' && github.event.action == 'published') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+    # Trusted Publishing: requires configuring PyPI to trust this workflow.
+    # See: https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "wheel-*"
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: List artifacts
+        run: ls -lhR dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # No password needed: uses OIDC Trusted Publishing
+          verbose: true

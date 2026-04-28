@@ -17,6 +17,8 @@ members = [
     "diskann-disk",
     "diskann-label-filter",
     "diskann-garnet",
+    # Python Bindings
+    "DiskAnnPy",
     # Infrastructure
     "diskann-benchmark-runner",
     "diskann-benchmark-core",

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "diskannpy-rust"
+requires-python = ">=3.9"
+description = "Python bindings for DiskANN approximate nearest neighbor search library"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Microsoft Corporation"},
+]
+keywords = ["approximate-nearest-neighbor", "vector-search", "diskann", "ann"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dynamic = ["version"]
+
+dependencies = [
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "scikit-learn>=1.4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/microsoft/DiskANN"
+Repository = "https://github.com/microsoft/DiskANN"
+Issues = "https://github.com/microsoft/DiskANN/issues"
+Documentation = "https://github.com/microsoft/DiskANN"
+
+[tool.maturin]
+python-source = "python"
+module-name = "diskannpy._diskannpy"
+features = ["pyo3/extension-module"]

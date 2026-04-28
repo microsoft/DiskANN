@@ -1,0 +1,49 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+[package]
+name = "DiskAnnPy"
+version.workspace = true
+description = "Python bindings for DiskANN approximate nearest neighbor search"
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "_diskannpy"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.26.0"
+byteorder.workspace = true
+cfg-if.workspace = true
+clap = { workspace = true, features = ["derive"] }
+diskann-providers = { workspace = true, features = ["bf_tree"] }
+diskann-utils.workspace = true
+diskann-vector.workspace = true
+bytemuck.workspace = true
+num_cpus.workspace = true
+rayon.workspace = true
+half.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+numpy = "0.26.0"
+tokio = { workspace = true, features = ["full"] }
+diskann.workspace = true
+diskann-disk.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+diskann-quantization.workspace = true
+bf-tree.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+
+perf_test = ["diskann-providers/perf_test", "diskann-disk/perf_test"]
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"
