@@ -352,7 +352,7 @@ impl Provider {
     }
 
     /// Return `true` is `id` is a start point. Otherwise, return `false`.
-    fn is_start_point(&self, id: u32) -> bool {
+    pub(crate) fn is_start_point(&self, id: u32) -> bool {
         self.config.start_points.contains_key(&id)
     }
 
@@ -443,6 +443,34 @@ impl Provider {
         }
 
         neighbors
+    }
+
+    pub(crate) fn get_neighbors(
+        &self,
+        id: u32,
+        neighbors: &mut AdjacencyList<u32>,
+    ) -> ANNResult<()> {
+        match self.terms.get(&id) {
+            Some(v) => {
+                self.get_neighbors.increment();
+                neighbors.overwrite_trusted(&v.neighbors);
+                Ok(())
+            }
+            None => Err(ANNError::opaque(AccessedInvalidId(id))),
+        }
+    }
+
+    /// Capture all ids including deleted and startpoints
+    pub fn all_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.terms.iter().map(|ref_multi| *ref_multi.key())
+    }
+
+    /// Capture all ids including deleted
+    pub fn non_start_points_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.terms
+            .iter()
+            .map(|ref_multi| *ref_multi.key())
+            .filter(|id| !self.is_start_point(*id))
     }
 }
 
@@ -625,20 +653,6 @@ impl From<InvalidId> for ANNError {
     #[track_caller]
     fn from(err: InvalidId) -> ANNError {
         ANNError::opaque(err)
-    }
-}
-
-impl IntoIterator for &Provider {
-    type Item = u32;
-    type IntoIter = std::vec::IntoIter<u32>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.terms
-            .iter()
-            .map(|entry| *entry.key())
-            .filter(|id| !self.config.start_points.contains_key(id))
-            .collect::<Vec<_>>()
-            .into_iter()
     }
 }
 
@@ -912,14 +926,8 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> ANNResult<Self> {
-        match self.provider.terms.get(&id) {
-            Some(v) => {
-                self.provider.get_neighbors.increment();
-                neighbors.overwrite_trusted(&v.neighbors);
-                Ok(self)
-            }
-            None => Err(ANNError::opaque(AccessedInvalidId(id))),
-        }
+        self.provider.get_neighbors(id, neighbors)?;
+        Ok(self)
     }
 }
 

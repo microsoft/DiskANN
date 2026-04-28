@@ -406,12 +406,13 @@ where
             .block_on(self.inner.count_reachable_nodes(start_points, accessor))
     }
 
-    pub fn get_degree_stats<NA>(&self, accessor: &mut NA) -> ANNResult<DegreeStats>
+    pub fn get_degree_stats<NA, Itr>(&self, accessor: &mut NA, itr: Itr) -> ANNResult<DegreeStats>
     where
-        for<'a> &'a DP: IntoIterator<Item = DP::InternalId, IntoIter: Send>,
+        Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
         NA: AsNeighbor<Id = DP::InternalId>,
     {
-        self.handle.block_on(self.inner.get_degree_stats(accessor))
+        self.handle
+            .block_on(self.inner.get_degree_stats(accessor, itr))
     }
 }
 
