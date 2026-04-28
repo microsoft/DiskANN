@@ -13,8 +13,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     {
         use half::f16;
 
-        benchmarks.register::<imp::ProductQuantized<'static, f32>>("async-pq-f32");
-        benchmarks.register::<imp::ProductQuantized<'static, f16>>("async-pq-f16");
+        benchmarks.register("async-pq-f32", imp::ProductQuantized::<f32>::new());
+        benchmarks.register("async-pq-f16", imp::ProductQuantized::<f16>::new());
     }
 
     // Stub implementation
@@ -42,7 +42,7 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, BuildAndSearch, FullPrecision},
+            benchmarks::{run_build, run_search_outer, FullPrecision},
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
             result::QuantBuildResult,
         },
@@ -50,21 +50,19 @@ mod imp {
         utils::{self, datafiles},
     };
 
-    pub(super) struct ProductQuantized<'a, T> {
-        input: &'a IndexPQOperation,
+    pub(super) struct ProductQuantized<T> {
         _type: std::marker::PhantomData<T>,
     }
 
-    impl<'a, T> ProductQuantized<'a, T> {
-        fn new(input: &'a IndexPQOperation) -> Self {
+    impl<T> ProductQuantized<T> {
+        pub(super) fn new() -> Self {
             Self {
-                input,
                 _type: std::marker::PhantomData,
             }
         }
     }
 
-    impl<T> Benchmark for ProductQuantized<'static, T>
+    impl<T> Benchmark for ProductQuantized<T>
     where
         T: VectorRepr
             + diskann_utils::sampling::WithApproximateNorm
@@ -74,51 +72,31 @@ mod imp {
         type Input = IndexPQOperation;
         type Output = QuantBuildResult;
 
-        fn try_match(input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            <FullPrecision<'static, T> as Benchmark>::try_match(&input.index_operation)
+        fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
+            FullPrecision::<T>::new().try_match(&input.index_operation)
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&IndexPQOperation>,
         ) -> std::fmt::Result {
-            <FullPrecision<'static, T> as Benchmark>::description(
-                f,
-                input.map(|f| &f.index_operation),
-            )
+            FullPrecision::<T>::new().description(f, input.map(|f| &f.index_operation))
         }
 
         fn run(
+            &self,
             input: &IndexPQOperation,
             checkpoint: Checkpoint<'_>,
-            output: &mut dyn Output,
-        ) -> anyhow::Result<QuantBuildResult> {
-            let pq = ProductQuantized::<T>::new(input);
-            BuildAndSearch::run(pq, checkpoint, output)
-        }
-    }
-
-    impl<'a, T> BuildAndSearch<'a> for ProductQuantized<'a, T>
-    where
-        T: VectorRepr
-            + diskann_utils::sampling::WithApproximateNorm
-            + diskann::graph::SampleableForStart,
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
-    {
-        type Data = QuantBuildResult;
-        fn run(
-            self,
-            checkpoint: Checkpoint<'_>,
             mut output: &mut dyn Output,
-        ) -> Result<Self::Data, anyhow::Error> {
-            writeln!(output, "{}", self.input)?;
+        ) -> anyhow::Result<QuantBuildResult> {
+            writeln!(output, "{}", input)?;
 
-            let hybrid = common::Hybrid::new(self.input.max_fp_vecs_per_prune);
+            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
 
-            let (index, build_stats, quant_training_time) = match &self.input.index_operation.source
-            {
+            let (index, build_stats, quant_training_time) = match &input.index_operation.source {
                 IndexSource::Load(load) => {
-                    let index_config: &IndexConfiguration = &self.input.to_config()?;
+                    let index_config: &IndexConfiguration = &input.to_config()?;
 
                     let index =
                         { utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))? };
@@ -139,17 +117,16 @@ mod imp {
 
                         diskann_async::train_pq(
                             train_data.as_view(),
-                            self.input.num_pq_chunks,
-                            &mut StdRng::seed_from_u64(self.input.seed),
+                            input.num_pq_chunks,
+                            &mut StdRng::seed_from_u64(input.seed),
                             build.num_threads,
                         )?
                     };
 
                     let create_index = |data_view: MatrixView<T>| {
                         let index = diskann_async::new_quant_index::<T, _, _>(
-                            self.input.try_as_config()?.build()?,
-                            self.input
-                                .inmem_parameters(data_view.nrows(), data_view.ncols())?,
+                            input.try_as_config()?.build()?,
+                            input.inmem_parameters(data_view.nrows(), data_view.ncols())?,
                             table,
                             common::NoDeletes,
                         )?;
@@ -180,9 +157,9 @@ mod imp {
                 }
             };
 
-            let build = if self.input.use_fp_for_search {
+            let build = if input.use_fp_for_search {
                 run_search_outer(
-                    &self.input.index_operation.search_phase,
+                    &input.index_operation.search_phase,
                     common::FullPrecision,
                     index,
                     build_stats,
@@ -190,7 +167,7 @@ mod imp {
                 )?
             } else {
                 run_search_outer(
-                    &self.input.index_operation.search_phase,
+                    &input.index_operation.search_phase,
                     hybrid,
                     index,
                     build_stats,

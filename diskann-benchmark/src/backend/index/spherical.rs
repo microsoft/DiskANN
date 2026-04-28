@@ -16,9 +16,9 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 
     #[cfg(feature = "spherical-quantization")]
     {
-        benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME);
-        benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME);
-        benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME);
+        benchmarks.register(NAME, imp::SphericalQ::<1>);
+        benchmarks.register(NAME, imp::SphericalQ::<2>);
+        benchmarks.register(NAME, imp::SphericalQ::<4>);
     }
 
     // Stub implementation
@@ -52,7 +52,6 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::BuildAndSearch,
             build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,
             search,
@@ -68,15 +67,7 @@ mod imp {
     };
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct SphericalQ<'a, const NBITS: usize> {
-        input: &'a SphericalQuantBuild,
-    }
-
-    impl<'a, const NBITS: usize> SphericalQ<'a, NBITS> {
-        pub(super) fn new(input: &'a SphericalQuantBuild) -> Self {
-            Self { input }
-        }
-    }
+    pub(super) struct SphericalQ<const NBITS: usize>;
 
     macro_rules! write_field {
         ($f:ident, $field:tt, $fmt:literal, $($expr:tt)*) => {
@@ -126,11 +117,14 @@ mod imp {
 
     macro_rules! build_and_search {
         ($N:literal) => {
-            impl Benchmark for SphericalQ<'static, $N> {
+            impl Benchmark for SphericalQ<$N> {
                 type Input = SphericalQuantBuild;
                 type Output = SphericalBuildResult;
 
-                fn try_match(input: &SphericalQuantBuild) -> Result<MatchScore, FailureScore> {
+                fn try_match(
+                    &self,
+                    input: &SphericalQuantBuild,
+                ) -> Result<MatchScore, FailureScore> {
                     let mut failure_score: Option<u32> = None;
                     if input.build.multi_insert.is_some() {
                         failure_score = Some(1);
@@ -157,6 +151,7 @@ mod imp {
                 }
 
                 fn description(
+                    &self,
                     f: &mut std::fmt::Formatter<'_>,
                     input: Option<&SphericalQuantBuild>,
                 ) -> std::fmt::Result {
@@ -200,42 +195,37 @@ mod imp {
                 }
 
                 fn run(
+                    &self,
                     input: &SphericalQuantBuild,
                     checkpoint: Checkpoint<'_>,
-                    output: &mut dyn Output,
-                ) -> anyhow::Result<SphericalBuildResult> {
-                    let sq = SphericalQ::<$N>::new(input);
-                    BuildAndSearch::run(sq, checkpoint, output)
-                }
-            }
-
-            impl<'a> BuildAndSearch<'a> for SphericalQ<'a, $N> {
-                type Data = SphericalBuildResult;
-                fn run(
-                    self,
-                    _checkpoint: Checkpoint<'_>,
                     mut output: &mut dyn Output,
-                ) -> Result<Self::Data, anyhow::Error> {
-                    writeln!(output, "{}", self.input)?;
+                ) -> anyhow::Result<SphericalBuildResult> {
+                    assert_eq!(
+                        input.num_bits.get(),
+                        $N,
+                        "INTERNAL ERROR: this should not have passed the match check"
+                    );
 
-                    let build = &self.input.build;
+                    writeln!(output, "{}", input)?;
+
+                    let build = &input.build;
 
                     let data: Arc<Matrix<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
 
                     let start = std::time::Instant::now();
                     let m: diskann_vector::distance::Metric = build.distance.into();
-                    let pre_scale = match self.input.pre_scale {
+                    let pre_scale = match input.pre_scale {
                         Some(v) => v.try_into()?,
                         None => diskann_quantization::spherical::PreScale::None,
                     };
 
                     let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                         data.as_view(),
-                        (&self.input.transform_kind).into(),
+                        (&input.transform_kind).into(),
                         m.try_into()?,
                         pre_scale,
-                        &mut rand::rngs::StdRng::seed_from_u64(self.input.seed),
+                        &mut rand::rngs::StdRng::seed_from_u64(input.seed),
                         GlobalAllocator,
                     )?;
 
@@ -244,8 +234,8 @@ mod imp {
                     // We manually inline the build and search loops because we support
                     // multiple different kinds of searches.
                     let index = diskann_async::new_quant_index::<f32, _, _>(
-                        self.input.try_as_config()?.build()?,
-                        self.input.inmem_parameters(data.nrows(), data.ncols()),
+                        input.try_as_config()?.build()?,
+                        input.inmem_parameters(data.nrows(), data.ncols()),
                         diskann_quantization::spherical::iface::Impl::<$N>::new(quantizer)?,
                         NoDeletes,
                     )?;
@@ -274,12 +264,12 @@ mod imp {
                         runs: Vec::new(),
                     };
 
-                    match &self.input.search_phase {
+                    match &input.search_phase {
                         SearchPhase::Topk(search_phase) => {
                             // Handle Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -295,7 +285,7 @@ mod imp {
                                 &search_phase.runs,
                             );
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let knn = benchmark_core::search::graph::KNN::new(
                                     index.clone(),
                                     queries.clone(),
@@ -317,7 +307,7 @@ mod imp {
                             // Handle Range search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -333,7 +323,7 @@ mod imp {
                                 &search_phase.runs,
                             );
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let range = benchmark_core::search::graph::Range::new(
                                     index.clone(),
                                     queries.clone(),
@@ -358,7 +348,7 @@ mod imp {
                             // Handle Beta Filtered Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -384,7 +374,7 @@ mod imp {
                                 .map(utils::filters::as_query_label_provider)
                                 .collect();
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_strategies = setup_filter_strategies(
                                     search_phase.beta,
@@ -414,7 +404,7 @@ mod imp {
                             // Handle Beta Filtered Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -440,7 +430,7 @@ mod imp {
                                 .map(utils::filters::as_query_label_provider)
                                 .collect();
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let multihop = benchmark_core::search::graph::MultiHop::new(
                                     index.clone(),
                                     queries.clone(),

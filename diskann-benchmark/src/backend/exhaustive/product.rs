@@ -11,7 +11,7 @@ crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register::<imp::ProductQ<'static>>(NAME);
+    benchmarks.register(NAME, imp::ProductQ);
 
     #[cfg(not(feature = "product-quantization"))]
     imp::register(NAME, benchmarks)
@@ -65,18 +65,17 @@ mod imp {
     }
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct ProductQ<'a> {
-        input: &'a inputs::exhaustive::Product,
-    }
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct ProductQ;
 
-    impl<'a> ProductQ<'a> {
-        pub(super) fn new(input: &'a inputs::exhaustive::Product) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results> {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+    impl ProductQ {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::Product,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results> {
+            let input = &input;
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -190,15 +189,19 @@ mod imp {
         }
     }
 
-    impl Benchmark for ProductQ<'static> {
+    impl Benchmark for ProductQ {
         type Input = inputs::exhaustive::Product;
         type Output = Results;
 
-        fn try_match(_input: &inputs::exhaustive::Product) -> Result<MatchScore, FailureScore> {
+        fn try_match(
+            &self,
+            _input: &inputs::exhaustive::Product,
+        ) -> Result<MatchScore, FailureScore> {
             Ok(MatchScore(0))
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&inputs::exhaustive::Product>,
         ) -> std::fmt::Result {
@@ -210,11 +213,12 @@ mod imp {
         }
 
         fn run(
+            &self,
             input: &inputs::exhaustive::Product,
             _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<Results> {
-            ProductQ::new(input).run(output)
+            self.run(input, output)
         }
     }
 
