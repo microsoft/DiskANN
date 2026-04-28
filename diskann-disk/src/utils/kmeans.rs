@@ -136,7 +136,7 @@ pub fn run_lloyds<Pool: AsThreadPool>(
     let mut docs_l2sq = vec![0.0; num_points];
 
     forward_threadpool!(pool = pool);
-    compute_vecs_l2sq(&mut docs_l2sq, data, num_points, dim, pool)?;
+    compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool)?;
 
     let mut old_residual;
 
