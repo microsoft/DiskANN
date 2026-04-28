@@ -96,9 +96,16 @@ pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
     dim: usize,
     pool: Pool,
 ) -> ANNResult<()> {
-    if data.len() != vecs_l2sq.len() * dim {
-        return Err(ANNError::log_pq_error(format_args!(
-            "data.len() {} should be vecs_l2sq.len() {} * dim {}",
+    let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "vecs_l2sq.len() * dim overflowed: vecs_l2sq.len() ({}) * dim ({})",
+            vecs_l2sq.len(),
+            dim
+        ))
+    })?;
+    if data.len() != expected_data_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "data.len() ({}) should be vecs_l2sq.len() ({}) * dim ({})",
             data.len(),
             vecs_l2sq.len(),
             dim
@@ -264,11 +271,19 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
         )));
     }
 
-    if closest_centers_ivf.len() != num_points * k {
+    let expected_closest_centers_len = num_points.checked_mul(k).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_points * k overflowed: num_points ({}) * k ({})",
+            num_points, k
+        ))
+    })?;
+
+    if closest_centers_ivf.len() != expected_closest_centers_len {
         return Err(ANNError::log_index_error(format_args!(
-            "closest_centers_ivf.len() ({}) should equal num_points * k ({})",
+            "closest_centers_ivf.len() ({}) should equal num_points ({}) * k ({})",
             closest_centers_ivf.len(),
-            num_points * k
+            num_points,
+            k
         )));
     }
 
@@ -277,7 +292,7 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
     let mut owned_pts_norms_squared;
     let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
         if pts_norms.len() != num_points {
-            return Err(ANNError::log_pq_error(format_args!(
+            return Err(ANNError::log_index_error(format_args!(
                 "pts_norms_squared.len() ({}) should equal num_points ({})",
                 pts_norms.len(),
                 num_points
@@ -641,7 +656,7 @@ mod math_util_test {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("data.len() 12 should be vecs_l2sq.len() 5 * dim 3"));
+            .contains("data.len() (12) should be vecs_l2sq.len() (5) * dim (3)"));
     }
 
     #[test]
@@ -701,7 +716,7 @@ mod math_util_test {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("closest_centers_ivf.len() (4) should equal num_points * k (8)"));
+            .contains("closest_centers_ivf.len() (4) should equal num_points (4) * k (2)"));
     }
 
     #[test]
