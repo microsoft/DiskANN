@@ -6,25 +6,22 @@
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 
-use diskann_quantization::{
-    alloc::{aligned_slice, AlignedSlice},
-    num::PowerOfTwo,
-};
+use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 #[derive(Debug)]
 /// PQ scratch
 pub struct PQScratch {
     /// Aligned pq table distance scratch, the length must be at least [256 * NCHUNKS]. 256 is the number of PQ centroids.
     /// This is used to store the distance between each chunk in the query vector to each centroid, which is why the length is num of centroids * num of chunks
-    pub aligned_pqtable_dist_scratch: AlignedSlice<f32>,
+    pub aligned_pqtable_dist_scratch: Poly<[f32], AlignedAllocator>,
 
     /// Aligned dist scratch, must be at least diskann MAX_DEGREE
     /// This is used to temporarily save the pq distance between query vector to the candidate vectors.
-    pub aligned_dist_scratch: AlignedSlice<f32>,
+    pub aligned_dist_scratch: Poly<[f32], AlignedAllocator>,
 
     /// Aligned pq coord scratch, must be at least [N_CHUNKS * MAX_DEGREE]
     /// This is used to store the pq coordinates of the candidate vectors.
-    pub aligned_pq_coord_scratch: AlignedSlice<u8>,
+    pub aligned_pq_coord_scratch: Poly<[u8], AlignedAllocator>,
 
     /// Query scratch buffer stored as `f32`. `set` initializes it by copying/converting the
     /// raw query values; `PQTable.PreprocessQuery` can then rotate or otherwise preprocess it.
@@ -32,12 +29,6 @@ pub struct PQScratch {
 }
 
 impl PQScratch {
-    /// 128 bytes alignment to optimize for the L2 Adjacent Cache Line Prefetcher.
-    const ALIGNED_ALLOC_128: PowerOfTwo = match PowerOfTwo::new(128) {
-        Ok(v) => v,
-        Err(_) => unreachable!(),
-    };
-
     /// Create a new pq scratch
     pub fn new(
         graph_degree: usize,
@@ -46,13 +37,11 @@ impl PQScratch {
         num_centers: usize,
     ) -> ANNResult<Self> {
         let aligned_pq_coord_scratch =
-            aligned_slice(graph_degree * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)
-                .map_err(ANNError::log_index_error)?;
+            Poly::broadcast(0u8, graph_degree * num_pq_chunks, AlignedAllocator::A128).unwrap();
         let aligned_pqtable_dist_scratch =
-            aligned_slice(num_centers * num_pq_chunks, PQScratch::ALIGNED_ALLOC_128)
-                .map_err(ANNError::log_index_error)?;
-        let aligned_dist_scratch = aligned_slice(graph_degree, PQScratch::ALIGNED_ALLOC_128)
-            .map_err(ANNError::log_index_error)?;
+            Poly::broadcast(0f32, num_centers * num_pq_chunks, AlignedAllocator::A128).unwrap();
+        let aligned_dist_scratch =
+            Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128).unwrap();
         let rotated_query = vec![0.0f32; dim];
 
         Ok(Self {
@@ -94,6 +83,7 @@ impl PQScratch {
 
 #[cfg(test)]
 mod tests {
+    use diskann_quantization::num::PowerOfTwo;
     use rstest::rstest;
 
     use super::PQScratch;
@@ -110,20 +100,16 @@ mod tests {
         let mut pq_scratch: PQScratch =
             PQScratch::new(graph_degree, dim, num_pq_chunks, num_centers).unwrap();
 
-        // Check alignment of the remaining AlignedSlice buffers.
         assert_eq!(
-            (pq_scratch.aligned_pqtable_dist_scratch.as_ptr() as usize)
-                % PQScratch::ALIGNED_ALLOC_128.raw(),
+            (pq_scratch.aligned_pqtable_dist_scratch.as_ptr() as usize) % PowerOfTwo::V128.raw(),
             0
         );
         assert_eq!(
-            (pq_scratch.aligned_dist_scratch.as_ptr() as usize)
-                % PQScratch::ALIGNED_ALLOC_128.raw(),
+            (pq_scratch.aligned_dist_scratch.as_ptr() as usize) % PowerOfTwo::V128.raw(),
             0
         );
         assert_eq!(
-            (pq_scratch.aligned_pq_coord_scratch.as_ptr() as usize)
-                % PQScratch::ALIGNED_ALLOC_128.raw(),
+            (pq_scratch.aligned_pq_coord_scratch.as_ptr() as usize) % PowerOfTwo::V128.raw(),
             0
         );
 
