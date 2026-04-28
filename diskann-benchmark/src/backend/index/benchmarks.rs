@@ -3,8 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use core::option::Option::None;
-use std::{io::Write, num::NonZeroUsize, sync::Arc};
+use std::{any::Any, io::Write, marker::PhantomData, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
     graph::SampleableForStart,
@@ -24,7 +23,10 @@ use diskann_benchmark_runner::{
 };
 use diskann_providers::{
     index::diskann_async,
-    model::{configuration::IndexConfiguration, graph::provider::async_::common},
+    model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::{common, inmem},
+    },
 };
 use diskann_utils::{
     future::AsyncFriendly,
@@ -40,9 +42,12 @@ use super::{
 use crate::{
     backend::index::{
         result::{AggregatedSearchResults, BuildResult},
+        search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::async_::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -56,10 +61,27 @@ use crate::{
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
     // Full Precision
-    benchmarks.register("async-full-precision-f32", FullPrecision::<f32>::new());
-    benchmarks.register("async-full-precision-f16", FullPrecision::<f16>::new());
-    benchmarks.register("async-full-precision-u8", FullPrecision::<u8>::new());
-    benchmarks.register("async-full-precision-i8", FullPrecision::<i8>::new());
+    benchmarks.register(
+        "async-full-precision-f32",
+        FullPrecision::<f32>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range)
+            .search(plugins::BetaFilter)
+            .search(plugins::MultihopFilter),
+    );
+
+    benchmarks.register(
+        "async-full-precision-f16",
+        FullPrecision::<f16>::new().search(plugins::Topk),
+    );
+    benchmarks.register(
+        "async-full-precision-u8",
+        FullPrecision::<u8>::new().search(plugins::Topk),
+    );
+    benchmarks.register(
+        "async-full-precision-i8",
+        FullPrecision::<i8>::new().search(plugins::Topk),
+    );
 
     // Dynamic Full Precision
     benchmarks.register(
@@ -84,16 +106,44 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     spherical::register_benchmarks(benchmarks);
 }
 
-// Full Precision
-pub(super) struct FullPrecision<T> {
-    _type: std::marker::PhantomData<T>,
+type FullPrecisionProvider<T> = inmem::DefaultProvider<
+    inmem::FullPrecisionStore<T>,
+    common::NoStore,
+    common::NoDeletes,
+    DefaultContext,
+>;
+
+impl<T> QueryType for FullPrecisionProvider<T>
+where
+    T: VectorRepr,
+{
+    type Element = T;
 }
 
-impl<T> FullPrecision<T> {
+// Full Precision
+pub(super) struct FullPrecision<T>
+where
+    T: VectorRepr,
+{
+    plugins: plugins::Plugins<FullPrecisionProvider<T>, Strategy<common::FullPrecision>>,
+}
+
+impl<T> FullPrecision<T>
+where
+    T: VectorRepr,
+{
     pub(super) fn new() -> Self {
         Self {
-            _type: std::marker::PhantomData,
+            plugins: plugins::Plugins::new(),
         }
+    }
+
+    pub(super) fn search<P>(mut self, plugin: P) -> Self
+    where
+        P: plugins::Plugin<FullPrecisionProvider<T>, Strategy<common::FullPrecision>> + 'static,
+    {
+        self.plugins.register(plugin);
+        self
     }
 }
 
@@ -179,13 +229,13 @@ where
             }
         };
 
-        let result = run_search_outer(
-            &input.search_phase,
-            common::FullPrecision,
+        let search_results = self.plugins.run(
             index,
-            build_stats,
-            checkpoint,
+            &Strategy::new(common::FullPrecision),
+            &input.search_phase,
         )?;
+
+        let result = BuildResult::new(build_stats, search_results);
 
         writeln!(output, "\n\n{}", result)?;
         Ok(result)
@@ -325,160 +375,344 @@ where
     Ok((index, build_stats))
 }
 
-pub(super) fn run_search_outer<T, S, DP>(
-    input: &SearchPhase,
-    search_strategy: S,
-    index: Index<DP>,
-    build_stats: Option<BuildStats>,
-    checkpoint: Checkpoint<'_>,
-) -> anyhow::Result<BuildResult>
-where
-    DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
-    T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
-{
-    match &input {
-        SearchPhase::Topk(search_phase) => {
-            // Handle Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
+// pub(super) fn run_search_outer<T, S, DP>(
+//     input: &SearchPhase,
+//     search_strategy: S,
+//     index: Index<DP>,
+//     build_stats: Option<BuildStats>,
+//     checkpoint: Checkpoint<'_>,
+// ) -> anyhow::Result<BuildResult>
+// where
+//     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
+//         + for<'a> provider::SetElement<&'a [T]>,
+//     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
+//     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
+// {
+//     match &input {
+//         SearchPhase::Topk(search_phase) => {
+//             // Handle Topk search phase
+//             let mut result = BuildResult::new_topk(build_stats);
+//
+//             // Save construction stats before running queries.
+//             checkpoint.checkpoint(&result)?;
+//
+//             let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+//                 &search_phase.queries,
+//             ))?);
+//
+//             let groundtruth =
+//                 datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+//
+//             let knn = benchmark_core::search::graph::KNN::new(
+//                 index,
+//                 queries,
+//                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+//             )?;
+//
+//             let steps = search::knn::SearchSteps::new(
+//                 search_phase.reps,
+//                 &search_phase.num_threads,
+//                 &search_phase.runs,
+//             );
+//
+//             let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+//             result.append(AggregatedSearchResults::Topk(search_results));
+//             Ok(result)
+//         }
+//         SearchPhase::Range(search_phase) => {
+//             // Handle Range search phase
+//             let mut result = BuildResult::new_range(build_stats);
+//
+//             // Save construction stats before running queries.
+//             checkpoint.checkpoint(&result)?;
+//
+//             let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+//                 &search_phase.queries,
+//             ))?);
+//
+//             let groundtruth =
+//                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+//
+//             let steps = search::range::RangeSearchSteps::new(
+//                 search_phase.reps,
+//                 &search_phase.num_threads,
+//                 &search_phase.runs,
+//             );
+//
+//             let range = benchmark_core::search::graph::Range::new(
+//                 index,
+//                 queries,
+//                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+//             )?;
+//
+//             let search_results = search::range::run(&range, &groundtruth, steps)?;
+//             result.append(AggregatedSearchResults::Range(search_results));
+//             Ok(result)
+//         }
+//         SearchPhase::TopkBetaFilter(search_phase) => {
+//             // Handle Beta Filtered Topk search phase
+//             let mut result = BuildResult::new_topk(build_stats);
+//
+//             // Save construction stats before running queries.
+//             checkpoint.checkpoint(&result)?;
+//
+//             let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+//                 &search_phase.queries,
+//             ))?);
+//
+//             let groundtruth =
+//                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+//
+//             let bit_maps =
+//                 generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+//
+//             let search_strategies = setup_filter_strategies(
+//                 search_phase.beta,
+//                 bit_maps
+//                     .into_iter()
+//                     .map(utils::filters::as_query_label_provider),
+//                 search_strategy.clone(),
+//             );
+//
+//             let knn = benchmark_core::search::graph::KNN::new(
+//                 index,
+//                 queries,
+//                 benchmark_core::search::graph::Strategy::collection(search_strategies),
+//             )?;
+//
+//             let steps = search::knn::SearchSteps::new(
+//                 search_phase.reps,
+//                 &search_phase.num_threads,
+//                 &search_phase.runs,
+//             );
+//
+//             let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+//             result.append(AggregatedSearchResults::Topk(search_results));
+//             Ok(result)
+//         }
+//         SearchPhase::TopkMultihopFilter(search_phase) => {
+//             // Handle MultiHop Topk search phase
+//             let mut result = BuildResult::new_topk(build_stats);
+//
+//             // Save construction stats before running queries.
+//             checkpoint.checkpoint(&result)?;
+//
+//             let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+//                 &search_phase.queries,
+//             ))?);
+//
+//             let groundtruth =
+//                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+//
+//             let steps = search::knn::SearchSteps::new(
+//                 search_phase.reps,
+//                 &search_phase.num_threads,
+//                 &search_phase.runs,
+//             );
+//
+//             let bit_maps =
+//                 generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+//
+//             let multihop = benchmark_core::search::graph::MultiHop::new(
+//                 index,
+//                 queries,
+//                 benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+//                 bit_maps
+//                     .into_iter()
+//                     .map(utils::filters::as_query_label_provider)
+//                     .collect(),
+//             )?;
+//
+//             let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
+//             result.append(AggregatedSearchResults::Topk(search_results));
+//             Ok(result)
+//         }
+//     }
+// }
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
+trait QueryType {
+    type Element: VectorRepr;
+}
 
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Strategy<S>(S);
 
-            let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
-
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
-
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
-
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
-        SearchPhase::Range(search_phase) => {
-            // Handle Range search phase
-            let mut result = BuildResult::new_range(build_stats);
-
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
-
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
-
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
-
-            let steps = search::range::RangeSearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
-
-            let range = benchmark_core::search::graph::Range::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
-
-            let search_results = search::range::run(&range, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Range(search_results));
-            Ok(result)
-        }
-        SearchPhase::TopkBetaFilter(search_phase) => {
-            // Handle Beta Filtered Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
-
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
-
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
-
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
-
-            let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
-
-            let search_strategies = setup_filter_strategies(
-                search_phase.beta,
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider),
-                search_strategy.clone(),
-            );
-
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::collection(search_strategies),
-            )?;
-
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
-
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
-        SearchPhase::TopkMultihopFilter(search_phase) => {
-            // Handle MultiHop Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
-
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
-
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
-
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
-
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
-
-            let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
-
-            let multihop = benchmark_core::search::graph::MultiHop::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider)
-                    .collect(),
-            )?;
-
-            let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
+impl<S> Strategy<S> {
+    pub(super) fn new(strategy: S) -> Self {
+        Self(strategy)
     }
 }
+
+impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::Topk
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn kind(&self) -> SearchPhaseKind {
+        Self::kind()
+    }
+
+    fn search(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        strategy: &Strategy<S>,
+        phase: &SearchPhase,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let topk = phase.as_topk().unwrap();
+
+        let queries: Arc<Matrix<DP::Element>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
+
+        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index.clone(),
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.0.clone()),
+        )?;
+
+        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+
+        let results = search::knn::run(&knn, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(results))
+    }
+}
+
+impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::Range
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn kind(&self) -> SearchPhaseKind {
+        Self::kind()
+    }
+
+    fn search(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        strategy: &Strategy<S>,
+        phase: &SearchPhase,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let range = phase.as_range().unwrap();
+        let queries: Arc<Matrix<DP::Element>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&range.groundtruth))?;
+
+        let steps =
+            search::range::RangeSearchSteps::new(range.reps, &range.num_threads, &range.runs);
+
+        let range = benchmark_core::search::graph::Range::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.0.clone()),
+        )?;
+
+        let result = search::range::run(&range, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Range(result))
+    }
+}
+
+impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::BetaFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn kind(&self) -> SearchPhaseKind {
+        Self::kind()
+    }
+
+    fn search(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        strategy: &Strategy<S>,
+        phase: &SearchPhase,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let beta_filter = phase.as_topk_beta_filter().unwrap();
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&beta_filter.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&beta_filter.groundtruth))?;
+
+        let bit_maps = generate_bitmaps(&beta_filter.query_predicates, &beta_filter.data_labels)?;
+
+        let search_strategies = setup_filter_strategies(
+            beta_filter.beta,
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider),
+            strategy.0.clone(),
+        );
+
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::collection(search_strategies),
+        )?;
+
+        let steps = search::knn::SearchSteps::new(
+            beta_filter.reps,
+            &beta_filter.num_threads,
+            &beta_filter.runs,
+        );
+
+        let result = search::knn::run(&knn, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::MultihopFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn kind(&self) -> SearchPhaseKind {
+        Self::kind()
+    }
+
+    fn search(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        strategy: &Strategy<S>,
+        phase: &SearchPhase,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_filter().unwrap();
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            &multihop.queries,
+        ))?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(
+            multihop.reps,
+            &multihop.num_threads,
+            &multihop.runs,
+        );
+
+        let bit_maps =
+            generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.0.clone()),
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
 
 /// The stack looks like this:
 ///

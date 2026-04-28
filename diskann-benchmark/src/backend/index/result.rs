@@ -36,6 +36,10 @@ impl BuildResult {
         }
     }
 
+    pub(super) fn new(build: Option<BuildStats>, search: AggregatedSearchResults) -> Self {
+        Self { build, search }
+    }
+
     pub(super) fn append(&mut self, search: AggregatedSearchResults) {
         self.search.append(search);
     }
