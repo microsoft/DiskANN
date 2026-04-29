@@ -9,6 +9,7 @@
 //! [`OnElementsUnordered`] via [`DefaultIteratedOperator`].
 
 use diskann_utils::{Reborrow, future::SendFuture};
+use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{error::StandardError, provider::HasId};
 
@@ -31,6 +32,34 @@ pub trait OnElementsUnordered: HasId + Send + Sync {
     fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>);
+}
+
+
+/// Extension of [`OnElementsUnordered`] that drives the scan with a pre-built query
+/// computer, invoking a callback with `(id, distance)` pairs instead of raw elements.
+///
+/// The concrete computer is insantiated and supplied externally
+/// by the [`FlatSearchStrategy`](crate::flat::FlatSearchStrategy).
+///
+/// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
+/// calling `computer.evaluate_similarity` on each element. 
+pub trait DistancesUnordered: OnElementsUnordered {
+    /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
+    /// the resulting `(id, distance)` pair.
+    fn distances_unordered<C, F>(
+        &mut self,
+        computer: &C,
+        mut f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32> + Send + Sync,
+        F: Send + FnMut(Self::Id, f32),
+    {
+        self.on_elements_unordered(move |id, element| {
+            let dist = computer.evaluate_similarity(element);
+            f(id, dist);
+        })
+    }
 }
 
 /// A lending, asynchronous iterator over the elements of a flat index.
@@ -112,3 +141,5 @@ where
         }
     }
 }
+
+impl<I> DistancesUnordered for DefaultIteratedOperator<I> where I: FlatIterator + HasId + Send + Sync {}

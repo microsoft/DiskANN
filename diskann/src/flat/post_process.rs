@@ -46,9 +46,9 @@ where
 /// A trivial [`FlatPostProcess`] that copies each `(Id, distance)` pair straight into the
 /// output buffer.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct CopyFlatIds;
+pub struct CopyIds;
 
-impl<S, T> FlatPostProcess<S, T> for CopyFlatIds
+impl<S, T> FlatPostProcess<S, T> for CopyIds
 where
     S: OnElementsUnordered,
     T: ?Sized,

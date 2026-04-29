@@ -7,7 +7,7 @@
 
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::StandardError, flat::OnElementsUnordered, provider::DataProvider};
+use crate::{error::StandardError, flat::{DistancesUnordered, OnElementsUnordered}, provider::DataProvider};
 
 /// Per-call configuration that knows how to construct a [`FlatIterator`] for a provider
 /// and how to pre-process queries of type `T` into a distance computer.
@@ -36,7 +36,7 @@ where
 {
     /// The iterator type produced by [`Self::create_callback`]. Borrows from `self` and the
     /// provider.
-    type Callback<'a>: OnElementsUnordered
+    type Callback<'a>: DistancesUnordered
     where
         Self: 'a,
         P: 'a;

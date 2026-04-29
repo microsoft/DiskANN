@@ -9,12 +9,11 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
-use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
     ANNResult,
     error::IntoANNResult,
-    flat::{OnElementsUnordered, FlatPostProcess, FlatSearchStrategy},
+    flat::{DistancesUnordered, FlatPostProcess, FlatSearchStrategy},
     graph::{SearchOutputBuffer, index::SearchStats},
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::DataProvider,
@@ -23,8 +22,8 @@ use crate::{
 /// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
 ///
 /// The provider is owned by the index. The index is constructed once at process startup and
-/// shared across requests; per-query state lives in the [`crate::flat::FlatIterator`] that
-/// the [`crate::flat::FlatSearchStrategy`] produces.
+/// shared across requests; per-query state lives in the [`crate::flat::OnElementsUnordered`] 
+/// implementation that the [`crate::flat::FlatSearchStrategy`] produces.
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {
     /// The backing provider.
@@ -86,8 +85,7 @@ impl<P: DataProvider> FlatIndex<P> {
             let mut queue = NeighborPriorityQueue::new(k);
             let mut cmps: u32 = 0;
 
-            callback.on_elements_unordered(|id, element| {
-                let dist = computer.evaluate_similarity(element);
+            callback.distances_unordered(&computer, |id, dist| {
                 cmps += 1;
                 queue.insert(Neighbor::new(id, dist));
             })
