@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Simple kernel implementation of multi-vector distance computation.
+//! Fallback kernel implementation of multi-vector distance computation.
 
 use std::ops::Deref;
 
@@ -49,17 +49,17 @@ impl<'a, T: Repr> Deref for QueryMatRef<'a, T> {
     }
 }
 
-//////////////////
-// SimpleKernel //
-//////////////////
+////////////////////
+// FallbackKernel //
+////////////////////
 
-/// Simple double-loop kernel to compute max-sim distances over multi-vectors.
+/// Fallback double-loop kernel to compute max-sim distances over multi-vectors.
 ///
 /// This kernel performs a simple double-loop over the rows of `query`
 /// and the `doc` and dispatches to [`InnerProduct`] to compute the similarity.
-pub struct SimpleKernel;
+pub struct FallbackKernel;
 
-impl SimpleKernel {
+impl FallbackKernel {
     /// Core kernel for computing per-query-vector max similarities (min negated inner-product).
     ///
     /// For each `query` vector, computes the maximum similarity (negated inner product)
@@ -128,7 +128,7 @@ where
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
         }
 
-        SimpleKernel::max_sim_kernel(query, doc, |i, score| {
+        FallbackKernel::max_sim_kernel(query, doc, |i, score| {
             // SAFETY: We asserted that self.size() == query.num_vectors(),
             // and i < query.num_vectors() due to the kernel loop bound.
             unsafe { *self.scores.get_unchecked_mut(i) = score };
@@ -151,7 +151,7 @@ where
     fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
         let mut sum = 0.0f32;
 
-        SimpleKernel::max_sim_kernel(query, doc, |_i, score| {
+        FallbackKernel::max_sim_kernel(query, doc, |_i, score| {
             sum += score;
         });
 
@@ -185,7 +185,7 @@ mod tests {
             .fold(f32::MAX, f32::min)
     }
 
-    /// Generate a vector of random f32 values in [-1, 1] for testing
+    /// Generate deterministic test data.
     fn make_test_data(len: usize, ceil: usize, shift: usize) -> Vec<f32> {
         (0..len).map(|v| ((v + shift) % ceil) as f32).collect()
     }
@@ -270,9 +270,9 @@ mod tests {
                     );
                 }
 
-                // Check that SimpleKernel is also correct.
-                SimpleKernel::max_sim_kernel(query, doc, |i, score| {
-                    assert!((scores[i] - score).abs() <= 1e-6)
+                // Check that FallbackKernel produces the same values as the naive reference.
+                FallbackKernel::max_sim_kernel(query, doc, |i, score| {
+                    assert!((expected_scores[i] - score).abs() <= 1e-6)
                 });
 
                 // Test Chamfer
@@ -299,7 +299,7 @@ mod tests {
             // No query vectors means sum is 0
             assert_eq!(result, 0.0);
 
-            let result = Chamfer::evaluate(doc.into(), query.deref().reborrow());
+            let result = Chamfer::evaluate(QueryMatRef::from(doc), query.deref().reborrow());
 
             assert_eq!(result, 0.0);
         }

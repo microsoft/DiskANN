@@ -12,7 +12,7 @@ pub enum MaxSimError {
     IndexOutOfBounds(usize, usize),
     #[error("Scores buffer length cannot be 0")]
     BufferLengthIsZero,
-    #[error("Invalid buffer length {0} for query size {0}")]
+    #[error("Invalid buffer length {0} for query size {1}")]
     InvalidBufferLength(usize, usize),
 }
 
@@ -22,8 +22,8 @@ pub enum MaxSimError {
 
 /// Computes per-query-vector maximum similarities to document vectors.
 ///
-/// For each query vector `qᵢ`, finds the maximum similarity (minimum negated
-/// inner product) to any document vector:
+/// For each query vector `qᵢ`, computes the negated maximum inner product
+/// to any document vector:
 ///
 /// ```text
 /// scores[i] = minⱼ -IP(qᵢ, dⱼ)

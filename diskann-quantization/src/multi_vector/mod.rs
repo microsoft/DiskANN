@@ -20,6 +20,7 @@
 //! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
 //! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
 //! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
+//! | [`QueryComputer`] | Architecture-dispatched SIMD query computer |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
 //!
@@ -71,7 +72,7 @@ pub mod distance;
 pub(crate) mod matrix;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
+pub use distance::{Chamfer, MaxSim, MaxSimError, QueryComputer, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,
