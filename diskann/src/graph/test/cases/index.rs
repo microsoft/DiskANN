@@ -7,15 +7,8 @@ use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
     graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
     provider::{Delete, NeighborAccessor},
-    test::cmp::{VerboseEq, verbose_eq},
+    test::cmp::VerboseEq,
 };
-
-verbose_eq!(DegreeStats {
-    max_degree,
-    avg_degree,
-    min_degree,
-    cnt_less_than_two,
-});
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_count_reachable_nodes() {
