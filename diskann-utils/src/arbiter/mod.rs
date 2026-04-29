@@ -4,7 +4,7 @@
  */
 
 mod buffer;
-pub use buffer::Buffer;
+pub use buffer::{Buffer, prefetch_cachelines};
 
 pub mod epoch;
 
@@ -14,4 +14,5 @@ pub use freelist::Freelist;
 pub mod generation;
 pub use generation::Generation;
 
-mod store;
+pub mod store;
+pub use store::Store;

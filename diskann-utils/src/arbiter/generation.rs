@@ -12,6 +12,7 @@ pub struct Generation(u64);
 impl Generation {
     const MASK: u64 = 0x3fff_ffff_ffff_ffff;
 
+    #[inline]
     pub const fn new(value: u64, metadata: Metadata) -> Option<Self> {
         if value > Self::MASK {
             None
@@ -25,18 +26,22 @@ impl Generation {
         Self::from_raw((metadata as u64) << 62 | Self::MASK)
     }
 
+    #[inline]
     pub const fn from_raw(value: u64) -> Self {
         Self(value)
     }
 
+    #[inline]
     pub const fn value(self) -> u64 {
         self.0 & Self::MASK
     }
 
+    #[inline]
     pub const fn raw(self) -> u64 {
         self.0
     }
 
+    #[inline]
     pub const fn metadata(self) -> Metadata {
         match (self.0 & !Self::MASK) >> 62 {
             0 => Metadata::Zero,
@@ -60,14 +65,17 @@ pub enum Metadata {
 pub struct Ref<'a>(&'a AtomicU64);
 
 impl<'a> Ref<'a> {
+    #[inline]
     pub(crate) fn new(slot: &'a AtomicU64) -> Self {
         Self(slot)
     }
 
+    #[inline]
     fn inner(&self) -> &'a AtomicU64 {
         self.0
     }
 
+    #[inline]
     pub fn get(&self, ordering: Ordering) -> Generation {
         Generation::from_raw(self.0.load(ordering))
     }
@@ -78,10 +86,12 @@ impl<'a> Ref<'a> {
 pub struct Mut<'a>(Ref<'a>);
 
 impl<'a> Mut<'a> {
+    #[inline]
     pub(crate) fn new(slot: &'a AtomicU64) -> Self {
         Self(Ref::new(slot))
     }
 
+    #[inline]
     pub fn try_set(
         &self,
         current: Generation,
@@ -95,6 +105,7 @@ impl<'a> Mut<'a> {
             .map_err(Generation::from_raw)
     }
 
+    #[inline]
     pub fn set(&self, generation: Generation, ordering: Ordering) {
         self.inner().store(generation.raw(), ordering)
     }

@@ -25,7 +25,7 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
 };
 
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{arbiter, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, distance::Metric};
 
 use crate::model::graph::{
@@ -109,6 +109,29 @@ where
 // FullAccessor //
 //////////////////
 
+#[derive(Debug)]
+struct Reader<'a, T> {
+    inner: arbiter::store::Reader<'a>,
+    bytes: usize,
+    _type: std::marker::PhantomData<T>,
+}
+
+impl<'a, T> Reader<'a, T>
+where
+    T: bytemuck::Pod,
+{
+    #[inline(always)]
+    fn read(&self, i: usize) -> &[T] {
+        let slice = self.inner.read(i).unwrap();
+
+        // SAFETY: The buffer is 128-byte aligned (satisfies any primitive T alignment),
+        // self.bytes is always dim * size_of::<T>() and therefore T-aligned and
+        // evenly divisible, and self.bytes <= stride (the slice length) by construction.
+        let count = self.bytes / std::mem::size_of::<T>();
+        unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const T, count) }
+    }
+}
+
 /// An accessor for retrieving full-precision vectors from the `DefaultProvider`.
 ///
 /// This type implements the following traits:
@@ -122,6 +145,7 @@ where
 {
     /// The host provider.
     provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+    reader: Reader<'a, T>,
 
     /// A buffer for resolving iterators given during bulk operations.
     ///
@@ -169,6 +193,11 @@ where
     pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>) -> Self {
         Self {
             provider,
+            reader: Reader {
+                inner: provider.base_vectors.store.reader(),
+                bytes: std::mem::size_of::<T>() * provider.base_vectors.dim(),
+                _type: std::marker::PhantomData,
+            },
             id_buffer: Vec::new(),
         }
     }
@@ -216,11 +245,7 @@ where
         &mut self,
         id: Self::Id,
     ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        // SAFETY: We've decided to live with UB (undefined behavior) that can result from
-        // potentially mixing unsynchronized reads and writes on the underlying memory.
-        std::future::ready(Ok(unsafe {
-            self.provider.base_vectors.get_vector_sync(id.into_usize())
-        }))
+        std::future::ready(Ok(self.reader.read(id.into_usize())))
     }
 
     /// Perform a bulk operation.
@@ -247,25 +272,16 @@ where
 
         // Prefetch the first few vectors.
         for id in id_buffer.iter().take(lookahead) {
-            self.provider.base_vectors.prefetch_hint(id.into_usize());
+            self.reader.inner.prefetch(id.into_usize())
+            // self.provider.base_vectors.prefetch_hint(id.into_usize());
         }
 
         for (i, id) in id_buffer.iter().enumerate() {
             // Prefetch `lookahead` iterations ahead as long as it is safe.
             if lookahead > 0 && i + lookahead < len {
-                self.provider
-                    .base_vectors
-                    .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                self.reader.inner.prefetch(id_buffer[i + lookahead].into_usize());
             }
-
-            // Invoke the passed closure on the full-precision vector.
-            //
-            // SAFETY: We're accepting the consequences of potential unsynchronized,
-            // concurrent mutation.
-            f(
-                unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) },
-                *id,
-            )
+            f(self.reader.read(id.into_usize()), *id)
         }
 
         std::future::ready(Ok(()))
@@ -382,12 +398,11 @@ where
                 if checker.deletion_check(n.id) {
                     None
                 } else {
-                    Some((
-                        n.id,
-                        f.evaluate_similarity(query, unsafe {
-                            full.get_vector_sync(n.id.into_usize())
-                        }),
-                    ))
+                    todo!();
+                    // Some((
+                    //     n.id,
+                    //     f.evaluate_similarity(query, accessor.reader.read(n.id.into_usize()))
+                    //     ))
                 }
             })
             .collect();
@@ -505,9 +520,7 @@ where
         Self: 'a;
 
     fn get(&self, id: u32) -> Option<&[T]> {
-        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
-        // this invariant is not enforced. See `get_vector_sync` for details
-        Some(unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) })
+        Some(self.reader.read(id.into_usize()))
     }
 }
 
@@ -594,6 +607,7 @@ where
         _context: &'a Ctx,
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        Ok(unsafe { provider.base_vectors.get_vector_sync(id.into_usize()) }.into())
+        todo!()
+        // Ok(unsafe { provider.base_vectors.get_vector_sync(id.into_usize()) }.into())
     }
 }

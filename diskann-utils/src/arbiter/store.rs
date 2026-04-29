@@ -3,9 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-use super::{epoch, generation, Generation, Buffer, buffer, Freelist};
+use super::{buffer, epoch, generation, Buffer, Freelist, Generation};
+use super::buffer::prefetch_tag;
 
 #[derive(Debug)]
 pub struct Store {
@@ -15,7 +19,19 @@ pub struct Store {
     registry: epoch::Registry,
 }
 
+const SENTINEL: Generation = Generation::max(State::Available.metadata());
+
 impl Store {
+    pub fn new(len: usize, bytes: usize) -> Self {
+        Self {
+            buffer: Buffer::new(bytes, len),
+            tags: (0..len).map(|_| AtomicU64::new(SENTINEL.raw())).collect(),
+            freelist: Freelist::new(len.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
+            registry: epoch::Registry::new(),
+        }
+    }
+
+    #[inline]
     pub fn tag(&self, i: usize) -> Option<generation::Ref<'_>> {
         self.tags.get(i).map(generation::Ref::new)
     }
@@ -50,6 +66,14 @@ impl Store {
         self.tags.get(i).map(generation::Mut::new)
     }
 
+    /// Issue prefetch hints for the generation tag and data at index `i`.
+    #[inline(always)]
+    pub fn prefetch(&self, i: usize) {
+        if let Some(tag) = self.tags.get(i) {
+            prefetch_tag(tag);
+        }
+        self.buffer.prefetch(i, self.buffer.stride());
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,14 +87,20 @@ pub enum State {
     Available = 3,
 }
 
+impl State {
+    const fn metadata(self) -> generation::Metadata {
+        match self {
+            State::Used => generation::Metadata::Zero,
+            State::Owned => generation::Metadata::One,
+            State::SoftDeleted => generation::Metadata::Two,
+            State::Available => generation::Metadata::Three,
+        }
+    }
+}
+
 impl From<State> for generation::Metadata {
     fn from(state: State) -> Self {
-        match state {
-            State::Used => Self::Zero,
-            State::Owned => Self::One,
-            State::SoftDeleted => Self::Two,
-            State::Available => Self::Three,
-        }
+        state.metadata()
     }
 }
 
@@ -85,6 +115,7 @@ impl From<generation::Metadata> for State {
     }
 }
 
+#[derive(Debug)]
 pub struct Reader<'a> {
     store: &'a Store,
     epoch: epoch::Guard<'a>,
@@ -96,17 +127,26 @@ impl<'a> Reader<'a> {
     ///
     /// 1. Index `i` is out-of-bounds.
     /// 2. The read cannot be guaranteed to be race-free.
-    fn read(&self, i: usize) -> Option<&[u8]> {
-        // Only access if allowed by the generation tag.
+    #[inline]
+    pub fn read(&self, i: usize) -> Option<&[u8]> {
+        // Bounds-check once via the tags array.
         let generation = self.store.tag(i)?.get(Ordering::Acquire);
         if generation.value() <= self.epoch.generation() {
-            Some(unsafe { self.store.buffer.get(i)?.as_slice() })
+            // SAFETY: tags and buffer always have the same length, and we
+            // verified i < tags.len() above.
+            Some(unsafe { self.store.buffer.get_unchecked(i).as_slice() })
         } else {
             None
         }
     }
+
+    #[inline(always)]
+    pub fn prefetch(&self, i: usize) {
+        self.store.prefetch(i)
+    }
 }
 
+#[derive(Debug)]
 pub struct Write<'a> {
     tag: generation::Mut<'a>,
     generation: Generation,
@@ -114,6 +154,10 @@ pub struct Write<'a> {
 }
 
 impl<'a> Write<'a> {
+    pub fn raw_slice(&mut self) -> buffer::Slice<'_> {
+        self.data
+    }
+
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.data.as_mut_slice() }
     }
@@ -124,4 +168,3 @@ impl Drop for Write<'_> {
         self.tag.set(self.generation, Ordering::Release)
     }
 }
-

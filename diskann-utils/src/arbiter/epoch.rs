@@ -108,6 +108,7 @@ pub struct Guard<'a> {
 
 impl Guard<'_> {
     /// Return the generation associated with the [`Guard`]'s creation.
+    #[inline]
     pub fn generation(&self) -> u64 {
         self.generation
     }

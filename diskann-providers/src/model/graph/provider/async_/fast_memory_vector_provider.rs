@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{ANNError, ANNResult, utils::VectorRepr};
+use diskann_utils::arbiter;
 use diskann_vector::distance::Metric;
 
 use super::common::{AlignedMemoryVectorStore, PrefetchCacheLineLevel, TestCallCount};
@@ -39,12 +40,7 @@ const PREFETCH_DEFAULT: usize = 8;
 pub struct FastMemoryVectorProviderAsync<Data: GraphDataType> {
     dim: usize,
     max_vectors: usize,
-    vectors: AlignedMemoryVectorStore<Data::VectorDataType>,
-
-    // We keep only write locks as reads are unsynchronized. Since there are
-    // only writers, we use Mutex here. Note that sync::Mutex is ok here
-    // because the Mutex is never held across an await.
-    write_locks: Vec<Mutex<()>>,
+    pub(crate) store: arbiter::Store,
 
     // The distance object used to compare two vector representations.
     distance: <Data::VectorDataType as VectorRepr>::Distance,
@@ -65,17 +61,21 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
         prefetch_cache_line_level: Option<PrefetchCacheLineLevel>,
         prefetch_lookahead: Option<usize>,
     ) -> Self {
-        let vectors = AlignedMemoryVectorStore::with_capacity(max_vectors, dim);
+        let store = arbiter::Store::new(
+            max_vectors,
+            (std::mem::size_of::<Data::VectorDataType>() * dim).next_multiple_of(64),
+        );
 
-        let write_locks = (0..max_vectors.div_ceil(WRITE_LOCK_GRANULARITY))
-            .map(|_| Mutex::new(()))
-            .collect::<Vec<_>>();
+        // let vectors = AlignedMemoryVectorStore::with_capacity(max_vectors, dim);
+
+        // let write_locks = (0..max_vectors.div_ceil(WRITE_LOCK_GRANULARITY))
+        //     .map(|_| Mutex::new(()))
+        //     .collect::<Vec<_>>();
 
         Self {
             dim,
             max_vectors,
-            vectors,
-            write_locks,
+            store,
             distance: Data::VectorDataType::distance(metric, Some(dim)),
             num_get_calls: TestCallCount::default(),
             prefetch_cache_line_level: prefetch_cache_line_level.unwrap_or_default(),
@@ -101,27 +101,27 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
         &self.distance
     }
 
-    /// Return an "immutable" slice over the data at index `i`.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because this provider does not give a guarantee on
-    /// exclusivity of the returned data. That is, the returned data *can* be modified
-    /// concurrently using unsynchronized accesses.
-    ///
-    /// It's the caller's responsibility to either:
-    ///
-    /// 1. Use this method in a way that ensures mutual exclusion with mutable references to
-    ///    the same ID.
-    ///
-    /// 2. Be okay with racey data.
-    #[inline(always)]
-    pub unsafe fn get_vector_sync(&self, i: usize) -> &[Data::VectorDataType] {
-        self.num_get_calls.increment();
-        // SAFETY: The caller must ensure that `i < self.total()` and that there is no
-        // concurrent mutable access to the vector at index `i`.
-        unsafe { self.vectors.get_slice(i) }
-    }
+    // /// Return an "immutable" slice over the data at index `i`.
+    // ///
+    // /// # Safety
+    // ///
+    // /// This function is unsafe because this provider does not give a guarantee on
+    // /// exclusivity of the returned data. That is, the returned data *can* be modified
+    // /// concurrently using unsynchronized accesses.
+    // ///
+    // /// It's the caller's responsibility to either:
+    // ///
+    // /// 1. Use this method in a way that ensures mutual exclusion with mutable references to
+    // ///    the same ID.
+    // ///
+    // /// 2. Be okay with racey data.
+    // #[inline(always)]
+    // pub unsafe fn get_vector_sync(&self, i: usize) -> &[Data::VectorDataType] {
+    //     self.num_get_calls.increment();
+
+    //     // YOLO!
+    //     bytemuck::cast_slice::<u8, Data::VectorDataType>(self.store.reader().read(i).unwrap())
+    // }
 
     /// Store the data in `v` into the internal data at position `i`.
     ///
@@ -158,14 +158,10 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
             ));
         }
 
-        let lock_id = i / WRITE_LOCK_GRANULARITY;
-        let _guard = self.write_locks[lock_id].lock_or_panic();
-        // SAFETY: `get_mut_slice` guarantees it is safe to access the memory,
-        // and but it may be a torn read. As we are trading off synchronization
-        // for speed, this is okay.
-        unsafe {
-            self.vectors.get_mut_slice(i).copy_from_slice(v);
-        }
+        let mut write = self.store.write(i).unwrap();
+        let bytes = std::mem::size_of::<Data::VectorDataType>() * self.dim;
+
+        write.as_mut_slice()[..bytes].copy_from_slice(bytemuck::must_cast_slice::<_, u8>(v));
 
         Ok(())
     }
@@ -211,24 +207,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     /// the cache line level determines how many cache lines to prefetch
     #[inline(always)]
     pub(crate) fn prefetch_hint(&self, i: usize) {
-        // SAFETY: Racing on the underlying data is okay because we are dispatching to
-        // an architectural primitive for prefetching that doesn't care about the data
-        // itself, just its address.
-        let vector = unsafe { self.vectors.get_slice(i) };
-        match self.prefetch_cache_line_level {
-            PrefetchCacheLineLevel::CacheLine4 => {
-                diskann_vector::prefetch_hint_max::<4, _>(vector);
-            }
-            PrefetchCacheLineLevel::CacheLine8 => {
-                diskann_vector::prefetch_hint_max::<8, _>(vector);
-            }
-            PrefetchCacheLineLevel::CacheLine16 => {
-                diskann_vector::prefetch_hint_max::<16, _>(vector);
-            }
-            PrefetchCacheLineLevel::All => {
-                diskann_vector::prefetch_hint_all(vector);
-            }
-        }
+        self.store.prefetch(i);
     }
 
     /// Returns the prefetch lookahead for full-precision bulk operations.
@@ -311,9 +290,11 @@ impl<Data: GraphDataType> storage::bin::GetData for FastMemoryVectorProviderAsyn
     type Item<'a> = &'a [Self::Element];
 
     fn get_data(&self, i: usize) -> ANNResult<Self::Item<'_>> {
-        // SAFETY: We aren't full protected against races on the underlying data, but at
-        // least `&self` will keep the data alive.
-        Ok(unsafe { self.get_vector_sync(i) })
+        todo!()
+
+        // // SAFETY: We aren't full protected against races on the underlying data, but at
+        // // least `&self` will keep the data alive.
+        // Ok(unsafe { self.get_vector_sync(i) })
     }
 
     /// Return the total number of points, including frozen points.

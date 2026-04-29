@@ -342,15 +342,16 @@ where
 
     /// The default behavior of `get_element` returns a full-precision vector. The
     /// implementation of [`Fill`] is how the `max_fp_vecs_per_fill` is used.
-    fn get_element(
+    async fn get_element(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        // SAFETY: We've decided to live with UB that can result from potentially mixing
-        // unsynchronized reads and writes on the underlying memory.
-        std::future::ready(Ok(unsafe {
-            distances::pq::Hybrid::Full(self.provider.base_vectors.get_vector_sync(id.into_usize()))
-        }))
+    ) -> Result<Self::Element<'_>, Self::GetError> {
+        todo!();
+        // // SAFETY: We've decided to live with UB that can result from potentially mixing
+        // // unsynchronized reads and writes on the underlying memory.
+        // std::future::ready(Ok(unsafe {
+        //     distances::pq::Hybrid::Full(self.provider.base_vectors.get_vector_sync(id.into_usize()))
+        // }))
     }
 }
 
@@ -441,11 +442,12 @@ where
     fn get(&self, id: u32) -> Option<Self::Element<'_>> {
         let provider = &self.accessor.provider;
         let element = if self.full.0.contains(&id) {
-            // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
-            // this invariant is not enforced. See `get_vector_sync` for details.
-            unsafe {
-                distances::pq::Hybrid::Full(provider.base_vectors.get_vector_sync(id.into_usize()))
-            }
+            todo!();
+            // // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+            // // this invariant is not enforced. See `get_vector_sync` for details.
+            // unsafe {
+            //     distances::pq::Hybrid::Full(provider.base_vectors.get_vector_sync(id.into_usize()))
+            // }
         } else {
             // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
             // this invariant is not enforced. See `get_vector_sync` for details.
@@ -650,7 +652,8 @@ where
         _context: &'a Ctx,
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        Ok(unsafe { provider.base_vectors.get_vector_sync(id.into_usize()) }.into())
+        todo!();
+        // Ok(unsafe { provider.base_vectors.get_vector_sync(id.into_usize()) }.into())
     }
 }
 
