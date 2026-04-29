@@ -14,17 +14,17 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         use half::f16;
 
         // f32
-        benchmarks.register::<imp::ScalarQuantized<'static, 8, f32>>("async-sq-8-bit-f32");
-        benchmarks.register::<imp::ScalarQuantized<'static, 4, f32>>("async-sq-4-bit-f32");
-        benchmarks.register::<imp::ScalarQuantized<'static, 2, f32>>("async-sq-2-bit-f32");
-        benchmarks.register::<imp::ScalarQuantized<'static, 1, f32>>("async-sq-1-bit-f32");
+        benchmarks.register("async-sq-8-bit-f32", imp::ScalarQuantized::<8, f32>::new());
+        benchmarks.register("async-sq-4-bit-f32", imp::ScalarQuantized::<4, f32>::new());
+        benchmarks.register("async-sq-2-bit-f32", imp::ScalarQuantized::<2, f32>::new());
+        benchmarks.register("async-sq-1-bit-f32", imp::ScalarQuantized::<1, f32>::new());
         // f16
-        benchmarks.register::<imp::ScalarQuantized<'static, 8, f16>>("async-sq-8-bit-f16");
-        benchmarks.register::<imp::ScalarQuantized<'static, 4, f16>>("async-sq-4-bit-f16");
-        benchmarks.register::<imp::ScalarQuantized<'static, 2, f16>>("async-sq-2-bit-f16");
-        benchmarks.register::<imp::ScalarQuantized<'static, 1, f16>>("async-sq-1-bit-f16");
+        benchmarks.register("async-sq-8-bit-f16", imp::ScalarQuantized::<8, f16>::new());
+        benchmarks.register("async-sq-4-bit-f16", imp::ScalarQuantized::<4, f16>::new());
+        benchmarks.register("async-sq-2-bit-f16", imp::ScalarQuantized::<2, f16>::new());
+        benchmarks.register("async-sq-1-bit-f16", imp::ScalarQuantized::<1, f16>::new());
         // i8
-        benchmarks.register::<imp::ScalarQuantized<'static, 1, i8>>("async-sq-1-bit-i8");
+        benchmarks.register("async-sq-1-bit-i8", imp::ScalarQuantized::<1, i8>::new());
     }
 
     // Stub implementation
@@ -55,7 +55,7 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, BuildAndSearch, FullPrecision},
+            benchmarks::{run_build, run_search_outer, FullPrecision},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
             result::QuantBuildResult,
         },
@@ -64,16 +64,13 @@ mod imp {
     };
 
     // Scalar Quantized
-    pub(super) struct ScalarQuantized<'a, const NBITS: usize, T> {
-        input: &'a IndexSQOperation,
+    pub(super) struct ScalarQuantized<const NBITS: usize, T> {
         _type: std::marker::PhantomData<T>,
     }
 
-    impl<'a, const NBITS: usize, T> ScalarQuantized<'a, NBITS, T> {
-        fn new(input: &'a IndexSQOperation) -> Self {
-            assert_eq!(input.num_bits, NBITS);
+    impl<const NBITS: usize, T> ScalarQuantized<NBITS, T> {
+        pub(super) fn new() -> Self {
             Self {
-                input,
                 _type: std::marker::PhantomData,
             }
         }
@@ -81,11 +78,11 @@ mod imp {
 
     macro_rules! impl_sq_build {
         ($N:literal, $T: ty) => {
-            impl Benchmark for ScalarQuantized<'static, $N, $T> {
+            impl Benchmark for ScalarQuantized<$N, $T> {
                 type Input = IndexSQOperation;
                 type Output = QuantBuildResult;
 
-                fn try_match(input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
+                fn try_match(&self, input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
                     let mut failure_score: Option<u32> = None;
                     match input.index_operation.source {
                         IndexSource::Load(_) => {}
@@ -96,7 +93,7 @@ mod imp {
                         }
                     }
 
-                    if <FullPrecision<'static, $T> as Benchmark>::try_match(&input.index_operation)
+                    if FullPrecision::<$T>::new().try_match(&input.index_operation)
                         .is_err()
                     {
                         *failure_score.get_or_insert(0) += 1;
@@ -113,6 +110,7 @@ mod imp {
                 }
 
                 fn description(
+                    &self,
                     f: &mut std::fmt::Formatter<'_>,
                     input: Option<&IndexSQOperation>,
                 ) -> std::fmt::Result {
@@ -173,25 +171,20 @@ mod imp {
                 }
 
                 fn run(
+                    &self,
                     input: &IndexSQOperation,
                     checkpoint: Checkpoint<'_>,
-                    output: &mut dyn Output,
-                ) -> anyhow::Result<QuantBuildResult> {
-                    let sq = ScalarQuantized::<$N, $T>::new(input);
-                    BuildAndSearch::run(sq, checkpoint, output)
-                }
-            }
-
-            impl<'a> BuildAndSearch<'a> for ScalarQuantized<'a, $N, $T> {
-                type Data = QuantBuildResult;
-                fn run(
-                    self,
-                    checkpoint: Checkpoint<'_>,
                     mut output: &mut dyn Output,
-                ) -> Result<Self::Data, anyhow::Error> {
-                    writeln!(output, "{}", self.input)?;
+                ) -> anyhow::Result<QuantBuildResult> {
+                    assert_eq!(
+                        input.num_bits,
+                        $N,
+                        "INTERNAL ERROR: this should not have passed the match check"
+                    );
 
-                    let (index, build_stats, quant_training_time) = match &self.input.index_operation.source {
+                    writeln!(output, "{}", input)?;
+
+                    let (index, build_stats, quant_training_time) = match &input.index_operation.source {
                         IndexSource::Load(load) => {
                             let index_config: &IndexConfiguration = &load.to_config()?;
 
@@ -208,7 +201,7 @@ mod imp {
 
                         let start = std::time::Instant::now();
                         let quantizer = diskann_quantization::scalar::train::ScalarQuantizationParameters::new(
-                            diskann_quantization::num::Positive::new(self.input.standard_deviations).context(
+                            diskann_quantization::num::Positive::new(input.standard_deviations).context(
                                 "please file a bug report, this should not have made it past the\
                                     front end",
                             )?,
@@ -216,8 +209,8 @@ mod imp {
                         .train(data.as_view());
                                             let create_index = |data_view: MatrixView<$T>| {
                         let index = diskann_async::new_quant_index::<$T, _, _>(
-                            self.input.try_as_config()?.build()?,
-                            self.input
+                            input.try_as_config()?.build()?,
+                            input
                                 .inmem_parameters(data_view.nrows(), data_view.ncols())?,
                             inmem::WithBits::<$N>::new(quantizer),
                             common::NoDeletes,
@@ -247,9 +240,9 @@ mod imp {
                     };
 
 
-                    let build = if self.input.use_fp_for_search {
+                    let build = if input.use_fp_for_search {
                         run_search_outer(
-                            &self.input.index_operation.search_phase,
+                            &input.index_operation.search_phase,
                             common::FullPrecision,
                             index,
                             build_stats,
@@ -257,7 +250,7 @@ mod imp {
                         )?
                     } else {
                         run_search_outer(
-                            &self.input.index_operation.search_phase,
+                            &input.index_operation.search_phase,
                             common::Quantized,
                             index,
                             build_stats,

@@ -303,137 +303,104 @@ impl std::fmt::Display for CheckResult {
 // Benchmark Registration //
 ////////////////////////////
 
-macro_rules! register {
-    ($arch:literal, $dispatcher:ident, $name:literal, $($kernel:tt)*) => {
-        #[cfg(target_arch = $arch)]
-        $dispatcher.register_regression::<$($kernel)*>($name)
-    };
-    ($dispatcher:ident, $name:literal, $($kernel:tt)*) => {
-        $dispatcher.register_regression::<$($kernel)*>($name)
-    };
-}
-
 fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
     // x86-64-v4
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-f32xf32-x86_64_V4",
-        Kernel<diskann_wide::arch::x86_64::V4, f32, f32>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-f16xf16-x86_64_V4",
-        Kernel<diskann_wide::arch::x86_64::V4, f16, f16>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-u8xu8-x86_64_V4",
-        Kernel<diskann_wide::arch::x86_64::V4, u8, u8>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-i8xi8-x86_64_V4",
-        Kernel<diskann_wide::arch::x86_64::V4, i8, i8>
-    );
+    #[cfg(target_arch = "x86_64")]
+    {
+        dispatcher.register_regression(
+            "simd-op-f32xf32-x86_64_V4",
+            Kernel::<diskann_wide::arch::x86_64::V4, f32, f32>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-f16xf16-x86_64_V4",
+            Kernel::<diskann_wide::arch::x86_64::V4, f16, f16>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-u8xu8-x86_64_V4",
+            Kernel::<diskann_wide::arch::x86_64::V4, u8, u8>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-i8xi8-x86_64_V4",
+            Kernel::<diskann_wide::arch::x86_64::V4, i8, i8>::new(),
+        );
+    }
 
     // x86-64-v3
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-f32xf32-x86_64_V3",
-        Kernel<diskann_wide::arch::x86_64::V3, f32, f32>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-f16xf16-x86_64_V3",
-        Kernel<diskann_wide::arch::x86_64::V3, f16, f16>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-u8xu8-x86_64_V3",
-        Kernel<diskann_wide::arch::x86_64::V3, u8, u8>
-    );
-    register!(
-        "x86_64",
-        dispatcher,
-        "simd-op-i8xi8-x86_64_V3",
-        Kernel<diskann_wide::arch::x86_64::V3, i8, i8>
-    );
+    #[cfg(target_arch = "x86_64")]
+    {
+        dispatcher.register_regression(
+            "simd-op-f32xf32-x86_64_V3",
+            Kernel::<diskann_wide::arch::x86_64::V3, f32, f32>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-f16xf16-x86_64_V3",
+            Kernel::<diskann_wide::arch::x86_64::V3, f16, f16>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-u8xu8-x86_64_V3",
+            Kernel::<diskann_wide::arch::x86_64::V3, u8, u8>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-i8xi8-x86_64_V3",
+            Kernel::<diskann_wide::arch::x86_64::V3, i8, i8>::new(),
+        );
+    }
 
     // aarch64-neon
-    register!(
-        "aarch64",
-        dispatcher,
-        "simd-op-f32xf32-aarch64_neon",
-        Kernel<diskann_wide::arch::aarch64::Neon, f32, f32>
-    );
-    register!(
-        "aarch64",
-        dispatcher,
-        "simd-op-f16xf16-aarch64_neon",
-        Kernel<diskann_wide::arch::aarch64::Neon, f16, f16>
-    );
-    register!(
-        "aarch64",
-        dispatcher,
-        "simd-op-u8xu8-aarch64_neon",
-        Kernel<diskann_wide::arch::aarch64::Neon, u8, u8>
-    );
-    register!(
-        "aarch64",
-        dispatcher,
-        "simd-op-i8xi8-aarch64_neon",
-        Kernel<diskann_wide::arch::aarch64::Neon, i8, i8>
-    );
+    #[cfg(target_arch = "aarch64")]
+    {
+        dispatcher.register_regression(
+            "simd-op-f32xf32-aarch64_neon",
+            Kernel::<diskann_wide::arch::aarch64::Neon, f32, f32>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-f16xf16-aarch64_neon",
+            Kernel::<diskann_wide::arch::aarch64::Neon, f16, f16>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-u8xu8-aarch64_neon",
+            Kernel::<diskann_wide::arch::aarch64::Neon, u8, u8>::new(),
+        );
+        dispatcher.register_regression(
+            "simd-op-i8xi8-aarch64_neon",
+            Kernel::<diskann_wide::arch::aarch64::Neon, i8, i8>::new(),
+        );
+    }
 
     // scalar
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-f32xf32-scalar",
-        Kernel<diskann_wide::arch::Scalar, f32, f32>
+        Kernel::<diskann_wide::arch::Scalar, f32, f32>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-f16xf16-scalar",
-        Kernel<diskann_wide::arch::Scalar, f16, f16>
+        Kernel::<diskann_wide::arch::Scalar, f16, f16>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-u8xu8-scalar",
-        Kernel<diskann_wide::arch::Scalar, u8, u8>
+        Kernel::<diskann_wide::arch::Scalar, u8, u8>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-i8xi8-scalar",
-        Kernel<diskann_wide::arch::Scalar, i8, i8>
+        Kernel::<diskann_wide::arch::Scalar, i8, i8>::new(),
     );
 
     // reference
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-f32xf32-reference",
-        Kernel<Reference, f32, f32>
+        Kernel::<Reference, f32, f32>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-f16xf16-reference",
-        Kernel<Reference, f16, f16>
+        Kernel::<Reference, f16, f16>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-u8xu8-reference",
-        Kernel<Reference, u8, u8>
+        Kernel::<Reference, u8, u8>::new(),
     );
-    register!(
-        dispatcher,
+    dispatcher.register_regression(
         "simd-op-i8xi8-reference",
-        Kernel<Reference, i8, i8>
+        Kernel::<Reference, i8, i8>::new(),
     );
 }
 
@@ -449,14 +416,12 @@ struct Reference;
 struct Identity<T>(T);
 
 struct Kernel<A, Q, D> {
-    arch: A,
     _type: std::marker::PhantomData<(A, Q, D)>,
 }
 
 impl<A, Q, D> Kernel<A, Q, D> {
-    fn new(arch: A) -> Self {
+    fn new() -> Self {
         Self {
-            arch,
             _type: std::marker::PhantomData,
         }
     }
@@ -582,13 +547,16 @@ where
     datatype::Type<Q>: DispatchRule<datatype::DataType>,
     datatype::Type<D>: DispatchRule<datatype::DataType>,
     Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
-    Kernel<A, Q, D>: RunBenchmark,
+    Kernel<A, Q, D>: RunBenchmark<A>,
+    A: 'static,
+    Q: 'static,
+    D: 'static,
 {
     type Input = SimdOp;
     type Output = Vec<RunResult>;
 
     // Matching simply requires that we match the inner type.
-    fn try_match(from: &SimdOp) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, from: &SimdOp) -> Result<MatchScore, FailureScore> {
         let mut failscore: Option<u32> = None;
         if datatype::Type::<Q>::try_match(&from.query_type).is_err() {
             *failscore.get_or_insert(0) += 10;
@@ -607,19 +575,23 @@ where
     }
 
     fn run(
+        &self,
         input: &SimdOp,
         _: diskann_benchmark_runner::Checkpoint<'_>,
         mut output: &mut dyn diskann_benchmark_runner::Output,
     ) -> anyhow::Result<Self::Output> {
         let arch = Identity::<A>::convert(input.arch)?.0;
-        let kernel = Self::new(arch);
         writeln!(output, "{}", input)?;
-        let results = kernel.run(input)?;
+        let results = self.run_benchmark(input, arch)?;
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
         Ok(results)
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&SimdOp>) -> std::fmt::Result {
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&SimdOp>,
+    ) -> std::fmt::Result {
         match input {
             None => {
                 describeln!(
@@ -659,13 +631,17 @@ where
     datatype::Type<Q>: DispatchRule<datatype::DataType>,
     datatype::Type<D>: DispatchRule<datatype::DataType>,
     Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
-    Kernel<A, Q, D>: RunBenchmark,
+    Kernel<A, Q, D>: RunBenchmark<A>,
+    A: 'static,
+    Q: 'static,
+    D: 'static,
 {
     type Tolerances = SimdTolerance;
     type Pass = CheckResult;
     type Fail = CheckResult;
 
     fn check(
+        &self,
         tolerance: &SimdTolerance,
         _input: &SimdOp,
         before: &Vec<RunResult>,
@@ -724,8 +700,8 @@ where
 // Benchmark //
 ///////////////
 
-trait RunBenchmark {
-    fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error>;
+trait RunBenchmark<A> {
+    fn run_benchmark(&self, input: &SimdOp, arch: A) -> Result<Vec<RunResult>, anyhow::Error>;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -856,8 +832,12 @@ impl<Q, D> Data<Q, D> {
 
 macro_rules! stamp {
     (reference, $Q:ty, $D:ty, $f_l2:ident, $f_ip:ident, $f_cosine:ident) => {
-        impl RunBenchmark for Kernel<Reference, $Q, $D> {
-            fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error> {
+        impl RunBenchmark<Reference> for Kernel<Reference, $Q, $D> {
+            fn run_benchmark(
+                &self,
+                input: &SimdOp,
+                _arch: Reference,
+            ) -> Result<Vec<RunResult>, anyhow::Error> {
                 let mut results = Vec::new();
                 for run in input.runs.iter() {
                     let data = Data::<$Q, $D>::new(run);
@@ -873,8 +853,12 @@ macro_rules! stamp {
         }
     };
     ($arch:path, $Q:ty, $D:ty) => {
-        impl RunBenchmark for Kernel<$arch, $Q, $D> {
-            fn run(self, input: &SimdOp) -> Result<Vec<RunResult>, anyhow::Error> {
+        impl RunBenchmark<$arch> for Kernel<$arch, $Q, $D> {
+            fn run_benchmark(
+                &self,
+                input: &SimdOp,
+                arch: $arch,
+            ) -> Result<Vec<RunResult>, anyhow::Error> {
                 let mut results = Vec::new();
 
                 let l2 = &simd::L2 {};
@@ -891,16 +875,13 @@ macro_rules! stamp {
                     // target features.
                     let result = match run.distance {
                         SimilarityMeasure::SquaredL2 => data.run(run, |q, d| {
-                            self.arch
-                                .run2(|q, d| simd::simd_op(l2, self.arch, q, d), q, d)
+                            arch.run2(|q, d| simd::simd_op(l2, arch, q, d), q, d)
                         }),
                         SimilarityMeasure::InnerProduct => data.run(run, |q, d| {
-                            self.arch
-                                .run2(|q, d| simd::simd_op(ip, self.arch, q, d), q, d)
+                            arch.run2(|q, d| simd::simd_op(ip, arch, q, d), q, d)
                         }),
                         SimilarityMeasure::Cosine => data.run(run, |q, d| {
-                            self.arch
-                                .run2(|q, d| simd::simd_op(cosine, self.arch, q, d), q, d)
+                            arch.run2(|q, d| simd::simd_op(cosine, arch, q, d), q, d)
                         }),
                     };
                     results.push(result)
@@ -1237,60 +1218,64 @@ mod tests {
 
     #[test]
     fn check_rejects_mismatched_runs() {
-        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+        let kernel = Kernel::<diskann_wide::arch::Scalar, f32, f32>::new();
 
-        let err = Bench::check(
-            &tolerance(0.0),
-            &tiny_op(),
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
-            &vec![tiny_result(SimilarityMeasure::Cosine, 100)],
-        )
-        .unwrap_err();
+        let err = kernel
+            .check(
+                &tolerance(0.0),
+                &tiny_op(),
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+                &vec![tiny_result(SimilarityMeasure::Cosine, 100)],
+            )
+            .unwrap_err();
 
         assert_eq!(err.to_string(), "run 0 mismatched");
     }
 
     #[test]
     fn check_allows_negative_relative_change() {
-        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+        let kernel = Kernel::<diskann_wide::arch::Scalar, f32, f32>::new();
 
-        let result = Bench::check(
-            &tolerance(0.0),
-            &tiny_op(),
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 95)],
-        )
-        .unwrap();
+        let result = kernel
+            .check(
+                &tolerance(0.0),
+                &tiny_op(),
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 95)],
+            )
+            .unwrap();
 
         assert!(matches!(result, PassFail::Pass(_)));
     }
 
     #[test]
     fn check_passes_on_tolerance_boundary() {
-        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+        let kernel = Kernel::<diskann_wide::arch::Scalar, f32, f32>::new();
 
-        let result = Bench::check(
-            &tolerance(0.05),
-            &tiny_op(),
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 105)],
-        )
-        .unwrap();
+        let result = kernel
+            .check(
+                &tolerance(0.05),
+                &tiny_op(),
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 105)],
+            )
+            .unwrap();
 
         assert!(matches!(result, PassFail::Pass(_)));
     }
 
     #[test]
     fn check_fails_above_tolerance_boundary() {
-        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+        let kernel = Kernel::<diskann_wide::arch::Scalar, f32, f32>::new();
 
-        let result = Bench::check(
-            &tolerance(0.05),
-            &tiny_op(),
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 106)],
-        )
-        .unwrap();
+        let result = kernel
+            .check(
+                &tolerance(0.05),
+                &tiny_op(),
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 100)],
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 106)],
+            )
+            .unwrap();
 
         assert!(matches!(result, PassFail::Fail(_)));
     }
@@ -1322,15 +1307,16 @@ mod tests {
     // We require at least a non-zero value.
     #[test]
     fn zero_values_rejected() {
-        type Bench = Kernel<diskann_wide::arch::Scalar, f32, f32>;
+        let kernel = Kernel::<diskann_wide::arch::Scalar, f32, f32>::new();
 
-        let result = Bench::check(
-            &tolerance(0.05),
-            &tiny_op(),
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
-            &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
-        )
-        .unwrap();
+        let result = kernel
+            .check(
+                &tolerance(0.05),
+                &tiny_op(),
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
+                &vec![tiny_result(SimilarityMeasure::SquaredL2, 0)],
+            )
+            .unwrap();
 
         assert!(matches!(result, PassFail::Fail(_)));
     }
