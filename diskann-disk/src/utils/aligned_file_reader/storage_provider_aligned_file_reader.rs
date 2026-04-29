@@ -54,7 +54,7 @@ mod tests {
     use diskann_utils::test_data_root;
 
     use super::*;
-    use diskann_quantization::{alloc::aligned_slice, num::PowerOfTwo};
+    use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
     fn test_index_path() -> String {
         "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
@@ -79,7 +79,7 @@ mod tests {
         let read_length = 512;
         let num_read = 10;
         let mut aligned_mem =
-            aligned_slice::<u8>(read_length * num_read, PowerOfTwo::new(512).unwrap()).unwrap();
+            Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
 
         // create and add AlignedReads to the vector
         let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
