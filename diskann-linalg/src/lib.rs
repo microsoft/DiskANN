@@ -36,6 +36,12 @@ pub enum SgemmError {
         expected_len: usize,
         actual_len: usize,
     },
+    /// Dimension overflow when computing matrix size.
+    DimensionOverflow {
+        operation: &'static str,
+        dim1: usize,
+        dim2: usize,
+    },
 }
 
 impl fmt::Display for SgemmError {
@@ -70,6 +76,15 @@ impl fmt::Display for SgemmError {
                 f,
                 "expected {}x{} matrix `c` to have length {}, instead got {}",
                 expected_rows, expected_cols, expected_len, actual_len
+            ),
+            SgemmError::DimensionOverflow {
+                operation,
+                dim1,
+                dim2,
+            } => write!(
+                f,
+                "dimension overflow in {}: {} * {} would overflow usize",
+                operation, dim1, dim2
             ),
         }
     }
@@ -132,6 +147,9 @@ mod reference;
 /// # Errors
 ///
 /// Returns an error if:
+/// * `m * k` would overflow `usize`
+/// * `k * n` would overflow `usize`
+/// * `m * n` would overflow `usize`
 /// * `a.len() != m * k`
 /// * `b.len() != k * n`
 /// * `c.len() != m * n`
@@ -148,30 +166,48 @@ pub fn sgemm(
     beta: Option<f32>,
     c: &mut [f32],
 ) -> Result<(), SgemmError> {
-    // Check size requirements.
-    if a.len() != m * k {
+    // Check size requirements with overflow protection.
+    let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
+        operation: "matrix a (m * k)",
+        dim1: m,
+        dim2: k,
+    })?;
+
+    if a.len() != expected_a_len {
         return Err(SgemmError::InvalidMatrixADimensions {
             expected_rows: m,
             expected_cols: k,
-            expected_len: m * k,
+            expected_len: expected_a_len,
             actual_len: a.len(),
         });
     }
 
-    if b.len() != k * n {
+    let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
+        operation: "matrix b (k * n)",
+        dim1: k,
+        dim2: n,
+    })?;
+
+    if b.len() != expected_b_len {
         return Err(SgemmError::InvalidMatrixBDimensions {
             expected_rows: k,
             expected_cols: n,
-            expected_len: k * n,
+            expected_len: expected_b_len,
             actual_len: b.len(),
         });
     }
 
-    if c.len() != m * n {
+    let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
+        operation: "matrix c (m * n)",
+        dim1: m,
+        dim2: n,
+    })?;
+
+    if c.len() != expected_c_len {
         return Err(SgemmError::InvalidMatrixCDimensions {
             expected_rows: m,
             expected_cols: n,
-            expected_len: m * n,
+            expected_len: expected_c_len,
             actual_len: c.len(),
         });
     }
@@ -260,6 +296,75 @@ mod tests {
                 panic!("{} on iteration {}. Problem: {:?}", err, i, problem);
             }
         }
+    }
+
+    #[test]
+    fn test_sgemm_m_times_k_overflow() {
+        let mut c = [0.0f32];
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            usize::MAX,
+            1,
+            2,
+            1.0,
+            &[],
+            &[0.0],
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        let SgemmError::DimensionOverflow { operation, .. } = err else {
+            panic!("Expected DimensionOverflow, got {:?}", err);
+        };
+        assert!(operation.contains("matrix a (m * k)"));
+    }
+
+    #[test]
+    fn test_sgemm_k_times_n_overflow() {
+        let mut c = vec![0.0f32; 10];
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            1,
+            usize::MAX,
+            10,
+            1.0,
+            &[0.0f32; 10],
+            &[],
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        let SgemmError::DimensionOverflow { operation, .. } = err else {
+            panic!("Expected DimensionOverflow, got {:?}", err);
+        };
+        assert!(operation.contains("matrix b (k * n)"));
+    }
+
+    #[test]
+    fn test_sgemm_m_times_n_overflow() {
+        let mut c = [];
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            2,
+            usize::MAX,
+            0,
+            1.0,
+            &[],
+            &[],
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        let SgemmError::DimensionOverflow { operation, .. } = err else {
+            panic!("Expected DimensionOverflow, got {:?}", err);
+        };
+        assert!(operation.contains("matrix c (m * n)"));
     }
 
     ///////////////
