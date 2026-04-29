@@ -89,9 +89,7 @@ pub trait FlatIterator: HasId + Send + Sync {
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
 }
 
-///////////////
-/// Default ///
-///////////////
+// ─── Default adapter ────────────────────────────────────────────────────────
 
 /// Bridges a [`FlatIterator`] into an [`OnElementsUnordered`] by looping over
 /// [`FlatIterator::next`] and reborrowing each element into the closure.
