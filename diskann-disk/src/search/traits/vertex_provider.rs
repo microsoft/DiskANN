@@ -8,7 +8,7 @@ use diskann::ANNResult;
 
 /// `VertexProvider` is a trait that abstracts the access to Vertex data.
 ///
-/// This trait provides an interface to interact with different types of vertex providers structures such as `DiskVertexProvider` and `JetVertexProvider`.
+/// This trait provides an interface to interact with vertex provider structures such as `DiskVertexProvider`.
 ///
 /// # Types
 ///
@@ -47,7 +47,7 @@ pub trait VertexProvider<Data: GraphDataType>: Send + Sync {
         vertex_id: &Data::VectorIdType,
     ) -> ANNResult<&[Data::VectorIdType]>;
 
-    // Gets the associated data for a given vertex id.
+    /// Gets the associated data for a given vertex id.
     ///
     /// The `get_associated_data` function attempts to retrieve the associated data for the
     /// specified `vertex_id`. This function returns an `ANNResult` that wraps a reference to the associated data.
@@ -80,11 +80,11 @@ pub trait VertexProvider<Data: GraphDataType>: Send + Sync {
     /// If it fails, returns an `ANNError`.
     fn load_vertices(&mut self, vertex_ids: &[Data::VectorIdType]) -> ANNResult<()>;
 
-    /// This function to process the loaded node
+    /// Processes a vertex previously loaded by `load_vertices`, materializing its full-precision vector and adjacency list from the raw on-disk record so they can be served by the `get_*` accessors.
     /// # Parameters
     ///
-    /// * `vertex_id`: A Data::VectorIdType value representing the id of the vertex for which to process.
-    /// * `idx`: A usize value representing the index of the vertex in the loaded node list.
+    /// * `vertex_id`: A Data::VectorIdType value representing the id of the vertex to process.
+    /// * `idx`: A usize value representing the index of the vertex in the slice passed to the preceding `load_vertices` call.
     ///
     /// # Returns
     /// * `ANNResult<()>`: If the operation is successful, returns Ok.
@@ -92,12 +92,12 @@ pub trait VertexProvider<Data: GraphDataType>: Send + Sync {
     /// If it fails, returns an `ANNError`.
     fn process_loaded_node(&mut self, vertex_id: &Data::VectorIdType, idx: usize) -> ANNResult<()>;
 
-    // Returns the number of IO operations performed by the vertex provider.
+    /// Returns the number of IO operations performed by the vertex provider.
     fn io_operations(&self) -> u32;
 
-    // Returns the number of vertices loaded by the vertex provider.
+    /// Returns the number of vertices loaded by the vertex provider.
     fn vertices_loaded_count(&self) -> u32;
 
-    // Clears the members of the vertex provider.
+    /// Clears the members of the vertex provider.
     fn clear(&mut self);
 }

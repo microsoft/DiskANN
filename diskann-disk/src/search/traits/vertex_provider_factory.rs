@@ -9,20 +9,20 @@ use diskann::ANNResult;
 use super::VertexProvider;
 use crate::data_model::GraphHeader;
 
-/// The `VertexProviderFactory` trait provides an interface to create a GraphProvider`. This trait forms an important part
-/// of the interaction between the `ANNWrapper` and the creation of `DiskIndexSearcher`. The `ANNWrapper` passes a `VertexProviderFactory` when
-/// it initializes a `DiskIndexSearcher` When serving each search request, the `DiskIndexSearcher` opens a `VertexProvider`
-/// using the provided `VertexProviderFactory`. There will be two flavors of VertexProviderFactory, one that reads vertex data from data another that reads vertex data from a stream.
+/// The `VertexProviderFactory` trait provides an interface to create a `VertexProvider`. This trait forms an important part
+/// of the interaction between the `DiskIndexSearcher` and a `VertexProvider`. A `VertexProviderFactory` is passed to `DiskIndexSearcher` when
+/// it is constructed. When serving each search request, the `DiskIndexSearcher` opens a `VertexProvider`
+/// using the provided `VertexProviderFactory`.
 ///
 /// This trait has an associated VertexProvider type that signifies the specific type of VertexProvider which this `VertexProviderFactory` will create.
 ///
 /// # Parameters
-/// * `GraphMetadata`: This contains the metadata of the disk index graph, like the number of points, dimension, max_node_length, etc.
+/// * `Data`: A `GraphDataType` that defines the vector element type, id type, and associated payload type for the graph.
 ///
 /// # Functions
-/// * `create_vertex_provider`: This function takes a `Metadata` object as an argument and returns a `VertexProvider` object. It also accepts a max batch read sizes which is
-///   used to control the maximum number of nodes it can get in one batch.
-/// * `get_header`: This function returns the metadata of the graph.
+/// * `create_vertex_provider`: This function takes a `GraphHeader` reference and a max batch size and returns a `VertexProvider` object.
+///   The max batch size controls the maximum number of nodes that can be loaded in a single batch.
+/// * `get_header`: This function returns the header of the graph.
 pub trait VertexProviderFactory<Data: GraphDataType>: Send + Sync {
     type VertexProviderType: VertexProvider<Data>;
 
