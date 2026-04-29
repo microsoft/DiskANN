@@ -13,7 +13,7 @@ use crate::{
     provider::DataProvider,
 };
 
-/// Per-call configuration that knows how to construct a [`FlatIterator`] for a provider
+/// Per-call configuration that knows how to construct a [`DistancesUnordered`] for a provider
 /// and how to pre-process queries of type `T` into a distance computer.
 ///
 /// `FlatSearchStrategy` is the flat counterpart to [`crate::graph::glue::SearchStrategy`].

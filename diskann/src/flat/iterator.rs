@@ -61,6 +61,10 @@ pub trait DistancesUnordered: OnElementsUnordered {
     }
 }
 
+//////////////
+// Iterator //
+//////////////
+
 /// A lending, asynchronous iterator over the elements of a flat index.
 ///
 /// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
@@ -89,7 +93,9 @@ pub trait FlatIterator: HasId + Send + Sync {
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
 }
 
-// ─── Default adapter ────────────────────────────────────────────────────────
+/////////////
+// Default //
+/////////////
 
 /// Bridges a [`FlatIterator`] into an [`OnElementsUnordered`] by looping over
 /// [`FlatIterator::next`] and reborrowing each element into the closure.
