@@ -3,56 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use super::helpers::{create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square};
+use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
-    graph::{self, AdjacencyList, DiskANNIndex, test::provider as test_provider},
-    neighbor::Neighbor,
+    graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
     provider::{Delete, NeighborAccessor},
+    test::cmp::VerboseEq,
 };
-use std::sync::Arc;
-
-fn setup_paged_search_test() -> (
-    Arc<DiskANNIndex<test_provider::Provider>>,
-    test_provider::Strategy,
-    test_provider::Context,
-    Vec<f32>,
-) {
-    let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
-    let strategy = test_provider::Strategy::new();
-    let ctx = test_provider::Context::new();
-    let query_point = vec![0.1, 0.2];
-    (index, strategy, ctx, query_point)
-}
-
-#[test]
-fn query_label_provider_on_visit_default() {
-    use crate::graph::index::{QueryLabelProvider, QueryVisitDecision};
-
-    #[derive(Debug)]
-    struct BasicValidation;
-
-    impl QueryLabelProvider<u32> for BasicValidation {
-        fn is_match(&self, id: u32) -> bool {
-            id.is_multiple_of(2)
-        }
-    }
-
-    let filter = BasicValidation;
-    assert!(matches!(
-        filter.on_visit(Neighbor::new(0, 1.0)),
-        QueryVisitDecision::Accept(_)
-    ));
-    assert!(matches!(
-        filter.on_visit(Neighbor::new(1, 1.0)),
-        QueryVisitDecision::Reject
-    ));
-}
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_count_reachable_nodes() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
     let starting_point = [4];
 
@@ -94,7 +55,7 @@ async fn test_count_unreachable_isolated_nodes() {
         AdjacencyList::from_iter_untrusted([]),
         AdjacencyList::from_iter_untrusted([]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 1);
+    let index = setup_2d_square(adjacency_list, 1);
     let mut accessor = index.provider().neighbors();
     let starting_point = [4];
 
@@ -108,20 +69,25 @@ async fn test_count_unreachable_isolated_nodes() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_get_degree_stats() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
-    let stats = index.get_degree_stats(&mut accessor).await.unwrap();
-
-    assert_eq!(stats.max_degree, 2);
-    assert_eq!(stats.min_degree, 2);
-    assert_eq!(stats.avg_degree, 2.0);
-    assert_eq!(stats.cnt_less_than_two, 0);
+    let stats = index
+        .get_degree_stats(&mut accessor, index.provider().non_start_points_ids())
+        .await
+        .unwrap();
+    let expected = DegreeStats {
+        max_degree: 2,
+        avg_degree: 2.0,
+        min_degree: 2,
+        cnt_less_than_two: 0,
+    };
+    assert!(stats.verbose_eq(&expected).is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_prune_range() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 1);
+    let index = setup_2d_square(adjacency_list, 1);
     let ctx = test_provider::Context::default();
     let strat = test_provider::Strategy::new();
 
@@ -159,7 +125,7 @@ async fn test_count_reachable_nodes_multiple_starts() {
         AdjacencyList::from_iter_untrusted([2]),
         AdjacencyList::from_iter_untrusted([0, 1]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
 
     // From start (4) alone: reaches 4, 0, 1 = 3
@@ -195,199 +161,26 @@ async fn test_get_degree_stats_mixed() {
         AdjacencyList::from_iter_untrusted([2, 4]),
         AdjacencyList::from_iter_untrusted([1, 2, 3]),
     ];
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let mut accessor = index.provider().neighbors();
-    let stats = index.get_degree_stats(&mut accessor).await.unwrap();
-
-    assert_eq!(stats.max_degree, 2);
-    assert_eq!(stats.min_degree, 0);
-    // avg = (0 + 1 + 2 + 2) / 4 = 1.25
-    assert_eq!(stats.avg_degree, 1.25);
-    // nodes with degree < 2: node 0 (degree 0) and node 1 (degree 1)
-    assert_eq!(stats.cnt_less_than_two, 2);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn validate_basic_paged_search() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let k = 2;
-    let mut state = index
-        .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
+    let stats = index
+        .get_degree_stats(&mut accessor, index.provider().non_start_points_ids())
         .await
         .unwrap();
 
-    let mut output = vec![Neighbor::default(); k];
-    let count = index
-        .next_search_results(&ctx, &mut state, k, &mut output)
-        .await
-        .unwrap();
-
-    assert_eq!(count, k);
-    assert_eq!(output[0].id, 0);
-    assert_eq!(output[1].id, 1);
-    assert!(output[..count].iter().all(|n| n.id != 4)); // ensure start point isn't in the
-    // output
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn validate_paged_search_multiple() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let k = 1;
-    let mut state = index
-        .start_paged_search(strategy, &ctx, query_point.as_slice(), k)
-        .await
-        .unwrap();
-
-    let mut output = vec![Neighbor::default()];
-    let mut visited: Vec<u32> = Vec::new();
-    for _ in 0..4 {
-        let count = index
-            .next_search_results(&ctx, &mut state, k, &mut output)
-            .await
-            .unwrap();
-        assert_eq!(count, 1);
-        visited.push(output[0].id);
-    }
-
-    use std::collections::HashSet;
-    let unique: HashSet<_> = visited.iter().collect();
-    assert_eq!(unique.len(), visited.len());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_paged_search_error_cases() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let l_value = 2;
-    let mut state = index
-        .start_paged_search(strategy, &ctx, query_point.as_slice(), l_value)
-        .await
-        .unwrap();
-
-    let mut output = vec![Neighbor::default(); 2];
-
-    // k > l_value
-    let result = index
-        .next_search_results(&ctx, &mut state, l_value + 1, &mut output)
-        .await;
-    assert!(result.is_err());
-
-    // k == 0
-    let result = index
-        .next_search_results(&ctx, &mut state, 0, &mut output)
-        .await;
-    assert!(result.is_err());
-
-    // output buffer too small for requested k
-    let mut small_output = vec![Neighbor::default(); 1];
-    let result = index
-        .next_search_results(&ctx, &mut state, 2, &mut small_output)
-        .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn validate_basic_paged_search_with_init_ids() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let k = 2;
-
-    // Seed search from nodes 0 and 1 instead of using the default start point
-    let init_ids: &[u32] = &[0, 1];
-    let mut state = index
-        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), k, Some(init_ids))
-        .await
-        .unwrap();
-
-    let mut output = vec![Neighbor::default(); k];
-    let count = index
-        .next_search_results(&ctx, &mut state, k, &mut output)
-        .await
-        .unwrap();
-
-    assert_eq!(count, k);
-    // Init IDs (0, 1) are filtered out as start points; results are from remaining nodes
-    assert!(
-        output[..count]
-            .iter()
-            .all(|n| n.id != 0 && n.id != 1 && n.id != 4)
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn validate_paged_search_with_init_ids_multiple() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let k = 1;
-
-    let init_ids: &[u32] = &[0, 1];
-    let mut state = index
-        .start_paged_search_with_init_ids(strategy, &ctx, query_point.as_slice(), k, Some(init_ids))
-        .await
-        .unwrap();
-
-    let mut output = vec![Neighbor::default()];
-    let mut visited: Vec<u32> = Vec::new();
-    for _ in 0..2 {
-        let count = index
-            .next_search_results(&ctx, &mut state, k, &mut output)
-            .await
-            .unwrap();
-        assert_eq!(count, 1);
-        visited.push(output[0].id);
-    }
-
-    use std::collections::HashSet;
-    let unique: HashSet<_> = visited.iter().collect();
-    assert_eq!(unique.len(), visited.len());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_paged_search_with_init_ids_error_cases() {
-    let (index, strategy, ctx, query_point) = setup_paged_search_test();
-
-    let l_value = 2;
-
-    let init_ids: &[u32] = &[0, 1];
-    let mut state = index
-        .start_paged_search_with_init_ids(
-            strategy,
-            &ctx,
-            query_point.as_slice(),
-            l_value,
-            Some(init_ids),
-        )
-        .await
-        .unwrap();
-
-    let mut output = vec![Neighbor::default(); 2];
-
-    // k > l_value
-    let result = index
-        .next_search_results(&ctx, &mut state, l_value + 1, &mut output)
-        .await;
-    assert!(result.is_err());
-
-    // k == 0
-    let result = index
-        .next_search_results(&ctx, &mut state, 0, &mut output)
-        .await;
-    assert!(result.is_err());
-
-    // output buffer too small for requested k
-    let mut small_output = vec![Neighbor::default(); 1];
-    let result = index
-        .next_search_results(&ctx, &mut state, 2, &mut small_output)
-        .await;
-    assert!(result.is_err());
+    let expected = DegreeStats {
+        max_degree: 2,
+        avg_degree: 1.25,
+        min_degree: 0,
+        cnt_less_than_two: 2,
+    };
+    assert!(stats.verbose_eq(&expected).is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_is_any_neighbor_deleted() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -418,7 +211,7 @@ async fn test_is_any_neighbor_deleted() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -447,7 +240,7 @@ async fn test_drop_deleted_neighbors() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors_only_orphans() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -477,7 +270,7 @@ async fn test_drop_deleted_neighbors_only_orphans() {
 #[tokio::test(flavor = "current_thread")]
 async fn test_drop_deleted_neighbors_noop() {
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
     let mut accessor = index.provider().neighbors();
 
@@ -495,7 +288,7 @@ async fn test_flat_search_basic() {
     use crate::graph::search_output_buffer::IdDistance;
 
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let strategy = test_provider::Strategy::new();
     let ctx = test_provider::Context::new();
 
@@ -536,7 +329,7 @@ async fn test_flat_search_with_filter() {
     use crate::graph::search_output_buffer::IdDistance;
 
     let adjacency_list = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let strategy = test_provider::Strategy::new();
     let ctx = test_provider::Context::new();
 

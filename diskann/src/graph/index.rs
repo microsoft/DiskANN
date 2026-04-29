@@ -2491,9 +2491,13 @@ where
         }
     }
 
-    pub fn get_degree_stats<NA>(&self, accessor: &mut NA) -> impl SendFuture<ANNResult<DegreeStats>>
+    pub fn get_degree_stats<NA, Itr>(
+        &self,
+        accessor: &mut NA,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<DegreeStats>>
     where
-        for<'a> &'a DP: IntoIterator<Item = DP::InternalId, IntoIter: Send>,
+        Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
         NA: AsNeighbor<Id = DP::InternalId>,
     {
         async move {
@@ -2504,7 +2508,7 @@ where
             let mut total_live_points = 0;
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            for id in &self.data_provider {
+            for id in itr {
                 total_live_points += 1;
                 accessor.get_neighbors(id, &mut neighbors).await?;
                 let pool_size = neighbors.len();
@@ -3163,4 +3167,40 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::test::cmp::verbose_eq;
+
+    verbose_eq!(DegreeStats {
+        max_degree,
+        avg_degree,
+        min_degree,
+        cnt_less_than_two,
+    });
+
+    #[test]
+    fn query_label_provider_on_visit_default() {
+        #[derive(Debug)]
+        struct BasicValidation;
+
+        impl QueryLabelProvider<u32> for BasicValidation {
+            fn is_match(&self, id: u32) -> bool {
+                id.is_multiple_of(2)
+            }
+        }
+
+        let filter = BasicValidation;
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(0, 1.0)),
+            QueryVisitDecision::Accept(_)
+        ));
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(1, 1.0)),
+            QueryVisitDecision::Reject
+        ));
+    }
 }

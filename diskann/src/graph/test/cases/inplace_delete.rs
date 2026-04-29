@@ -16,8 +16,7 @@ use crate::{
 };
 
 use super::helpers::{
-    create_2d_unit_square, generate_2d_square_adjacency_list, setup_2d_square,
-    setup_2d_square_using_synthetics_grid,
+    generate_2d_square_adjacency_list, setup_2d_square, setup_2d_square_using_synthetics_grid,
 };
 
 fn inplace_delete_setup() -> Arc<DiskANNIndex<test_provider::Provider>> {
@@ -109,7 +108,7 @@ async fn basic_multi() {
 /// Sets up 2D square, deletes node 3 with the given method, then validates.
 async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
     let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let index = setup_2d_square(adjacency_lists, 4);
     let ctx = test_provider::Context::new();
 
     index
@@ -124,7 +123,7 @@ async fn delete_node_3_and_validate(method: InplaceDeleteMethod) {
 /// Sets up 2D square, multi-deletes nodes 2 and 3 with the given method, then validates.
 async fn multi_delete_2_and_3_and_validate(method: InplaceDeleteMethod) {
     let adjacency_lists = generate_2d_square_adjacency_list();
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_lists, 4);
+    let index = setup_2d_square(adjacency_lists, 4);
     let ctx = test_provider::Context::new();
 
     index
@@ -274,7 +273,7 @@ async fn delete_isolated_node() {
         AdjacencyList::from_iter_untrusted([0, 1, 3]),
     ];
 
-    let index = setup_2d_square(create_2d_unit_square(), adjacency_list, 4);
+    let index = setup_2d_square(adjacency_list, 4);
     let ctx = test_provider::Context::new();
 
     //capture state of neighbors pre-delete (ignoring node 2)
