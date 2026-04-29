@@ -9,13 +9,12 @@ use diskann_wide::arch::aarch64::Neon;
 use diskann_wide::arch::x86_64::{V3, V4};
 use diskann_wide::{
     arch::{Dispatched2, FTarget2, Scalar},
-    lifetime::Ref,
     Architecture,
 };
 use half::f16;
 
 use super::{implementations::Specialize, Cosine, CosineNormalized, InnerProduct, SquaredL2};
-use crate::distance::Metric;
+use crate::{distance::Metric, AsUnaligned, UnalignedSlice};
 
 /// Return a function pointer-like [`Distance`] to compute the requested metric.
 ///
@@ -46,6 +45,16 @@ pub trait DistanceProvider<T>: Sized + 'static {
     fn distance_comparer(metric: Metric, dimension: Option<usize>) -> Distance<Self, T>;
 }
 
+#[derive(Debug)]
+struct Unaligned<T>(std::marker::PhantomData<T>);
+
+impl<T> diskann_wide::lifetime::AddLifetime for Unaligned<T>
+where
+    T: 'static,
+{
+    type Of<'a> = UnalignedSlice<'a, T>;
+}
+
 /// A function pointer-like type for computing distances between `&[T]` and `&[U]`.
 ///
 /// See: [`DistanceProvider`].
@@ -55,7 +64,7 @@ where
     T: 'static,
     U: 'static,
 {
-    f: Dispatched2<f32, Ref<[T]>, Ref<[U]>>,
+    f: Dispatched2<f32, Unaligned<T>, Unaligned<U>>,
 }
 
 impl<T, U> Distance<T, U>
@@ -63,11 +72,11 @@ where
     T: 'static,
     U: 'static,
 {
-    fn new(f: Dispatched2<f32, Ref<[T]>, Ref<[U]>>) -> Self {
+    fn new(f: Dispatched2<f32, Unaligned<T>, Unaligned<U>>) -> Self {
         Self { f }
     }
 
-    /// Compute a distances between `x` and `y`.
+    /// Compute the distance between `x` and `y`.
     ///
     /// The actual distance computed depends on the metric supplied to [`DistanceProvider`].
     ///
@@ -75,6 +84,17 @@ where
     /// panic if provided with slices with a length not equal to this dimension.
     #[inline]
     pub fn call(&self, x: &[T], y: &[U]) -> f32 {
+        self.f.call(x.as_unaligned(), y.as_unaligned())
+    }
+
+    /// Compute the distance between `x` and `y`.
+    ///
+    /// The actual distance computed depends on the metric supplied to [`DistanceProvider`].
+    ///
+    /// Additionally, if a dimension were given to [`DistanceProvider`], this function may
+    /// panic if provided with slices with a length not equal to this dimension.
+    #[inline]
+    pub fn call_unaligned(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
         self.f.call(x, y)
     }
 }
@@ -86,6 +106,17 @@ where
 {
     fn evaluate_similarity(&self, x: &[T], y: &[U]) -> f32 {
         self.call(x, y)
+    }
+}
+
+impl<T, U> crate::DistanceFunction<UnalignedSlice<'_, T>, UnalignedSlice<'_, U>, f32>
+    for Distance<T, U>
+where
+    T: 'static,
+    U: 'static,
+{
+    fn evaluate_similarity(&self, x: UnalignedSlice<'_, T>, y: UnalignedSlice<'_, U>) -> f32 {
+        self.f.call(x, y)
     }
 }
 
@@ -305,7 +336,7 @@ struct Spec<const N: usize>;
 impl<A, F, const N: usize, T, U> TrySpecialize<A, F, T, U> for Spec<N>
 where
     A: Architecture,
-    Specialize<N, F>: for<'a, 'b> FTarget2<A, f32, &'a [T], &'b [U]>,
+    Specialize<N, F>: for<'a, 'b> FTarget2<A, f32, UnalignedSlice<'a, T>, UnalignedSlice<'b, U>>,
     T: 'static,
     U: 'static,
 {
@@ -314,7 +345,7 @@ where
             if d == N {
                 return Some(Distance::new(
                     // NOTE: This line here is what actually compiles the specialized kernel.
-                    arch.dispatch2::<Specialize<N, F>, f32, Ref<[T]>, Ref<[U]>>(),
+                    arch.dispatch2::<Specialize<N, F>, f32, Unaligned<T>, Unaligned<U>>(),
                 ));
             }
         }
@@ -352,7 +383,7 @@ impl<Head, Tail> Cons<Head, Tail> {
     fn specialize<A, F, T, U>(&self, arch: A, _f: F, dim: Option<usize>) -> Distance<T, U>
     where
         A: Architecture,
-        F: for<'a, 'b> FTarget2<A, f32, &'a [T], &'b [U]>,
+        F: for<'a, 'b> FTarget2<A, f32, UnalignedSlice<'a, T>, UnalignedSlice<'b, U>>,
         Head: TrySpecialize<A, F, T, U>,
         Tail: TrySpecialize<A, F, T, U>,
         T: 'static,
@@ -361,7 +392,7 @@ impl<Head, Tail> Cons<Head, Tail> {
         if let Some(f) = self.try_specialize(arch, dim) {
             f
         } else {
-            Distance::new(arch.dispatch2::<F, f32, Ref<[T]>, Ref<[U]>>())
+            Distance::new(arch.dispatch2::<F, f32, Unaligned<T>, Unaligned<U>>())
         }
     }
 }
@@ -465,7 +496,7 @@ mod test_unaligned_distance_provider {
         // Unwrap the SimilarityScore for the reference implementation.
         let converted = |a: &[T], b: &[T]| -> f32 { reference(a, b).into_inner() };
 
-        let checker = test_util::Checker::<T, T, f32>::new(
+        let mut checker = test_util::Checker::<T, T, f32>::new(
             |a, b| under_test.call(a, b),
             converted,
             |got: f32, expected: f32| {
@@ -479,7 +510,7 @@ mod test_unaligned_distance_provider {
         );
 
         test_util::test_distance_function(
-            checker,
+            &mut checker,
             distribution.clone(),
             distribution.clone(),
             dim,

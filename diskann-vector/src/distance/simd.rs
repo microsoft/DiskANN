@@ -3,8 +3,6 @@
  * Licensed under the MIT license.
  */
 
-use std::convert::AsRef;
-
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 
@@ -16,7 +14,7 @@ use diskann_wide::{
     SIMDSumTree, SIMDVector,
 };
 
-use crate::Half;
+use crate::{AsUnaligned, Half};
 
 /// A helper trait to allow integer to f32 conversion (which may be lossy).
 pub trait LossyF32Conversion: Copy {
@@ -688,12 +686,12 @@ fn emit_length_error(xlen: usize, ylen: usize) -> ! {
 pub fn simd_op<L, R, S, T, U, A>(schema: &S, arch: A, x: T, y: U) -> S::Return
 where
     A: Architecture,
-    T: AsRef<[L]>,
-    U: AsRef<[R]>,
+    T: AsUnaligned<Element = L>,
+    U: AsUnaligned<Element = R>,
     S: SIMDSchema<L, R, A>,
 {
-    let x: &[L] = x.as_ref();
-    let y: &[R] = y.as_ref();
+    let x = x.as_unaligned();
+    let y = y.as_unaligned();
 
     let len = x.len();
 
@@ -3549,7 +3547,7 @@ mod tests {
     use rand_distr;
 
     use super::*;
-    use crate::{distance::reference, norm::LInfNorm, test_util};
+    use crate::{distance::reference, norm::LInfNorm, test_util, unaligned};
 
     ///////////////////////
     // Cosine Norm Check //
@@ -3768,7 +3766,7 @@ mod tests {
     ) {
         // Pick chunk sizes that exercise combinations of the unrolled loops.
         let chunk_divisors: Vec<usize> = vec![1, 2, 3, 4, 16, 54, 64, 65, 70, 77];
-        let checker = test_util::AdHocChecker::<f32, f32>::new(|a: &[f32], b: &[f32]| {
+        let mut checker = test_util::AdHocChecker::<f32, f32>::new(|a: &[f32], b: &[f32]| {
             let expected = reference(a, b);
             let got = simd_op(&O::default(), arch, a, b);
             println!("dim = {}", dim);
@@ -3790,14 +3788,30 @@ mod tests {
             }
         });
 
-        test_util::test_distance_function(
-            checker,
-            rand_distr::Normal::new(0.0, 10.0).unwrap(),
-            rand_distr::Normal::new(0.0, 10.0).unwrap(),
-            dim,
-            10,
-            rng,
-        )
+        let dist = rand_distr::Normal::new(0.0, 10.0).unwrap();
+        test_util::test_distance_function(&mut checker, dist, dist, dim, 10, rng);
+
+        //-----------//
+        // Unaligned //
+        //-----------//
+
+        let mut left = unaligned::Buffer::default();
+        let mut right = unaligned::Buffer::default();
+        let mut checker = test_util::Checker::<f32, f32, f32>::new(
+            |a, b| simd_op(&O::default(), arch, a.as_unaligned(), b.as_unaligned()),
+            |a, b| {
+                left.copy(a);
+                right.copy(b);
+                simd_op(
+                    &O::default(),
+                    arch,
+                    left.as_unaligned(),
+                    right.as_unaligned(),
+                )
+            },
+            |got, expected| assert_eq!(got, expected),
+        );
+        test_util::test_distance_function(&mut checker, dist, dist, dim, 10, rng);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3811,15 +3825,15 @@ mod tests {
         max_relative: f32,
         rng: &mut Rand,
     ) where
-        L: test_util::CornerCases,
-        R: test_util::CornerCases,
-        DistLeft: test_util::GenerateRandomArguments<L>,
-        DistRight: test_util::GenerateRandomArguments<R>,
+        L: test_util::CornerCases + bytemuck::Pod,
+        R: test_util::CornerCases + bytemuck::Pod,
+        DistLeft: test_util::GenerateRandomArguments<L> + Copy,
+        DistRight: test_util::GenerateRandomArguments<R> + Copy,
         O: Default + SIMDSchema<L, R, A, Return = f32>,
         Rand: Rng,
         A: Architecture,
     {
-        let checker = test_util::Checker::<L, R, f32>::new(
+        let mut checker = test_util::Checker::<L, R, f32>::new(
             |x: &[L], y: &[R]| simd_op(&O::default(), arch, x, y),
             reference,
             |got, expected| {
@@ -3833,8 +3847,29 @@ mod tests {
         );
 
         let trials = if cfg!(miri) { 0 } else { 10 };
+        test_util::test_distance_function(&mut checker, left_dist, right_dist, dim, trials, rng);
 
-        test_util::test_distance_function(checker, left_dist, right_dist, dim, trials, rng);
+        //-----------//
+        // Unaligned //
+        //-----------//
+
+        let mut left = unaligned::Buffer::default();
+        let mut right = unaligned::Buffer::default();
+        let mut checker = test_util::Checker::<L, R, f32>::new(
+            |a, b| simd_op(&O::default(), arch, a.as_unaligned(), b.as_unaligned()),
+            |a, b| {
+                left.copy(a);
+                right.copy(b);
+                simd_op(
+                    &O::default(),
+                    arch,
+                    left.as_unaligned(),
+                    right.as_unaligned(),
+                )
+            },
+            |got, expected| assert_eq!(got, expected),
+        );
+        test_util::test_distance_function(&mut checker, left_dist, right_dist, dim, trials, rng);
     }
 
     fn stress_test_linf<L, Dist, Rand, A>(
@@ -3852,7 +3887,7 @@ mod tests {
         A: Architecture,
         LInfNorm: for<'a> Target1<A, f32, &'a [L]>,
     {
-        let checker = test_util::Checker::<L, L, f32>::new(
+        let mut checker = test_util::Checker::<L, L, f32>::new(
             |x: &[L], _y: &[L]| (LInfNorm).run(arch, x),
             |x: &[L], _y: &[L]| reference(x),
             |got, expected| {
@@ -3866,7 +3901,7 @@ mod tests {
         );
 
         println!("checking {dim}");
-        test_util::test_distance_function(checker, dist.clone(), dist, dim, 10, rng);
+        test_util::test_distance_function(&mut checker, dist.clone(), dist, dim, 10, rng);
     }
 
     /////////
@@ -4942,6 +4977,17 @@ mod tests {
                         simd_op(&L2, arch, left.as_slice(), right.as_slice());
                         simd_op(&IP, arch, left.as_slice(), right.as_slice());
                         simd_op(&CosineStateless, arch, left.as_slice(), right.as_slice());
+
+                        let left = unaligned::Buffer::new(&left);
+                        let right = unaligned::Buffer::new(&right);
+                        simd_op(&L2, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(&IP, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(
+                            &CosineStateless,
+                            arch,
+                            left.as_unaligned(),
+                            right.as_unaligned(),
+                        );
                     }
                 }
 
@@ -4955,6 +5001,17 @@ mod tests {
                         simd_op(&L2, arch, left.as_slice(), right.as_slice());
                         simd_op(&IP, arch, left.as_slice(), right.as_slice());
                         simd_op(&CosineStateless, arch, left.as_slice(), right.as_slice());
+
+                        let left = unaligned::Buffer::new(&left);
+                        let right = unaligned::Buffer::new(&right);
+                        simd_op(&L2, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(&IP, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(
+                            &CosineStateless,
+                            arch,
+                            left.as_unaligned(),
+                            right.as_unaligned(),
+                        );
                     }
                 }
 
@@ -4968,6 +5025,17 @@ mod tests {
                         simd_op(&L2, arch, left.as_slice(), right.as_slice());
                         simd_op(&IP, arch, left.as_slice(), right.as_slice());
                         simd_op(&CosineStateless, arch, left.as_slice(), right.as_slice());
+
+                        let left = unaligned::Buffer::new(&left);
+                        let right = unaligned::Buffer::new(&right);
+                        simd_op(&L2, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(&IP, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(
+                            &CosineStateless,
+                            arch,
+                            left.as_unaligned(),
+                            right.as_unaligned(),
+                        );
                     }
                 }
 
@@ -4981,6 +5049,16 @@ mod tests {
                         simd_op(&L2, arch, left.as_slice(), right.as_slice());
                         simd_op(&IP, arch, left.as_slice(), right.as_slice());
                         simd_op(&CosineStateless, arch, left.as_slice(), right.as_slice());
+                        let left = unaligned::Buffer::new(&left);
+                        let right = unaligned::Buffer::new(&right);
+                        simd_op(&L2, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(&IP, arch, left.as_unaligned(), right.as_unaligned());
+                        simd_op(
+                            &CosineStateless,
+                            arch,
+                            left.as_unaligned(),
+                            right.as_unaligned(),
+                        );
                     }
                 }
             }
