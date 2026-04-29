@@ -791,4 +791,73 @@ mod tests {
         let mut output = Memory::new();
         cli.check_target(&mut output).unwrap();
     }
+
+    #[test]
+    fn document_filter_integration() {
+        let input_path = example_directory().join("document-filter.json");
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let output_path = tempdir.path().join("output.json");
+        assert!(!output_path.exists());
+
+        let modified_input_path = tempdir.path().join("input.json");
+
+        let mut raw = value_from_file(&input_path);
+        prefix_search_directories(&mut raw, &root_directory());
+        save_to_file(&modified_input_path, &raw);
+
+        run_document_filter_integration(&modified_input_path, &output_path, &raw);
+    }
+
+    #[cfg(feature = "document-index")]
+    fn run_document_filter_integration(
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+        raw: &serde_json::Value,
+    ) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        cli.run(&mut output).unwrap();
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        println!("output = {}", output);
+        // Check that the results file is generated.
+        assert!(output_path.exists());
+
+        let results: Vec<Value> = load_from_file(output_path);
+        assert_eq!(results.len(), num_jobs(raw));
+    }
+
+    #[cfg(not(feature = "document-index"))]
+    fn run_document_filter_integration(
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+        _raw: &serde_json::Value,
+    ) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        let err = cli.run(&mut output).unwrap_err();
+        println!("err = {:?}", err);
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains("\"document-index\" feature"));
+        println!("output = {}", output);
+
+        // The output file should not have been created because we failed.
+        assert!(!output_path.exists());
+    }
 }

@@ -31,19 +31,14 @@ impl ASTLabelIdMapper {
         Self { attribute_map }
     }
 
-    fn _lookup(
-        encoder: &AttributeEncoder,
-        attribute: &Attribute,
-        field: &str,
-        op: &CompareOp,
-    ) -> ANNResult<ASTIdExpr<u64>> {
+    fn _lookup(encoder: &AttributeEncoder, attribute: &Attribute) -> ANNResult<ASTIdExpr<u64>> {
         match encoder.get(attribute) {
             Some(attribute_id) => Ok(ASTIdExpr::Terminal(attribute_id)),
             None => Err(ANNError::message(
                 ANNErrorKind::Opaque,
                 format!(
-                    "{}+{} present in the query does not exist in the dataset.",
-                    field, op
+                    "{} present in the query does not exist in the dataset.",
+                    attribute
                 ),
             )),
         }
@@ -120,10 +115,10 @@ impl ASTVisitor for ASTLabelIdMapper {
 
         if let Some(attribute) = label_or_none {
             match self.attribute_map.read() {
-                Ok(guard) => Self::_lookup(&guard, &attribute, field, op),
+                Ok(guard) => Self::_lookup(&guard, &attribute),
                 Err(poison_error) => {
                     let attr_map = poison_error.into_inner();
-                    Self::_lookup(&attr_map, &attribute, field, op)
+                    Self::_lookup(&attr_map, &attribute)
                 }
             }
         } else {

@@ -22,7 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   # The features we want to explicitly test. For example, the `flatbuffers-build` feature
   # of `diskann-quantization` requires additional setup and so must not be included by default.
-  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen,document-index"
 
   # Intel SDE version used for baseline and AVX-512 emulation jobs.
   SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"

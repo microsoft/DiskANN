@@ -28,7 +28,7 @@ use crate::{
 
 type AttrAccessor<IA> = EncodedAttributeAccessor<RoaringTreemapSetProvider<<IA as HasId>::Id>>;
 
-pub(crate) struct EncodedDocumentAccessor<IA>
+pub struct EncodedDocumentAccessor<IA>
 where
     IA: HasId,
 {
@@ -94,7 +94,7 @@ where
                     Some(set) => Ok(set.into_owned()),
                     None => Err(ANNError::message(
                         ANNErrorKind::IndexError,
-                        "No labels were found for vector",
+                        format!("No labels were found for vector:{:?}", id),
                     )),
                 }
             })?;
@@ -162,16 +162,17 @@ where
     }
 }
 
-impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
+impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<'_, Q>> for EncodedDocumentAccessor<IA>
 where
-    IA: BuildQueryComputer<&'q Q>,
+    IA: BuildQueryComputer<Q::Target>,
+    Q: Reborrow<'q>,
 {
     type QueryComputerError = ANNError;
     type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
 
     fn build_query_computer(
         &self,
-        from: &'q FilteredQuery<Q>,
+        from: &'q FilteredQuery<'_, Q>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         let inner_computer = self
             .inner_accessor

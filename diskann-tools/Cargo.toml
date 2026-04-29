@@ -12,7 +12,7 @@ license.workspace = true
 [dependencies]
 byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
-diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
+diskann-providers = { workspace = true, default-features = false }   # see `linalg/Cargo.toml`
 diskann-vector = { workspace = true }
 diskann-disk = { workspace = true }
 diskann-utils = { workspace = true }
@@ -24,6 +24,7 @@ ordered-float = "4.2.0"
 rand_distr.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 bincode.workspace = true
 opentelemetry.workspace = true
 diskann-quantization = { workspace = true }
