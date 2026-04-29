@@ -13,6 +13,7 @@ pub mod utils;
 pub(crate) mod internal;
 
 // Index Implementations
+pub mod flat;
 pub mod graph;
 
 // Top level exports.
