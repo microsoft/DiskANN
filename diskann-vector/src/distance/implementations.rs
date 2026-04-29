@@ -56,7 +56,7 @@ impl<A, T, L, R, const N: usize, F>
     for Specialize<N, F>
 where
     A: Architecture,
-    F: for<'a, 'b> diskann_wide::arch::Target2<A, T, UnalignedSlice<'a, L>, UnalignedSlice<'a, R>>
+    F: for<'a, 'b> diskann_wide::arch::Target2<A, T, UnalignedSlice<'a, L>, UnalignedSlice<'b, R>>
         + Default,
 {
     #[inline(always)]
