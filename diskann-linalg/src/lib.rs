@@ -315,6 +315,75 @@ mod tests {
     }
 
     #[test]
+    fn test_sgemm_invalid_matrix_a_dimensions() {
+        let mut c = [0.0f32; 6];
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            2,
+            3,
+            4,
+            1.0,
+            &[0.0; 5], // Should be 2 * 4 = 8
+            &[0.0; 12],
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "expected 2x4 matrix `a` to have length 8, instead got 5"
+        );
+    }
+
+    #[test]
+    fn test_sgemm_invalid_matrix_b_dimensions() {
+        let mut c = [0.0f32; 6];
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            2,
+            3,
+            4,
+            1.0,
+            &[0.0; 8],
+            &[0.0; 10], // Should be 4 * 3 = 12
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "expected 4x3 matrix `b` to have length 12, instead got 10"
+        );
+    }
+
+    #[test]
+    fn test_sgemm_invalid_matrix_c_dimensions() {
+        let mut c = [0.0f32; 5]; // Should be 2 * 3 = 6
+        let err = sgemm(
+            Transpose::None,
+            Transpose::None,
+            2,
+            3,
+            4,
+            1.0,
+            &[0.0; 8],
+            &[0.0; 12],
+            None,
+            &mut c,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "expected 2x3 matrix `c` to have length 6, instead got 5"
+        );
+    }
+
+    #[test]
     fn test_sgemm_m_times_k_overflow() {
         let mut c = [0.0f32];
         let err = sgemm(
@@ -331,10 +400,13 @@ mod tests {
         )
         .unwrap_err();
 
-        let SgemmError::DimensionOverflow { operation, .. } = err else {
-            panic!("Expected DimensionOverflow, got {:?}", err);
-        };
-        assert!(operation.contains("matrix a (m * k)"));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "dimension overflow in matrix a (m * k): {} * 2 would overflow usize",
+                usize::MAX
+            )
+        );
     }
 
     #[test]
@@ -354,10 +426,13 @@ mod tests {
         )
         .unwrap_err();
 
-        let SgemmError::DimensionOverflow { operation, .. } = err else {
-            panic!("Expected DimensionOverflow, got {:?}", err);
-        };
-        assert!(operation.contains("matrix b (k * n)"));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "dimension overflow in matrix b (k * n): 10 * {} would overflow usize",
+                usize::MAX
+            )
+        );
     }
 
     #[test]
@@ -377,10 +452,13 @@ mod tests {
         )
         .unwrap_err();
 
-        let SgemmError::DimensionOverflow { operation, .. } = err else {
-            panic!("Expected DimensionOverflow, got {:?}", err);
-        };
-        assert!(operation.contains("matrix c (m * n)"));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "dimension overflow in matrix c (m * n): 2 * {} would overflow usize",
+                usize::MAX
+            )
+        );
     }
 
     ///////////////
