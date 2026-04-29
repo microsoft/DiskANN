@@ -11,10 +11,19 @@ crate::utils::stub_impl!("product-quantization", inputs::async_::IndexPQOperatio
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
     {
+        use crate::backend::index::search::plugins;
         use half::f16;
 
-        benchmarks.register("async-pq-f32", imp::ProductQuantized::<f32>::new());
-        benchmarks.register("async-pq-f16", imp::ProductQuantized::<f16>::new());
+        benchmarks.register(
+            "async-pq-f32",
+            imp::ProductQuantized::<f32>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range),
+        );
+        benchmarks.register(
+            "async-pq-f16",
+            imp::ProductQuantized::<f16>::new().search(plugins::Topk),
+        );
     }
 
     // Stub implementation
@@ -29,7 +38,10 @@ mod imp {
     use diskann::utils::VectorRepr;
     use diskann_providers::{
         index::diskann_async::{self},
-        model::{graph::provider::async_::common, IndexConfiguration},
+        model::{
+            graph::provider::async_::{common, inmem},
+            IndexConfiguration,
+        },
     };
     use diskann_utils::views::{Matrix, MatrixView};
 
@@ -42,23 +54,58 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, FullPrecision},
+            benchmarks::{run_build, FullPrecision, QueryType, Strategy},
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-            result::QuantBuildResult,
+            result::{BuildResult, QuantBuildResult},
+            search::plugins,
         },
         inputs::async_::{IndexPQOperation, IndexSource},
         utils::{self, datafiles},
     };
 
-    pub(super) struct ProductQuantized<T> {
-        _type: std::marker::PhantomData<T>,
+    type PQProvider<T> = inmem::DefaultProvider<
+        inmem::FullPrecisionStore<T>,
+        inmem::DefaultQuant,
+        common::NoDeletes,
+        diskann::provider::DefaultContext,
+    >;
+
+    impl<T> QueryType for PQProvider<T>
+    where
+        T: VectorRepr,
+    {
+        type Element = T;
     }
 
-    impl<T> ProductQuantized<T> {
+    pub(super) struct ProductQuantized<T>
+    where
+        T: VectorRepr,
+    {
+        quant_search: plugins::Plugins<PQProvider<T>, Strategy<common::Hybrid>>,
+        full_search: plugins::Plugins<PQProvider<T>, Strategy<common::FullPrecision>>,
+    }
+
+    impl<T> ProductQuantized<T>
+    where
+        T: VectorRepr,
+    {
         pub(super) fn new() -> Self {
             Self {
-                _type: std::marker::PhantomData,
+                quant_search: plugins::Plugins::new(),
+                full_search: plugins::Plugins::new(),
             }
+        }
+
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
+        where
+            P: plugins::Plugin<PQProvider<T>, Strategy<common::Hybrid>>
+                + plugins::Plugin<PQProvider<T>, Strategy<common::FullPrecision>>
+                + Clone
+                + 'static,
+        {
+            self.quant_search.register(plugin.clone());
+            self.full_search.register(plugin);
+            self
         }
     }
 
@@ -157,27 +204,23 @@ mod imp {
                 }
             };
 
-            let build = if input.use_fp_for_search {
-                run_search_outer(
-                    &input.index_operation.search_phase,
-                    common::FullPrecision,
+            let search = if input.use_fp_for_search {
+                self.full_search.run(
                     index,
-                    build_stats,
-                    checkpoint,
+                    &Strategy::new(common::FullPrecision),
+                    &input.index_operation.search_phase,
                 )?
             } else {
-                run_search_outer(
-                    &input.index_operation.search_phase,
-                    hybrid,
+                self.quant_search.run(
                     index,
-                    build_stats,
-                    checkpoint,
+                    &Strategy::new(hybrid),
+                    &input.index_operation.search_phase,
                 )?
             };
 
             let result = QuantBuildResult {
                 quant_training_time,
-                build,
+                build: BuildResult::new(build_stats, search),
             };
 
             writeln!(output, "\n\n{}", result)?;

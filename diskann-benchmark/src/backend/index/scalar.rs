@@ -11,20 +11,48 @@ crate::utils::stub_impl!("scalar-quantization", inputs::async_::IndexSQOperation
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "scalar-quantization")]
     {
+        use crate::backend::index::search::plugins::Topk;
         use half::f16;
 
         // f32
-        benchmarks.register("async-sq-8-bit-f32", imp::ScalarQuantized::<8, f32>::new());
-        benchmarks.register("async-sq-4-bit-f32", imp::ScalarQuantized::<4, f32>::new());
-        benchmarks.register("async-sq-2-bit-f32", imp::ScalarQuantized::<2, f32>::new());
-        benchmarks.register("async-sq-1-bit-f32", imp::ScalarQuantized::<1, f32>::new());
+        benchmarks.register(
+            "async-sq-8-bit-f32",
+            imp::ScalarQuantized::<8, f32>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-4-bit-f32",
+            imp::ScalarQuantized::<4, f32>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-2-bit-f32",
+            imp::ScalarQuantized::<2, f32>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-1-bit-f32",
+            imp::ScalarQuantized::<1, f32>::new().search(Topk),
+        );
         // f16                                  ,
-        benchmarks.register("async-sq-8-bit-f16", imp::ScalarQuantized::<8, f16>::new());
-        benchmarks.register("async-sq-4-bit-f16", imp::ScalarQuantized::<4, f16>::new());
-        benchmarks.register("async-sq-2-bit-f16", imp::ScalarQuantized::<2, f16>::new());
-        benchmarks.register("async-sq-1-bit-f16", imp::ScalarQuantized::<1, f16>::new());
+        benchmarks.register(
+            "async-sq-8-bit-f16",
+            imp::ScalarQuantized::<8, f16>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-4-bit-f16",
+            imp::ScalarQuantized::<4, f16>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-2-bit-f16",
+            imp::ScalarQuantized::<2, f16>::new().search(Topk),
+        );
+        benchmarks.register(
+            "async-sq-1-bit-f16",
+            imp::ScalarQuantized::<1, f16>::new().search(Topk),
+        );
         // i8
-        benchmarks.register("async-sq-1-bit-i8", imp::ScalarQuantized::<1, i8>::new());
+        benchmarks.register(
+            "async-sq-1-bit-i8",
+            imp::ScalarQuantized::<1, i8>::new().search(Topk),
+        );
     }
 
     // Stub implementation
@@ -37,6 +65,7 @@ mod imp {
     use std::{io::Write, sync::Arc};
 
     use anyhow::Context;
+    use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
         describeln,
         dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
@@ -55,24 +84,59 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, FullPrecision},
+            benchmarks::{run_build, FullPrecision, QueryType, Strategy},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
-            result::QuantBuildResult,
+            result::{BuildResult, QuantBuildResult},
+            search::plugins,
         },
         inputs::async_::{IndexSQOperation, IndexSource},
         utils::{self, datafiles},
     };
 
-    // Scalar Quantized
-    pub(super) struct ScalarQuantized<const NBITS: usize, T> {
-        _type: std::marker::PhantomData<T>,
+    type SQProvider<const NBITS: usize, T> = inmem::DefaultProvider<
+        inmem::FullPrecisionStore<T>,
+        inmem::SQStore<NBITS>,
+        common::NoDeletes,
+        diskann::provider::DefaultContext,
+    >;
+
+    impl<const NBITS: usize, T> QueryType for SQProvider<NBITS, T>
+    where
+        T: VectorRepr,
+    {
+        type Element = T;
     }
 
-    impl<const NBITS: usize, T> ScalarQuantized<NBITS, T> {
+    // Scalar Quantized
+    pub(super) struct ScalarQuantized<const NBITS: usize, T>
+    where
+        T: VectorRepr,
+    {
+        quant_search: plugins::Plugins<SQProvider<NBITS, T>, Strategy<common::Quantized>>,
+        full_search: plugins::Plugins<SQProvider<NBITS, T>, Strategy<common::FullPrecision>>,
+    }
+
+    impl<const NBITS: usize, T> ScalarQuantized<NBITS, T>
+    where
+        T: VectorRepr,
+    {
         pub(super) fn new() -> Self {
             Self {
-                _type: std::marker::PhantomData,
+                quant_search: plugins::Plugins::new(),
+                full_search: plugins::Plugins::new(),
             }
+        }
+
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
+        where
+            P: plugins::Plugin<SQProvider<NBITS, T>, Strategy<common::Quantized>>
+                + plugins::Plugin<SQProvider<NBITS, T>, Strategy<common::FullPrecision>>
+                + Clone
+                + 'static,
+        {
+            self.quant_search.register(plugin.clone());
+            self.full_search.register(plugin);
+            self
         }
     }
 
@@ -240,27 +304,23 @@ mod imp {
                     };
 
 
-                    let build = if input.use_fp_for_search {
-                        run_search_outer(
-                            &input.index_operation.search_phase,
-                            common::FullPrecision,
+                    let search = if input.use_fp_for_search {
+                        self.full_search.run(
                             index,
-                            build_stats,
-                            checkpoint,
+                            &Strategy::new(common::FullPrecision),
+                            &input.index_operation.search_phase,
                         )?
                     } else {
-                        run_search_outer(
-                            &input.index_operation.search_phase,
-                            common::Quantized,
+                        self.quant_search.run(
                             index,
-                            build_stats,
-                            checkpoint,
+                            &Strategy::new(common::Quantized),
+                            &input.index_operation.search_phase,
                         )?
                     };
 
                     let result = QuantBuildResult {
                         quant_training_time,
-                        build,
+                        build: BuildResult::new(build_stats, search),
                     };
 
                     writeln!(output, "\n\n{}", result)?;
