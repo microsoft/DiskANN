@@ -22,7 +22,7 @@ use crate::{
 /// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
 ///
 /// The provider is owned by the index. The index is constructed once at process startup and
-/// shared across requests; per-query state lives in the [`crate::flat::OnElementsUnordered`] 
+/// shared across requests; per-query state lives in the [`crate::flat::OnElementsUnordered`]
 /// implementation that the [`crate::flat::FlatSearchStrategy`] produces.
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {
@@ -85,12 +85,13 @@ impl<P: DataProvider> FlatIndex<P> {
             let mut queue = NeighborPriorityQueue::new(k);
             let mut cmps: u32 = 0;
 
-            callback.distances_unordered(&computer, |id, dist| {
-                cmps += 1;
-                queue.insert(Neighbor::new(id, dist));
-            })
-            .await
-            .into_ann_result()?;
+            callback
+                .distances_unordered(&computer, |id, dist| {
+                    cmps += 1;
+                    queue.insert(Neighbor::new(id, dist));
+                })
+                .await
+                .into_ann_result()?;
 
             let result_count = processor
                 .post_process(&mut callback, query, queue.iter().take(k), output)

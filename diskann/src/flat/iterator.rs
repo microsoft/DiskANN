@@ -34,7 +34,6 @@ pub trait OnElementsUnordered: HasId + Send + Sync {
         F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>);
 }
 
-
 /// Extension of [`OnElementsUnordered`] that drives the scan with a pre-built query
 /// computer, invoking a callback with `(id, distance)` pairs instead of raw elements.
 ///
@@ -42,7 +41,7 @@ pub trait OnElementsUnordered: HasId + Send + Sync {
 /// by the [`FlatSearchStrategy`](crate::flat::FlatSearchStrategy).
 ///
 /// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
-/// calling `computer.evaluate_similarity` on each element. 
+/// calling `computer.evaluate_similarity` on each element.
 pub trait DistancesUnordered: OnElementsUnordered {
     /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
     /// the resulting `(id, distance)` pair.
@@ -90,11 +89,9 @@ pub trait FlatIterator: HasId + Send + Sync {
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
 }
 
-
 ///////////////
 /// Default ///
 ///////////////
-
 
 /// Bridges a [`FlatIterator`] into an [`OnElementsUnordered`] by looping over
 /// [`FlatIterator::next`] and reborrowing each element into the closure.
@@ -142,4 +139,5 @@ where
     }
 }
 
-impl<I> DistancesUnordered for DefaultIteratedOperator<I> where I: FlatIterator + HasId + Send + Sync {}
+impl<I> DistancesUnordered for DefaultIteratedOperator<I> where I: FlatIterator + HasId + Send + Sync
+{}

@@ -7,7 +7,11 @@
 
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::StandardError, flat::{DistancesUnordered, OnElementsUnordered}, provider::DataProvider};
+use crate::{
+    error::StandardError,
+    flat::{DistancesUnordered, OnElementsUnordered},
+    provider::DataProvider,
+};
 
 /// Per-call configuration that knows how to construct a [`FlatIterator`] for a provider
 /// and how to pre-process queries of type `T` into a distance computer.
