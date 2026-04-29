@@ -6,7 +6,7 @@
 pub mod traits;
 
 mod aligned_read;
-pub use aligned_read::AlignedRead;
+pub use aligned_read::{AlignedRead, Alignment, A1, A512};
 
 cfg_if::cfg_if! {
     if #[cfg(all(not(miri), target_os = "linux"))] {
