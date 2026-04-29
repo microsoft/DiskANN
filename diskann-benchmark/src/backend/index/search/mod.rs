@@ -5,3 +5,6 @@
 
 pub(crate) mod knn;
 pub(crate) mod range;
+
+pub(crate) mod plugins;
+pub(crate) use plugins::Plugin;

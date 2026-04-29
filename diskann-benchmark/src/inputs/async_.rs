@@ -335,6 +335,45 @@ pub(crate) enum SearchPhase {
     TopkMultihopFilter(MultiHopSearchPhase),
 }
 
+impl SearchPhase {
+    pub(crate) fn kind(&self) -> SearchPhaseKind {
+        match self {
+            Self::Topk(_) => SearchPhaseKind::Topk,
+            Self::Range(_) => SearchPhaseKind::Range,
+            Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
+            Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+        }
+    }
+
+    pub(crate) fn as_topk(&self) -> Option<&TopkSearchPhase> {
+        match self {
+            Self::Topk(phase) => Some(phase),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_range(&self) -> Option<&RangeSearchPhase> {
+        match self {
+            Self::Range(phase) => Some(phase),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_topk_beta_filter(&self) -> Option<&BetaSearchPhase> {
+        match self {
+            Self::TopkBetaFilter(phase) => Some(phase),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_filter(&self) -> Option<&MultiHopSearchPhase> {
+        match self {
+            Self::TopkMultihopFilter(phase) => Some(phase),
+            _ => None,
+        }
+    }
+}
+
 impl CheckDeserialization for SearchPhase {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
@@ -343,6 +382,31 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchPhaseKind {
+    Topk,
+    Range,
+    TopkBetaFilter,
+    TopkMultihopFilter,
+}
+
+impl SearchPhaseKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Topk => "topk",
+            Self::Range => "range",
+            Self::TopkBetaFilter => "beta-filter",
+            Self::TopkMultihopFilter => "multihop-filter",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchPhaseKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
