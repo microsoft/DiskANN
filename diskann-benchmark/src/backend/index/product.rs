@@ -141,7 +141,8 @@ mod imp {
                             train_data.as_view(),
                             self.input.num_pq_chunks,
                             &mut StdRng::seed_from_u64(self.input.seed),
-                            &diskann_providers::utils::create_thread_pool(build.num_threads)?,
+                            diskann_providers::utils::create_thread_pool(build.num_threads)?
+                                .as_ref(),
                         )?
                     };
 
