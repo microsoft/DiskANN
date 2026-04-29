@@ -59,7 +59,7 @@ fn generate_benchmark_data(
     query_centroid_l2_distance
         .par_chunks_mut(NUM_PQ_CENTROIDS)
         .enumerate()
-        .for_each_in_pool(&pool, |(_, chunk)| chunk.copy_from_slice(&vec_256));
+        .for_each_in_pool(pool.as_ref(), |(_, chunk)| chunk.copy_from_slice(&vec_256));
 
     let pq_data: Vec<u8> = (0..num_pq_chunks * n_pts)
         .map(|_| rng.random_range(0..256) as u8)

@@ -12,10 +12,7 @@
 use std::cmp::min;
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
 use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
 use hashbrown::HashSet;
 use rand::{
@@ -43,7 +40,7 @@ fn lloyds_iter(
     docs_l2sq: &[f32],
     closest_docs: &mut Vec<Vec<usize>>,
     closest_center: &mut [u32],
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<f32> {
     let compute_residual = true;
 
@@ -118,7 +115,7 @@ fn lloyds_iter(
 /// new vec<usize> [num_centers]`, and `closest_center = new size_t[num_points]`
 /// Final centers are output in centers as row-major num_centers * dim.
 #[allow(clippy::too_many_arguments)]
-pub fn run_lloyds<Pool: AsThreadPool>(
+pub fn run_lloyds(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -126,7 +123,7 @@ pub fn run_lloyds<Pool: AsThreadPool>(
     num_centers: usize,
     max_reps: usize,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<(Vec<Vec<usize>>, Vec<u32>, f32)> {
     let mut residual = f32::MAX;
 
@@ -135,7 +132,6 @@ pub fn run_lloyds<Pool: AsThreadPool>(
 
     let mut docs_l2sq = vec![0.0; num_points];
 
-    forward_threadpool!(pool = pool);
     compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool)?;
 
     let mut old_residual;
@@ -231,7 +227,7 @@ fn select_random_pivots(
 /// If there are are fewer than num_center distinct points, pick all unique points as pivots,
 /// and sample data randomly for the remaining pivots.
 #[allow(clippy::too_many_arguments)]
-pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
+pub fn k_meanspp_selecting_pivots(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -239,7 +235,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
     num_centers: usize,
     rng: &mut impl Rng,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if num_points > (1 << 23) {
         return Err(ANNError::log_kmeans_error(format!(
@@ -280,7 +276,6 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
 
     let mut dist = vec![0.0; num_points];
 
-    forward_threadpool!(pool = pool);
     // Calculate the distance between each node and the first pivot and store the result in dist.
     dist.par_iter_mut()
         .enumerate()
@@ -394,7 +389,7 @@ pub fn k_meanspp_selecting_pivots<Pool: AsThreadPool>(
 
 /// k-means algorithm interface
 #[allow(clippy::too_many_arguments)]
-pub fn k_means_clustering<Pool: AsThreadPool>(
+pub fn k_means_clustering(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -403,10 +398,8 @@ pub fn k_means_clustering<Pool: AsThreadPool>(
     max_reps: usize,
     rng: &mut impl Rng,
     cancellation_token: &mut bool,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<(Vec<Vec<usize>>, Vec<u32>, f32)> {
-    forward_threadpool!(pool = pool);
-
     k_meanspp_selecting_pivots(
         data,
         num_points,
@@ -473,7 +466,7 @@ mod kmeans_test {
             &docs_l2sq,
             &mut closest_docs,
             &mut closest_center,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -515,7 +508,7 @@ mod kmeans_test {
             num_centers,
             max_reps,
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -558,7 +551,7 @@ mod kmeans_test {
             num_centers,
             max_reps,
             cancellation_token,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap_err();
 
@@ -699,7 +692,7 @@ mod kmeans_test {
             num_centers,
             &mut create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -751,7 +744,7 @@ mod kmeans_test {
             num_centers,
             &mut create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -765,7 +758,7 @@ mod kmeans_test {
             num_centers + 1,
             &mut create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -779,7 +772,7 @@ mod kmeans_test {
             num_points,
             &mut create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
     }
@@ -829,7 +822,7 @@ mod kmeans_test {
             num_centers,
             &mut create_rnd_in_tests(),
             &mut (false),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -945,7 +938,7 @@ mod kmeans_test {
             num_centers,
             &mut create_rnd_in_tests(),
             cancellation_token,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap_err();
 
@@ -968,7 +961,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data,  num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data,  num_centers, &mut create_rnd_in_tests(), &mut (false),pool.as_ref()).unwrap();
         }
     }
     proptest! {
@@ -982,7 +975,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),pool.as_ref()).unwrap();
         }
     }
     proptest! {
@@ -996,7 +989,7 @@ mod kmeans_test {
             let num_centers = 5;
             let mut pivot_data = vec![0.0; num_centers * pq_dim];
             let pool = create_thread_pool_for_test();
-            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),&pool).unwrap();
+            k_meanspp_selecting_pivots(&data, num_points, pq_dim, &mut pivot_data, num_centers, &mut create_rnd_in_tests(), &mut (false),pool.as_ref()).unwrap();
         }
     }
 }

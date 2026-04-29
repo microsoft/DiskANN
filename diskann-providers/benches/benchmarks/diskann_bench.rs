@@ -62,7 +62,7 @@ async fn test_sift_256_vectors_with_quant_vectors() {
         train_data.as_view(),
         32,
         &mut diskann_providers::utils::create_rnd_in_tests(),
-        &pool,
+        pool.as_ref(),
     )
     .unwrap();
 

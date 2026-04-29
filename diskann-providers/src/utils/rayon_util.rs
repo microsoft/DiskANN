@@ -2,27 +2,8 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use std::ops::Range;
-
 use diskann::{ANNError, ANNResult};
-use rayon::prelude::{IntoParallelIterator, ParallelIterator};
-
-/// based on thread_num, execute the task in parallel using Rayon or serial
-#[inline]
-pub fn execute_with_rayon<F>(range: Range<usize>, num_threads: usize, f: F) -> ANNResult<()>
-where
-    F: Fn(usize) -> ANNResult<()> + Sync + Send + Copy,
-{
-    if num_threads == 1 {
-        for i in range {
-            f(i)?;
-        }
-        Ok(())
-    } else {
-        let pool = create_thread_pool(num_threads)?;
-        range.into_par_iter().try_for_each_in_pool(&pool, f)
-    }
-}
+use rayon::prelude::ParallelIterator;
 
 /// Creates a new thread pool with the specified number of threads.
 /// If `num_threads` is 0, it defaults to the number of logical CPUs.
@@ -71,50 +52,28 @@ impl RayonThreadPool {
     {
         self.0.install(op)
     }
-}
 
-mod sealed {
-    pub trait Sealed {}
-}
-
-/// This allows either an integer to be provided or an explicit `&RayonThreadPool`.
-/// If an integer is provided, we create a new thread-pool with the requested number of
-/// threads.
-///
-/// This trait should be "sealed" to avoid external users being able to implement it.
-/// See [as_threadpool_tests] for examples of how to use this trait.
-pub trait AsThreadPool: sealed::Sealed + Send + Sync {
-    type Returns: std::ops::Deref<Target = RayonThreadPool>;
-    fn as_threadpool(&self) -> ANNResult<Self::Returns>;
-}
-
-impl sealed::Sealed for usize {}
-impl sealed::Sealed for &RayonThreadPool {}
-
-impl AsThreadPool for usize {
-    type Returns = diskann_utils::reborrow::Place<RayonThreadPool>;
-    fn as_threadpool(&self) -> ANNResult<Self::Returns> {
-        create_thread_pool(*self).map(diskann_utils::reborrow::Place)
+    pub fn as_ref(&self) -> RayonThreadPoolRef<'_> {
+        RayonThreadPoolRef(&self.0)
     }
 }
 
-impl<'a> AsThreadPool for &'a RayonThreadPool {
-    type Returns = &'a RayonThreadPool;
-    fn as_threadpool(&self) -> ANNResult<Self::Returns> {
-        Ok(self)
-    }
-}
+#[derive(Clone, Copy)]
+pub struct RayonThreadPoolRef<'a>(&'a rayon::ThreadPool);
 
-/// The `forward_threadpool` macro simplifies obtaining a thread pool from an input
-/// that implements the `AsThreadPool` trait.
-#[macro_export]
-macro_rules! forward_threadpool {
-    ($out:ident = $in:ident) => {
-        $crate::forward_threadpool!($out = $in: _);
-    };
-    ($out:ident = $in:ident: $type:ty) => {
-        let $out = &*<$type as $crate::utils::AsThreadPool>::as_threadpool(&$in)?;
-    };
+impl<'a> RayonThreadPoolRef<'a> {
+    /// Wrap an externally-owned `rayon::ThreadPool`.
+    pub fn new(pool: &'a rayon::ThreadPool) -> Self {
+        Self(pool)
+    }
+
+    pub fn install<OP, R>(self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.0.install(op)
+    }
 }
 
 // Allow use of disallowed methods within this trait to provide custom
@@ -122,14 +81,14 @@ macro_rules! forward_threadpool {
 // within a specified thread pool.
 #[allow(clippy::disallowed_methods)]
 pub trait ParallelIteratorInPool: ParallelIterator + Sized {
-    fn for_each_in_pool<OP>(self, pool: &RayonThreadPool, op: OP)
+    fn for_each_in_pool<OP>(self, pool: RayonThreadPoolRef<'_>, op: OP)
     where
         OP: Fn(Self::Item) + Sync + Send,
     {
         pool.install(|| self.for_each(op));
     }
 
-    fn for_each_with_in_pool<OP, T>(self, pool: &RayonThreadPool, init: T, op: OP)
+    fn for_each_with_in_pool<OP, T>(self, pool: RayonThreadPoolRef<'_>, init: T, op: OP)
     where
         OP: Fn(&mut T, Self::Item) + Sync + Send,
         T: Send + Clone,
@@ -137,7 +96,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.for_each_with(init, op))
     }
 
-    fn for_each_init_in_pool<OP, INIT, T>(self, pool: &RayonThreadPool, init: INIT, op: OP)
+    fn for_each_init_in_pool<OP, INIT, T>(self, pool: RayonThreadPoolRef<'_>, init: INIT, op: OP)
     where
         OP: Fn(&mut T, Self::Item) + Sync + Send,
         INIT: Fn() -> T + Sync + Send,
@@ -145,7 +104,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.for_each_init(init, op))
     }
 
-    fn try_for_each_in_pool<OP, E>(self, pool: &RayonThreadPool, op: OP) -> Result<(), E>
+    fn try_for_each_in_pool<OP, E>(self, pool: RayonThreadPoolRef<'_>, op: OP) -> Result<(), E>
     where
         OP: Fn(Self::Item) -> Result<(), E> + Sync + Send,
         E: Send,
@@ -155,7 +114,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
 
     fn try_for_each_with_in_pool<OP, T, E>(
         self,
-        pool: &RayonThreadPool,
+        pool: RayonThreadPoolRef<'_>,
         init: T,
         op: OP,
     ) -> Result<(), E>
@@ -169,7 +128,7 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
 
     fn try_for_each_init_in_pool<OP, INIT, T, E>(
         self,
-        pool: &RayonThreadPool,
+        pool: RayonThreadPoolRef<'_>,
         init: INIT,
         op: OP,
     ) -> Result<(), E>
@@ -181,18 +140,18 @@ pub trait ParallelIteratorInPool: ParallelIterator + Sized {
         pool.install(|| self.try_for_each_init(init, op))
     }
 
-    fn count_in_pool(self, pool: &RayonThreadPool) -> usize {
+    fn count_in_pool(self, pool: RayonThreadPoolRef<'_>) -> usize {
         pool.install(|| self.count())
     }
 
-    fn collect_in_pool<C>(self, pool: &RayonThreadPool) -> C
+    fn collect_in_pool<C>(self, pool: RayonThreadPoolRef<'_>) -> C
     where
         C: rayon::iter::FromParallelIterator<Self::Item> + Send,
     {
         pool.install(|| self.collect())
     }
 
-    fn sum_in_pool<S>(self, pool: &RayonThreadPool) -> S
+    fn sum_in_pool<S>(self, pool: RayonThreadPoolRef<'_>) -> S
     where
         S: Send + std::iter::Sum<Self::Item> + std::iter::Sum<S>,
     {
@@ -208,6 +167,7 @@ mod tests {
     use std::sync::{Mutex, mpsc::channel};
 
     use super::*;
+    use rayon::prelude::IntoParallelIterator;
 
     fn get_num_cpus() -> usize {
         std::thread::available_parallelism()
@@ -281,11 +241,31 @@ mod tests {
     }
 
     #[test]
+    fn test_bring_your_own_pool() {
+        let external_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let pool_ref = RayonThreadPoolRef::new(&external_pool);
+
+        let res = Mutex::new(Vec::new());
+        (0..5).into_par_iter().for_each_in_pool(pool_ref, |x| {
+            let mut res = res.lock().unwrap();
+            res.push(x);
+            assert_run_in_rayon_thread();
+        });
+
+        let mut res = res.lock().unwrap();
+        res.sort();
+        assert_eq!(&res[..], &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
     fn test_for_each_in_pool() {
         let pool = create_thread_pool(4).unwrap();
 
         let res = Mutex::new(Vec::new());
-        (0..5).into_par_iter().for_each_in_pool(&pool, |x| {
+        (0..5).into_par_iter().for_each_in_pool(pool.as_ref(), |x| {
             let mut res = res.lock().unwrap();
             res.push(x);
             assert_run_in_rayon_thread();
@@ -303,7 +283,7 @@ mod tests {
 
         (0..5)
             .into_par_iter()
-            .for_each_with_in_pool(&pool, sender, |s, x| s.send(x).unwrap());
+            .for_each_with_in_pool(pool.as_ref(), sender, |s, x| s.send(x).unwrap());
 
         let mut res: Vec<_> = receiver.iter().collect();
 
@@ -317,7 +297,7 @@ mod tests {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
         iter.for_each_init_in_pool(
-            &pool,
+            pool.as_ref(),
             || 0,
             |s, i| {
                 assert_run_in_rayon_thread();
@@ -334,7 +314,7 @@ mod tests {
             assert_run_in_rayon_thread();
             i as f32
         });
-        let list = mapped_iter.collect_in_pool::<Vec<f32>>(&pool);
+        let list = mapped_iter.collect_in_pool::<Vec<f32>>(pool.as_ref());
         assert!(list.len() == 100);
     }
 
@@ -342,7 +322,7 @@ mod tests {
     fn test_try_for_each_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let result = iter.try_for_each_in_pool(&pool, |i| {
+        let result = iter.try_for_each_in_pool(pool.as_ref(), |i| {
             assert_run_in_rayon_thread();
             if i < 50 { Ok(()) } else { Err("Error") }
         });
@@ -354,7 +334,7 @@ mod tests {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
         let result = iter.try_for_each_init_in_pool(
-            &pool,
+            pool.as_ref(),
             || 0,
             |_, i| {
                 assert_run_in_rayon_thread();
@@ -368,7 +348,7 @@ mod tests {
     fn test_try_for_each_with_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let result = iter.try_for_each_with_in_pool(&pool, 0, |acc, i| {
+        let result = iter.try_for_each_with_in_pool(pool.as_ref(), 0, |acc, i| {
             assert_run_in_rayon_thread();
             if i < 50 {
                 *acc += i;
@@ -384,7 +364,7 @@ mod tests {
     fn test_count_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let count = iter.count_in_pool(&pool);
+        let count = iter.count_in_pool(pool.as_ref());
         assert_eq!(count, 100);
     }
 
@@ -392,7 +372,7 @@ mod tests {
     fn test_collect_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let vec = iter.collect_in_pool::<Vec<_>>(&pool);
+        let vec = iter.collect_in_pool::<Vec<_>>(pool.as_ref());
         assert_eq!(vec.len(), 100);
     }
 
@@ -400,96 +380,7 @@ mod tests {
     fn test_sum_in_pool() {
         let pool = create_thread_pool(4).unwrap();
         let iter = (0..100).into_par_iter();
-        let sum: i32 = iter.sum_in_pool(&pool);
+        let sum: i32 = iter.sum_in_pool(pool.as_ref());
         assert_eq!(sum, (0..100).sum::<i32>());
-    }
-}
-
-#[cfg(test)]
-mod as_threadpool_tests {
-    use super::*;
-
-    fn some_parallel_op<P: AsThreadPool>(pool: P) -> ANNResult<f32> {
-        forward_threadpool!(pool = pool);
-
-        let ret = (0..100).into_par_iter().map(|i| i as f32).sum_in_pool(pool);
-        Ok(ret)
-    }
-
-    fn another_parallel_op<P: AsThreadPool>(pool: P) -> ANNResult<f32> {
-        forward_threadpool!(pool = pool);
-        let ret = (0..100).into_par_iter().map(|i| i as f32).sum_in_pool(pool);
-        Ok(ret)
-    }
-
-    fn execute_single_parallel_op<P: AsThreadPool>(pool: P) -> ANNResult<f32> {
-        // Directly pass the thread pool to the function.
-        some_parallel_op(pool)
-    }
-
-    fn execute_two_parallel_ops<P: AsThreadPool>(pool: P) -> ANNResult<f32> {
-        // Need a reference to the thread pool to share it with multiple functions.
-        forward_threadpool!(pool = pool);
-
-        let ret1 = some_parallel_op(pool)?;
-        let ret2 = another_parallel_op(pool)?;
-        Ok(ret1 + ret2)
-    }
-
-    fn execute_combined_parallel_ops<P: AsThreadPool>(pool: P) -> ANNResult<f32> {
-        // Need a Threadpool reference to execute the operations.
-        forward_threadpool!(pool = pool);
-
-        let ret1: f32 = (0..100).into_par_iter().map(|i| i as f32).sum_in_pool(pool);
-        let ret2 = some_parallel_op(pool)?;
-        Ok(ret1 + ret2)
-    }
-
-    #[test]
-    fn test_execute_single_parallel_op_with_usize() {
-        let num_threads = 4;
-        let result = execute_single_parallel_op(num_threads);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_execute_single_parallel_op_with_existing_pool() {
-        let pool = create_thread_pool(4).unwrap();
-        let result = execute_single_parallel_op(&pool);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_execute_two_parallel_ops_with_usize() {
-        let num_threads = 4;
-        let result = execute_two_parallel_ops(num_threads);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_execute_two_parallel_ops_with_existing_pool() {
-        let pool = create_thread_pool(4).unwrap();
-        let result = execute_two_parallel_ops(&pool);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_execute_combined_parallel_ops_with_usize() {
-        let num_threads = 4;
-        let result = execute_combined_parallel_ops(num_threads);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_execute_combined_parallel_ops_with_existing_pool() {
-        let pool = create_thread_pool(4).unwrap();
-        let result = execute_combined_parallel_ops(&pool);
-        assert!(result.is_ok());
-        assert!(result.unwrap() > 0.0);
     }
 }

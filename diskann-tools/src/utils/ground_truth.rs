@@ -500,26 +500,29 @@ where
         queries_and_neighbor_queue
             .par_iter_mut()
             .enumerate()
-            .for_each_in_pool(&pool, |(idx_query, (query, ref mut neighbor_queue))| {
-                for (idx_in_batch, data) in data_batch.iter().enumerate() {
-                    let idx = (num_base_points + idx_in_batch) as u32;
+            .for_each_in_pool(
+                pool.as_ref(),
+                |(idx_query, (query, ref mut neighbor_queue))| {
+                    for (idx_in_batch, data) in data_batch.iter().enumerate() {
+                        let idx = (num_base_points + idx_in_batch) as u32;
 
-                    let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
-                        if let Ok(idx_usize) = idx.try_into() {
-                            bitmaps[idx_query].contains(idx_usize)
+                        let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
+                            if let Ok(idx_usize) = idx.try_into() {
+                                bitmaps[idx_query].contains(idx_usize)
+                            } else {
+                                false
+                            }
                         } else {
-                            false
-                        }
-                    } else {
-                        true
-                    };
+                            true
+                        };
 
-                    if allowed_by_bitmap {
-                        let distance = distance_comparer.evaluate_similarity(data, query);
-                        neighbor_queue.insert(Neighbor { id: idx, distance });
+                        if allowed_by_bitmap {
+                            let distance = distance_comparer.evaluate_similarity(data, query);
+                            neighbor_queue.insert(Neighbor { id: idx, distance });
+                        }
                     }
-                }
-            });
+                },
+            );
 
         num_base_points += points;
     }
@@ -585,60 +588,64 @@ where
     query_multivecs_and_neighbor_queue
         .par_iter_mut()
         .enumerate()
-        .for_each_in_pool(&pool, |(query_idx, (query_multivec, neighbor_queue))| {
-            for (idx_base, base_multivec) in base_vectors.iter().enumerate() {
-                // check if calculation is allowed by bitmap if present
-                let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
-                    bitmaps[query_idx].contains(idx_base)
-                } else {
-                    true
-                };
-
-                if allowed_by_bitmap {
-                    // compute distance between query_multivec and base_multivec
-                    let distance = match aggregation_method {
-                        MultivecAggregationMethod::AveragePairwise => {
-                            let mut total_distance = 0.0;
-                            for query_vec in query_multivec.row_iter() {
-                                for base_vec in base_multivec.row_iter() {
-                                    let dist =
-                                        distance_comparer.evaluate_similarity(query_vec, base_vec);
-                                    total_distance += dist;
-                                }
-                            }
-                            total_distance / (query_multivec.nrows() * base_multivec.nrows()) as f32
-                        }
-                        MultivecAggregationMethod::MinPairwise => {
-                            let mut min_distance = f32::MAX;
-                            for query_vec in query_multivec.row_iter() {
-                                for base_vec in base_multivec.row_iter() {
-                                    let dist =
-                                        distance_comparer.evaluate_similarity(query_vec, base_vec);
-                                    min_distance = min_distance.min(dist);
-                                }
-                            }
-                            min_distance
-                        }
-                        MultivecAggregationMethod::AvgofMins => {
-                            let mut distance = 0_f32;
-                            for query_vec in query_multivec.row_iter() {
-                                let mut local_min = f32::MAX;
-                                for base_vec in base_multivec.row_iter() {
-                                    let dist =
-                                        distance_comparer.evaluate_similarity(query_vec, base_vec);
-                                    local_min = local_min.min(dist);
-                                }
-                                distance += local_min;
-                            }
-                            distance / query_multivec.nrows() as f32
-                        }
+        .for_each_in_pool(
+            pool.as_ref(),
+            |(query_idx, (query_multivec, neighbor_queue))| {
+                for (idx_base, base_multivec) in base_vectors.iter().enumerate() {
+                    // check if calculation is allowed by bitmap if present
+                    let allowed_by_bitmap = if let Some(ref bitmaps) = query_bitmaps {
+                        bitmaps[query_idx].contains(idx_base)
+                    } else {
+                        true
                     };
-                    // insert into neighbor queue
-                    let idx = idx_base as u32;
-                    neighbor_queue.insert(Neighbor { id: idx, distance });
+
+                    if allowed_by_bitmap {
+                        // compute distance between query_multivec and base_multivec
+                        let distance = match aggregation_method {
+                            MultivecAggregationMethod::AveragePairwise => {
+                                let mut total_distance = 0.0;
+                                for query_vec in query_multivec.row_iter() {
+                                    for base_vec in base_multivec.row_iter() {
+                                        let dist = distance_comparer
+                                            .evaluate_similarity(query_vec, base_vec);
+                                        total_distance += dist;
+                                    }
+                                }
+                                total_distance
+                                    / (query_multivec.nrows() * base_multivec.nrows()) as f32
+                            }
+                            MultivecAggregationMethod::MinPairwise => {
+                                let mut min_distance = f32::MAX;
+                                for query_vec in query_multivec.row_iter() {
+                                    for base_vec in base_multivec.row_iter() {
+                                        let dist = distance_comparer
+                                            .evaluate_similarity(query_vec, base_vec);
+                                        min_distance = min_distance.min(dist);
+                                    }
+                                }
+                                min_distance
+                            }
+                            MultivecAggregationMethod::AvgofMins => {
+                                let mut distance = 0_f32;
+                                for query_vec in query_multivec.row_iter() {
+                                    let mut local_min = f32::MAX;
+                                    for base_vec in base_multivec.row_iter() {
+                                        let dist = distance_comparer
+                                            .evaluate_similarity(query_vec, base_vec);
+                                        local_min = local_min.min(dist);
+                                    }
+                                    distance += local_min;
+                                }
+                                distance / query_multivec.nrows() as f32
+                            }
+                        };
+                        // insert into neighbor queue
+                        let idx = idx_base as u32;
+                        neighbor_queue.insert(Neighbor { id: idx, distance });
+                    }
                 }
-            }
-        });
+            },
+        );
 
     Ok(neighbor_queues)
 }

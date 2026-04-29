@@ -4,10 +4,7 @@
  */
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{gen_random_slice, AsThreadPool, RayonThreadPool, READ_WRITE_BLOCK_SIZE},
-};
+use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_BLOCK_SIZE};
 
 use crate::utils::{compute_closest_centers, k_meanspp_selecting_pivots, run_lloyds};
 use rand::Rng;
@@ -22,7 +19,7 @@ use crate::{
 const BLOCK_SIZE_LARGE_FILE: u32 = 10_000;
 
 #[allow(clippy::too_many_arguments)]
-pub fn partition_with_ram_budget<T, StorageProvider, Pool, F>(
+pub fn partition_with_ram_budget<T, StorageProvider, F>(
     dataset_file: &str,
     dim: usize,
     sampling_rate: f64,
@@ -31,16 +28,14 @@ pub fn partition_with_ram_budget<T, StorageProvider, Pool, F>(
     merged_index_prefix: &str,
     storage_provider: &StorageProvider,
     rng: &mut impl Rng,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
     ram_estimator: F,
 ) -> ANNResult<usize>
 where
     T: VectorRepr,
     StorageProvider: StorageReadProvider + StorageWriteProvider,
-    Pool: AsThreadPool,
     F: Fn(u64, u64) -> f64,
 {
-    forward_threadpool!(pool = pool);
     // Find partition size and get pivot data
     let (num_parts, pivot_data, train_dim) = find_partition_size::<T, StorageProvider, F>(
         dataset_file,
@@ -78,7 +73,7 @@ fn find_partition_size<T, StorageProvider, F>(
     k_base: usize,
     storage_provider: &StorageProvider,
     rng: &mut impl Rng,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
     ram_estimator: &F,
 ) -> ANNResult<(usize, Vec<f32>, usize)>
 where
@@ -245,7 +240,7 @@ fn shard_data_into_clusters_only_ids<T, StorageProvider>(
     k_base: usize,
     merged_index_prefix: &str,
     storage_provider: &StorageProvider,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()>
 where
     T: VectorRepr,
@@ -369,7 +364,7 @@ fn estimate_cluster_sizes(
     dim: usize,
     k_base: usize,
     cluster_sizes: &mut Vec<u32>,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     cluster_sizes.clear();
     let mut shard_counts = vec![0; num_centers];
@@ -450,7 +445,7 @@ mod partition_test {
             dim,
             k_base,
             &mut cluster_sizes,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -511,7 +506,7 @@ mod partition_test {
             k_base,
             merged_index_prefix,
             &storage_provider,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -565,7 +560,7 @@ mod partition_test {
         let merged_index_prefix = "/test_merged_index_prefix";
         let pool = create_thread_pool_for_test();
 
-        let num_parts = partition_with_ram_budget::<f32, _, _, _>(
+        let num_parts = partition_with_ram_budget::<f32, _, _>(
             dataset_file,
             128, //sift is 128 dimensions
             sampling_rate,
@@ -574,7 +569,7 @@ mod partition_test {
             merged_index_prefix,
             &storage_provider,
             &mut diskann_providers::utils::create_rnd_in_tests(),
-            &pool,
+            pool.as_ref(),
             |num_points, dim| {
                 // Simple RAM estimation for test - capture datasize and graph_degree from context
                 use diskann_providers::model::GRAPH_SLACK_FACTOR;
