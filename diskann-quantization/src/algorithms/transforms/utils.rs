@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::alloc::{Allocator, AllocatorError, Poly};
 
-#[derive(Debug, Clone, Copy, Error, PartialEq)]
+#[derive(Debug, Clone, Error, PartialEq)]
 pub enum TransformFailed {
     #[error("incorrect transform input vector - expected length {expected} but got {found}")]
     SourceMismatch { expected: usize, found: usize },
@@ -16,6 +16,9 @@ pub enum TransformFailed {
     DestinationMismatch { expected: usize, found: usize },
     #[error(transparent)]
     AllocatorError(#[from] AllocatorError),
+    #[cfg(feature = "linalg")]
+    #[error("SGEMM operation failed: {0}")]
+    SgemmError(#[from] diskann_linalg::SgemmError),
 }
 
 pub(super) fn check_dims(

@@ -3,12 +3,79 @@
  * Licensed under the MIT license.
  */
 
+use std::fmt;
+
 pub mod common;
 pub use common::Transpose;
 
 mod faer;
 use faer::{random_distance_preserving_matrix_impl, sgemm_impl, svd_into_impl};
 use rand::Rng;
+
+/// Error type for SGEMM operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SgemmError {
+    /// Matrix `a` has incorrect dimensions.
+    InvalidMatrixADimensions {
+        expected_rows: usize,
+        expected_cols: usize,
+        expected_len: usize,
+        actual_len: usize,
+    },
+    /// Matrix `b` has incorrect dimensions.
+    InvalidMatrixBDimensions {
+        expected_rows: usize,
+        expected_cols: usize,
+        expected_len: usize,
+        actual_len: usize,
+    },
+    /// Matrix `c` has incorrect dimensions.
+    InvalidMatrixCDimensions {
+        expected_rows: usize,
+        expected_cols: usize,
+        expected_len: usize,
+        actual_len: usize,
+    },
+}
+
+impl fmt::Display for SgemmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SgemmError::InvalidMatrixADimensions {
+                expected_rows,
+                expected_cols,
+                expected_len,
+                actual_len,
+            } => write!(
+                f,
+                "expected {}x{} matrix `a` to have length {}, instead got {}",
+                expected_rows, expected_cols, expected_len, actual_len
+            ),
+            SgemmError::InvalidMatrixBDimensions {
+                expected_rows,
+                expected_cols,
+                expected_len,
+                actual_len,
+            } => write!(
+                f,
+                "expected {}x{} matrix `b` to have length {}, instead got {}",
+                expected_rows, expected_cols, expected_len, actual_len
+            ),
+            SgemmError::InvalidMatrixCDimensions {
+                expected_rows,
+                expected_cols,
+                expected_len,
+                actual_len,
+            } => write!(
+                f,
+                "expected {}x{} matrix `c` to have length {}, instead got {}",
+                expected_rows, expected_cols, expected_len, actual_len
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SgemmError {}
 
 // Make the reference implementation available for internal testing.
 #[cfg(test)]
@@ -62,15 +129,12 @@ mod reference;
 /// If the more esoteric features of the cblas `sgemm` API are needed, we can provide
 /// that as an interface extension.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if
+/// Returns an error if:
 /// * `a.len() != m * k`
 /// * `b.len() != k * n`
-/// * `c.len() != m * n`.
-///
-/// Additionally, if MKL is used, panics if any of `k, m, n` is not representable as a
-/// signed 32-bit integer due to `cblas` limitations.
+/// * `c.len() != m * n`
 #[allow(clippy::too_many_arguments)]
 pub fn sgemm(
     atranspose: Transpose,
@@ -83,38 +147,38 @@ pub fn sgemm(
     b: &[f32],
     beta: Option<f32>,
     c: &mut [f32],
-) {
+) -> Result<(), SgemmError> {
     // Check size requirements.
-    assert_eq!(
-        a.len(),
-        m * k,
-        "expected {}x{} matrix `a` to have length {}, instead got {}",
-        m,
-        k,
-        m * k,
-        a.len()
-    );
-    assert_eq!(
-        b.len(),
-        k * n,
-        "expected {}x{} matrix `b` to have length {}, instead got {}",
-        k,
-        n,
-        k * n,
-        b.len()
-    );
-    assert_eq!(
-        c.len(),
-        m * n,
-        "expected {}x{} matrix `c` to have length {}, instead got {}",
-        m,
-        n,
-        m * n,
-        c.len()
-    );
+    if a.len() != m * k {
+        return Err(SgemmError::InvalidMatrixADimensions {
+            expected_rows: m,
+            expected_cols: k,
+            expected_len: m * k,
+            actual_len: a.len(),
+        });
+    }
+
+    if b.len() != k * n {
+        return Err(SgemmError::InvalidMatrixBDimensions {
+            expected_rows: k,
+            expected_cols: n,
+            expected_len: k * n,
+            actual_len: b.len(),
+        });
+    }
+
+    if c.len() != m * n {
+        return Err(SgemmError::InvalidMatrixCDimensions {
+            expected_rows: m,
+            expected_cols: n,
+            expected_len: m * n,
+            actual_len: c.len(),
+        });
+    }
 
     // Invoke the actual implementation.
-    sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c)
+    sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
+    Ok(())
 }
 
 /// Compute the SVD of the provided matrix implicit row-major matrix `data`.
@@ -299,7 +363,8 @@ mod tests {
             &full_singular_values,
             None,
             &mut temp,
-        );
+        )
+        .unwrap();
 
         let mut output = vec![0.0; case.m * case.n];
         sgemm(
@@ -313,7 +378,8 @@ mod tests {
             &vt,
             None,
             &mut output,
-        );
+        )
+        .unwrap();
 
         for row in 0..case.m {
             for col in 0..case.n {

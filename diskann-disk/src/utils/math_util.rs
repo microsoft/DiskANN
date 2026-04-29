@@ -172,7 +172,8 @@ pub fn compute_closest_centers_in_block(
         &ones_a,
         None, // Initialize the destination matrix
         dist_matrix,
-    );
+    )
+    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
 
     diskann_linalg::sgemm(
         Transpose::None,
@@ -185,7 +186,8 @@ pub fn compute_closest_centers_in_block(
         centers_l2sq,
         Some(1.0), // Add to the destination matrix
         dist_matrix,
-    );
+    )
+    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
 
     diskann_linalg::sgemm(
         Transpose::None,
@@ -198,7 +200,8 @@ pub fn compute_closest_centers_in_block(
         centers,
         Some(1.0), // Add to the destination matrix.
         dist_matrix,
-    );
+    )
+    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
 
     if k == 1 {
         center_index

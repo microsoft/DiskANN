@@ -162,7 +162,7 @@ impl RandomRotation {
             src,
             None,
             dst,
-        );
+        )?;
         Ok(())
     }
 }

@@ -761,6 +761,12 @@ where
                     "The sizes of these arrays should already be checked - this is a logic error"
                 );
             }
+            #[cfg(feature = "linalg")]
+            Err(TransformFailed::SgemmError(_)) => {
+                panic!(
+                    "SGEMM should not fail with valid dimensions - this is a logic error"
+                );
+            }
         }
 
         *into.meta_mut() = FullQueryMeta {
@@ -833,6 +839,12 @@ where
             | Err(TransformFailed::DestinationMismatch { .. }) => {
                 panic!(
                     "The sizes of these arrays should already be checked - this is a logic error"
+                );
+            }
+            #[cfg(feature = "linalg")]
+            Err(TransformFailed::SgemmError(_)) => {
+                panic!(
+                    "SGEMM should not fail with valid dimensions - this is a logic error"
                 );
             }
         }
@@ -1153,6 +1165,12 @@ where
             | Err(TransformFailed::DestinationMismatch { .. }) => {
                 panic!(
                     "The sizes of these arrays should already be checked - this is a logic error"
+                );
+            }
+            #[cfg(feature = "linalg")]
+            Err(TransformFailed::SgemmError(_)) => {
+                panic!(
+                    "SGEMM should not fail with valid dimensions - this is a logic error"
                 );
             }
         }
