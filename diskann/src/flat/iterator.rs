@@ -3,19 +3,41 @@
  * Licensed under the MIT license.
  */
 
-//! [`FlatIterator`] — the sequential access primitive for accessing a flat index.
+//! [`OnElementsUnordered`] — the sequential access primitive for accessing a flat index.
+//!
+//! [`FlatIterator`] — a lending async iterator that can be bridged into
+//! [`OnElementsUnordered`] via [`DefaultIteratedOperator`].
 
 use diskann_utils::{Reborrow, future::SendFuture};
 
 use crate::{error::StandardError, provider::HasId};
 
-/// A lending, asynchronous iterator over the elements of a flat index.
+/// Callback-driven sequential scan over the elements of a flat index.
 ///
-/// `FlatIterator` is the streaming counterpart to [`crate::provider::Accessor`]. Where an
-/// accessor exposes random retrieval by id, a flat iterator exposes a *sequential* walk —
-/// each call to [`Self::next`] advances an internal cursor and yields the next element.
+/// `OnElementsUnordered` is the streaming counterpart to [`crate::provider::Accessor`].
+/// Where an accessor exposes random retrieval by id, this trait exposes a *sequential*
+/// walk that invokes a caller-supplied closure for every element.
 ///
 /// Algorithms see only `(Id, ElementRef)` pairs and treat the stream as opaque.
+pub trait OnElementsUnordered: HasId + Send + Sync {
+    /// A reference to a yielded element with an unconstrained lifetime, suitable for
+    /// distance-function HRTB bounds.
+    type ElementRef<'a>;
+
+    /// The error type yielded by [`Self::on_elements_unordered`].
+    type Error: StandardError;
+
+    /// Drive the entire scan, invoking `f` for each yielded element.
+    fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>);
+}
+
+/// A lending, asynchronous iterator over the elements of a flat index.
+///
+/// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
+/// only implement `FlatIterator` can be wrapped in [`DefaultIteratedOperator`] to obtain
+/// an [`OnElementsUnordered`] implementation automatically.
 pub trait FlatIterator: HasId + Send + Sync {
     /// A reference to a yielded element with an unconstrained lifetime, suitable for
     /// distance-function HRTB bounds.
@@ -26,7 +48,7 @@ pub trait FlatIterator: HasId + Send + Sync {
     where
         Self: 'a;
 
-    /// The error type yielded by [`Self::next`] and [`Self::on_elements_unordered`].
+    /// The error type yielded by [`Self::next`].
     type Error: StandardError;
 
     /// Advance the iterator and asynchronously yield the next `(id, element)` pair.
@@ -37,16 +59,53 @@ pub trait FlatIterator: HasId + Send + Sync {
     fn next(
         &mut self,
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
+}
 
-    /// Drive the entire scan, invoking `f` for each yielded element.
-    ///
-    /// The default implementation loops over [`Self::next`].
+
+///////////////
+/// Default ///
+///////////////
+
+
+/// Bridges a [`FlatIterator`] into an [`OnElementsUnordered`] by looping over
+/// [`FlatIterator::next`] and reborrowing each element into the closure.
+///
+/// This is the default adapter for providers that implement element-at-a-time iteration.
+/// Providers that can do better (prefetching, SIMD batching, bulk I/O) should implement
+/// [`OnElementsUnordered`] directly.
+pub struct DefaultIteratedOperator<I> {
+    inner: I,
+}
+
+impl<I> DefaultIteratedOperator<I> {
+    /// Wrap an iterator to produce an [`OnElementsUnordered`] implementation.
+    pub fn new(inner: I) -> Self {
+        Self { inner }
+    }
+
+    /// Unwrap, returning the inner iterator.
+    pub fn into_inner(self) -> I {
+        self.inner
+    }
+}
+
+impl<I: HasId> HasId for DefaultIteratedOperator<I> {
+    type Id = I::Id;
+}
+
+impl<I> OnElementsUnordered for DefaultIteratedOperator<I>
+where
+    I: FlatIterator + HasId + Send + Sync,
+{
+    type ElementRef<'a> = I::ElementRef<'a>;
+    type Error = I::Error;
+
     fn on_elements_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
         F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>),
     {
         async move {
-            while let Some((id, element)) = self.next().await? {
+            while let Some((id, element)) = self.inner.next().await? {
                 f(id, element.reborrow());
             }
             Ok(())

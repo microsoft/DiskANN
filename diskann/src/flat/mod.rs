@@ -38,6 +38,6 @@ pub mod post_process;
 pub mod strategy;
 
 pub use index::FlatIndex;
-pub use iterator::FlatIterator;
+pub use iterator::{DefaultIteratedOperator, FlatIterator, OnElementsUnordered};
 pub use post_process::{CopyFlatIds, FlatPostProcess};
 pub use strategy::FlatSearchStrategy;

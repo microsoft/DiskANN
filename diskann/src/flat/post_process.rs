@@ -8,7 +8,7 @@
 use diskann_utils::future::SendFuture;
 
 use crate::{
-    error::StandardError, flat::FlatIterator, graph::SearchOutputBuffer, neighbor::Neighbor,
+    error::StandardError, flat::OnElementsUnordered, graph::SearchOutputBuffer, neighbor::Neighbor,
     provider::HasId,
 };
 
@@ -23,7 +23,7 @@ use crate::{
 /// pairs, fully hydrated hits etc.).
 pub trait FlatPostProcess<S, T, O = <S as HasId>::Id>
 where
-    S: FlatIterator,
+    S: OnElementsUnordered,
     T: ?Sized,
 {
     /// Errors yielded by [`Self::post_process`].
@@ -50,7 +50,7 @@ pub struct CopyFlatIds;
 
 impl<S, T> FlatPostProcess<S, T> for CopyFlatIds
 where
-    S: FlatIterator,
+    S: OnElementsUnordered,
     T: ?Sized,
 {
     type Error = crate::error::Infallible;

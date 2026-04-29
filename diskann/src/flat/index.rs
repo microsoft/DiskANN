@@ -14,7 +14,7 @@ use diskann_vector::PreprocessedDistanceFunction;
 use crate::{
     ANNResult,
     error::IntoANNResult,
-    flat::{FlatIterator, FlatPostProcess, FlatSearchStrategy},
+    flat::{OnElementsUnordered, FlatPostProcess, FlatSearchStrategy},
     graph::{SearchOutputBuffer, index::SearchStats},
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::DataProvider,
@@ -28,7 +28,7 @@ use crate::{
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {
     /// The backing provider.
-    pub provider: P,
+    provider: P,
     _marker: PhantomData<fn() -> P>,
 }
 
@@ -73,19 +73,20 @@ impl<P: DataProvider> FlatIndex<P> {
         T: ?Sized + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> FlatPostProcess<S::Iter<'a>, T, O> + Send + Sync,
+        PP: for<'a> FlatPostProcess<S::Callback<'a>, T, O> + Send + Sync,
     {
         async move {
-            let mut iter = strategy
-                .create_iter(&self.provider, context)
+            let mut callback = strategy
+                .create_callback(&self.provider, context)
                 .into_ann_result()?;
+
             let computer = strategy.build_query_computer(query).into_ann_result()?;
 
             let k = k.get();
             let mut queue = NeighborPriorityQueue::new(k);
             let mut cmps: u32 = 0;
 
-            iter.on_elements_unordered(|id, element| {
+            callback.on_elements_unordered(|id, element| {
                 let dist = computer.evaluate_similarity(element);
                 cmps += 1;
                 queue.insert(Neighbor::new(id, dist));
@@ -94,7 +95,7 @@ impl<P: DataProvider> FlatIndex<P> {
             .into_ann_result()?;
 
             let result_count = processor
-                .post_process(&mut iter, query, queue.iter().take(k), output)
+                .post_process(&mut callback, query, queue.iter().take(k), output)
                 .await
                 .into_ann_result()? as u32;
 
