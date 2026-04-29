@@ -22,75 +22,88 @@ stuffing the algorithm or the backend through the `Accessor` trait surface.
 
 ### Goals
 
-1. Define a streaming access primitive — `FlatIterator` — that mirrors the role
-   `Accessor` plays for graph search but exposes a lending-iterator interface instead of
-   a random-access one.
+1. Define a streaming access primitive — `OnElementsUnordered` — that mirrors the role
+   `Accessor` plays for graph search but exposes a callback-driven scan instead of
+   random access.
 2. Provide flat-search algorithm implementations (with `knn_search` as default and filtered and diverse variants to opt-into) built on the new
    primitives, so consumers can use this against their own providers / backends. 
 3. Expose support for features and implementations native to the repo like quantized distance computers out-of-the-box.
 
 ## Proposal
 
-Let's start with the main analog to the `Accessor` trait for the `FlatIndex` - `FlatIterator`. 
+The flat-search infrastructure is built on a small sequence of traits. The only required traits for the algorithm is `OnElementsUnordered` and its subtrait `DistancesUnordered`. A strategy - `FlatSearchStrategy` - instantiates these implementations for specific providers. An opt-in iterator trait `FlatIterator` and default implementations of the core traits - `DefaultIteratedOperator` - exist for convenience for backends that naturally expose element-at-a-time iteration.
 
-
-### `FlatIterator`
+### `OnElementsUnordered` — the core scan
 
 ```rust
-pub trait FlatIterator: HasId + Send + Sync { // Has Id support
-    // Element yielded by iterator
-    type ElementRef<'a>; 
+pub trait OnElementsUnordered: HasId + Send + Sync {
+    type ElementRef<'a>;
+    type Error: StandardError;
 
-    // Mostly machinery to play nice with HRTB 
+    fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>);
+}
+```
+
+A single required method: drive the entire scan via a callback. Async to match
+[`crate::provider::Accessor`]. Implementations choose iteration order, prefetching, and
+any SIMD-friendly bulk reads if they want; algorithms see only `(Id, ElementRef)` pairs.
+
+### `DistancesUnordered` — the distance subtrait
+
+```rust
+pub trait DistancesUnordered: OnElementsUnordered {
+    fn distances_unordered<C, F>(
+        &mut self, computer: &C, mut f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32> + Send + Sync,
+        F: Send + FnMut(Self::Id, f32),
+    {
+        // default delegates to on_elements_unordered + evaluate_similarity
+    }
+}
+```
+
+A subtrait that fuses scanning with scoring. The default implementation loops
+`on_elements_unordered` and calls `computer.evaluate_similarity` on each element.
+
+The query computer is a generic parameter rather than an associated type, so the same
+callback type can be driven by different computers. The `FlatSearchStrategy` is the
+source of truth for which computer is used in any given search.
+
+### `FlatIterator` and `DefaultIteratedOperator` — convenience for element-at-a-time backends
+
+For backends that naturally expose element-at-a-time iteration, `FlatIterator` is a
+lending async iterator:
+
+```rust
+pub trait FlatIterator: HasId + Send + Sync {
+    type ElementRef<'a>;
+    // lifetime gymnastics to make lifetime of `Element<'_>` to play nice with HRTB
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
-    where 
-        Self: 'a; 
-
+        where Self: 'a; 
     type Error: StandardError;
 
     fn next(
         &mut self,
     ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
-
-    // Default implementation for driving a closure on the items in the index. 
-    fn on_elements_unordered<F>(
-        &mut self,
-        mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
-    where F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>),
-    {
-        async move {
-            while let Some((id, element)) = self.next().await? {
-                f(id, element.reborrow());
-            }
-            
-            Ok(())
-        }
-    }
 }
 ```
 
-The trait combines two access patterns:
-
-- A required lending-iterator `next()`.
-- A defaulted bulk method `on_elements_unordered` that consumes the entire scan via a
-  callback. The default impl loops over `next`; iterators that benefit from prefetching,
-  SIMD batching, or amortized per-element cost could override it.
-
-Both methods are **async** (returning `impl SendFuture<...>`), matching
-[`crate::provider::Accessor::get_element`]. Iterators backed by I/O — disk pages,
-remote shards — return a real future; in-memory iterators wrap their result in
-`std::future::ready`. 
-
-The `Element` / `ElementRef` split is identical to `Accessor` and exists for the same
-reason: to keep HRTB bounds on query computers from inducing `'static` requirements on
-the iterator type.
+`DefaultIteratedOperator<I>` wraps any `FlatIterator` and implements `OnElementsUnordered`
+(and `DistancesUnordered` by inheritance) by looping over `next()` and reborrowing each
+element. 
 
 
 ### The glue: `FlatSearchStrategy`
 
-While the `FlatIterator` is the primary object that provides access to the elements in the index for the algorithm, it is scoped to each query. We intorduce a constructor - `FlatSearchStrategy` - similar to `SearchStrategy` for `Accessor` to instantiate this object. A strategy is per-call configuration: stateless, cheap to construct, scoped to one
-search. It produces both a per-query iterator and a query computer. 
+While `OnElementsUnordered` is the primary handle the algorithm uses to walk the index,
+it is scoped to each query. We introduce a constructor — `FlatSearchStrategy` — similar
+to `SearchStrategy` for `Accessor`, to instantiate the per-query callback object.
+A strategy is per-call configuration that is stateless, cheap to construct and scoped to one
+search. It produces both a per-query callback and a query computer.
 
 ```rust
 pub trait FlatSearchStrategy<P, T>: Send + Sync
@@ -98,55 +111,55 @@ where
     P: DataProvider,
     T: ?Sized,
 {
-    /// The iterator type produced by [`Self::create_iter`]. Borrows from `self` and the
-    /// provider.
-    type Iter<'a>: FlatIterator
+    /// The per-query callback type produced by [`Self::create_callback`]. Borrows from
+    /// `self` and the provider.
+    type Callback<'a>: DistancesUnordered
     where
         Self: 'a,
 
     /// The query computer produced by [`Self::build_query_computer`].
     type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::Iter<'a> as FlatIterator>::ElementRef<'b>,
+            <Self::Callback<'a> as OnElementsUnordered>::ElementRef<'b>,
             f32,
         > + Send
         + Sync
         + 'static;
 
-    /// The error type for both factory methods.
+    /// The error type 
     type Error: StandardError;
 
-    /// Construct a fresh iterator over `provider` for the given request `context`.
-    fn create_iter<'a>(
+    /// Construct a fresh callback over `provider` for the given request `context`.
+    fn create_callback<'a>(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
-    ) -> Result<Self::Iter<'a>, Self::Error>;
+    ) -> Result<Self::Callback<'a>, Self::Error>;
 
     /// Pre-process a query into a [`Self::QueryComputer`] usable for distance computation
-    /// against any iterator produced by [`Self::create_iter`].
+    /// against any callback produced by [`Self::create_callback`].
     fn build_query_computer(&self, query: &T) -> Result<Self::QueryComputer, Self::Error>;
 }
 ```
 
-The `ElementRef<'b>` that the distance function `QueryComputer` acts on is tied to the (reborrowed) element yielded by the `FlatIterator::next()`.
+The `ElementRef<'b>` that the `QueryComputer` acts on is tied to the
+`OnElementsUnordered::ElementRef` of the callback produced by `create_callback`.
 
 ### `FlatIndex`
 
 `FlatIndex` is a thin `'static` wrapper around a `DataProvider`. The same `DataProvider`
-trait used by graph search is reused here — flat and graph subsystems share a single
+trait used by graph search is reused here - flat and graph subsystems share a single
 provider surface and the same `Context` / id-mapping / error machinery.
 
 ```rust
 pub struct FlatIndex<P: DataProvider> {
     provider: P,
-    /* private */
 }
 
 impl<P: DataProvider> FlatIndex<P> {
     pub fn new(provider: P) -> Self;
     pub fn provider(&self) -> &P;
 
-    pub fn knn_search<S, T, O, OB>(
+    pub fn knn_search<S, T, O, OB, PP>(
         &self,
         k: NonZeroUsize,
         strategy: &S,
@@ -160,15 +173,16 @@ impl<P: DataProvider> FlatIndex<P> {
         T: ?Sized + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
+        PP: for<'a> FlatPostProcess<S::Callback<'a>, T, O> + Send + Sync,
 }
 ```
 
 The `knn_search` method is the canonical brute-force search algorithm:
 
-1. Construct the iterator via `strategy.create_iter` to obtain a scoped iterator over the elements.
+1. Construct the per-query callback via `strategy.create_callback`.
 2. Build the query computer via `strategy.build_query_computer`.
-3. Drive the scan via `iter.on_elements_unordered`, scoring each element and
-   inserting `Neighbor`s into a `NeighborPriorityQueue<Id>` of capacity `k`.
+3. Drive the scan via `callback.distances_unordered(&computer, ...)`, inserting each
+   `(id, distance)` pair into a `NeighborPriorityQueue<Id>` of capacity `k`.
 4. Hand the survivors (in distance order) to `processor.post_process`.
 5. Return search stats.
 
@@ -187,31 +201,28 @@ This design leans into using the `DataProvider` trait which requires implementat
   `to_external_id`), and error machinery are identical across graph and flat search,
   reducing the learning surface for new contributors.
 
-### Async vs sync API for `FlatIterator`
+### Async vs sync scan API
 
-`next()` and `on_elements_unordered` return a future, making the trait
-async. This is the right default for disk-backed and network-backed iterators
-where advancing the cursor involves real I/O. It also matches the `Accessor` surface,
+`on_elements_unordered` and `distances_unordered` return a future, making the scan
+surface async. This is the right default for disk-backed and network-backed backends
+where advancing the scan involves real I/O. It also matches the `Accessor` surface,
 keeping the two subsystems shaped the same way.
 
-The cost is paid by in-memory consumers: every call to `next()` goes through the future
-machinery even when the result is immediately available via `std::future::ready`. In a
-tight brute-force loop this overhead — poll scaffolding, pinning etc — could be measurable. 
+The cost is paid by in-memory consumers: the scan goes through the future machinery
+even when results are immediately available. In a tight brute-force loop this overhead —
+poll scaffolding, pinning etc — could be measurable.
 
 We chose async because the wider audience of consumers (disk, network, mixed) benefits
-more than in-memory consumers lose. 
+more than in-memory consumers lose.
 
 ### Expand `Element` to support batched distance computation?
 
 The current design yields one element per `next()` call, and the query computer scores
-elements one at a time via `PreprocessedDistanceFunction::evaluate_similarity`. This could leave some optimization and performance on the table; especially with the upcoming effort around batched distance kernels.
+elements one at a time via `PreprocessedDistanceFunction::evaluate_similarity`. This could leave some optimization and performance on the table; especially with the upcoming effort around batched distance kernels. Of course, a consumer can choose to implement their own optimized implementation of `distances_unordered` that uses batching.
 
 An alternative is to make `next()` yield a *batch* instead of a single vector representation like `Element<'_>`. Some work will need to be done to define the right interaction between the batch type, the element type in the batch, the interaction with `QueryComputer`'s types and way IDs and distances are collected in the queue.
 
-We opted for the scalar-per-element design for now because it is simpler to implement and
-reason about. The hope is that batched distance computation can be layered on later as an opt-in sub-trait without breaking
-existing iterators.
-
 ## Future Work
 - Support for other flat-search algorithms like - filtered, range and diverse flat algorithms as additional methods on `FlatIndex`.
+- Index build -- this is just one part of the picture; more work needs to be done around how this fits in with any traits / interface we need for index build.
 
