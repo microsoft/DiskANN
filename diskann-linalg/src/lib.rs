@@ -289,9 +289,25 @@ mod tests {
 
     #[test]
     fn test_reference_implementation() {
+        #[allow(clippy::too_many_arguments)]
+        fn sgemm_wrapper(
+            atranspose: Transpose,
+            btranspose: Transpose,
+            m: usize,
+            n: usize,
+            k: usize,
+            alpha: f32,
+            a: &[f32],
+            b: &[f32],
+            beta: Option<f32>,
+            c: &mut [f32],
+        ) {
+            sgemm(atranspose, btranspose, m, n, k, alpha, a, b, beta, c).unwrap();
+        }
+
         let problems = reference::test_sgemm_problems();
         for (i, problem) in problems.iter().enumerate() {
-            let result = problem.check(sgemm);
+            let result = problem.check(sgemm_wrapper);
             if let Err(err) = result {
                 panic!("{} on iteration {}. Problem: {:?}", err, i, problem);
             }

@@ -763,9 +763,7 @@ where
             }
             #[cfg(feature = "linalg")]
             Err(TransformFailed::SgemmError(_)) => {
-                panic!(
-                    "SGEMM should not fail with valid dimensions - this is a logic error"
-                );
+                panic!("SGEMM should not fail with valid dimensions - this is a logic error");
             }
         }
 
@@ -843,9 +841,7 @@ where
             }
             #[cfg(feature = "linalg")]
             Err(TransformFailed::SgemmError(_)) => {
-                panic!(
-                    "SGEMM should not fail with valid dimensions - this is a logic error"
-                );
+                panic!("SGEMM should not fail with valid dimensions - this is a logic error");
             }
         }
 
@@ -1169,9 +1165,7 @@ where
             }
             #[cfg(feature = "linalg")]
             Err(TransformFailed::SgemmError(_)) => {
-                panic!(
-                    "SGEMM should not fail with valid dimensions - this is a logic error"
-                );
+                panic!("SGEMM should not fail with valid dimensions - this is a logic error");
             }
         }
 

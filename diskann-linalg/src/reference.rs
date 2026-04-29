@@ -68,11 +68,11 @@ pub(crate) struct ReferenceError {
 }
 
 pub(crate) trait GemmFunction:
-    Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32]) -> Result<(), crate::SgemmError>
+    Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32])
 {
 }
 impl<F> GemmFunction for F where
-    F: Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32]) -> Result<(), crate::SgemmError>
+    F: Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32])
 {
 }
 
@@ -124,11 +124,7 @@ impl TestProblem {
             &self.b,
             self.beta,
             &mut result,
-        )
-        .map_err(|_| ReferenceError {
-            got: vec![],
-            expected: vec![],
-        })?;
+        );
 
         if result == self.expected {
             Ok(())
@@ -256,27 +252,11 @@ pub(crate) fn test_sgemm_problems() -> Vec<TestProblem> {
 mod tests {
     use super::*;
 
-    fn sgemm_impl_wrapper(
-        atranspose: Transpose,
-        btranspose: Transpose,
-        m: usize,
-        n: usize,
-        k: usize,
-        alpha: f32,
-        a: &[f32],
-        b: &[f32],
-        beta: Option<f32>,
-        c: &mut [f32],
-    ) -> Result<(), crate::SgemmError> {
-        sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
-        Ok(())
-    }
-
     #[test]
     fn test_reference_implementation() {
         let problems = test_sgemm_problems();
         for (i, problem) in problems.iter().enumerate() {
-            let result = problem.check(sgemm_impl_wrapper);
+            let result = problem.check(sgemm_impl);
             if let Err(err) = result {
                 panic!("{} on iteration {}. Problem: {:?}", err, i, problem);
             }
