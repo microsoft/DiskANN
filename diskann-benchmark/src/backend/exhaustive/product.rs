@@ -74,7 +74,6 @@ mod imp {
             input: &inputs::exhaustive::Product,
             mut output: &mut dyn Output,
         ) -> anyhow::Result<Results> {
-            let input = &input;
             writeln!(output, "{}", input)?;
 
             // Training

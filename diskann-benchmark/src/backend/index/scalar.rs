@@ -18,7 +18,7 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         benchmarks.register("async-sq-4-bit-f32", imp::ScalarQuantized::<4, f32>::new());
         benchmarks.register("async-sq-2-bit-f32", imp::ScalarQuantized::<2, f32>::new());
         benchmarks.register("async-sq-1-bit-f32", imp::ScalarQuantized::<1, f32>::new());
-        // f16                                  ,
+        // f16
         benchmarks.register("async-sq-8-bit-f16", imp::ScalarQuantized::<8, f16>::new());
         benchmarks.register("async-sq-4-bit-f16", imp::ScalarQuantized::<4, f16>::new());
         benchmarks.register("async-sq-2-bit-f16", imp::ScalarQuantized::<2, f16>::new());
