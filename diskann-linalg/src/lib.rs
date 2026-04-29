@@ -15,22 +15,9 @@ use rand::Rng;
 /// Error type for SGEMM operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SgemmError {
-    /// Matrix `a` has incorrect dimensions.
-    InvalidMatrixADimensions {
-        expected_rows: usize,
-        expected_cols: usize,
-        expected_len: usize,
-        actual_len: usize,
-    },
-    /// Matrix `b` has incorrect dimensions.
-    InvalidMatrixBDimensions {
-        expected_rows: usize,
-        expected_cols: usize,
-        expected_len: usize,
-        actual_len: usize,
-    },
-    /// Matrix `c` has incorrect dimensions.
-    InvalidMatrixCDimensions {
+    /// Matrix has incorrect dimensions.
+    InvalidMatrixDimensions {
+        matrix_name: &'static str,
         expected_rows: usize,
         expected_cols: usize,
         expected_len: usize,
@@ -47,35 +34,16 @@ pub enum SgemmError {
 impl fmt::Display for SgemmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SgemmError::InvalidMatrixADimensions {
+            SgemmError::InvalidMatrixDimensions {
+                matrix_name,
                 expected_rows,
                 expected_cols,
                 expected_len,
                 actual_len,
             } => write!(
                 f,
-                "expected {}x{} matrix `a` to have length {}, instead got {}",
-                expected_rows, expected_cols, expected_len, actual_len
-            ),
-            SgemmError::InvalidMatrixBDimensions {
-                expected_rows,
-                expected_cols,
-                expected_len,
-                actual_len,
-            } => write!(
-                f,
-                "expected {}x{} matrix `b` to have length {}, instead got {}",
-                expected_rows, expected_cols, expected_len, actual_len
-            ),
-            SgemmError::InvalidMatrixCDimensions {
-                expected_rows,
-                expected_cols,
-                expected_len,
-                actual_len,
-            } => write!(
-                f,
-                "expected {}x{} matrix `c` to have length {}, instead got {}",
-                expected_rows, expected_cols, expected_len, actual_len
+                "expected {}x{} matrix `{}` to have length {}, instead got {}",
+                expected_rows, expected_cols, matrix_name, expected_len, actual_len
             ),
             SgemmError::DimensionOverflow {
                 operation,
@@ -174,7 +142,8 @@ pub fn sgemm(
     })?;
 
     if a.len() != expected_a_len {
-        return Err(SgemmError::InvalidMatrixADimensions {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: "a",
             expected_rows: m,
             expected_cols: k,
             expected_len: expected_a_len,
@@ -189,7 +158,8 @@ pub fn sgemm(
     })?;
 
     if b.len() != expected_b_len {
-        return Err(SgemmError::InvalidMatrixBDimensions {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: "b",
             expected_rows: k,
             expected_cols: n,
             expected_len: expected_b_len,
@@ -204,7 +174,8 @@ pub fn sgemm(
     })?;
 
     if c.len() != expected_c_len {
-        return Err(SgemmError::InvalidMatrixCDimensions {
+        return Err(SgemmError::InvalidMatrixDimensions {
+            matrix_name: "c",
             expected_rows: m,
             expected_cols: n,
             expected_len: expected_c_len,
