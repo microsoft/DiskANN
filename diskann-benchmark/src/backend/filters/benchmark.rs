@@ -46,14 +46,10 @@ impl Benchmark for MetadataIndexJob {
 
     fn description(
         &self,
-        f: &mut std::fmt::Formatter<'_>,
+        _f: &mut std::fmt::Formatter<'_>,
         _input: Option<&MetadataIndexBuild>,
     ) -> std::fmt::Result {
-        writeln!(
-            f,
-            "tag: \"{}\"",
-            crate::inputs::filters::MetadataIndexBuild::tag()
-        )
+        Ok(())
     }
 
     fn run(

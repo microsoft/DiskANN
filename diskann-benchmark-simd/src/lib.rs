@@ -21,7 +21,6 @@ use thiserror::Error;
 
 use diskann_benchmark_runner::{
     benchmark::{PassFail, Regression},
-    describeln,
     dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
     utils::{
         datatype::{self, DataType},
@@ -594,17 +593,17 @@ where
     ) -> std::fmt::Result {
         match input {
             None => {
-                describeln!(
+                writeln!(
                     f,
                     "- Query Type: {}",
                     Description::<datatype::DataType, datatype::Type<Q>>::new()
                 )?;
-                describeln!(
+                writeln!(
                     f,
                     "- Data Type: {}",
                     Description::<datatype::DataType, datatype::Type<D>>::new()
                 )?;
-                describeln!(
+                writeln!(
                     f,
                     "- Implementation: {}",
                     Description::<Arch, Identity<A>>::new()
@@ -612,13 +611,13 @@ where
             }
             Some(input) => {
                 if let Err(err) = datatype::Type::<Q>::try_match_verbose(&input.query_type) {
-                    describeln!(f, "\n    - Mismatched query type: {}", err)?;
+                    writeln!(f, "\n    - Mismatched query type: {}", err)?;
                 }
                 if let Err(err) = datatype::Type::<D>::try_match_verbose(&input.data_type) {
-                    describeln!(f, "\n    - Mismatched data type: {}", err)?;
+                    writeln!(f, "\n    - Mismatched data type: {}", err)?;
                 }
                 if let Err(err) = Identity::<A>::try_match_verbose(&input.arch) {
-                    describeln!(f, "\n    - Mismatched architecture: {}", err)?;
+                    writeln!(f, "\n    - Mismatched architecture: {}", err)?;
                 }
             }
         }

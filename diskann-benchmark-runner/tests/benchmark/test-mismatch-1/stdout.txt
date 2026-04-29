@@ -8,8 +8,14 @@ Could not find a match for the following input:
 
 Closest matches:
 
-    1. "type-bench-f32": expected "float32" but found "float16"
-    2. "type-bench-i8": expected "int8" but found "float16"
-    3. "exact-type-bench-f32-1000": expected "float32" but found "float16"
+    1. "type-bench-f32":
+        expected "float32" but found "float16"
+
+    2. "type-bench-i8":
+        expected "int8" but found "float16"
+
+    3. "exact-type-bench-f32-1000":
+        expected "float32" but found "float16"
+
 
 could not find a benchmark for all inputs

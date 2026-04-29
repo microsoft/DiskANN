@@ -14,6 +14,10 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         use crate::backend::index::search::plugins;
         use half::f16;
 
+        // NOTE: Try to balance search plugins with the needed functionality.
+        //
+        // Feel free to add search plugins, but be mindful of the monomorphization cost.
+
         benchmarks.register(
             "async-pq-f32",
             imp::ProductQuantized::<f32>::new()
@@ -54,7 +58,7 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, FullPrecision, QueryType, Strategy},
+            benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
             result::{BuildResult, QuantBuildResult},
             search::plugins,
@@ -77,6 +81,10 @@ mod imp {
         type Element = T;
     }
 
+    /// A [`Benchmark`] for product-quantized searches containing a dynamic list of search
+    /// types.
+    ///
+    /// The kinds of quantized and full-precision searches are kept in-sync.
     pub(super) struct ProductQuantized<T>
     where
         T: VectorRepr,
@@ -120,7 +128,19 @@ mod imp {
         type Output = QuantBuildResult;
 
         fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            FullPrecision::<T>::new().try_match(&input.index_operation)
+            let score = datatype::Type::<T>::try_match(input.index_operation.source.data_type());
+
+            if self
+                .quant_search
+                .is_match(input.index_operation.search_phase.kind())
+            {
+                score
+            } else {
+                match score {
+                    Ok(_) => Err(FailureScore(0)),
+                    Err(score) => Err(score),
+                }
+            }
         }
 
         fn description(
@@ -128,7 +148,41 @@ mod imp {
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&IndexPQOperation>,
         ) -> std::fmt::Result {
-            FullPrecision::<T>::new().description(f, input.map(|f| &f.index_operation))
+            use diskann_benchmark_runner::dispatcher::{Description, Why};
+
+            match input {
+                Some(arg) => {
+                    writeln!(
+                        f,
+                        "{}",
+                        Why::<datatype::DataType, datatype::Type<T>>::new(
+                            arg.index_operation.source.data_type()
+                        )
+                    )?;
+
+                    if !self
+                        .quant_search
+                        .is_match(arg.index_operation.search_phase.kind())
+                    {
+                        writeln!(
+                            f,
+                            "Unsupported search phase: \"{}\" - expected one of {}",
+                            arg.index_operation.search_phase.kind(),
+                            self.quant_search.format_kinds(),
+                        )?;
+                    }
+                    Ok(())
+                }
+                None => {
+                    writeln!(
+                        f,
+                        "Data/Query Type: {}",
+                        Description::<datatype::DataType, datatype::Type<T>>::new()
+                    )?;
+
+                    writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
+                }
+            }
         }
 
         fn run(
@@ -203,6 +257,9 @@ mod imp {
                     (index, Some(build_stats), quant_training_time)
                 }
             };
+
+            // Save construction stats before running queries.
+            checkpoint.checkpoint(&build_stats)?;
 
             let search = if input.use_fp_for_search {
                 self.full_search.run(

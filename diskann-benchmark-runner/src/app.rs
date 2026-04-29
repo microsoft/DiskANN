@@ -70,7 +70,7 @@ use crate::{
     output::Output,
     registry,
     result::Checkpoint,
-    utils::fmt::Banner,
+    utils::fmt::{Banner, Indent},
 };
 
 /// Check if we're running in debug mode and error if not allowed.
@@ -227,14 +227,12 @@ impl App {
             Commands::Benchmarks {} => {
                 writeln!(output, "Registered Benchmarks:")?;
                 for (name, description) in benchmarks.names() {
-                    let mut lines = description.lines();
-                    if let Some(first) = lines.next() {
-                        writeln!(output, "    {}: {}", name, first)?;
-                        for line in lines {
-                            writeln!(output, "        {}", line)?;
-                        }
+                    write!(output, "    {name}:")?;
+                    if description.is_empty() {
+                        writeln!(output)?;
                     } else {
-                        writeln!(output, "    {}: <no description>", name)?;
+                        writeln!(output)?;
+                        write!(output, "{}", Indent::new(&description, 8))?;
                     }
                 }
             }
@@ -264,13 +262,8 @@ impl App {
                         )?;
                         writeln!(output, "Closest matches:\n")?;
                         for (i, mismatch) in mismatches.into_iter().enumerate() {
-                            writeln!(
-                                output,
-                                "    {}. \"{}\": {}",
-                                i + 1,
-                                mismatch.method(),
-                                mismatch.reason(),
-                            )?;
+                            writeln!(output, "    {}. \"{}\":", i + 1, mismatch.method(),)?;
+                            writeln!(output, "{}", Indent::new(mismatch.reason(), 8),)?;
                         }
                         writeln!(output)?;
 

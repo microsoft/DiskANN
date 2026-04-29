@@ -14,6 +14,10 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         use crate::backend::index::search::plugins::Topk;
         use half::f16;
 
+        // NOTE: We just register `Topk` for now to reduce compilation cost.
+        //
+        // Feel free to add search plugins, but be mindful of the monomorphization cost.
+
         // f32
         benchmarks.register(
             "async-sq-8-bit-f32",
@@ -67,7 +71,6 @@ mod imp {
     use anyhow::Context;
     use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        describeln,
         dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
         Benchmark, Checkpoint, Output,
@@ -84,7 +87,7 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, FullPrecision, QueryType, Strategy},
+            benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
             result::{BuildResult, QuantBuildResult},
             search::plugins,
@@ -107,7 +110,10 @@ mod imp {
         type Element = T;
     }
 
-    // Scalar Quantized
+    /// A [`Benchmark`] for scalar-quantized searches containing a dynamic list of search
+    /// types.
+    ///
+    /// The kinds of quantized and full-precision searches are kept in-sync.
     pub(super) struct ScalarQuantized<const NBITS: usize, T>
     where
         T: VectorRepr,
@@ -157,9 +163,13 @@ mod imp {
                         }
                     }
 
-                    if FullPrecision::<$T>::new().try_match(&input.index_operation)
+                    if datatype::Type::<$T>::try_match(input.index_operation.source.data_type())
                         .is_err()
                     {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
+                    if !self.quant_search.is_match(input.index_operation.search_phase.kind()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -180,22 +190,23 @@ mod imp {
                 ) -> std::fmt::Result {
                     match input {
                         None => {
-                            describeln!(
+                            writeln!(
                                 f,
                                 "- Index Build and Search using {} scalar quantized bits",
                                 $N
                             )?;
-                            describeln!(
+                            writeln!(
                                 f,
                                 "- Requires `{}` data",
                                 Description::<datatype::DataType, datatype::Type<$T>>::new(),
                             )?;
-                            describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            describeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                            writeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
                         }
                         Some(input) => {
                             if input.num_bits != $N {
-                                describeln!(
+                                writeln!(
                                     f,
                                     "- Expected {} bits, instead got {}",
                                     $N,
@@ -203,31 +214,32 @@ mod imp {
                                 )?;
                             }
 
-                            let mut check_match = |data_type: &datatype::DataType| {
-                                if datatype::Type::<$T>::try_match(data_type).is_err() {
-                                    describeln!(
+                            let data_type = input.index_operation.source.data_type();
+                            if datatype::Type::<$T>::try_match(data_type).is_err() {
+                                writeln!(
+                                    f,
+                                    "- Only `{}` data type is supported. Instead, got {}",
+                                    Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                    data_type
+                                )?;
+                            }
+
+                            if let IndexSource::Build(ref build) = input.index_operation.source {
+                                if build.multi_insert.is_some() {
+                                    writeln!(
                                         f,
-                                        "- Only `{}` data type is supported. Instead, got {}",
-                                        Description::<datatype::DataType, datatype::Type<$T>>::new(),
-                                        data_type
-                                    ).unwrap();
+                                        "- Scalar Quantization does not support multi-insert"
+                                    )?;
                                 }
-                            };
+                            }
 
-                            match &input.index_operation.source {
-                                IndexSource::Load(load) => {
-                                    check_match(&load.data_type);
-                                }
-                                IndexSource::Build(build) => {
-                                    check_match(&build.data_type);
-
-                                    if build.multi_insert.is_some() {
-                                        describeln!(
-                                            f,
-                                            "- Scalar Quantization does not support multi-insert"
-                                        )?;
-                                    }
-                                }
+                            if !self.quant_search.is_match(input.index_operation.search_phase.kind()) {
+                                writeln!(
+                                    f,
+                                    "- Unsupported search phase: \"{}\" - expected one of {}",
+                                    input.index_operation.search_phase.kind(),
+                                    self.quant_search.format_kinds(),
+                                )?;
                             }
                         }
                     }
@@ -303,6 +315,9 @@ mod imp {
 
                     };
 
+
+                    // Save construction stats before running queries.
+                    checkpoint.checkpoint(&build_stats)?;
 
                     let search = if input.use_fp_for_search {
                         self.full_search.run(

@@ -189,6 +189,163 @@ impl std::fmt::Display for Banner<'_> {
     }
 }
 
+////////////
+// Indent //
+////////////
+
+/// Indents each line of a string by a fixed number of spaces.
+///
+/// Each line is prefixed with `spaces` spaces and terminated with a newline.
+///
+/// # Examples
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::Indent;
+///
+/// let indented = Indent::new("hello\nworld", 4).to_string();
+/// assert_eq!(indented, "    hello\n    world\n");
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct Indent<'a> {
+    string: &'a str,
+    spaces: usize,
+}
+
+impl<'a> Indent<'a> {
+    /// Create a new [`Indent`] that will prefix each line of `string` with `spaces` spaces.
+    pub fn new(string: &'a str, spaces: usize) -> Self {
+        Self { string, spaces }
+    }
+}
+
+impl std::fmt::Display for Indent<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let spaces = self.spaces;
+        self.string
+            .lines()
+            .try_for_each(|ln| writeln!(f, "{: >spaces$}{}", "", ln))
+    }
+}
+
+/////////////
+// Delimit //
+/////////////
+
+/// Formats an iterator with a delimiter between items and an optional distinct last delimiter.
+///
+/// This is a single-use wrapper: the iterator is consumed on the first call to [`Display::fmt`].
+/// Subsequent calls will print `<missing>`.
+///
+/// The `last` parameter allows a different delimiter before the final item (e.g., `", and "`),
+/// which is useful for natural-language lists like `"a, b, and c"`.
+///
+/// # Examples
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::Delimit;
+///
+/// let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "));
+/// assert_eq!(d.to_string(), "a, b, and c");
+/// ```
+pub struct Delimit<'a, I> {
+    itr: std::cell::Cell<Option<I>>,
+    delimiter: &'a str,
+    last: Option<&'a str>,
+}
+
+impl<'a, I> Delimit<'a, I> {
+    /// Create a new [`Delimit`] from an iterable, a delimiter, and an optional last delimiter.
+    ///
+    /// If `last` is `None`, the regular `delimiter` is used before the final item.
+    pub fn new(
+        itr: impl IntoIterator<IntoIter = I>,
+        delimiter: &'a str,
+        last: Option<&'a str>,
+    ) -> Self {
+        Self {
+            itr: std::cell::Cell::new(Some(itr.into_iter())),
+            delimiter,
+            last,
+        }
+    }
+}
+
+impl<I> std::fmt::Display for Delimit<'_, I>
+where
+    I: Iterator<Item: std::fmt::Display>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(mut itr) = self.itr.take() else {
+            return write!(f, "<missing>");
+        };
+
+        let mut first = true;
+        let mut current = if let Some(item) = itr.next() {
+            item
+        } else {
+            // Empty iterator
+            return Ok(());
+        };
+
+        loop {
+            match itr.next() {
+                None => {
+                    // "current" is the last item. If it is also the first, we write it
+                    // directly. Otherwise, we use the "last" delimiter if available, falling
+                    // back to "delimiter".
+                    let delimiter = if first {
+                        ""
+                    } else if let Some(last) = self.last {
+                        last
+                    } else {
+                        self.delimiter
+                    };
+
+                    return write!(f, "{}{}", delimiter, current);
+                }
+                Some(next) => {
+                    // There is at least one item next. We print "current" and move on.
+                    let delimiter = if first {
+                        first = false;
+                        ""
+                    } else {
+                        self.delimiter
+                    };
+
+                    write!(f, "{}{}", delimiter, current)?;
+                    current = next;
+                }
+            }
+        }
+    }
+}
+
+///////////
+// Quote //
+///////////
+
+/// Wraps a value in double quotes when displayed.
+///
+/// # Examples
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::Quote;
+///
+/// assert_eq!(Quote("hello").to_string(), "\"hello\"");
+/// assert_eq!(Quote(42).to_string(), "\"42\"");
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct Quote<T>(pub T);
+
+impl<T> std::fmt::Display for Quote<T>
+where
+    T: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\"{}\"", self.0)
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -326,5 +483,82 @@ string,        ,   string
         let mut table = Table::new([1, 2], 1);
         let mut row = table.row(0);
         row.insert(1, 3);
+    }
+
+    #[test]
+    fn test_indent_single_line() {
+        let s = Indent::new("hello", 4).to_string();
+        assert_eq!(s, "    hello\n");
+    }
+
+    #[test]
+    fn test_indent_multi_line() {
+        let s = Indent::new("hello\nworld\nfoo", 2).to_string();
+        assert_eq!(s, "  hello\n  world\n  foo\n");
+    }
+
+    #[test]
+    fn test_indent_zero_spaces() {
+        let s = Indent::new("hello\nworld", 0).to_string();
+        assert_eq!(s, "hello\nworld\n");
+    }
+
+    #[test]
+    fn test_indent_empty_string() {
+        let s = Indent::new("", 4).to_string();
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn test_delimit_empty() {
+        let d = Delimit::new(std::iter::empty::<&str>(), ", ", None);
+        assert_eq!(d.to_string(), "");
+    }
+
+    #[test]
+    fn test_delimit_single_item() {
+        let d = Delimit::new(["a"], ", ", Some(", and "));
+        assert_eq!(d.to_string(), "a");
+    }
+
+    #[test]
+    fn test_delimit_two_items_with_last() {
+        let d = Delimit::new(["a", "b"], ", ", Some(", and "));
+        assert_eq!(d.to_string(), "a, and b");
+    }
+
+    #[test]
+    fn test_delimit_three_items_with_last() {
+        let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "));
+        assert_eq!(d.to_string(), "a, b, and c");
+    }
+
+    #[test]
+    fn test_delimit_without_last() {
+        let d = Delimit::new(["x", "y", "z"], " | ", None);
+        assert_eq!(d.to_string(), "x | y | z");
+    }
+
+    #[test]
+    fn test_delimit_second_display_prints_missing() {
+        let d = Delimit::new(["a", "b"], ", ", None);
+        assert_eq!(d.to_string(), "a, b");
+        assert_eq!(d.to_string(), "<missing>");
+    }
+
+    #[test]
+    fn test_quote() {
+        assert_eq!(Quote("hello").to_string(), "\"hello\"");
+    }
+
+    #[test]
+    fn test_quote_with_integer() {
+        assert_eq!(Quote(42).to_string(), "\"42\"");
+    }
+
+    #[test]
+    fn test_delimit_with_quote() {
+        let d = Delimit::new(["topk", "range"].iter().map(Quote), ", ", Some(", and "));
+        assert_eq!(d.to_string(), "\"topk\", and \"range\"");
     }
 }

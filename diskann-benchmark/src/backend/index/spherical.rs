@@ -16,9 +16,37 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 
     #[cfg(feature = "spherical-quantization")]
     {
-        benchmarks.register(NAME, imp::SphericalQ::<1>);
-        benchmarks.register(NAME, imp::SphericalQ::<2>);
-        benchmarks.register(NAME, imp::SphericalQ::<4>);
+        use crate::backend::index::search::plugins;
+
+        // NOTE: Since the spherical provider is not generic on the number of bits, the
+        // implementations of the search-plugins are shared by all bit-widths. Registering
+        // all plugins for all bit widths does not meaningfully increase compilation time.
+        benchmarks.register(
+            NAME,
+            imp::SphericalQ::<1>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range)
+                .search(plugins::BetaFilter)
+                .search(plugins::MultihopFilter),
+        );
+
+        benchmarks.register(
+            NAME,
+            imp::SphericalQ::<2>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range)
+                .search(plugins::BetaFilter)
+                .search(plugins::MultihopFilter),
+        );
+
+        benchmarks.register(
+            NAME,
+            imp::SphericalQ::<4>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range)
+                .search(plugins::BetaFilter)
+                .search(plugins::MultihopFilter),
+        );
     }
 
     // Stub implementation
@@ -32,17 +60,16 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 
 #[cfg(feature = "spherical-quantization")]
 mod imp {
-    use diskann::graph::StartPointStrategy;
+    use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
     use diskann_benchmark_runner::{
-        describeln,
         dispatcher::{DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
-        index::diskann_async::{self},
-        model::graph::provider::async_::{common::NoDeletes, inmem},
+        index::diskann_async,
+        model::graph::provider::async_::{common, inmem},
     };
     use diskann_quantization::alloc::GlobalAllocator;
     use diskann_utils::views::Matrix;
@@ -52,12 +79,13 @@ mod imp {
 
     use crate::{
         backend::index::{
+            benchmarks::QueryType,
             build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,
             search,
         },
         inputs::{
-            async_::{SearchPhase, SphericalQuantBuild},
+            async_::{SearchPhase, SearchPhaseKind, SphericalQuantBuild},
             exhaustive,
         },
         utils::{
@@ -66,8 +94,38 @@ mod imp {
         },
     };
 
-    /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct SphericalQ<const NBITS: usize>;
+    type SQProvider = inmem::DefaultProvider<
+        inmem::FullPrecisionStore<f32>,
+        inmem::spherical::SphericalStore,
+        common::NoDeletes,
+        diskann::provider::DefaultContext,
+    >;
+
+    impl QueryType for SQProvider {
+        type Element = f32;
+    }
+
+    /// A [`Benchmark`] for spherical-quantized searches containing a dynamic list of search
+    /// types.
+    pub(super) struct SphericalQ<const NBITS: usize> {
+        search: search::plugins::Plugins<SQProvider, exhaustive::SphericalQuery>,
+    }
+
+    impl<const NBITS: usize> SphericalQ<NBITS> {
+        pub(super) fn new() -> Self {
+            Self {
+                search: search::plugins::Plugins::new(),
+            }
+        }
+
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
+        where
+            P: search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> + 'static,
+        {
+            self.search.register(plugin);
+            self
+        }
+    }
 
     macro_rules! write_field {
         ($f:ident, $field:tt, $fmt:literal, $($expr:tt)*) => {
@@ -136,6 +194,10 @@ mod imp {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
+                    if !self.search.is_match(input.search_phase.kind()) {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
                     let num_bits = input.num_bits.get();
                     if num_bits != $N {
                         *failure_score.get_or_insert(0) += ($N as usize)
@@ -157,36 +219,43 @@ mod imp {
                 ) -> std::fmt::Result {
                     match input {
                         None => {
-                            describeln!(
+                            writeln!(
                                 f,
                                 "- Index Build and Search using {}-bit spherical quantization",
                                 $N
                             )?;
-                            describeln!(f, "- Requires `float32` data")?;
-                            describeln!(
-                                f,
-                                "- Implements `squared_l2` or `inner_product` distance",
-                            )?;
-                            describeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Requires `float32` data")?;
+                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                            writeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
                         }
                         Some(input) => {
                             let num_bits = input.num_bits.get();
                             if num_bits != $N {
-                                describeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
+                                writeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
                             }
 
                             if input.build.multi_insert.is_some() {
-                                describeln!(
+                                writeln!(
                                     f,
                                     "- Spherical Quantization does not support multi-insert"
                                 )?;
                             }
 
                             if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
-                                describeln!(
+                                writeln!(
                                     f,
                                     "- Only `float32` data type is supported. Instead, got {}",
                                     input.build.data_type
+                                )?;
+                            }
+
+                            if !self.search.is_match(input.search_phase.kind()) {
+                                writeln!(
+                                    f,
+                                    "- Unsupported search phase: \"{}\" - expected one of {}",
+                                    input.search_phase.kind(),
+                                    self.search.format_kinds(),
                                 )?;
                             }
                         }
@@ -237,7 +306,7 @@ mod imp {
                         input.try_as_config()?.build()?,
                         input.inmem_parameters(data.nrows(), data.ncols()),
                         diskann_quantization::spherical::iface::Impl::<$N>::new(quantizer)?,
-                        NoDeletes,
+                        common::NoDeletes,
                     )?;
 
                     build::set_start_points(
@@ -264,193 +333,21 @@ mod imp {
                         runs: Vec::new(),
                     };
 
-                    match &input.search_phase {
-                        SearchPhase::Topk(search_phase) => {
-                            // Handle Topk search phase
+                    // Save construction stats before running queries.
+                    checkpoint.checkpoint(&result)?;
 
-                            // Save construction stats before running queries.
-                            checkpoint.checkpoint(&result)?;
-
-                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
-                                datafiles::BinFile(&search_phase.queries),
-                            )?);
-
-                            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(
-                                &search_phase.groundtruth,
-                            ))?;
-
-                            let steps = search::knn::SearchSteps::new(
-                                search_phase.reps,
-                                &search_phase.num_threads,
-                                &search_phase.runs,
-                            );
-
-                            for &layout in input.query_layouts.iter() {
-                                let knn = benchmark_core::search::graph::KNN::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::broadcast(
-                                        inmem::spherical::Quantized::search(layout.into()),
-                                    ),
-                                )?;
-
-                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-                                result.append(SearchRun {
-                                    layout,
-                                    results: AggregatedSearchResults::Topk(search_results),
-                                });
-                            }
-                            writeln!(output, "\n\n{}", result)?;
-                            Ok(result)
-                        }
-                        SearchPhase::Range(search_phase) => {
-                            // Handle Range search phase
-
-                            // Save construction stats before running queries.
-                            checkpoint.checkpoint(&result)?;
-
-                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
-                                datafiles::BinFile(&search_phase.queries),
-                            )?);
-
-                            let groundtruth = datafiles::load_range_groundtruth(
-                                datafiles::BinFile(&search_phase.groundtruth),
-                            )?;
-
-                            let steps = search::range::RangeSearchSteps::new(
-                                search_phase.reps,
-                                &search_phase.num_threads,
-                                &search_phase.runs,
-                            );
-
-                            for &layout in input.query_layouts.iter() {
-                                let range = benchmark_core::search::graph::Range::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::broadcast(
-                                        inmem::spherical::Quantized::search(layout.into()),
-                                    ),
-                                )?;
-
-                                let search_results =
-                                    search::range::run(&range, &groundtruth, steps)?;
-
-                                result.append(SearchRun {
-                                    layout,
-                                    results: AggregatedSearchResults::Range(search_results),
-                                });
-                            }
-
-                            writeln!(output, "\n\n{}", result)?;
-                            Ok(result)
-                        }
-                        SearchPhase::TopkBetaFilter(search_phase) => {
-                            // Handle Beta Filtered Topk search phase
-
-                            // Save construction stats before running queries.
-                            checkpoint.checkpoint(&result)?;
-
-                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
-                                datafiles::BinFile(&search_phase.queries),
-                            )?);
-
-                            let groundtruth = datafiles::load_range_groundtruth(
-                                datafiles::BinFile(&search_phase.groundtruth),
-                            )?;
-
-                            let steps = search::knn::SearchSteps::new(
-                                search_phase.reps,
-                                &search_phase.num_threads,
-                                &search_phase.runs,
-                            );
-
-                            let bit_maps = generate_bitmaps(
-                                &search_phase.query_predicates,
-                                &search_phase.data_labels,
-                            )?;
-
-                            let label_providers: Vec<_> = bit_maps
-                                .into_iter()
-                                .map(utils::filters::as_query_label_provider)
-                                .collect();
-
-                            for &layout in input.query_layouts.iter() {
-                                let strategy = inmem::spherical::Quantized::search(layout.into());
-                                let search_strategies = setup_filter_strategies(
-                                    search_phase.beta,
-                                    label_providers.iter().cloned(),
-                                    strategy.clone(),
-                                );
-
-                                let knn = benchmark_core::search::graph::KNN::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::Collection(
-                                        search_strategies.into(),
-                                    ),
-                                )?;
-
-                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-
-                                result.append(SearchRun {
-                                    layout,
-                                    results: AggregatedSearchResults::Topk(search_results),
-                                });
-                            }
-                            writeln!(output, "\n\n{}", result)?;
-                            Ok(result)
-                        }
-                        SearchPhase::TopkMultihopFilter(search_phase) => {
-                            // Handle Beta Filtered Topk search phase
-
-                            // Save construction stats before running queries.
-                            checkpoint.checkpoint(&result)?;
-
-                            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
-                                datafiles::BinFile(&search_phase.queries),
-                            )?);
-
-                            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(
-                                &search_phase.groundtruth,
-                            ))?;
-
-                            let steps = search::knn::SearchSteps::new(
-                                search_phase.reps,
-                                &search_phase.num_threads,
-                                &search_phase.runs,
-                            );
-
-                            let bit_maps = generate_bitmaps(
-                                &search_phase.query_predicates,
-                                &search_phase.data_labels,
-                            )?;
-
-                            let bit_map_filters: Arc<[_]> = bit_maps
-                                .into_iter()
-                                .map(utils::filters::as_query_label_provider)
-                                .collect();
-
-                            for &layout in input.query_layouts.iter() {
-                                let multihop = benchmark_core::search::graph::MultiHop::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::broadcast(
-                                        inmem::spherical::Quantized::search(layout.into()),
-                                    ),
-                                    bit_map_filters.clone(),
-                                )?;
-
-                                let search_results =
-                                    search::knn::run(&multihop, &groundtruth, steps)?;
-                                result.append(SearchRun {
-                                    layout,
-                                    results: AggregatedSearchResults::Topk(search_results),
-                                });
-                            }
-                            writeln!(output, "\n\n{}", result)?;
-                            Ok(result)
-                        }
+                    for layout in input.query_layouts.iter() {
+                        let search = self
+                            .search
+                            .run(index.clone(), layout, &input.search_phase)?;
+                        result.append(SearchRun {
+                            layout: *layout,
+                            results: search,
+                        });
                     }
+
+                    writeln!(output, "\n\n{}", result)?;
+                    Ok(result)
                 }
             }
         };
@@ -459,4 +356,169 @@ mod imp {
     build_and_search!(1);
     build_and_search!(2);
     build_and_search!(4);
+
+    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> for search::plugins::Topk {
+        fn kind(&self) -> SearchPhaseKind {
+            Self::kind()
+        }
+
+        fn search(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            query_layout: &exhaustive::SphericalQuery,
+            phase: &SearchPhase,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let topk = phase.as_topk()?;
+
+            let queries: Arc<Matrix<f32>> =
+                Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
+
+            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+
+            let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+
+            let knn = benchmark_core::search::graph::KNN::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+            )?;
+
+            let result = search::knn::run(&knn, &groundtruth, steps)?;
+            Ok(AggregatedSearchResults::Topk(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> for search::plugins::Range {
+        fn kind(&self) -> SearchPhaseKind {
+            Self::kind()
+        }
+
+        fn search(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            query_layout: &exhaustive::SphericalQuery,
+            phase: &SearchPhase,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let range = phase.as_range()?;
+
+            let queries: Arc<Matrix<f32>> =
+                Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&range.groundtruth))?;
+
+            let steps =
+                search::range::RangeSearchSteps::new(range.reps, &range.num_threads, &range.runs);
+
+            let range = benchmark_core::search::graph::Range::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+            )?;
+
+            let result = search::range::run(&range, &groundtruth, steps)?;
+
+            Ok(AggregatedSearchResults::Range(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery>
+        for search::plugins::BetaFilter
+    {
+        fn kind(&self) -> SearchPhaseKind {
+            Self::kind()
+        }
+
+        fn search(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            query_layout: &exhaustive::SphericalQuery,
+            phase: &SearchPhase,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let betafilter = phase.as_topk_beta_filter()?;
+
+            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &betafilter.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&betafilter.groundtruth))?;
+
+            let steps = search::knn::SearchSteps::new(
+                betafilter.reps,
+                &betafilter.num_threads,
+                &betafilter.runs,
+            );
+
+            let bit_maps = generate_bitmaps(&betafilter.query_predicates, &betafilter.data_labels)?;
+
+            let label_providers: Vec<_> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let strategy = inmem::spherical::Quantized::search((*query_layout).into());
+            let search_strategies =
+                setup_filter_strategies(betafilter.beta, label_providers.iter().cloned(), strategy);
+
+            let knn = benchmark_core::search::graph::KNN::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::Collection(search_strategies.into()),
+            )?;
+
+            let result = search::knn::run(&knn, &groundtruth, steps)?;
+            Ok(AggregatedSearchResults::Topk(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery>
+        for search::plugins::MultihopFilter
+    {
+        fn kind(&self) -> SearchPhaseKind {
+            Self::kind()
+        }
+
+        fn search(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            query_layout: &exhaustive::SphericalQuery,
+            phase: &SearchPhase,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let multihop = phase.as_topk_multihop_filter()?;
+
+            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &multihop.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+            let steps =
+                search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+
+            let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
+
+            let bit_map_filters: Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let multihop = benchmark_core::search::graph::MultiHop::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+                bit_map_filters.clone(),
+            )?;
+
+            let result = search::knn::run(&multihop, &groundtruth, steps)?;
+            Ok(AggregatedSearchResults::Topk(result))
+        }
+    }
 }
