@@ -95,28 +95,6 @@ pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
     }
 }
 
-#[test]
-fn query_label_provider_on_visit_default() {
-    #[derive(Debug)]
-    struct BasicValidation;
-
-    impl QueryLabelProvider<u32> for BasicValidation {
-        fn is_match(&self, id: u32) -> bool {
-            id.is_multiple_of(2)
-        }
-    }
-
-    let filter = BasicValidation;
-    assert!(matches!(
-        filter.on_visit(Neighbor::new(0, 1.0)),
-        QueryVisitDecision::Accept(_)
-    ));
-    assert!(matches!(
-        filter.on_visit(Neighbor::new(1, 1.0)),
-        QueryVisitDecision::Reject
-    ));
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct DegreeStats {
     pub max_degree: u32,
@@ -3189,4 +3167,40 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::test::cmp::verbose_eq;
+
+    verbose_eq!(DegreeStats {
+        max_degree,
+        avg_degree,
+        min_degree,
+        cnt_less_than_two,
+    });
+
+    #[test]
+    fn query_label_provider_on_visit_default() {
+        #[derive(Debug)]
+        struct BasicValidation;
+
+        impl QueryLabelProvider<u32> for BasicValidation {
+            fn is_match(&self, id: u32) -> bool {
+                id.is_multiple_of(2)
+            }
+        }
+
+        let filter = BasicValidation;
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(0, 1.0)),
+            QueryVisitDecision::Accept(_)
+        ));
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(1, 1.0)),
+            QueryVisitDecision::Reject
+        ));
+    }
 }
