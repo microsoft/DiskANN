@@ -23,7 +23,7 @@ rand.workspace = true
 criterion.workspace = true
 rand_distr.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits", "bytemuck"] }
-bytemuck.workspace = true
+bytemuck = { workspace = true, features = ["must_cast"] }
 
 [[bench]]
 name = "bench_main"
