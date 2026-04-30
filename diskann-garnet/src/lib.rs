@@ -36,8 +36,8 @@ use crate::{
 use crate::{
     dyn_index::DynIndex,
     garnet::{
-        Callbacks, Context, DeleteCallback, GarnetId, ReadCallback, ReadModifyWriteCallback,
-        WriteCallback,
+        Callbacks, Context, DeleteCallback, FilterCandidateCallback, GarnetId, ReadCallback,
+        ReadModifyWriteCallback, WriteCallback,
     },
 };
 
@@ -75,6 +75,7 @@ pub struct Index {
     inner: Box<dyn DynIndex>,
     quant_type: VectorQuantType,
     state: AtomicUsize,
+    filter_callback: FilterCandidateCallback,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -175,6 +176,7 @@ fn create_index_impl<T: VectorRepr>(
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
+    let filter_callback = callbacks.filter_callback();
     let provider = GarnetProvider::<T>::new(dim, metric_type, max_degree, callbacks, context)?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
@@ -187,6 +189,7 @@ fn create_index_impl<T: VectorRepr>(
         )),
         quant_type,
         state,
+        filter_callback,
     }))
 }
 
@@ -206,6 +209,7 @@ pub unsafe extern "C" fn create_index(
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
+    filter_callback: FilterCandidateCallback,
 ) -> *const c_void {
     let metric_type = match Metric::try_from(metric_type) {
         Ok(m) => m,
@@ -227,7 +231,13 @@ pub unsafe extern "C" fn create_index(
     };
 
     let context = Context(ctx);
-    let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
+    let callbacks = Callbacks::new(
+        read_callback,
+        write_callback,
+        delete_callback,
+        rmw_callback,
+        filter_callback,
+    );
 
     match quant_type {
         VectorQuantType::XPreQ8 => {
@@ -390,6 +400,9 @@ pub unsafe extern "C" fn insert(
     attribute_data: *const u8,
     attribute_len: usize,
 ) -> bool {
+    if index_ptr.is_null() {
+        return false;
+    }
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let ctx = Context(ctx);
 
@@ -512,7 +525,7 @@ pub unsafe extern "C" fn search_vector(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -550,18 +563,28 @@ pub unsafe extern "C" fn search_vector(
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
-
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
+    let garnet_filter = if max_filtering_effort > 0 && bitmap_len == 0 {
+        Some(labels::GarnetFilter::Callback(
+            labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
+            max_filtering_effort,
+        ))
+    } else if !bitmap_data.is_null() && bitmap_len > 0 {
+        Some(labels::GarnetFilter::Bitmap(
+            unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) },
+            FILTER_BETA,
+        ))
+    } else if max_filtering_effort > 0 {
+        Some(labels::GarnetFilter::Callback(
+            labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
+            max_filtering_effort,
+        ))
     } else {
         None
     };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
 
     let res = index
         .inner
-        .search_vector(&ctx, &v, &params, filter, &mut output);
+        .search_vector(&ctx, &v, &params, garnet_filter.as_ref(), &mut output);
 
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
@@ -587,7 +610,7 @@ pub unsafe extern "C" fn search_element(
     search_exploration_factor: u32,
     bitmap_data: *const u8,
     bitmap_len: usize,
-    _max_filtering_effort: usize,
+    max_filtering_effort: usize,
     output_ids: *mut u8,
     output_ids_len: usize,
     output_distances: *mut f32,
@@ -615,17 +638,25 @@ pub unsafe extern "C" fn search_element(
         Err(_) => return -1,
     };
 
-    let has_filter = !bitmap_data.is_null() && bitmap_len > 0;
-    let labels = if has_filter {
-        Some(unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) })
+    let garnet_filter = if max_filtering_effort > 0 && bitmap_len == 0 {
+        // Only use callback filter when both effort > 0 AND no bitmap exists.
+        // TODO: C# should set max_filtering_effort = 0 for unfiltered.
+        Some(labels::GarnetFilter::Callback(
+            labels::GarnetFilterProvider::new(ctx.0, index.filter_callback),
+            max_filtering_effort,
+        ))
+    } else if !bitmap_data.is_null() && bitmap_len > 0 {
+        Some(labels::GarnetFilter::Bitmap(
+            unsafe { labels::GarnetQueryLabelProvider::from_raw(bitmap_data, bitmap_len) },
+            FILTER_BETA,
+        ))
     } else {
         None
     };
-    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
 
     let res = index
         .inner
-        .search_element(&ctx, &id, &params, filter, &mut output);
+        .search_element(&ctx, &id, &params, garnet_filter.as_ref(), &mut output);
     if let Ok(stats) = res {
         if stats.result_count > i32::MAX as u32 {
             -1

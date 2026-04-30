@@ -45,6 +45,7 @@ use crate::{
 mod knn_search;
 mod multihop_search;
 mod range_search;
+mod two_queue_search;
 
 pub mod record;
 pub(crate) mod scratch;
@@ -110,6 +111,7 @@ where
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError};
+pub use two_queue_search::{TwoQueueSearch, TwoQueueStats, TwoQueueTermination};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]

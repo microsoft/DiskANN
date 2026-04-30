@@ -263,6 +263,36 @@ impl CheckDeserialization for MultiHopSearchPhase {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TwoQueueSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: InputFile,
+    pub(crate) max_candidates: Vec<usize>,
+    pub(crate) result_size_factor: usize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+}
+
+impl CheckDeserialization for TwoQueueSearchPhase {
+    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.check_deserialization(checker)?;
+
+        self.query_predicates.check_deserialization(checker)?;
+        self.data_labels.check_deserialization(checker)?;
+
+        self.groundtruth.check_deserialization(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.check_deserialization(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+
+        Ok(())
+    }
+}
+
 /// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -333,6 +363,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkTwoQueueFilter(TwoQueueSearchPhase),
 }
 
 impl CheckDeserialization for SearchPhase {
@@ -342,6 +373,7 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::Range(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::TopkTwoQueueFilter(phase) => phase.check_deserialization(checker),
         }
     }
 }

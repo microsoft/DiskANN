@@ -12,11 +12,16 @@ thread_local! {
     pub static STORE: DashMap<Vec<u8>, Vec<u8>> = DashMap::new();
 }
 
+/// No-op filter callback that accepts all candidates.
+unsafe extern "C" fn noop_filter(_context: u64, _internal_id: u32) -> u8 {
+    1
+}
+
 pub struct Store;
 
 impl Store {
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks::new(test_read, test_write, test_delete, test_rmw)
+        Callbacks::new(test_read, test_write, test_delete, test_rmw, noop_filter)
     }
 
     pub fn clear(&self) {
