@@ -1,0 +1,52 @@
+{
+  "search_directories": [
+    "test_data"
+  ],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Load",
+          "data_type": "float32",
+          "load_path": "C:/data/openai/openai_index_normal"
+        },
+        "search_phase": {
+          "queries": "openai_query.bin",
+          "groundtruth": "openai_gt_50.bin",
+          "search_list": [100, 200, 400],
+          "beam_width": 4,
+          "recall_at": 10,
+          "num_threads": 8,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null
+        }
+      }
+    },
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Load",
+          "data_type": "float32",
+          "load_path": "C:/data/openai/openai_index_normal"
+        },
+        "search_phase": {
+          "queries": "openai_query.bin",
+          "groundtruth": "openai_gt_50.bin",
+          "search_list": [100, 200, 400],
+          "beam_width": 4,
+          "recall_at": 10,
+          "num_threads": 8,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null,
+          "is_determinant_diversity_search": true,
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 2.0
+        }
+      }
+    }
+  ]
+}

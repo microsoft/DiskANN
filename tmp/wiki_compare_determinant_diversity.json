@@ -1,0 +1,63 @@
+{
+  "search_directories": [
+    "C:\\wikipedia_dataset"
+  ],
+  "jobs": [
+    {
+      "type": "async-index-build",
+      "content": {
+        "source": {
+          "index-source": "Load",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "load_path": "C:\\wikipedia_dataset\\wikipedia_saved_index"
+        },
+        "search_phase": {
+          "search-type": "topk",
+          "queries": "C:\\wikipedia_dataset\\query.bin",
+          "groundtruth": "C:\\wikipedia_dataset\\groundtruth_k100.bin",
+          "reps": 1,
+          "determinant_diversity_eta": null,
+          "determinant_diversity_power": null,
+          "determinant_diversity_results_k": null,
+          "num_threads": [8],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [20, 30, 40, 50, 100, 200],
+              "recall_k": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "async-index-build",
+      "content": {
+        "source": {
+          "index-source": "Load",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "load_path": "C:\\wikipedia_dataset\\wikipedia_saved_index"
+        },
+        "search_phase": {
+          "search-type": "topk",
+          "queries": "C:\\wikipedia_dataset\\query.bin",
+          "groundtruth": "C:\\wikipedia_dataset\\groundtruth_k100.bin",
+          "reps": 1,
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 2.0,
+          "determinant_diversity_results_k": 10,
+          "num_threads": [8],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [20, 30, 40, 50, 100, 200],
+              "recall_k": 10
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

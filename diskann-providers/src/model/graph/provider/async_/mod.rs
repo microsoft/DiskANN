@@ -9,6 +9,11 @@ pub use common::{PrefetchCacheLineLevel, StartPoints, VectorGuard};
 
 pub(crate) mod postprocess;
 
+mod determinant_diversity_post_process;
+pub use determinant_diversity_post_process::{
+    DeterminantDiversityError, DeterminantDiversitySearchParams, determinant_diversity_post_process,
+};
+
 pub mod distances;
 
 pub mod memory_vector_provider;

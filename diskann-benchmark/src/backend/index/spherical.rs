@@ -42,7 +42,9 @@ mod imp {
     };
     use diskann_providers::{
         index::diskann_async::{self},
-        model::graph::provider::async_::{common::NoDeletes, inmem},
+        model::graph::provider::async_::{
+            common::NoDeletes, inmem, DeterminantDiversitySearchParams,
+        },
     };
     use diskann_quantization::alloc::GlobalAllocator;
     use diskann_utils::views::Matrix;
@@ -296,15 +298,44 @@ mod imp {
                             );
 
                             for &layout in self.input.query_layouts.iter() {
-                                let knn = benchmark_core::search::graph::KNN::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::broadcast(
-                                        inmem::spherical::Quantized::search(layout.into()),
-                                    ),
-                                )?;
+                                let strategy = inmem::spherical::Quantized::search(layout.into());
+                                let search_results = if let (Some(eta), Some(power)) = (
+                                    search_phase.determinant_diversity_eta,
+                                    search_phase.determinant_diversity_power,
+                                ) {
+                                    let processor = DeterminantDiversitySearchParams::new(
+                                        search_phase
+                                            .determinant_diversity_results_k
+                                            .unwrap_or_else(|| {
+                                                search_phase
+                                                    .runs
+                                                    .iter()
+                                                    .map(|run| run.search_n)
+                                                    .max()
+                                                    .unwrap_or(1)
+                                            }),
+                                        eta,
+                                        power,
+                                    )
+                                    .map_err(|err| anyhow::anyhow!("Invalid determinant-diversity parameters: {err}"))?;
 
-                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+                                    let knn = benchmark_core::search::graph::knn::KNN::new_with(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(strategy),
+                                        benchmark_core::search::graph::Strategy::broadcast(processor),
+                                    )?;
+
+                                    search::knn::run(&knn, &groundtruth, steps)?
+                                } else {
+                                    let knn = benchmark_core::search::graph::KNN::new(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(strategy),
+                                    )?;
+
+                                    search::knn::run(&knn, &groundtruth, steps)?
+                                };
                                 result.append(SearchRun {
                                     layout,
                                     results: AggregatedSearchResults::Topk(search_results),

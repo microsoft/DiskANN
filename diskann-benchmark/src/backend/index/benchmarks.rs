@@ -20,11 +20,14 @@ use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     utils::datatype,
-    Benchmark, Checkpoint,
+    Any, Checkpoint,
 };
 use diskann_providers::{
     index::diskann_async,
-    model::{configuration::IndexConfiguration, graph::provider::async_::common},
+    model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::{common, DeterminantDiversitySearchParams},
+    },
 };
 use diskann_utils::{
     future::AsyncFriendly,
@@ -55,18 +58,78 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
+macro_rules! register {
+    ($disp:ident, $name:literal, $bench_type:ty) => {
+        $disp.register::<$bench_type>($name, |object, checkpoint, output| {
+            match <_ as $crate::backend::index::benchmarks::BuildAndSearch>::run(
+                object, checkpoint, output,
+            ) {
+                Ok(v) => Ok(serde_json::to_value(v)?),
+                Err(err) => Err(err),
+            }
+        });
+    };
+}
+macro_rules! register_streaming {
+    ($disp:ident, $name:literal, $bench_type:ty) => {
+        $disp.register::<$bench_type>($name, |object, checkpoint, output| {
+            match <_ as $crate::backend::index::benchmarks::BuildAndDynamicRun>::run(
+                object, checkpoint, output,
+            ) {
+                Ok(v) => Ok(serde_json::to_value(v)?),
+                Err(err) => Err(err),
+            }
+        });
+    };
+}
+
+#[cfg(any(feature = "product-quantization", feature = "scalar-quantization"))]
+pub(super) use register;
+
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
     // Full Precision
-    benchmarks.register::<FullPrecision<'static, f32>>("async-full-precision-f32");
-    benchmarks.register::<FullPrecision<'static, f16>>("async-full-precision-f16");
-    benchmarks.register::<FullPrecision<'static, u8>>("async-full-precision-u8");
-    benchmarks.register::<FullPrecision<'static, i8>>("async-full-precision-i8");
+    register!(
+        benchmarks,
+        "async-full-precision-f32",
+        FullPrecision<'static, f32>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-f16",
+        FullPrecision<'static, f16>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-u8",
+        FullPrecision<'static, u8>
+    );
+    register!(
+        benchmarks,
+        "async-full-precision-i8",
+        FullPrecision<'static, i8>
+    );
 
     // Dynamic Full Precision
-    benchmarks.register::<DynamicFullPrecision<'static, f32>>("async-dynamic-full-precision-f32");
-    benchmarks.register::<DynamicFullPrecision<'static, f16>>("async-dynamic-full-precision-f16");
-    benchmarks.register::<DynamicFullPrecision<'static, u8>>("async-dynamic-full-precision-u8");
-    benchmarks.register::<DynamicFullPrecision<'static, i8>>("async-dynamic-full-precision-i8");
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-f32",
+        DynamicFullPrecision<'static, f32>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-f16",
+        DynamicFullPrecision<'static, f16>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-u8",
+        DynamicFullPrecision<'static, u8>
+    );
+    register_streaming!(
+        benchmarks,
+        "async-dynamic-full-precision-i8",
+        DynamicFullPrecision<'static, i8>
+    );
 
     product::register_benchmarks(benchmarks);
     scalar::register_benchmarks(benchmarks);
@@ -116,28 +179,38 @@ impl<'a, T> FullPrecision<'a, T> {
     }
 }
 
-impl<T> Benchmark for FullPrecision<'static, T>
+impl<T> diskann_benchmark_runner::dispatcher::Map for FullPrecision<'static, T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
+    T: 'static,
+{
+    type Type<'a> = FullPrecision<'a, T>;
+}
+
+/// Dispatch to a full-precision only build.
+impl<'a, T> DispatchRule<&'a IndexOperation> for FullPrecision<'a, T>
+where
     datatype::Type<T>: DispatchRule<datatype::DataType>,
 {
-    type Input = IndexOperation;
-    type Output = BuildResult;
+    type Error = std::convert::Infallible;
 
-    fn try_match(input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        match &input.source {
+    // Matching simply requires that we match the inner type.
+    fn try_match(from: &&'a IndexOperation) -> Result<MatchScore, FailureScore> {
+        match &from.source {
             IndexSource::Load(load) => datatype::Type::<T>::try_match(&load.data_type),
             IndexSource::Build(build) => datatype::Type::<T>::try_match(&build.data_type),
         }
     }
 
+    fn convert(from: &'a IndexOperation) -> Result<Self, Self::Error> {
+        Ok(Self::new(from))
+    }
+
     fn description(
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&IndexOperation>,
+        from: Option<&&'a IndexOperation>,
     ) -> std::fmt::Result {
-        match input {
+        // At this level, we only care about the data type, so return that description.
+        match from {
             Some(arg) => match &arg.source {
                 IndexSource::Load(load) => {
                     datatype::Type::<T>::description(f, Some(&load.data_type))
@@ -149,13 +222,25 @@ where
             None => datatype::Type::<T>::description(f, None::<&datatype::DataType>),
         }
     }
+}
 
-    fn run(
-        input: &IndexOperation,
-        checkpoint: Checkpoint<'_>,
-        output: &mut dyn Output,
-    ) -> anyhow::Result<BuildResult> {
-        BuildAndSearch::run(FullPrecision::<T>::new(input), checkpoint, output)
+/// Central Dispatch
+impl<'a, T> DispatchRule<&'a Any> for FullPrecision<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
+    type Error = anyhow::Error;
+
+    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
+        from.try_match::<IndexOperation, Self>()
+    }
+
+    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
+        from.convert::<IndexOperation, Self>()
+    }
+
+    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>) -> std::fmt::Result {
+        Any::description::<IndexOperation, Self>(f, from, IndexOperation::tag())
     }
 }
 
@@ -174,33 +259,49 @@ impl<'a, T> DynamicFullPrecision<'a, T> {
     }
 }
 
-impl<T> Benchmark for DynamicFullPrecision<'static, T>
+impl<T> diskann_benchmark_runner::dispatcher::Map for DynamicFullPrecision<'static, T>
 where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
+    T: 'static,
+{
+    type Type<'a> = DynamicFullPrecision<'a, T>;
+}
+
+/// Dispatch to a dynamic full-precision async index run.
+impl<'a, T> DispatchRule<&'a DynamicIndexRun> for DynamicFullPrecision<'a, T>
+where
     datatype::Type<T>: DispatchRule<datatype::DataType>,
 {
-    type Input = DynamicIndexRun;
-    type Output = Vec<managed::Stats<StreamStats>>;
-
-    fn try_match(input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        datatype::Type::<T>::try_match(&input.build.data_type)
+    type Error = std::convert::Infallible;
+    // Matching simply requires that we match the inner type.
+    fn try_match(from: &&'a DynamicIndexRun) -> Result<MatchScore, FailureScore> {
+        datatype::Type::<T>::try_match(&from.build.data_type)
     }
-
+    fn convert(from: &'a DynamicIndexRun) -> Result<Self, Self::Error> {
+        Ok(Self::new(from))
+    }
     fn description(
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DynamicIndexRun>,
+        from: Option<&&'a DynamicIndexRun>,
     ) -> std::fmt::Result {
-        datatype::Type::<T>::description(f, input.map(|f| f.build.data_type).as_ref())
+        // At this level, we only care about the data type, so return that description.
+        datatype::Type::<T>::description(f, from.map(|f| f.build.data_type).as_ref())
     }
+}
 
-    fn run(
-        input: &DynamicIndexRun,
-        checkpoint: Checkpoint<'_>,
-        output: &mut dyn Output,
-    ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
-        BuildAndDynamicRun::run(DynamicFullPrecision::<T>::new(input), checkpoint, output)
+/// Central Dispatch
+impl<'a, T> DispatchRule<&'a Any> for DynamicFullPrecision<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
+    type Error = anyhow::Error;
+    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
+        from.try_match::<DynamicIndexRun, Self>()
+    }
+    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
+        from.convert::<DynamicIndexRun, Self>()
+    }
+    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>) -> std::fmt::Result {
+        Any::description::<DynamicIndexRun, Self>(f, from, DynamicIndexRun::tag())
     }
 }
 
@@ -217,10 +318,10 @@ pub(super) fn run_build<T, BF, CF, B, DP>(
 ) -> anyhow::Result<(Index<DP>, BuildStats)>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
+        + provider::SetElement<[T]>,
     CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: for<'a> glue::SearchStrategy<DP, &'a [T]> + Clone + Send + Sync,
+    B: glue::SearchStrategy<DP, [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -249,9 +350,11 @@ pub(super) fn run_search_outer<T, S, DP>(
 ) -> anyhow::Result<BuildResult>
 where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
+        + provider::SetElement<[T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
+    S: glue::DefaultSearchStrategy<DP, [T]> + Clone + AsyncFriendly,
+    DeterminantDiversitySearchParams:
+        for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, [T], DP::ExternalId> + Send + Sync,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {
@@ -268,19 +371,51 @@ where
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
-
             let steps = search::knn::SearchSteps::new(
                 search_phase.reps,
                 &search_phase.num_threads,
                 &search_phase.runs,
             );
 
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+            let search_results = if let (Some(eta), Some(power)) = (
+                search_phase.determinant_diversity_eta,
+                search_phase.determinant_diversity_power,
+            ) {
+                let processor = DeterminantDiversitySearchParams::new(
+                    search_phase
+                        .determinant_diversity_results_k
+                        .unwrap_or_else(|| {
+                            search_phase
+                                .runs
+                                .iter()
+                                .map(|run| run.search_n)
+                                .max()
+                                .unwrap_or(1)
+                        }),
+                    eta,
+                    power,
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!("Invalid determinant-diversity parameters: {err}")
+                })?;
+
+                let knn = benchmark_core::search::graph::knn::KNN::new_with(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                    benchmark_core::search::graph::Strategy::broadcast(processor),
+                )?;
+
+                search::knn::run(&knn, &groundtruth, steps)?
+            } else {
+                let knn = benchmark_core::search::graph::KNN::new(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                )?;
+
+                search::knn::run(&knn, &groundtruth, steps)?
+            };
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }
@@ -395,140 +530,151 @@ where
     }
 }
 
-impl<'a, T> BuildAndSearch<'a> for FullPrecision<'a, T>
-where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-{
-    type Data = BuildResult;
-    fn run(
-        self,
-        checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> Result<Self::Data, anyhow::Error> {
-        writeln!(output, "{}", self.input)?;
-        let (index, build_stats) = match &self.input.source {
-            IndexSource::Build(build) => {
-                let (index, build_stats) = run_build(
-                    build,
+macro_rules! impl_build {
+    ($T:ty) => {
+        impl<'a> BuildAndSearch<'a> for FullPrecision<'a, $T> {
+            type Data = BuildResult;
+            fn run(
+                self,
+                checkpoint: Checkpoint<'_>,
+                mut output: &mut dyn Output,
+            ) -> Result<Self::Data, anyhow::Error> {
+                writeln!(output, "{}", self.input)?;
+                let (index, build_stats) = match &self.input.source {
+                    IndexSource::Build(build) => {
+                        let (index, build_stats) = run_build(
+                            &build,
+                            common::FullPrecision,
+                            None,
+                            output,
+                            |data| {
+                                let index = diskann_async::new_index::<$T, _>(
+                                    build.try_as_config()?.build()?,
+                                    build.inmem_parameters(data.nrows(), data.ncols()),
+                                    common::NoDeletes,
+                                )?;
+                                build::set_start_points(
+                                    index.provider(),
+                                    data.as_view(),
+                                    build.start_point_strategy,
+                                )?;
+                                Ok(index)
+                            },
+                            single_or_multi_insert,
+                        )?;
+
+                        // save the index if requested
+                        if let Some(save_path) = &build.save_path {
+                            utils::tokio::block_on(save_index(index.clone(), &save_path))?;
+                        }
+
+                        (index, Some(build_stats))
+                    }
+                    IndexSource::Load(load) => {
+                        let index_config: &IndexConfiguration = &load.to_config()?;
+
+                        let index = {
+                            utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))?
+                        };
+
+                        (Arc::new(index), None::<BuildStats>)
+                    }
+                };
+
+                let result = run_search_outer(
+                    &self.input.search_phase,
                     common::FullPrecision,
-                    None,
-                    output,
-                    |data| {
-                        let index = diskann_async::new_index::<T, _>(
-                            build.try_as_config()?.build()?,
-                            build.inmem_parameters(data.nrows(), data.ncols()),
-                            common::NoDeletes,
-                        )?;
-                        build::set_start_points(
-                            index.provider(),
-                            data.as_view(),
-                            build.start_point_strategy,
-                        )?;
-                        Ok(index)
-                    },
-                    single_or_multi_insert,
+                    index,
+                    build_stats,
+                    checkpoint,
                 )?;
 
-                // save the index if requested
-                if let Some(save_path) = &build.save_path {
-                    utils::tokio::block_on(save_index(index.clone(), save_path))?;
-                }
-
-                (index, Some(build_stats))
+                writeln!(output, "\n\n{}", result)?;
+                Ok(result)
             }
-            IndexSource::Load(load) => {
-                let index_config: &IndexConfiguration = &load.to_config()?;
-
-                let index =
-                    { utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))? };
-
-                (Arc::new(index), None::<BuildStats>)
-            }
-        };
-
-        let result = run_search_outer(
-            &self.input.search_phase,
-            common::FullPrecision,
-            index,
-            build_stats,
-            checkpoint,
-        )?;
-
-        writeln!(output, "\n\n{}", result)?;
-        Ok(result)
-    }
+        }
+    };
 }
 
-impl<'a, T> BuildAndDynamicRun<'a> for DynamicFullPrecision<'a, T>
-where
-    T: VectorRepr
-        + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-{
-    type Data = Vec<managed::Stats<StreamStats>>;
-    fn run(
-        self,
-        _checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> Result<Self::Data, anyhow::Error> {
-        writeln!(output, "{}", self.input)?;
+impl_build!(f32);
+impl_build!(f16);
+impl_build!(u8);
+impl_build!(i8);
 
-        let groundtruth_directory = self
-            .input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-            })?;
+macro_rules! impl_dynamic_run {
+    ($T:ty) => {
+        impl<'a> BuildAndDynamicRun<'a> for DynamicFullPrecision<'a, $T> {
+            type Data = Vec<managed::Stats<StreamStats>>;
+            fn run(
+                self,
+                _checkpoint: Checkpoint<'_>,
+                mut output: &mut dyn Output,
+            ) -> Result<Self::Data, anyhow::Error> {
+                writeln!(output, "{}", self.input)?;
 
-        let mut runbook = bigann::RunBook::load(
-            &self.input.runbook_params.runbook_path,
-            &self.input.runbook_params.dataset_name,
-            &mut bigann::ScanDirectory::new(groundtruth_directory)?,
-        )?;
+                let groundtruth_directory = self
+                    .input
+                    .runbook_params
+                    .resolved_gt_directory
+                    .as_ref()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Ground truth directory path was not resolved during validation"
+                        )
+                    })?;
 
-        let mut streamer = full_precision_streaming(&self, runbook.max_points())?;
+                let mut runbook = bigann::RunBook::load(
+                    &self.input.runbook_params.runbook_path,
+                    &self.input.runbook_params.dataset_name,
+                    &mut bigann::ScanDirectory::new(groundtruth_directory)?,
+                )?;
 
-        let mut results = Vec::new();
-        let stages = runbook.len();
-        let mut i = 1;
+                let mut streamer = full_precision_streaming(&self, runbook.max_points())?;
 
-        runbook.run_with(
-            &mut streamer,
-            |o: managed::Stats<StreamStats>| -> anyhow::Result<()> {
-                if o.inner().is_maintain() {
-                    let message = format!("Ran maintenance before stage {}", i);
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                } else {
-                    let message =
-                        format!("Finished stage {} of {}: {}", i, stages, o.inner().kind());
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                    i += 1;
-                }
-                writeln!(output, "{}", o)?;
-                results.push(o);
-                Ok(())
-            },
-        )?;
+                let mut results = Vec::new();
+                let stages = runbook.len();
+                let mut i = 1;
 
-        write!(
-            output,
-            "{}",
-            crate::utils::SmallBanner("End of Run Summary")
-        )?;
+                runbook.run_with(
+                    &mut streamer,
+                    |o: managed::Stats<StreamStats>| -> anyhow::Result<()> {
+                        if o.inner().is_maintain() {
+                            let message = format!("Ran maintenance before stage {}", i);
+                            write!(output, "{}", crate::utils::SmallBanner(&message))?;
+                        } else {
+                            let message =
+                                format!("Finished stage {} of {}: {}", i, stages, o.inner().kind());
+                            write!(output, "{}", crate::utils::SmallBanner(&message))?;
+                            i += 1;
+                        }
+                        writeln!(output, "{}", o)?;
+                        results.push(o);
+                        Ok(())
+                    },
+                )?;
 
-        writeln!(
-            output,
-            "{}",
-            streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
-        )?;
+                write!(
+                    output,
+                    "{}",
+                    crate::utils::SmallBanner("End of Run Summary")
+                )?;
 
-        Ok(results)
-    }
+                writeln!(
+                    output,
+                    "{}",
+                    streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
+                )?;
+
+                Ok(results)
+            }
+        }
+    };
 }
+
+impl_dynamic_run!(f32);
+impl_dynamic_run!(f16);
+impl_dynamic_run!(u8);
+impl_dynamic_run!(i8);
 
 /// The stack looks like this:
 ///

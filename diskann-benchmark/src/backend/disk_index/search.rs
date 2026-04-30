@@ -42,6 +42,9 @@ pub(super) struct DiskSearchStats {
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
     pub(crate) is_flat_search: bool,
+    pub(crate) is_determinant_diversity_search: bool,
+    pub(crate) determinant_diversity_eta: Option<f64>,
+    pub(crate) determinant_diversity_power: Option<f64>,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
@@ -276,6 +279,9 @@ where
                 Some(search_params.beam_width),
                 vector_filter,
                 search_params.is_flat_search,
+                search_params.is_determinant_diversity_search,
+                search_params.determinant_diversity_eta,
+                search_params.determinant_diversity_power,
             ) {
                 Ok(search_result) => {
                     *stats = search_result.stats.query_statistics;
@@ -341,6 +347,9 @@ where
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
         is_flat_search: search_params.is_flat_search,
+        is_determinant_diversity_search: search_params.is_determinant_diversity_search,
+        determinant_diversity_eta: search_params.determinant_diversity_eta,
+        determinant_diversity_power: search_params.determinant_diversity_power,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
@@ -425,6 +434,22 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Beam width,       : {}", self.beam_width)?;
         writeln!(f, "Recall at,        : {}", self.recall_at)?;
         writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
+        writeln!(
+            f,
+            "Det-div search,   : {}",
+            self.is_determinant_diversity_search
+        )?;
+        writeln!(
+            f,
+            "Det-div params,   : {}",
+            match (
+                self.determinant_diversity_eta,
+                self.determinant_diversity_power,
+            ) {
+                (Some(eta), Some(power)) => format!("eta={eta}, power={power}"),
+                _ => "None".to_string(),
+            }
+        )?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
         writeln!(
