@@ -114,6 +114,10 @@ pub(super) struct SearchResults {
     pub(super) qps: Vec<f64>,
     pub(super) search_latencies: Vec<MicroSeconds>,
     pub(super) mean_latencies: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mean_first_stage_latencies: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mean_rerank_latencies: Option<Vec<f64>>,
     pub(super) p90_latencies: Vec<MicroSeconds>,
     pub(super) p99_latencies: Vec<MicroSeconds>,
     pub(super) recall: utils::recall::RecallMetrics,
@@ -148,6 +152,8 @@ impl SearchResults {
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,
+            mean_first_stage_latencies: None,
+            mean_rerank_latencies: None,
             p90_latencies,
             p99_latencies,
             recall: (&recall).into(),
@@ -170,8 +176,26 @@ where
     }
 
     let has_batch = batch_formatter.is_some();
-    let headers: &[&str] = if has_batch {
-        &[
+    let has_stage_latencies = results
+        .iter()
+        .any(|r| r.mean_first_stage_latencies.is_some() || r.mean_rerank_latencies.is_some());
+
+    let headers: &[&str] = match (has_batch, has_stage_latencies) {
+        (true, true) => &[
+            "Batch",
+            "Ls",
+            "KNN",
+            "Avg cmps",
+            "Avg hops",
+            "QPS - mean(max)",
+            "Avg First Stage",
+            "Avg Rerank",
+            "Avg Latency",
+            "p99 Latency",
+            "Recall",
+            "Threads",
+        ],
+        (true, false) => &[
             "Batch",
             "Ls",
             "KNN",
@@ -182,9 +206,21 @@ where
             "p99 Latency",
             "Recall",
             "Threads",
-        ]
-    } else {
-        &[
+        ],
+        (false, true) => &[
+            "Ls",
+            "KNN",
+            "Avg cmps",
+            "Avg hops",
+            "QPS - mean(max)",
+            "Avg First Stage",
+            "Avg Rerank",
+            "Avg Latency",
+            "p99 Latency",
+            "Recall",
+            "Threads",
+        ],
+        (false, false) => &[
             "Ls",
             "KNN",
             "Avg cmps",
@@ -194,7 +230,7 @@ where
             "p99 Latency",
             "Recall",
             "Threads",
-        ]
+        ],
     };
 
     let mut table = diskann_benchmark_runner::utils::fmt::Table::new(headers, results.len());
@@ -219,13 +255,27 @@ where
             ),
             col_idx + 4,
         );
+        col_idx += 5;
+
+        if has_stage_latencies {
+            row.insert(
+                format_latency_mean(r.mean_first_stage_latencies.as_deref()),
+                col_idx,
+            );
+            row.insert(
+                format_latency_mean(r.mean_rerank_latencies.as_deref()),
+                col_idx + 1,
+            );
+            col_idx += 2;
+        }
+
         row.insert(
             format!(
                 "{:.1}us ({:.1}us)",
                 MaybeDisplay(percentiles::mean(&r.mean_latencies), "missing"),
                 MaybeDisplay(percentiles::max_f64(&r.mean_latencies), "missing"),
             ),
-            col_idx + 5,
+            col_idx,
         );
         row.insert(
             format!(
@@ -233,13 +283,24 @@ where
                 MaybeDisplay(percentiles::mean(&r.p99_latencies), "missing"),
                 MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
             ),
-            col_idx + 6,
+            col_idx + 1,
         );
-        row.insert(format!("{:3}", r.recall.average), col_idx + 7);
-        row.insert(r.num_tasks, col_idx + 8);
+        row.insert(format!("{:3}", r.recall.average), col_idx + 2);
+        row.insert(r.num_tasks, col_idx + 3);
     });
 
     write!(f, "{}", table)
+}
+
+fn format_latency_mean(values: Option<&[f64]>) -> String {
+    match values {
+        Some(values) => format!(
+            "{:.1}us ({:.1}us)",
+            MaybeDisplay(percentiles::mean(values), "missing"),
+            MaybeDisplay(percentiles::max_f64(values), "missing"),
+        ),
+        None => "missing".to_string(),
+    }
 }
 
 impl std::fmt::Display for DisplayWrapper<'_, [SearchResults]> {

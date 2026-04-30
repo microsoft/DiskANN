@@ -4,7 +4,10 @@
  */
 
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use diskann::{
     graph::{self, glue, DiskANNIndex},
@@ -313,6 +316,57 @@ pub struct SearchMetrics {
     pub comparisons: u32,
     /// The number of candidates expanded during search.
     pub hops: u32,
+    /// The time spent in the post-processing rerank stage.
+    pub rerank_latency: MicroSeconds,
+}
+
+#[derive(Debug, Clone)]
+struct TimedPostProcessor<P> {
+    inner: P,
+    elapsed_micros: Arc<AtomicU64>,
+}
+
+impl<P> TimedPostProcessor<P> {
+    fn new(inner: P, elapsed_micros: Arc<AtomicU64>) -> Self {
+        Self {
+            inner,
+            elapsed_micros,
+        }
+    }
+}
+
+impl<A, T, O, P> glue::SearchPostProcess<A, T, O> for TimedPostProcessor<P>
+where
+    A: provider::BuildQueryComputer<T>,
+    O: Send,
+    P: glue::SearchPostProcess<A, T, O> + Send + Sync,
+{
+    type Error = P::Error;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut A,
+        query: T,
+        computer: &<A as provider::BuildQueryComputer<T>>::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = diskann::neighbor::Neighbor<A::Id>> + Send,
+        B: graph::SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        let elapsed_micros = Arc::clone(&self.elapsed_micros);
+        let future = self
+            .inner
+            .post_process(accessor, query, computer, candidates, output);
+
+        async move {
+            let start = std::time::Instant::now();
+            let result = future.await;
+            elapsed_micros.store(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            result
+        }
+    }
 }
 
 impl<DP, T, S> benchmark_core::search::Search for MultiKNN<DP, T, S>
@@ -345,11 +399,18 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
+        let rerank_micros = Arc::new(AtomicU64::new(0));
+        let strategy = self.strategy.get(index)?;
+        let processor = TimedPostProcessor::new(
+            strategy.default_post_processor(),
+            Arc::clone(&rerank_micros),
+        );
         let stats = self
             .index
-            .search(
+            .search_with(
                 *kind,
-                self.strategy.get(index)?,
+                strategy,
+                processor,
                 &context,
                 self.queries[index].as_view(),
                 buffer,
@@ -359,6 +420,7 @@ where
         Ok(SearchMetrics {
             comparisons: stats.cmps,
             hops: stats.hops,
+            rerank_latency: MicroSeconds::new(rerank_micros.load(Ordering::Relaxed)),
         })
     }
 }
@@ -378,6 +440,12 @@ pub struct Summary {
 
     /// The average latency for individual queries.
     pub mean_latencies: Vec<f64>,
+
+    /// The average latency spent before post-processing rerank for individual queries.
+    pub mean_first_stage_latencies: Vec<f64>,
+
+    /// The average latency spent in post-processing rerank for individual queries.
+    pub mean_rerank_latencies: Vec<f64>,
 
     /// The 90th percentile latency for individual queries.
     pub p90_latencies: Vec<MicroSeconds>,
@@ -443,20 +511,36 @@ where
         };
 
         let mut mean_latencies = Vec::with_capacity(results.len());
+        let mut mean_first_stage_latencies = Vec::with_capacity(results.len());
+        let mut mean_rerank_latencies = Vec::with_capacity(results.len());
         let mut p90_latencies = Vec::with_capacity(results.len());
         let mut p99_latencies = Vec::with_capacity(results.len());
 
         results.iter_mut().for_each(|r| {
+            let (total_rerank_micros, count) =
+                r.output().iter().fold((0u64, 0usize), |(micros, n), o| {
+                    (micros + o.rerank_latency.as_micros(), n + 1)
+                });
+            let mean_rerank_latency = if count > 0 {
+                total_rerank_micros as f64 / count as f64
+            } else {
+                0.0
+            };
+
             match percentiles::compute_percentiles(r.latencies_mut()) {
                 Ok(values) => {
                     let percentiles::Percentiles { mean, p90, p99, .. } = values;
                     mean_latencies.push(mean);
+                    mean_first_stage_latencies.push((mean - mean_rerank_latency).max(0.0));
+                    mean_rerank_latencies.push(mean_rerank_latency);
                     p90_latencies.push(p90);
                     p99_latencies.push(p99);
                 }
                 Err(_) => {
                     let zero = MicroSeconds::new(0);
                     mean_latencies.push(0.0);
+                    mean_first_stage_latencies.push(0.0);
+                    mean_rerank_latencies.push(0.0);
                     p90_latencies.push(zero);
                     p99_latencies.push(zero);
                 }
@@ -488,6 +572,8 @@ where
             end_to_end_latencies: results.iter().map(|r| r.end_to_end_latency()).collect(),
             recall,
             mean_latencies,
+            mean_first_stage_latencies,
+            mean_rerank_latencies,
             p90_latencies,
             p99_latencies,
             mean_cmps,
@@ -534,6 +620,8 @@ impl From<Summary> for SearchResults {
             parameters,
             end_to_end_latencies,
             mean_latencies,
+            mean_first_stage_latencies,
+            mean_rerank_latencies,
             p90_latencies,
             p99_latencies,
             recall,
@@ -554,6 +642,8 @@ impl From<Summary> for SearchResults {
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,
+            mean_first_stage_latencies: Some(mean_first_stage_latencies),
+            mean_rerank_latencies: Some(mean_rerank_latencies),
             p90_latencies,
             p99_latencies,
             recall: (&recall).into(),
