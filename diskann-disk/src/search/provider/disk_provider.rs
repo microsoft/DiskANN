@@ -653,6 +653,7 @@ where
             query,
         })
     }
+
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
         if ids.is_empty() {
             return Ok(());

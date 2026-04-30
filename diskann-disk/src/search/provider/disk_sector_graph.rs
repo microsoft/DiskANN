@@ -8,14 +8,11 @@
 use std::ops::Deref;
 
 use diskann::{ANNError, ANNResult};
-use diskann_quantization::{
-    alloc::{AlignedAllocator, Poly},
-    num::PowerOfTwo,
-};
+use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead},
+    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -79,9 +76,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
             sectors_data: Poly::broadcast(
                 0u8,
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
-                AlignedAllocator::new(
-                    PowerOfTwo::new(block_size).map_err(ANNError::log_index_error)?,
-                ),
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
             .map_err(ANNError::log_index_error)?,
             cur_sector_idx: 0,
@@ -100,9 +95,7 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
             self.sectors_data = Poly::broadcast(
                 0u8,
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
-                AlignedAllocator::new(
-                    PowerOfTwo::new(self.block_size).map_err(ANNError::log_index_error)?,
-                ),
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
             .map_err(ANNError::log_index_error)?;
         }
@@ -143,7 +136,8 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
         );
         let mut sector_slices: Vec<&mut [u8]> =
             self.sectors_data[range].chunks_mut(len_per_node).collect();
-        let mut read_requests = Vec::with_capacity(sector_slices.len());
+        let mut read_requests: Vec<AlignedRead<'_, u8, AlignedReaderType::Alignment>> =
+            Vec::with_capacity(sector_slices.len());
         for (local_sector_idx, slice) in sector_slices.iter_mut().enumerate() {
             let sector_id = sectors_to_fetch[local_sector_idx];
             read_requests.push(AlignedRead::new(sector_id * self.block_size as u64, slice)?);

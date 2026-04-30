@@ -31,7 +31,7 @@ pub fn benchmark_aligned_file_reader_iai() {
     let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
     // Read the same data from disk over and over again.  We guarantee that it is not all zeros.
-    let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
+    let mut aligned_reads: Vec<AlignedRead<'_, u8, _>> = mem_slices
         .iter_mut()
         .map(|slice| AlignedRead::new(0, slice).unwrap())
         .collect();
