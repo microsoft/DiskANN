@@ -9,15 +9,12 @@ use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     forward_threadpool,
-    model::{
-        pq::{accum_row_inplace, generate_pq_pivots},
-        GeneratePivotArguments,
-    },
+    model::{pq::generate_pq_pivots, GeneratePivotArguments},
     storage::PQStorage,
     utils::{AsThreadPool, BridgeErr, Timer},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
-use diskann_utils::views::MatrixBase;
+use diskann_utils::views::{accum_row_inplace, MatrixBase};
 use diskann_vector::distance::Metric;
 use tracing::info;
 

@@ -673,6 +673,23 @@ impl<'a, T> From<MutMatrixView<'a, T>> for &'a [T] {
     }
 }
 
+/// Add the row `y` to every row in `x`.
+///
+/// # Panics
+///
+/// Panics if `y.len() != x.ncols()`.
+pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
+where
+    T: Copy + std::ops::AddAssign,
+{
+    assert_eq!(x.ncols(), y.len());
+    x.row_iter_mut().for_each(|row| {
+        std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
+            *a += *b;
+        });
+    });
+}
+
 /// Return a reference to the item at entry `(row, col)` in the matrix.
 ///
 /// # Panics

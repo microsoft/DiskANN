@@ -87,7 +87,7 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_providers::model::pq::calculate_chunk_offsets_auto(
+            let offsets = diskann_quantization::views::calculate_chunk_offsets_auto(
                 data.ncols(),
                 input.num_pq_chunks.get(),
             );

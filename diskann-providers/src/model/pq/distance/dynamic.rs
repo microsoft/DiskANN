@@ -101,25 +101,6 @@ where
     }
 }
 
-impl<T> PreprocessedDistanceFunction<&Vec<u8>, f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &Vec<u8>) -> f32 {
-        self.evaluate_similarity(changing.as_slice())
-    }
-}
-
-impl<T> PreprocessedDistanceFunction<&&[u8], f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &&[u8]) -> f32 {
-        let changing: &[u8] = changing;
-        self.evaluate_similarity(changing)
-    }
-}
-
 /// Pre-dispatched distance functions for the `FixedChunkPQTable`.
 #[derive(Debug)]
 pub struct VTable {
@@ -230,52 +211,6 @@ where
         assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
         assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
         (self.vtable.distance_fn_qq)(&self.table, q0, q1)
-    }
-}
-
-/// Perform a comparison between a full-precision vector and quantized vector.
-impl<T> DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    #[inline(always)]
-    fn evaluate_similarity(&self, fp: &[f32], q: &&[u8]) -> f32 {
-        let q: &[u8] = q;
-        self.evaluate_similarity(fp, q)
-    }
-}
-
-impl<T> DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    #[inline(always)]
-    fn evaluate_similarity(&self, fp: &[f32], q: &Vec<u8>) -> f32 {
-        self.evaluate_similarity(fp, q.as_slice())
-    }
-}
-
-/// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    #[inline(always)]
-    fn evaluate_similarity(&self, q0: &&[u8], q1: &&[u8]) -> f32 {
-        let q0: &[u8] = q0;
-        let q1: &[u8] = q1;
-        self.evaluate_similarity(q0, q1)
-    }
-}
-
-/// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&Vec<u8>, &Vec<u8>, f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    #[inline(always)]
-    fn evaluate_similarity(&self, q0: &Vec<u8>, q1: &Vec<u8>) -> f32 {
-        self.evaluate_similarity(q0.as_slice(), q1.as_slice())
     }
 }
 

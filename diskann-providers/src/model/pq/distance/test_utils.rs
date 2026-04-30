@@ -13,7 +13,8 @@ use diskann_vector::{
 use rand::{Rng, distr::Distribution};
 use rand_distr::{Normal, Uniform};
 
-use crate::model::{FixedChunkPQTable, pq::calculate_chunk_offsets_auto};
+use crate::model::FixedChunkPQTable;
+use diskann_quantization::views::calculate_chunk_offsets_auto;
 
 /// We need a way to generate random queries.
 ///
