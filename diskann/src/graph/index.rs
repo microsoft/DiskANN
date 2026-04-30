@@ -103,6 +103,14 @@ pub struct DegreeStats {
     pub cnt_less_than_two: usize, // Number of vertices with degree less than 2
 }
 
+#[cfg(test)]
+crate::test::cmp::verbose_eq!(DegreeStats {
+    max_degree,
+    avg_degree,
+    min_degree,
+    cnt_less_than_two,
+});
+
 /// Statistics collected during a search operation.
 ///
 /// This struct provides detailed metrics about the search process, including
@@ -3171,16 +3179,7 @@ struct BatchIdMismatch {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::test::cmp::verbose_eq;
-
-    verbose_eq!(DegreeStats {
-        max_degree,
-        avg_degree,
-        min_degree,
-        cnt_less_than_two,
-    });
 
     #[test]
     fn query_label_provider_on_visit_default() {
