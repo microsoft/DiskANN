@@ -17,9 +17,8 @@ use diskann_benchmark_runner::{
     utils::MicroSeconds,
     Any,
 };
-use diskann_providers::model::graph::provider::async_::inmem;
 use diskann_quantization::multi_vector::{distance::Chamfer, Mat, Standard};
-use diskann_vector::{distance::InnerProduct, PureDistanceFunction};
+use diskann_vector::PureDistanceFunction;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Serialize;

@@ -31,6 +31,10 @@ use crate::{
     utils::datafiles,
 };
 
+/// The distance metric used for multi-vector search (inner product for mean-pooled vectors).
+#[cfg(feature = "spherical-quantization")]
+const METRIC: diskann_vector::distance::Metric = diskann_vector::distance::Metric::InnerProduct;
+
 ////////////////////////////
 // Benchmark Registration //
 ////////////////////////////
@@ -43,6 +47,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
             Ok(serde_json::to_value(())?)
         },
     );
+
+    spherical_rerank::register_benchmarks(benchmarks);
 }
 
 //////////////
@@ -650,5 +656,620 @@ impl From<Summary> for SearchResults {
             mean_cmps: mean_cmps as f32,
             mean_hops: mean_hops as f32,
         }
+    }
+}
+
+///////////////////////////////////
+// Spherical Rerank Benchmark    //
+///////////////////////////////////
+
+// Feature-gated module for configurable multi-vector reranking with spherical quantization.
+crate::utils::stub_impl!(
+    "spherical-quantization",
+    inputs::multi::SphericalRerankBuildAndSearch
+);
+
+mod spherical_rerank {
+    use super::*;
+
+    const NAME: &str = "multi-vector-spherical-rerank";
+
+    pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+        #[cfg(feature = "spherical-quantization")]
+        benchmarks.register::<SphericalRerankBuild<'static>>(NAME, |job, _checkpoint, output| {
+            job.run(output)?;
+            Ok(serde_json::to_value(())?)
+        });
+
+        #[cfg(not(feature = "spherical-quantization"))]
+        super::imp::register(NAME, benchmarks);
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(super) struct SphericalRerankBuild<'a> {
+        input: &'a inputs::multi::SphericalRerankBuildAndSearch,
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    impl<'a> SphericalRerankBuild<'a> {
+        fn new(input: &'a inputs::multi::SphericalRerankBuildAndSearch) -> Self {
+            Self { input }
+        }
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    impl dispatcher::Map for SphericalRerankBuild<'static> {
+        type Type<'a> = SphericalRerankBuild<'a>;
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    impl<'a> DispatchRule<&'a inputs::multi::SphericalRerankBuildAndSearch>
+        for SphericalRerankBuild<'a>
+    {
+        type Error = std::convert::Infallible;
+
+        fn try_match(
+            _from: &&'a inputs::multi::SphericalRerankBuildAndSearch,
+        ) -> Result<MatchScore, FailureScore> {
+            Ok(MatchScore(0))
+        }
+
+        fn convert(
+            from: &'a inputs::multi::SphericalRerankBuildAndSearch,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self::new(from))
+        }
+
+        fn description(
+            f: &mut std::fmt::Formatter<'_>,
+            _from: Option<&&'a inputs::multi::SphericalRerankBuildAndSearch>,
+        ) -> std::fmt::Result {
+            writeln!(
+                f,
+                "tag: \"{}\"",
+                inputs::multi::SphericalRerankBuildAndSearch::tag()
+            )
+        }
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    impl<'a> DispatchRule<&'a Any> for SphericalRerankBuild<'a> {
+        type Error = anyhow::Error;
+
+        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
+            from.try_match::<inputs::multi::SphericalRerankBuildAndSearch, Self>()
+        }
+
+        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
+            from.convert::<inputs::multi::SphericalRerankBuildAndSearch, Self>()
+        }
+
+        fn description(
+            f: &mut std::fmt::Formatter<'_>,
+            from: Option<&&'a Any>,
+        ) -> std::fmt::Result {
+            Any::description::<inputs::multi::SphericalRerankBuildAndSearch, Self>(
+                f,
+                from,
+                inputs::multi::SphericalRerankBuildAndSearch::tag(),
+            )
+        }
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    impl<'a> SphericalRerankBuild<'a> {
+        fn run(self, mut output: &mut dyn runner::Output) -> anyhow::Result<()> {
+            writeln!(output, "{}", self.input)?;
+            run_configurable(self.input, output)
+        }
+    }
+}
+
+#[cfg(feature = "spherical-quantization")]
+fn run_configurable(
+    input: &inputs::multi::SphericalRerankBuildAndSearch,
+    mut output: &mut dyn runner::Output,
+) -> anyhow::Result<()> {
+    use diskann_quantization::spherical;
+    use inputs::multi::{DistanceMethod, InnerLoopMethod, RerankMethod};
+    use rand::SeedableRng;
+
+    let spherical_cfg = input.spherical.as_ref();
+
+    // Helper: train a quantizer and build SphericalChamferData from multi-vector data.
+    let build_chamfer_data = |data: &[MultiVec<f32>],
+                              mut output: &mut dyn runner::Output|
+     -> anyhow::Result<Arc<inmem::multi::SphericalChamferData>> {
+        let cfg = spherical_cfg
+            .ok_or_else(|| anyhow::anyhow!("spherical chamfer requires `spherical` config"))?;
+
+        let dim = data.first().unwrap().vector_dim();
+        let mut training_rows: Vec<f32> = Vec::new();
+        for m in data {
+            let view = m.as_view();
+            for row in view.rows() {
+                training_rows.extend_from_slice(row);
+            }
+        }
+        let total_sub_vecs = training_rows.len() / dim;
+        let training_matrix =
+            diskann_utils::views::Matrix::try_from(training_rows.into(), total_sub_vecs, dim)?;
+
+        let metric: diskann_vector::distance::Metric = METRIC;
+        let pre_scale = match cfg.pre_scale {
+            Some(v) => v.try_into()?,
+            None => diskann_quantization::spherical::PreScale::None,
+        };
+
+        let start = std::time::Instant::now();
+        let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
+            training_matrix.as_view(),
+            (&cfg.transform_kind).into(),
+            metric.try_into()?,
+            pre_scale,
+            &mut rand::rngs::StdRng::seed_from_u64(cfg.seed),
+            diskann_quantization::alloc::GlobalAllocator,
+        )?;
+        let training_time: MicroSeconds = start.elapsed().into();
+        writeln!(
+            output,
+            "Spherical quantizer training: {}s",
+            training_time.as_seconds()
+        )?;
+
+        macro_rules! make_data {
+            ($N:literal) => {{
+                let sq_impl = spherical::iface::Impl::<$N>::new(quantizer)?;
+                Arc::new(inmem::multi::SphericalChamferData::new(sq_impl, data))
+            }};
+        }
+
+        let result = match cfg.num_bits.get() {
+            1 => make_data!(1),
+            2 => make_data!(2),
+            4 => make_data!(4),
+            n => anyhow::bail!("unsupported num_bits: {}", n),
+        };
+        Ok(result)
+    };
+
+    // --- Build the index ---
+    let index = match input.build.method {
+        DistanceMethod::MeanPool => build(&input.build, output)?,
+        DistanceMethod::SphericalChamfer => {
+            let query_layout = input.build.query_layout.ok_or_else(|| {
+                anyhow::anyhow!("spherical_chamfer build requires `query_layout` in `build`")
+            })?;
+
+            let build_data: Vec<MultiVec<f32>> =
+                datafiles::load_multi_vectors::<f32>(&input.build.data)?;
+
+            writeln!(output, "\nBuilding build-phase SphericalChamferData...")?;
+            let chamfer_data = build_chamfer_data(&build_data, output)?;
+
+            // Create provider and index (same as `build()` but with custom strategy).
+            let dim = build_data.first().unwrap().vector_dim();
+
+            let provider = inmem::DefaultProvider::<_, _, _, provider::DefaultContext>::new_empty(
+                input.build.inmem_parameters(build_data.len(), dim),
+                inmem::multi::Precursor::<f32>::new(dim),
+                inmem_common::NoStore,
+                inmem_common::NoDeletes,
+            )
+            .unwrap();
+
+            let index = Arc::new(graph::DiskANNIndex::new(
+                input.build.as_config().build()?,
+                provider,
+                None,
+            ));
+
+            let strategy =
+                inmem::multi::SphericalChamferSearch::new(chamfer_data, query_layout.into());
+
+            let builder = Insert::new(
+                index.clone(),
+                build_data.into(),
+                strategy,
+                benchmark_core::build::ids::Identity::new(),
+            );
+
+            let rt = benchmark_core::tokio::runtime(input.build.num_threads.get())?;
+            let _ = benchmark_core::build::build_tracked(
+                builder,
+                benchmark_core::build::Parallelism::dynamic(
+                    diskann::utils::ONE,
+                    input.build.num_threads,
+                ),
+                &rt,
+                Some(&super::build::ProgressMeter::new(output)),
+            )?;
+
+            index
+        }
+    };
+
+    let queries: Arc<[_]> = datafiles::load_multi_vectors::<f32>(&input.search.queries)?.into();
+    let gt = datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+
+    let steps = knn::SearchSteps::new(
+        input.search.reps,
+        &input.search.num_threads,
+        &input.search.runs,
+    );
+
+    // If all three stages use defaults, use the legacy `MultiKNN` path.
+    if matches!(input.build.method, DistanceMethod::MeanPool)
+        && matches!(input.inner_loop, InnerLoopMethod::MeanPool)
+        && matches!(input.rerank, RerankMethod::Chamfer)
+    {
+        let searcher = MultiKNN::new(
+            index.clone(),
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(inmem::multi::Strategy::new()),
+        )?;
+        let summaries = knn::run(&searcher, &gt, steps)?;
+        let results: Vec<_> = summaries.into_iter().map(SearchResults::from).collect();
+        writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
+        return Ok(());
+    }
+
+    // --- Build inner-loop config ---
+    let inner_loop = match &input.inner_loop {
+        InnerLoopMethod::MeanPool => InnerLoop::MeanPool,
+        InnerLoopMethod::SphericalChamfer {
+            data: inner_data_path,
+            query_data,
+            query_layout,
+        } => {
+            let inner_data: Vec<MultiVec<f32>> = match inner_data_path {
+                Some(path) => datafiles::load_multi_vectors::<f32>(path)?,
+                None => datafiles::load_multi_vectors::<f32>(&input.build.data)?,
+            };
+            let inner_queries: Option<Arc<[_]>> = query_data
+                .as_ref()
+                .map(|qd| datafiles::load_multi_vectors::<f32>(qd))
+                .transpose()?
+                .map(|v| v.into());
+
+            writeln!(output, "\nBuilding inner-loop SphericalChamferData...")?;
+            let chamfer_data = build_chamfer_data(&inner_data, output)?;
+
+            InnerLoop::SphericalChamfer {
+                data: chamfer_data,
+                inner_queries,
+                layout: (*query_layout).into(),
+            }
+        }
+    };
+
+    // --- Build reranker config and run ---
+    match &input.rerank {
+        RerankMethod::Chamfer => {
+            // Chamfer rerank with non-default inner loop (MeanPool+Chamfer handled above).
+            // SphericalChamferAccessor doesn't have Store access for in-index Chamfer,
+            // so we fall back to sideloading the build data for reranking.
+            let build_data: Arc<[_]> =
+                datafiles::load_multi_vectors::<f32>(&input.build.data)?.into();
+            let reranker = MultiReranker::SideloadedChamfer {
+                data: build_data,
+                rerank_queries: None,
+            };
+            let searcher = ConfigurableMultiKNN::new(index.clone(), queries, inner_loop, reranker)?;
+            let summaries = knn::run(&searcher, &gt, steps)?;
+            let results: Vec<_> = summaries.into_iter().map(SearchResults::from).collect();
+            writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
+        }
+
+        RerankMethod::SideloadedChamfer { data, query_data } => {
+            let rerank_data: Arc<[_]> = datafiles::load_multi_vectors::<f32>(data)?.into();
+            let rerank_queries: Option<Arc<[_]>> = query_data
+                .as_ref()
+                .map(|qd| datafiles::load_multi_vectors::<f32>(qd))
+                .transpose()?
+                .map(|v| v.into());
+
+            let reranker = MultiReranker::SideloadedChamfer {
+                data: rerank_data,
+                rerank_queries,
+            };
+            let searcher = ConfigurableMultiKNN::new(index.clone(), queries, inner_loop, reranker)?;
+            let summaries = knn::run(&searcher, &gt, steps)?;
+            let results: Vec<_> = summaries.into_iter().map(SearchResults::from).collect();
+            writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
+        }
+
+        RerankMethod::SphericalChamfer {
+            data: rerank_data_path,
+            query_data,
+            query_layouts,
+        } => {
+            let rerank_data: Vec<MultiVec<f32>> = match rerank_data_path {
+                Some(path) => datafiles::load_multi_vectors::<f32>(path)?,
+                None => datafiles::load_multi_vectors::<f32>(&input.build.data)?,
+            };
+            let rerank_queries: Option<Arc<[_]>> = query_data
+                .as_ref()
+                .map(|qd| datafiles::load_multi_vectors::<f32>(qd))
+                .transpose()?
+                .map(|v| v.into());
+
+            writeln!(output, "\nBuilding rerank SphericalChamferData...")?;
+            let chamfer_data = build_chamfer_data(&rerank_data, output)?;
+
+            for &layout in query_layouts {
+                let reranker = MultiReranker::QuantizedChamfer {
+                    data: chamfer_data.clone(),
+                    rerank_queries: rerank_queries.clone(),
+                    layout: layout.into(),
+                };
+                // Clone inner_loop data references for each layout iteration.
+                let il = match &inner_loop {
+                    InnerLoop::MeanPool => InnerLoop::MeanPool,
+                    InnerLoop::SphericalChamfer {
+                        data,
+                        inner_queries,
+                        layout,
+                    } => InnerLoop::SphericalChamfer {
+                        data: data.clone(),
+                        inner_queries: inner_queries.clone(),
+                        layout: *layout,
+                    },
+                };
+                let searcher =
+                    ConfigurableMultiKNN::new(index.clone(), queries.clone(), il, reranker)?;
+
+                writeln!(output, "\nRerank query layout: {}", layout)?;
+                let summaries = knn::run(&searcher, &gt, steps)?;
+                let results: Vec<_> = summaries.into_iter().map(SearchResults::from).collect();
+                writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
+            }
+        }
+
+        RerankMethod::None => {
+            let reranker = MultiReranker::PassThrough;
+            let searcher = ConfigurableMultiKNN::new(index.clone(), queries, inner_loop, reranker)?;
+            let summaries = knn::run(&searcher, &gt, steps)?;
+            let results: Vec<_> = summaries.into_iter().map(SearchResults::from).collect();
+            writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
+        }
+    }
+
+    Ok(())
+}
+
+///////////////////////////////
+// Configurable Multi-Vector //
+///////////////////////////////
+
+/// Inner-loop strategy for [`ConfigurableMultiKNN`].
+#[cfg(feature = "spherical-quantization")]
+enum InnerLoop {
+    /// Mean-pooled inner product (default). Uses the index's built-in mean-pooled vectors.
+    MeanPool,
+    /// Spherical-quantized Chamfer distance over compressed sub-vectors.
+    SphericalChamfer {
+        data: Arc<inmem::multi::SphericalChamferData>,
+        inner_queries: Option<Arc<[MultiVec<f32>]>>,
+        layout: diskann_quantization::spherical::iface::QueryLayout,
+    },
+}
+
+/// Reranking strategy for [`ConfigurableMultiKNN`].
+///
+/// Each variant captures the data and configuration needed for a specific reranking method.
+#[cfg(feature = "spherical-quantization")]
+enum MultiReranker {
+    /// Spherical-quantized Chamfer distance using pre-compressed sub-vectors.
+    QuantizedChamfer {
+        data: Arc<inmem::multi::SphericalChamferData>,
+        rerank_queries: Option<Arc<[MultiVec<f32>]>>,
+        layout: diskann_quantization::spherical::iface::QueryLayout,
+    },
+    /// Full-precision Chamfer distance using a separate (side-loaded) multi-vector set.
+    SideloadedChamfer {
+        data: Arc<[MultiVec<f32>]>,
+        rerank_queries: Option<Arc<[MultiVec<f32>]>>,
+    },
+    /// No reranking — pass through first-stage candidate ordering.
+    PassThrough,
+}
+
+/// A multi-vector KNN searcher with configurable reranking.
+///
+/// The first-stage search always uses mean-pooled vectors via [`inmem::multi::Strategy`].
+/// The reranking stage is determined by the [`MultiReranker`] variant.
+#[cfg(feature = "spherical-quantization")]
+struct ConfigurableMultiKNN {
+    index: Arc<DiskANNIndex<inmem::multi::Provider<f32>>>,
+    queries: Arc<[MultiVec<f32>]>,
+    inner_loop: InnerLoop,
+    reranker: MultiReranker,
+}
+
+#[cfg(feature = "spherical-quantization")]
+impl ConfigurableMultiKNN {
+    fn new(
+        index: Arc<DiskANNIndex<inmem::multi::Provider<f32>>>,
+        queries: Arc<[MultiVec<f32>]>,
+        inner_loop: InnerLoop,
+        reranker: MultiReranker,
+    ) -> anyhow::Result<Arc<Self>> {
+        // Validate rerank query lengths if provided.
+        match &reranker {
+            MultiReranker::QuantizedChamfer {
+                rerank_queries: Some(rq),
+                ..
+            }
+            | MultiReranker::SideloadedChamfer {
+                rerank_queries: Some(rq),
+                ..
+            } => {
+                if rq.len() != queries.len() {
+                    anyhow::bail!(
+                        "rerank queries length ({}) must match search queries length ({})",
+                        rq.len(),
+                        queries.len()
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            inner_loop,
+            reranker,
+        }))
+    }
+}
+
+#[cfg(feature = "spherical-quantization")]
+impl benchmark_core::search::Search for ConfigurableMultiKNN {
+    type Id = u32;
+    type Parameters = graph::search::Knn;
+    type Output = SearchMetrics;
+
+    fn num_queries(&self) -> usize {
+        self.queries.len()
+    }
+
+    fn id_count(&self, parameters: &Self::Parameters) -> benchmark_core::search::IdCount {
+        benchmark_core::search::IdCount::Fixed(parameters.k_value())
+    }
+
+    async fn search<O>(
+        &self,
+        kind: &Self::Parameters,
+        buffer: &mut O,
+        index: usize,
+    ) -> ANNResult<Self::Output>
+    where
+        O: graph::SearchOutputBuffer<u32> + Send,
+    {
+        let context = provider::DefaultContext;
+        let rerank_micros = Arc::new(AtomicU64::new(0));
+        let query = self.queries[index].as_view();
+
+        // Select the inner-loop query (may differ from the rerank/search query).
+        let inner_query = match &self.inner_loop {
+            InnerLoop::SphericalChamfer {
+                inner_queries: Some(iq),
+                ..
+            } => iq[index].as_view(),
+            _ => query,
+        };
+
+        // Helper macro: dispatch reranker with a given strategy, using `inner_query`
+        // for first-stage and `query` for the reranker.
+        macro_rules! dispatch_rerank {
+            ($strategy:expr) => {
+                match &self.reranker {
+                    MultiReranker::QuantizedChamfer {
+                        data,
+                        rerank_queries,
+                        layout,
+                    } => {
+                        let rq = rerank_queries
+                            .as_ref()
+                            .map(|q| q[index].as_view())
+                            .unwrap_or(query);
+                        let reranker =
+                            inmem::multi::QuantizedChamferRerank::new(data.clone(), rq, *layout);
+                        let processor = TimedPostProcessor::new(
+                            glue::Pipeline::new(glue::FilterStartPoints, reranker),
+                            Arc::clone(&rerank_micros),
+                        );
+                        self.index
+                            .search_with(
+                                *kind,
+                                &$strategy,
+                                processor,
+                                &context,
+                                inner_query,
+                                buffer,
+                            )
+                            .await?
+                    }
+                    MultiReranker::SideloadedChamfer {
+                        data,
+                        rerank_queries,
+                    } => {
+                        let rq = rerank_queries
+                            .as_ref()
+                            .map(|q| q[index].clone())
+                            .unwrap_or_else(|| self.queries[index].clone());
+                        let reranker = inmem::multi::SideloadedChamferRerank::new(data.clone(), rq);
+                        let processor = TimedPostProcessor::new(
+                            glue::Pipeline::new(glue::FilterStartPoints, reranker),
+                            Arc::clone(&rerank_micros),
+                        );
+                        self.index
+                            .search_with(
+                                *kind,
+                                &$strategy,
+                                processor,
+                                &context,
+                                inner_query,
+                                buffer,
+                            )
+                            .await?
+                    }
+                    MultiReranker::PassThrough => {
+                        let processor = TimedPostProcessor::new(
+                            glue::Pipeline::new(glue::FilterStartPoints, glue::CopyIds),
+                            Arc::clone(&rerank_micros),
+                        );
+                        self.index
+                            .search_with(
+                                *kind,
+                                &$strategy,
+                                processor,
+                                &context,
+                                inner_query,
+                                buffer,
+                            )
+                            .await?
+                    }
+                }
+            };
+        }
+
+        let stats = match &self.inner_loop {
+            InnerLoop::MeanPool => {
+                let strategy = inmem::multi::Strategy::new();
+                dispatch_rerank!(strategy)
+            }
+            InnerLoop::SphericalChamfer { data, layout, .. } => {
+                let strategy = inmem::multi::SphericalChamferSearch::new(data.clone(), *layout);
+                dispatch_rerank!(strategy)
+            }
+        };
+
+        Ok(SearchMetrics {
+            comparisons: stats.cmps,
+            hops: stats.hops,
+            rerank_latency: MicroSeconds::new(rerank_micros.load(Ordering::Relaxed)),
+        })
+    }
+}
+
+#[cfg(feature = "spherical-quantization")]
+impl knn::Knn<u32> for Arc<ConfigurableMultiKNN> {
+    fn search_all(
+        &self,
+        parameters: Vec<benchmark_core::search::Run<graph::search::Knn>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<u32>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>> {
+        let results = benchmark_core::search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            Aggregator::new(groundtruth, recall_k, recall_n),
+        )?;
+
+        Ok(results.into_iter().map(SearchResults::from).collect())
     }
 }
