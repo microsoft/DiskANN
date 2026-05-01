@@ -188,7 +188,7 @@ pub trait CheckDeserialization {
 mod tests {
     use super::*;
 
-    use std::fs::{create_dir, File};
+    use std::fs::{File, create_dir};
 
     #[test]
     fn test_constructor() {

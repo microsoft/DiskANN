@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
 
 /// A helper to generate incremental snapshots of data while a benchmark is progressing.
 ///

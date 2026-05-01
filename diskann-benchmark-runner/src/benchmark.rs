@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    dispatcher::{FailureScore, MatchScore},
     Any, Checkpoint, Input, Output,
+    dispatcher::{FailureScore, MatchScore},
 };
 
 /// A registered benchmark.

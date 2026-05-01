@@ -3,14 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 
 use thiserror::Error;
 
 use crate::{
+    Any, Checkpoint, Input, Output,
     benchmark::{self, Benchmark, Regression},
     dispatcher::{FailureScore, MatchScore},
-    input, Any, Checkpoint, Input, Output,
+    input,
 };
 
 /// A collection of [`crate::Input`].

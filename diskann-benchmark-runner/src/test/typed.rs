@@ -8,10 +8,10 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
     benchmark::{PassFail, Regression},
     dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
     utils::datatype::{DataType, Type},
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
 };
 
 ///////////

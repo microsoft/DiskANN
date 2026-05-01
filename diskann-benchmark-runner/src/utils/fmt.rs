@@ -239,33 +239,47 @@ impl std::fmt::Display for Indent<'_> {
 /// The `last` parameter allows a different delimiter before the final item (e.g., `", and "`),
 /// which is useful for natural-language lists like `"a, b, and c"`.
 ///
+/// Finally, the `pair` parameter allows custom formatting when there are only two items.
+///
 /// # Examples
 ///
 /// ```
 /// use diskann_benchmark_runner::utils::fmt::Delimit;
 ///
-/// let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "));
+/// let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "), None);
 /// assert_eq!(d.to_string(), "a, b, and c");
+///
+/// let d = Delimit::new(["a", "b"], ", ", Some(", and "), None);
+/// assert_eq!(d.to_string(), "a, and b");
+///
+/// let d = Delimit::new(["a", "b"], ", ", Some(", and "), Some(" and "));
+/// assert_eq!(d.to_string(), "a and b");
 /// ```
 pub struct Delimit<'a, I> {
     itr: std::cell::Cell<Option<I>>,
     delimiter: &'a str,
     last: Option<&'a str>,
+    pair: Option<&'a str>,
 }
 
 impl<'a, I> Delimit<'a, I> {
     /// Create a new [`Delimit`] from an iterable, a delimiter, and an optional last delimiter.
     ///
     /// If `last` is `None`, the regular `delimiter` is used before the final item.
+    ///
+    /// If provided, `pair` will be used as the delimiter if the length of `itr` is 2. If
+    /// not supplied then `last` is used if available. Otherwise, `delimiter` is used.
     pub fn new(
         itr: impl IntoIterator<IntoIter = I>,
         delimiter: &'a str,
         last: Option<&'a str>,
+        pair: Option<&'a str>,
     ) -> Self {
         Self {
             itr: std::cell::Cell::new(Some(itr.into_iter())),
             delimiter,
             last,
+            pair,
         }
     }
 }
@@ -279,7 +293,7 @@ where
             return write!(f, "<missing>");
         };
 
-        let mut first = true;
+        let mut count = 0;
         let mut current = if let Some(item) = itr.next() {
             item
         } else {
@@ -291,10 +305,17 @@ where
             match itr.next() {
                 None => {
                     // "current" is the last item. If it is also the first, we write it
-                    // directly. Otherwise, we use the "last" delimiter if available, falling
-                    // back to "delimiter".
-                    let delimiter = if first {
+                    // directly.
+                    //
+                    // Otherwise, we check if we've just emitted a single item so far and
+                    // use `pair` if available. Otherwise, we try `last` and finally
+                    // `delimiter`.
+                    let delimiter = if count == 0 {
                         ""
+                    } else if count == 1
+                        && let Some(pair) = self.pair
+                    {
+                        pair
                     } else if let Some(last) = self.last {
                         last
                     } else {
@@ -305,14 +326,10 @@ where
                 }
                 Some(next) => {
                     // There is at least one item next. We print "current" and move on.
-                    let delimiter = if first {
-                        first = false;
-                        ""
-                    } else {
-                        self.delimiter
-                    };
+                    let delimiter = if count == 0 { "" } else { self.delimiter };
 
                     write!(f, "{}{}", delimiter, current)?;
+                    count += 1;
                     current = next;
                 }
             }
@@ -511,37 +528,43 @@ string,        ,   string
 
     #[test]
     fn test_delimit_empty() {
-        let d = Delimit::new(std::iter::empty::<&str>(), ", ", None);
+        let d = Delimit::new(std::iter::empty::<&str>(), ", ", None, None);
         assert_eq!(d.to_string(), "");
     }
 
     #[test]
     fn test_delimit_single_item() {
-        let d = Delimit::new(["a"], ", ", Some(", and "));
+        let d = Delimit::new(["a"], ", ", Some(", and "), None);
         assert_eq!(d.to_string(), "a");
     }
 
     #[test]
     fn test_delimit_two_items_with_last() {
-        let d = Delimit::new(["a", "b"], ", ", Some(", and "));
+        let d = Delimit::new(["a", "b"], ", ", Some(", and "), None);
         assert_eq!(d.to_string(), "a, and b");
     }
 
     #[test]
+    fn test_delimit_two_items_with_pair() {
+        let d = Delimit::new(["a", "b"], ", ", Some(", and "), Some(" and "));
+        assert_eq!(d.to_string(), "a and b");
+    }
+
+    #[test]
     fn test_delimit_three_items_with_last() {
-        let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "));
+        let d = Delimit::new(["a", "b", "c"], ", ", Some(", and "), Some(" and "));
         assert_eq!(d.to_string(), "a, b, and c");
     }
 
     #[test]
     fn test_delimit_without_last() {
-        let d = Delimit::new(["x", "y", "z"], " | ", None);
+        let d = Delimit::new(["x", "y", "z"], " | ", None, None);
         assert_eq!(d.to_string(), "x | y | z");
     }
 
     #[test]
     fn test_delimit_second_display_prints_missing() {
-        let d = Delimit::new(["a", "b"], ", ", None);
+        let d = Delimit::new(["a", "b"], ", ", None, None);
         assert_eq!(d.to_string(), "a, b");
         assert_eq!(d.to_string(), "<missing>");
     }
@@ -558,7 +581,12 @@ string,        ,   string
 
     #[test]
     fn test_delimit_with_quote() {
-        let d = Delimit::new(["topk", "range"].iter().map(Quote), ", ", Some(", and "));
-        assert_eq!(d.to_string(), "\"topk\", and \"range\"");
+        let d = Delimit::new(
+            ["topk", "range"].iter().map(Quote),
+            ", ",
+            Some(", and "),
+            Some(" and "),
+        );
+        assert_eq!(d.to_string(), "\"topk\" and \"range\"");
     }
 }

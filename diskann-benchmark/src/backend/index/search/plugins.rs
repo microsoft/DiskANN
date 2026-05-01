@@ -103,7 +103,7 @@ where
 
     /// Return a human readable, formatted list of the registered [`SearchPhaseKind`]s.
     pub(crate) fn format_kinds(&self) -> impl std::fmt::Display + use<'_, DP, P> {
-        Delimit::new(self.kinds().map(Quote), ", ", Some(", and "))
+        Delimit::new(self.kinds().map(Quote), ", ", Some(", and "), Some(" and "))
     }
 
     /// Try to run a search plugin for `phase`.
