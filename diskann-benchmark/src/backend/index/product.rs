@@ -63,7 +63,7 @@ mod imp {
             result::{BuildResult, QuantBuildResult},
             search::plugins,
         },
-        inputs::async_::{IndexPQOperation, IndexSource},
+        inputs::async_::{IndexPQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 
@@ -89,8 +89,8 @@ mod imp {
     where
         T: VectorRepr,
     {
-        quant_search: plugins::Plugins<PQProvider<T>, Strategy<common::Hybrid>>,
-        full_search: plugins::Plugins<PQProvider<T>, Strategy<common::FullPrecision>>,
+        quant_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>,
+        full_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
     }
 
     impl<T> ProductQuantized<T>
@@ -106,8 +106,8 @@ mod imp {
 
         pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
-            P: plugins::Plugin<PQProvider<T>, Strategy<common::Hybrid>>
-                + plugins::Plugin<PQProvider<T>, Strategy<common::FullPrecision>>
+            P: plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>
+                + plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
                 + Clone
                 + 'static,
         {
@@ -132,7 +132,7 @@ mod imp {
 
             if self
                 .quant_search
-                .is_match(input.index_operation.search_phase.kind())
+                .is_match(&input.index_operation.search_phase)
             {
                 score
             } else {
@@ -162,7 +162,7 @@ mod imp {
 
                     if !self
                         .quant_search
-                        .is_match(arg.index_operation.search_phase.kind())
+                        .is_match(&arg.index_operation.search_phase)
                     {
                         writeln!(
                             f,
@@ -264,14 +264,14 @@ mod imp {
             let search = if input.use_fp_for_search {
                 self.full_search.run(
                     index,
-                    &Strategy::new(common::FullPrecision),
                     &input.index_operation.search_phase,
+                    &Strategy::new(common::FullPrecision),
                 )?
             } else {
                 self.quant_search.run(
                     index,
-                    &Strategy::new(hybrid),
                     &input.index_operation.search_phase,
+                    &Strategy::new(hybrid),
                 )?
             };
 

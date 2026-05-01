@@ -425,7 +425,7 @@ pub(crate) enum SearchPhaseKind {
 }
 
 impl SearchPhaseKind {
-    fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Topk => "topk",
             Self::Range => "range",

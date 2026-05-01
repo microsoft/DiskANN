@@ -85,7 +85,7 @@ mod imp {
             search,
         },
         inputs::{
-            async_::{SearchPhase, SearchPhaseKind, SphericalQuantBuild},
+            async_::{SearchPhase, SphericalQuantBuild},
             exhaustive,
         },
         utils::{
@@ -108,7 +108,7 @@ mod imp {
     /// A [`Benchmark`] for spherical-quantized searches containing a dynamic list of search
     /// types.
     pub(super) struct SphericalQ<const NBITS: usize> {
-        search: search::plugins::Plugins<SQProvider, exhaustive::SphericalQuery>,
+        search: search::plugins::Plugins<SQProvider, SearchPhase, exhaustive::SphericalQuery>,
     }
 
     impl<const NBITS: usize> SphericalQ<NBITS> {
@@ -120,7 +120,8 @@ mod imp {
 
         pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
-            P: search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> + 'static,
+            P: search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+                + 'static,
         {
             self.search.register(plugin);
             self
@@ -194,7 +195,7 @@ mod imp {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    if !self.search.is_match(input.search_phase.kind()) {
+                    if !self.search.is_match(&input.search_phase) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -250,7 +251,7 @@ mod imp {
                                 )?;
                             }
 
-                            if !self.search.is_match(input.search_phase.kind()) {
+                            if !self.search.is_match(&input.search_phase) {
                                 writeln!(
                                     f,
                                     "- Unsupported search phase: \"{}\" - expected one of {}",
@@ -339,7 +340,7 @@ mod imp {
                     for layout in input.query_layouts.iter() {
                         let search = self
                             .search
-                            .run(index.clone(), layout, &input.search_phase)?;
+                            .run(index.clone(), &input.search_phase, layout)?;
                         result.append(SearchRun {
                             layout: *layout,
                             results: search,
@@ -357,16 +358,22 @@ mod imp {
     build_and_search!(2);
     build_and_search!(4);
 
-    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> for search::plugins::Topk {
-        fn kind(&self) -> SearchPhaseKind {
-            Self::kind()
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::Topk
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            Self::kind() == phase.kind()
         }
 
-        fn search(
+        fn kind(&self) -> &'static str {
+            Self::kind().as_str()
+        }
+
+        fn run(
             &self,
             index: Arc<DiskANNIndex<SQProvider>>,
-            query_layout: &exhaustive::SphericalQuery,
             phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
         ) -> anyhow::Result<AggregatedSearchResults> {
             let topk = phase.as_topk()?;
 
@@ -390,16 +397,22 @@ mod imp {
         }
     }
 
-    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery> for search::plugins::Range {
-        fn kind(&self) -> SearchPhaseKind {
-            Self::kind()
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::Range
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            Self::kind() == phase.kind()
         }
 
-        fn search(
+        fn kind(&self) -> &'static str {
+            Self::kind().as_str()
+        }
+
+        fn run(
             &self,
             index: Arc<DiskANNIndex<SQProvider>>,
-            query_layout: &exhaustive::SphericalQuery,
             phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
         ) -> anyhow::Result<AggregatedSearchResults> {
             let range = phase.as_range()?;
 
@@ -426,18 +439,22 @@ mod imp {
         }
     }
 
-    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery>
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
         for search::plugins::BetaFilter
     {
-        fn kind(&self) -> SearchPhaseKind {
-            Self::kind()
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            Self::kind() == phase.kind()
         }
 
-        fn search(
+        fn kind(&self) -> &'static str {
+            Self::kind().as_str()
+        }
+
+        fn run(
             &self,
             index: Arc<DiskANNIndex<SQProvider>>,
-            query_layout: &exhaustive::SphericalQuery,
             phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
         ) -> anyhow::Result<AggregatedSearchResults> {
             let betafilter = phase.as_topk_beta_filter()?;
 
@@ -476,18 +493,22 @@ mod imp {
         }
     }
 
-    impl search::plugins::Plugin<SQProvider, exhaustive::SphericalQuery>
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
         for search::plugins::MultihopFilter
     {
-        fn kind(&self) -> SearchPhaseKind {
-            Self::kind()
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            Self::kind() == phase.kind()
         }
 
-        fn search(
+        fn kind(&self) -> &'static str {
+            Self::kind().as_str()
+        }
+
+        fn run(
             &self,
             index: Arc<DiskANNIndex<SQProvider>>,
-            query_layout: &exhaustive::SphericalQuery,
             phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
         ) -> anyhow::Result<AggregatedSearchResults> {
             let multihop = phase.as_topk_multihop_filter()?;
 

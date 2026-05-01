@@ -45,9 +45,7 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{
-        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind,
-    },
+    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
         self,
         datafiles::{self},
@@ -143,7 +141,8 @@ struct FullPrecision<T>
 where
     T: VectorRepr,
 {
-    plugins: plugins::Plugins<FullPrecisionProvider<T>, Strategy<common::FullPrecision>>,
+    plugins:
+        plugins::Plugins<FullPrecisionProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
 }
 
 impl<T> FullPrecision<T>
@@ -158,7 +157,8 @@ where
 
     fn search<P>(mut self, plugin: P) -> Self
     where
-        P: plugins::Plugin<FullPrecisionProvider<T>, Strategy<common::FullPrecision>> + 'static,
+        P: plugins::Plugin<FullPrecisionProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
+            + 'static,
     {
         self.plugins.register(plugin);
         self
@@ -177,7 +177,7 @@ where
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
         let score = datatype::Type::<T>::try_match(input.source.data_type());
-        if self.plugins.is_match(input.search_phase.kind()) {
+        if self.plugins.is_match(&input.search_phase) {
             score
         } else {
             match score {
@@ -206,7 +206,7 @@ where
                     Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
                 )?;
 
-                if !self.plugins.is_match(arg.search_phase.kind()) {
+                if !self.plugins.is_match(&arg.search_phase) {
                     writeln!(
                         f,
                         "Unsupported search phase: \"{}\" - expected one of {}",
@@ -280,8 +280,8 @@ where
 
         let search_results = self.plugins.run(
             index,
-            &Strategy::new(common::FullPrecision),
             &input.search_phase,
+            &Strategy::new(common::FullPrecision),
         )?;
 
         let result = BuildResult::new(build_stats, search_results);
@@ -448,20 +448,24 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
-impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::Topk
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
-    fn kind(&self) -> SearchPhaseKind {
-        Self::kind()
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
     }
 
-    fn search(
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        strategy: &Strategy<S>,
         phase: &SearchPhase,
+        strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let topk = phase.as_topk()?;
 
@@ -487,20 +491,24 @@ where
 // Range //
 //-------//
 
-impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::Range
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
-    fn kind(&self) -> SearchPhaseKind {
-        Self::kind()
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
     }
 
-    fn search(
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        strategy: &Strategy<S>,
         phase: &SearchPhase,
+        strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let range = phase.as_range()?;
         let queries: Arc<Matrix<DP::Element>> =
@@ -527,20 +535,24 @@ where
 // BetaFilter //
 //------------//
 
-impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::BetaFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::BetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
-    fn kind(&self) -> SearchPhaseKind {
-        Self::kind()
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
     }
 
-    fn search(
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        strategy: &Strategy<S>,
         phase: &SearchPhase,
+        strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let beta_filter = phase.as_topk_beta_filter()?;
 
@@ -582,20 +594,24 @@ where
 // MultihopFilter //
 //----------------//
 
-impl<DP, S> search::Plugin<DP, Strategy<S>> for plugins::MultihopFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::MultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
-    fn kind(&self) -> SearchPhaseKind {
-        Self::kind()
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
     }
 
-    fn search(
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        strategy: &Strategy<S>,
         phase: &SearchPhase,
+        strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
         let multihop = phase.as_topk_multihop_filter()?;
 

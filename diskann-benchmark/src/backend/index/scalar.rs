@@ -92,7 +92,7 @@ mod imp {
             result::{BuildResult, QuantBuildResult},
             search::plugins,
         },
-        inputs::async_::{IndexSQOperation, IndexSource},
+        inputs::async_::{IndexSQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 
@@ -118,8 +118,10 @@ mod imp {
     where
         T: VectorRepr,
     {
-        quant_search: plugins::Plugins<SQProvider<NBITS, T>, Strategy<common::Quantized>>,
-        full_search: plugins::Plugins<SQProvider<NBITS, T>, Strategy<common::FullPrecision>>,
+        quant_search:
+            plugins::Plugins<SQProvider<NBITS, T>, SearchPhase, Strategy<common::Quantized>>,
+        full_search:
+            plugins::Plugins<SQProvider<NBITS, T>, SearchPhase, Strategy<common::FullPrecision>>,
     }
 
     impl<const NBITS: usize, T> ScalarQuantized<NBITS, T>
@@ -135,8 +137,8 @@ mod imp {
 
         pub(super) fn search<P>(mut self, plugin: P) -> Self
         where
-            P: plugins::Plugin<SQProvider<NBITS, T>, Strategy<common::Quantized>>
-                + plugins::Plugin<SQProvider<NBITS, T>, Strategy<common::FullPrecision>>
+            P: plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::Quantized>>
+                + plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::FullPrecision>>
                 + Clone
                 + 'static,
         {
@@ -169,7 +171,7 @@ mod imp {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    if !self.quant_search.is_match(input.index_operation.search_phase.kind()) {
+                    if !self.quant_search.is_match(&input.index_operation.search_phase) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -233,7 +235,7 @@ mod imp {
                                 }
                             }
 
-                            if !self.quant_search.is_match(input.index_operation.search_phase.kind()) {
+                            if !self.quant_search.is_match(&input.index_operation.search_phase) {
                                 writeln!(
                                     f,
                                     "- Unsupported search phase: \"{}\" - expected one of {}",
@@ -322,14 +324,14 @@ mod imp {
                     let search = if input.use_fp_for_search {
                         self.full_search.run(
                             index,
-                            &Strategy::new(common::FullPrecision),
                             &input.index_operation.search_phase,
+                            &Strategy::new(common::FullPrecision),
                         )?
                     } else {
                         self.quant_search.run(
                             index,
-                            &Strategy::new(common::Quantized),
                             &input.index_operation.search_phase,
+                            &Strategy::new(common::Quantized),
                         )?
                     };
 

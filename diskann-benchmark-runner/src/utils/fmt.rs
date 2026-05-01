@@ -252,7 +252,7 @@ impl std::fmt::Display for Indent<'_> {
 /// assert_eq!(d.to_string(), "a, b, and c");
 ///
 /// let d = Delimit::new(["a", "b"], ", ").with_last(", and ");
-/// assert_eq!(d.to_string(), "a, b");
+/// assert_eq!(d.to_string(), "a, and b");
 ///
 /// let d = Delimit::new(["a", "b"], ", ")
 ///     .with_last(", and ")
@@ -263,7 +263,7 @@ pub struct Delimit<'a, I> {
     itr: std::cell::Cell<Option<I>>,
     delimiter: &'a str,
     last: &'a str,
-    pair: &'a str,
+    pair: Option<&'a str>,
 }
 
 impl<'a, I> Delimit<'a, I> {
@@ -277,7 +277,7 @@ impl<'a, I> Delimit<'a, I> {
             itr: std::cell::Cell::new(Some(itr.into_iter())),
             delimiter,
             last: delimiter,
-            pair: delimiter,
+            pair: None,
         }
     }
 
@@ -289,7 +289,7 @@ impl<'a, I> Delimit<'a, I> {
 
     /// Use `pair` when formatting exactly two items.
     pub fn with_pair(mut self, pair: &'a str) -> Self {
-        self.pair = pair;
+        self.pair = Some(pair);
         self
     }
 }
@@ -323,7 +323,7 @@ where
                     let delimiter = if count == 0 {
                         ""
                     } else if count == 1 {
-                        self.pair
+                        self.pair.unwrap_or(self.last)
                     } else {
                         self.last
                     };
@@ -547,7 +547,7 @@ string,        ,   string
     #[test]
     fn test_delimit_two_items_with_last() {
         let d = Delimit::new(["a", "b"], ", ").with_last(", and ");
-        assert_eq!(d.to_string(), "a, b");
+        assert_eq!(d.to_string(), "a, and b");
     }
 
     #[test]

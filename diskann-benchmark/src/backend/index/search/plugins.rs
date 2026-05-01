@@ -3,76 +3,80 @@
  * Licensed under the MIT license.
  */
 
-//! Search plugins are the solution the following benchmarking problem:
+//! Search plugins let each benchmark define exactly which search flavors it supports while
+//! keeping benchmark matching and reporting consistent.
 //!
-//! The [`SearchPhase`] enum contains a list of available search kinds. Adding a new variant
-//! either requires updating **all** users to implement that related search (harming compile
-//! times) or requires users to explicitly opt-out. Unfortunately, the latter is difficult
-//! to maintain with benchmark matching (i.e., the desire to catch configuration mismatches
-//! such as requesting an unsupported search early, rather than reaching an error late in
-//! a benchmark run). Additionally, if only a subset of search kinds are supported, it
-//! is user-friendly to document which variants are actually supported and to make it simple
-//! to add or remove flavors.
+//! The core abstraction is split across the [`Plugin`] trait and the [`Plugins`] helper.
+//! [`Plugin`] is dyn-compatible and generic over three things:
 //!
-//! The solution is the [`Plugin`] trait and the [`Plugins`] helper. The trait is a
-//! dyn-compatible wrapper for a search and the [`Plugins`] struct simply collects a list
-//! of [`Plugin`]s.
+//! * `DP`: the concrete index/data provider being searched.
+//! * `Kind`: the value used for matching and pre-validation.
+//! * `Params`: any additional execution context needed once a plugin has been selected.
 //!
-//! Implementations of [`Plugin`] declare which type of search they support, which is aggregated
-//! in the [`Plugins`] helper.
+//! Keeping `Kind` and `Params` separate is intentional. Matching usually wants a narrow,
+//! user-facing notion of "what kind of search was requested?", while execution often needs
+//! additional benchmark-specific state. This keeps diagnostics precise without forcing the
+//! matching type to absorb every runtime detail.
 //!
-//! Benchmarks can then contain a [`Plugins`] field, dynamically register plugin types, and
-//! then get registered in [`diskann_benchmark_runner::Benchmarks`]. The follow methods then
-//! support proper reporting in the benchmark infrastructure:
+//! Benchmarks own a [`Plugins`] collection and register only the plugin types they want to
+//! support. The helper methods on [`Plugins`] then integrate with
+//! [`diskann_benchmark_runner::Benchmarks`]:
 //!
-//! * [`Plugins::format_kinds`]: Format the registered plugins.
-//! * [`Plugins::is_match`]: Return whether a [`Plugin`] is registered matching a phase.
-//! * [`Plugins::run`]: Run the first matching plugin.
+//! * [`Plugins::format_kinds`]: format the registered plugin labels for diagnostics.
+//! * [`Plugins::is_match`]: check whether any registered plugin accepts a requested `Kind`.
+//! * [`Plugins::run`]: dispatch to the first registered plugin matching `Kind`.
 //!
-//! Concrete plugins maintain a one-to-one relationship with variants in [`SearchPhase`] and
-//! [`SearchPhaseKind`] and are simple ZSTs.
+//! The built-in ZST plugins in this module (`Topk`, `Range`, `BetaFilter`, and
+//! `MultihopFilter`) target the async benchmark inputs and fold their outputs into the closed
+//! [`AggregatedSearchResults`] families. That closed result boundary is deliberate: plugins are
+//! open for new search flavors, while result aggregation remains a curated
+//! reporting/evaluation boundary.
 
 use std::sync::Arc;
 
 use diskann::{graph::DiskANNIndex, provider::DataProvider};
 use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
 
-use crate::{
-    backend::index::result::AggregatedSearchResults,
-    inputs::async_::{SearchPhase, SearchPhaseKind},
-};
+use crate::{backend::index::result::AggregatedSearchResults, inputs::async_::SearchPhaseKind};
 
-/// A search plugin for `DP`. The generic `P` is for any additional parameters needed by
-/// a benchmark.
-pub(crate) trait Plugin<DP, P>: std::fmt::Debug
+/// A dyn-compatible search plugin for `DP`.
+///
+/// `Kind` is the matching surface used for benchmark selection and diagnostics. `Params`
+/// contains any additional execution context needed after a plugin has been selected.
+pub(crate) trait Plugin<DP, Kind, Params>: std::fmt::Debug
 where
     DP: DataProvider,
 {
-    /// The flavor of `SearchPhase` this plugin is compiled for.
-    fn kind(&self) -> SearchPhaseKind;
+    /// Return `true` if this plugin can accept `kind`.
+    fn is_match(&self, kind: &Kind) -> bool;
+
+    /// Return a human-readable label for the flavors of `Kind` supported by this plugin.
+    ///
+    /// This is used for informational diagnostics and benchmark descriptions.
+    fn kind(&self) -> &'static str;
 
     /// Run the search.
     ///
-    /// The user can assume that `phase` has the same [`SearchPhaseKind`] as [`Self::kind`]
-    /// and may return an error if this is not the case.
-    fn search(
+    /// The user can assume that `kind` passes [`Self::is_match`] and may return an error
+    /// if this is not the case.
+    fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        parameters: &P,
-        phase: &SearchPhase,
+        kind: &Kind,
+        parameters: &Params,
     ) -> anyhow::Result<AggregatedSearchResults>;
 }
 
-/// A collection of dynamically registered [`Plugins`].
+/// A collection of dynamically registered [`Plugin`]s.
 #[derive(Debug)]
-pub(crate) struct Plugins<DP, P>
+pub(crate) struct Plugins<DP, Kind, Params>
 where
     DP: DataProvider,
 {
-    plugins: Vec<Box<dyn Plugin<DP, P>>>,
+    plugins: Vec<Box<dyn Plugin<DP, Kind, Params>>>,
 }
 
-impl<DP, P> Plugins<DP, P>
+impl<DP, Kind, Params> Plugins<DP, Kind, Params>
 where
     DP: DataProvider,
 {
@@ -86,29 +90,31 @@ where
     /// Register `plugin` in the managed collection.
     pub(crate) fn register<T>(&mut self, plugin: T)
     where
-        T: Plugin<DP, P> + 'static,
+        T: Plugin<DP, Kind, Params> + 'static,
     {
         self.plugins.push(Box::new(plugin));
     }
 
-    /// Return an iterator over all [`SearchPhaseKind`]s currently registered.
-    pub(crate) fn kinds(&self) -> impl ExactSizeIterator<Item = SearchPhaseKind> + use<'_, DP, P> {
+    /// Return an iterator over the labels of all currently registered plugins.
+    pub(crate) fn kinds(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &'static str> + use<'_, DP, Kind, Params> {
         self.plugins.iter().map(|p| p.kind())
     }
 
-    /// Return whether a [`Plugin`] is registered matching `phase`.
-    pub(crate) fn is_match(&self, phase: SearchPhaseKind) -> bool {
-        self.plugins.iter().any(|p| p.kind() == phase)
+    /// Return whether any registered [`Plugin`] matches `kind`.
+    pub(crate) fn is_match(&self, kind: &Kind) -> bool {
+        self.plugins.iter().any(|p| p.is_match(kind))
     }
 
-    /// Return a human readable, formatted list of the registered [`SearchPhaseKind`]s.
-    pub(crate) fn format_kinds(&self) -> impl std::fmt::Display + use<'_, DP, P> {
+    /// Return a human readable, formatted list of the registered plugin labels.
+    pub(crate) fn format_kinds(&self) -> impl std::fmt::Display + use<'_, DP, Kind, Params> {
         Delimit::new(self.kinds().map(Quote), ", ")
             .with_last(", and ")
             .with_pair(" and ")
     }
 
-    /// Try to run a search plugin for `phase`.
+    /// Try to run a search plugin for `kind`.
     ///
     /// If no such plugin exists, an "INTERNAL ERROR:" is returned.
     /// Within the `diskann-benchmark` crate, pre-validation with [`Self::is_match`] should
@@ -116,14 +122,13 @@ where
     pub(crate) fn run(
         &self,
         index: Arc<DiskANNIndex<DP>>,
-        parameters: &P,
-        phase: &SearchPhase,
+        kind: &Kind,
+        parameters: &Params,
     ) -> anyhow::Result<AggregatedSearchResults> {
-        match self.plugins.iter().find(|p| p.kind() == phase.kind()) {
-            Some(plugin) => plugin.search(index, parameters, phase),
+        match self.plugins.iter().find(|p| p.is_match(kind)) {
+            Some(plugin) => plugin.run(index, kind, parameters),
             None => Err(anyhow::anyhow!(
-                "INTERNAL ERROR: Could not find a search plugin for {}",
-                phase.kind()
+                "INTERNAL ERROR: Could not find a suitable search plugin",
             )),
         }
     }
