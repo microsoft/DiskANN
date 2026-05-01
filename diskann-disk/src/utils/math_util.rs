@@ -12,7 +12,7 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNErrorKind, ANNResult};
 use diskann_linalg::{self, Transpose};
 use diskann_providers::{
     forward_threadpool,
@@ -173,7 +173,7 @@ pub fn compute_closest_centers_in_block(
         None, // Initialize the destination matrix
         dist_matrix,
     )
-    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
+    .map_err(|e| ANNError::new(ANNErrorKind::IndexError, e))?;
 
     diskann_linalg::sgemm(
         Transpose::None,
@@ -187,7 +187,7 @@ pub fn compute_closest_centers_in_block(
         Some(1.0), // Add to the destination matrix
         dist_matrix,
     )
-    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
+    .map_err(|e| ANNError::new(ANNErrorKind::IndexError, e))?;
 
     diskann_linalg::sgemm(
         Transpose::None,
@@ -201,7 +201,7 @@ pub fn compute_closest_centers_in_block(
         Some(1.0), // Add to the destination matrix.
         dist_matrix,
     )
-    .map_err(|e| ANNError::log_index_error(format_args!("{}", e)))?;
+    .map_err(|e| ANNError::new(ANNErrorKind::IndexError, e))?;
 
     if k == 1 {
         center_index
