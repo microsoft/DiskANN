@@ -261,7 +261,7 @@ mod tests {
 
                 for i in 0..*nq {
                     assert!(
-                        (scores[i] - expected_scores[i]).abs() < 1e-5,
+                        (scores[i] - expected_scores[i]).abs() < 1e-10,
                         "MaxSim mismatch at {} for ({},{},{})",
                         i,
                         nq,
@@ -272,7 +272,7 @@ mod tests {
 
                 // Check that FallbackKernel produces the same values as the naive reference.
                 FallbackKernel::max_sim_kernel(query, doc, |i, score| {
-                    assert!((expected_scores[i] - score).abs() <= 1e-6)
+                    assert!((expected_scores[i] - score).abs() <= 1e-10)
                 });
 
                 // Test Chamfer
@@ -280,7 +280,7 @@ mod tests {
                 let expected_chamfer: f32 = expected_scores.iter().sum();
 
                 assert!(
-                    (chamfer - expected_chamfer).abs() < 1e-4,
+                    (chamfer - expected_chamfer).abs() < 1e-10,
                     "Chamfer mismatch for ({},{},{})",
                     nq,
                     nd,

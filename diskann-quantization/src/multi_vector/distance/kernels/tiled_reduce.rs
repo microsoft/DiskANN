@@ -164,6 +164,10 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
 
             let mut pb_tile_src = b_ptr;
 
+            // ── Section A: Full B-tiles ─────────────────────────────
+            // Every panel in every B-tile here is complete; no
+            // remainder check inside Loop 4.
+            //
             // Loop 2: Full B-tiles (every panel in the tile is complete).
             // SAFETY: `pb_tile_src` is always in `[b_ptr, pb_full_end]` — both within
             // the same allocation — so `offset_from` is well-defined.
@@ -191,6 +195,12 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
                 pb_tile_src = pb_tile_src.add(b_src_tile_stride);
             }
 
+            // ── Section B: Peeled trailing B-tile ───────────────────
+            // Holds whatever B-rows Section A could not consume: zero
+            // or more full B-panels followed by an optional partial
+            // panel of `b_remainder` rows. Skipped entirely when
+            // Section A consumed all of B.
+            //
             // Peeled last B-tile: contains remaining full panels + remainder rows.
             if pb_tile_src < pb_end {
                 let remaining_b_rows = b_nrows - ((pb_tile_src.offset_from(b_ptr) as usize) / k);
@@ -416,19 +426,15 @@ mod tests {
         }
     }
 
-    // Shared shape matrix for the `tiled_reduce_*_matches_naive` tests.
-    // Sized to exercise degenerate, prime-`k`, exact-`A_PANEL`, off-by-one
-    // `A_PANEL`, multi-A-tile, and every B-row remainder class.
+    // Shape matrix for the breadth sweeps `tiled_reduce_f32_matches_naive`
+    // and `tiled_reduce_f16_matches_naive`. Covers degenerate shapes,
+    // prime `k`, exact and off-by-one `A_PANEL` boundaries on both
+    // `GROUP=8` and `GROUP=16`, and every B-row remainder class. Run
+    // under `TileBudget::default()`, which keeps every shape in a
+    // single tile (Section A skipped, Section B end-to-end).
     //
-    // Differs from `query_computer::tests::TEST_CASES` (the end-to-end
-    // shape matrix) by the inclusion of `(3, 2, 0)` and `(3, 0, 4)` —
-    // zero-`k` and zero-`b_nrows` are kernel-internal early-exit edges
-    // not relevant to the public `QueryComputer` API surface (which has
-    // dedicated `chamfer_with_zero_docs` / `max_sim_with_zero_docs`
-    // tests asserting different contracts) — and by `(8, 3, 4)` /
-    // `(16, 5, 8)`, which are Scalar-panel arithmetic edges that are
-    // already covered at the public layer by other shapes that cross the
-    // same boundaries.
+    // Multi-tile / multi-panel structural coverage lives in
+    // `tiled_reduce_all_loop_paths_match_naive`.
     //
     // (a_nrows, b_nrows, dim)
     const NAIVE_CASES: &[(usize, usize, usize)] = &[
@@ -455,17 +461,6 @@ mod tests {
         (16, 7, 32), // V3 B remainder=3
         (16, 8, 32), // No B remainder on either
     ];
-
-    // Two budgets: `default` exercises the peeled tile section only; `tiny`
-    // forces `a_panels_per_tile=1` and `b_panels_per_tile=1`, which makes
-    // the main loop body (Loop 2) and multiple A-tile iterations (Loop 1)
-    // run for every shape.
-    fn naive_budgets() -> [(&'static str, TileBudget); 2] {
-        [
-            ("default", TileBudget::default()),
-            ("tiny", TileBudget { l2_a: 1, l1_b: 1 }),
-        ]
-    }
 
     fn naive_max_ip_f32(
         a: &[f32],
@@ -503,10 +498,9 @@ mod tests {
             .collect()
     }
 
-    /// Run `max_ip_kernel::<A, T, GROUP>` against the naive reference for
-    /// every budget in `naive_budgets()` for one shape, asserting per-row
-    /// agreement within `tol`. `arch_label` is included in failure
-    /// messages to identify which arch branch tripped.
+    /// Run `max_ip_kernel::<A, T, GROUP>` against the naive reference
+    /// for one shape under `TileBudget::default()`. `arch_label`
+    /// identifies the arch branch in failure messages.
     #[allow(clippy::too_many_arguments)]
     fn check_kernel<A, T, const GROUP: usize>(
         arch: A,
@@ -527,39 +521,36 @@ mod tests {
         layouts::RowMajor<T>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
     {
-        for &(budget_label, budget) in &naive_budgets() {
-            let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), a_data).unwrap();
-            let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
-            let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), b_data).unwrap();
+        let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), a_data).unwrap();
+        let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
+        let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), b_data).unwrap();
 
-            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
-            max_ip_kernel::<A, T, GROUP>(arch, a_bt.as_view(), b_mat, &mut scratch, budget);
+        let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
+        max_ip_kernel::<A, T, GROUP>(
+            arch,
+            a_bt.as_view(),
+            b_mat,
+            &mut scratch,
+            TileBudget::default(),
+        );
 
-            for i in 0..a_nrows {
-                let actual = scratch[i];
-                let exp = expected[i];
-                assert!(
-                    (actual - exp).abs() < tol,
-                    "[{arch_label}] row {i} mismatch for ({a_nrows},{b_nrows},{dim}) budget={budget_label}: actual={actual}, expected={exp}",
-                );
-            }
+        for i in 0..a_nrows {
+            let actual = scratch[i];
+            let exp = expected[i];
+            assert!(
+                (actual - exp).abs() < tol,
+                "[{arch_label}] row {i} mismatch for ({a_nrows},{b_nrows},{dim}): actual={actual}, expected={exp}",
+            );
         }
     }
 
-    /// Exercise the f32 micro-kernels (`F32Kernel<8>` Scalar and, on
-    /// x86_64 hosts with AVX2+FMA, `F32Kernel<16>` V3) through
-    /// `tiled_reduce` with both `default` and `tiny` budgets.
-    ///
-    /// The `tiny` budget combined with the `NAIVE_CASES` matrix is the
-    /// only place that drives Loop 1 / Loop 2 of the tiling nest for
-    /// each registered f32 micro-kernel — the `QueryComputer`-based
-    /// tests always use the production cache budget and so never enter
-    /// those loops.
+    /// Breadth sweep: every `NAIVE_CASES` shape, both f32 micro-kernels
+    /// (`F32Kernel<8>` Scalar; `F32Kernel<16>` V3 on x86_64 hosts with
+    /// AVX2+FMA), under `TileBudget::default()`.
     ///
     /// The V3 branch compiles on all targets but only executes on
-    /// x86_64 hosts that expose AVX2+FMA at runtime; silently skips
-    /// otherwise. CI's native x86_64 runners and `sde-avx512-tests`
-    /// (Sapphire Rapids ⊇ V3) cover this path.
+    /// x86_64 hosts that expose AVX2+FMA at runtime; CI's native
+    /// x86_64 runners and `sde-avx512-tests` cover this path.
     #[test]
     fn tiled_reduce_f32_matches_naive() {
         for &(a_nrows, b_nrows, dim) in NAIVE_CASES {
@@ -570,7 +561,7 @@ mod tests {
             check_kernel::<_, f32, 8>(
                 Scalar::new(),
                 "scalar",
-                1e-6,
+                1e-10,
                 &a_data,
                 a_nrows,
                 &b_data,
@@ -584,7 +575,7 @@ mod tests {
                 check_kernel::<_, f32, 16>(
                     arch,
                     "x86-64-v3",
-                    1e-6,
+                    1e-10,
                     &a_data,
                     a_nrows,
                     &b_data,
@@ -596,13 +587,180 @@ mod tests {
         }
     }
 
-    /// Exercise the f16 path (`F16Entry` via `F32Kernel` + `ConvertTo`)
-    /// through `tiled_reduce` with both `default` and `tiny` budgets.
+    /// Structural coverage of every loop and section in `tiled_reduce`,
+    /// for every registered (arch, element-type) pair.
     ///
-    /// Combined with `tiny`, this drives the per-tile f16→f32 conversion
-    /// buffer through Loop 1 / Loop 2 of the tiling nest, validating
-    /// buffer reuse across multiple tiles. The V3 branch additionally
-    /// covers the V3-width conversion on x86_64 hosts with AVX2+FMA.
+    /// For each [`LoopCoveragePlan`] in [`LOOP_COVERAGE_PLANS`], the
+    /// budget and shape are derived from `K::A_PANEL` / `K::B_PANEL`
+    /// so the realised tile plan matches the declared one (asserted
+    /// via [`FullReduce::new`]) and drives the loop nest down the
+    /// declared path. Across the three plans the following paths each
+    /// fire at least once on every (arch, T):
+    ///
+    /// * Loop 1 multi-A-tile (full + short).
+    /// * Loop 2 multi-iter (Section A consumes ≥2 full B-tiles).
+    /// * Section A's Loops 3 and 4 with ≥2 iters each.
+    /// * Section B fully-skipped.
+    /// * Section B with ≥2 leftover full B-panels.
+    /// * Section B's `partial_panel` dispatch.
+    ///
+    /// Asymmetric `(a_panels_per_tile, b_panels_per_tile)` rows catch
+    /// stride-confusion bugs that a square plan would mask. Running
+    /// both `T = f32` and `T = half::f16` re-enters the f16 per-tile
+    /// `ConvertTo` buffer on every multi-tile iteration.
+    #[test]
+    fn tiled_reduce_all_loop_paths_match_naive() {
+        check_tile_plan_paths::<_, f32, 8>(Scalar::new(), "scalar", gen_f32_data, naive_max_ip_f32);
+        check_tile_plan_paths::<_, half::f16, 8>(
+            Scalar::new(),
+            "scalar",
+            gen_f16_data,
+            naive_max_ip_f16,
+        );
+        #[cfg(target_arch = "x86_64")]
+        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+            check_tile_plan_paths::<_, f32, 16>(arch, "x86-64-v3", gen_f32_data, naive_max_ip_f32);
+            check_tile_plan_paths::<_, half::f16, 16>(
+                arch,
+                "x86-64-v3",
+                gen_f16_data,
+                naive_max_ip_f16,
+            );
+        }
+    }
+
+    /// One row of [`LOOP_COVERAGE_PLANS`]: target tile plan + trailing
+    /// remainder shape. See `tiled_reduce_all_loop_paths_match_naive`
+    /// for the full coverage story.
+    #[derive(Debug, Clone, Copy)]
+    struct LoopCoveragePlan {
+        /// Target `FullReduce::a_panels_per_tile` (Section A Loop 3 iters).
+        a_panels_per_tile: usize,
+        /// Target `FullReduce::b_panels_per_tile` (Section A Loop 4 iters).
+        b_panels_per_tile: usize,
+        /// Full B-tiles Section A's Loop 2 should consume.
+        section_a_b_tile_iters: usize,
+        /// Full B-panels left in Section B's trailing tile.
+        section_b_full_b_panels: usize,
+        /// Adds a 1-row B-remainder (drives `partial_panel`).
+        section_b_has_b_remainder: bool,
+    }
+
+    /// Tile-plan rows exercised by
+    /// `tiled_reduce_all_loop_paths_match_naive`. Asymmetric
+    /// `(a_panels_per_tile, b_panels_per_tile)` pairs surface
+    /// stride-confusion bugs.
+    const LOOP_COVERAGE_PLANS: &[LoopCoveragePlan] = &[
+        // Section A multi-panel + Section B with `partial_panel` only.
+        LoopCoveragePlan {
+            a_panels_per_tile: 2,
+            b_panels_per_tile: 2,
+            section_a_b_tile_iters: 1,
+            section_b_full_b_panels: 0,
+            section_b_has_b_remainder: true,
+        },
+        // Section A's Loop 2 iterates twice; no Section B.
+        LoopCoveragePlan {
+            a_panels_per_tile: 2,
+            b_panels_per_tile: 3,
+            section_a_b_tile_iters: 2,
+            section_b_full_b_panels: 0,
+            section_b_has_b_remainder: false,
+        },
+        // Section B carries multiple full B-panels plus a remainder.
+        LoopCoveragePlan {
+            a_panels_per_tile: 3,
+            b_panels_per_tile: 2,
+            section_a_b_tile_iters: 1,
+            section_b_full_b_panels: 2,
+            section_b_has_b_remainder: true,
+        },
+    ];
+
+    fn gen_f32_data(len: usize, ceil: usize) -> Vec<f32> {
+        (0..len).map(|i| (i % ceil) as f32).collect()
+    }
+
+    fn gen_f16_data(len: usize, ceil: usize) -> Vec<half::f16> {
+        (0..len)
+            .map(|i| diskann_wide::cast_f32_to_f16((i % ceil) as f32))
+            .collect()
+    }
+
+    type NaiveMaxIp<T> = fn(&[T], usize, &[T], usize, usize) -> Vec<f32>;
+
+    fn check_tile_plan_paths<A, T, const GROUP: usize>(
+        arch: A,
+        arch_label: &str,
+        gen_data: fn(usize, usize) -> Vec<T>,
+        naive: NaiveMaxIp<T>,
+    ) where
+        A: Architecture,
+        T: Copy + Default,
+        F32Kernel<GROUP>: Kernel<A>,
+        layouts::BlockTransposed<T, GROUP>:
+            ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + Layout<Element = T>,
+        layouts::RowMajor<T>:
+            ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
+    {
+        let a_panel = <F32Kernel<GROUP> as Kernel<A>>::A_PANEL;
+        let b_panel = <F32Kernel<GROUP> as Kernel<A>>::B_PANEL;
+        let dim = 8usize;
+        let row_bytes = dim * std::mem::size_of::<T>();
+
+        for &p in LOOP_COVERAGE_PLANS {
+            // Exact-fit budget for the declared tile plan; one A-panel
+            // is reserved in L1 alongside the B tile, matching
+            // `FullReduce::new`'s convention.
+            let budget = TileBudget {
+                l2_a: p.a_panels_per_tile * a_panel * row_bytes,
+                l1_b: a_panel * row_bytes + p.b_panels_per_tile * b_panel * row_bytes,
+            };
+
+            // Pin the realised plan so planner drift fails loudly
+            // rather than silently turning the test into a no-op.
+            let plan = FullReduce::new(row_bytes, row_bytes, a_panel, b_panel, budget);
+            assert_eq!(
+                plan.a_panels_per_tile, p.a_panels_per_tile,
+                "[{arch_label}] a_panels_per_tile for plan {p:?}",
+            );
+            assert_eq!(
+                plan.b_panels_per_tile, p.b_panels_per_tile,
+                "[{arch_label}] b_panels_per_tile for plan {p:?}",
+            );
+
+            // a_nrows = a_panels_per_tile*A_PANEL + 1 → Loop 1 iterates twice.
+            // b_nrows packs: Section A consumption | Section B full panels | optional 1-row remainder.
+            let a_nrows = p.a_panels_per_tile * a_panel + 1;
+            let b_nrows = p.section_a_b_tile_iters * p.b_panels_per_tile * b_panel
+                + p.section_b_full_b_panels * b_panel
+                + usize::from(p.section_b_has_b_remainder);
+
+            let ceil = dim;
+            let a_data = gen_data(a_nrows * dim, ceil);
+            let b_data = gen_data(b_nrows * dim, ceil);
+            let expected = naive(&a_data, a_nrows, &b_data, b_nrows, dim);
+
+            let a_mat = MatRef::new(Standard::new(a_nrows, dim).unwrap(), &a_data).unwrap();
+            let a_bt = BlockTransposed::<T, GROUP>::from_matrix_view(a_mat.as_matrix_view());
+            let b_mat = MatRef::new(Standard::new(b_nrows, dim).unwrap(), &b_data).unwrap();
+            let mut scratch = vec![f32::MIN; a_bt.padded_nrows()];
+            max_ip_kernel::<A, T, GROUP>(arch, a_bt.as_view(), b_mat, &mut scratch, budget);
+
+            for i in 0..a_nrows {
+                assert!(
+                    (scratch[i] - expected[i]).abs() < 1e-10,
+                    "[{arch_label}] plan={p:?} row {i}: actual={} expected={}",
+                    scratch[i],
+                    expected[i],
+                );
+            }
+        }
+    }
+
+    /// Breadth sweep for the f16 path (`F32Kernel` + `ConvertTo`):
+    /// every `NAIVE_CASES` shape, both Scalar and V3 (x86_64 only),
+    /// under `TileBudget::default()`.
     #[test]
     fn tiled_reduce_f16_matches_naive() {
         for &(a_nrows, b_nrows, dim) in NAIVE_CASES {
@@ -620,7 +778,7 @@ mod tests {
             check_kernel::<_, half::f16, 8>(
                 Scalar::new(),
                 "scalar",
-                1e-1,
+                1e-10,
                 &a_data,
                 a_nrows,
                 &b_data,
@@ -634,7 +792,7 @@ mod tests {
                 check_kernel::<_, half::f16, 16>(
                     arch,
                     "x86-64-v3",
-                    1e-1,
+                    1e-10,
                     &a_data,
                     a_nrows,
                     &b_data,

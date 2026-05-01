@@ -14,9 +14,8 @@
 //!
 //! ```
 //! use diskann_quantization::multi_vector::{
-//!     QueryComputer, MatRef, Standard, Chamfer,
+//!     QueryComputer, MatRef, Standard,
 //! };
-//! use diskann_vector::PureDistanceFunction;
 //!
 //! let query_data = [1.0f32, 0.0, 0.0, 1.0];
 //! let doc_data = [1.0f32, 0.0, 0.0, 1.0];
@@ -28,20 +27,17 @@
 //! let computer = QueryComputer::<f32>::new(query);
 //!
 //! // Distance — vtable → arch.run3 with target_feature propagation
-//! let dist = Chamfer::evaluate(&computer, doc);
+//! let dist = computer.chamfer(doc);
 //! assert_eq!(dist, -2.0);
 //! ```
 
 mod f16;
 mod f32;
 
-use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
-
 use crate::multi_vector::{BlockTransposed, MatRef, Standard};
 
-use super::max_sim::{Chamfer, MaxSim};
-
 /// Architecture-dispatched query computer for multi-vector distance.
+#[derive(Debug)]
 pub struct QueryComputer<T: Copy> {
     inner: Box<dyn DynQueryComputer<T>>,
 }
@@ -92,11 +88,12 @@ impl<T: Copy> QueryComputer<T> {
     }
 }
 
-trait DynQueryComputer<T: Copy> {
+trait DynQueryComputer<T: Copy>: std::fmt::Debug + Send + Sync {
     fn compute_max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]);
     fn nrows(&self) -> usize;
 }
 
+#[derive(Debug)]
 struct Prepared<A, Q> {
     arch: A,
     prepared: Q,
@@ -108,18 +105,6 @@ fn build_prepared<T: Copy + Default, A, const GROUP: usize>(
 ) -> Prepared<A, BlockTransposed<T, GROUP>> {
     let prepared = BlockTransposed::<T, GROUP>::from_matrix_view(query.as_matrix_view());
     Prepared { arch, prepared }
-}
-
-impl<T: Copy> PureDistanceFunction<&QueryComputer<T>, MatRef<'_, Standard<T>>, f32> for Chamfer {
-    fn evaluate(query: &QueryComputer<T>, doc: MatRef<'_, Standard<T>>) -> f32 {
-        query.chamfer(doc)
-    }
-}
-
-impl<T: Copy> DistanceFunctionMut<&QueryComputer<T>, MatRef<'_, Standard<T>>> for MaxSim<'_> {
-    fn evaluate(&mut self, query: &QueryComputer<T>, doc: MatRef<'_, Standard<T>>) {
-        query.max_sim(doc, self.scores_mut());
-    }
 }
 
 #[cfg(test)]
@@ -155,42 +140,24 @@ mod tests {
             .collect()
     }
 
-    /// Test cases: (num_queries, num_docs, dim).
+    /// Shapes for the `chamfer_matches_fallback` / `max_sim_matches_fallback`
+    /// agreement checks: (num_queries, num_docs, dim).
     ///
-    /// Sized to exercise:
-    /// * degenerate single-element shapes,
-    /// * `k` (dim) not divisible by SIMD lane count,
-    /// * exact and off-by-one A_PANEL boundaries on both `GROUP=8` (Scalar/Neon)
-    ///   and `GROUP=16` (V3/V4) configurations,
-    /// * every B-row remainder class for the active `B_PANEL` (1, 2, 3 on V3;
-    ///   1 on Scalar).
-    ///
-    /// Diverges from `kernels::tiled_reduce::tests::NAIVE_CASES`: the
-    /// kernel-level matrix additionally covers zero-`k` / zero-`b_nrows`
-    /// (kernel internal early-exit edges, with no public-API meaning —
-    /// the API contracts for empty docs are pinned by the dedicated
-    /// `chamfer_with_zero_docs` / `max_sim_with_zero_docs` tests) and a
-    /// pair of Scalar-panel arithmetic edges already crossed by the
-    /// shapes below.
+    /// This matrix targets the API-layer wiring that lives above the
+    /// kernel — `QueryComputer::new` query setup, `chamfer` row
+    /// summation, `max_sim` per-row writeback, and the f16 query
+    /// conversion path — not kernel correctness. A small
+    /// representative set is sufficient because exhaustive shape
+    /// coverage (panel boundaries, B-remainder classes, prime `k`,
+    /// degenerate dims) is pinned one layer below in
+    /// `kernels::tiled_reduce::tests::NAIVE_CASES`, and structural
+    /// loop-path coverage in `tiled_reduce_all_loop_paths_match_naive`.
     const TEST_CASES: &[(usize, usize, usize)] = &[
-        (1, 1, 1),   // Degenerate single-element
-        (1, 1, 2),   // Minimal non-trivial
-        (1, 1, 4),   // Single query, single doc
-        (1, 5, 8),   // Single query, multiple docs
-        (5, 1, 8),   // Multiple queries, single doc
-        (3, 2, 3),   // Prime k
-        (3, 4, 16),  // General case
-        (5, 3, 5),   // Prime k, A-remainder on aarch64
-        (7, 7, 32),  // Square case
-        (2, 3, 7),   // k not divisible by SIMD lanes
-        (2, 3, 128), // Larger dimension
-        (16, 4, 64), // Exact A_PANEL on x86_64; two panels on aarch64
-        (17, 4, 64), // One more than A_PANEL (remainder)
-        (32, 5, 16), // Multiple full A-panels, remainder B-rows (5 % 4 = 1)
-        (48, 3, 16), // 3 A-tiles on x86_64; 6 on aarch64
-        (16, 6, 32), // Remainder B-rows (6 % 4 = 2)
-        (16, 7, 32), // Remainder B-rows (7 % 4 = 3)
-        (16, 8, 32), // No remainder B-rows (8 % 4 = 0)
+        (1, 1, 4), // Degenerate
+        (5, 3, 5), // Prime k; nq > 1 and nd > 1 exercise chamfer summation
+        //              and per-row max_sim writeback on a non-trivial shape
+        (17, 4, 64), // A-panel remainder crossing both Scalar and V3 panel widths
+        (16, 6, 32), // B-remainder ≠ 1 (V3 b_remainder = 2)
     ];
 
     fn check_chamfer_matches<T: Copy + FromF32>(
@@ -318,6 +285,6 @@ mod tests {
         };
     }
 
-    test_matches_fallback!(f32, f32, 1e-2, "f32 ");
-    test_matches_fallback!(f16, half::f16, 1e-1, "f16 ");
+    test_matches_fallback!(f32, f32, 1e-10, "f32 ");
+    test_matches_fallback!(f16, half::f16, 1e-10, "f16 ");
 }

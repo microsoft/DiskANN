@@ -50,7 +50,7 @@ where
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct BuildComputer;
 
 impl diskann_wide::arch::Target1<Scalar, QueryComputer<f32>, MatRef<'_, Standard<f32>>>
