@@ -4,6 +4,7 @@
  */
 
 mod build;
+mod post_processor;
 mod search;
 mod streaming;
 
