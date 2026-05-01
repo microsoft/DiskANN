@@ -111,7 +111,7 @@ macro_rules! stub_impl {
             use crate::inputs;
 
             pub(super) fn register(name: &str, registry: &mut Benchmarks) {
-                registry.register::<Stub>(name);
+                registry.register(name, Stub);
             }
 
             /// An empty placeholder to provide a hint for the necessary feature.
@@ -121,11 +121,12 @@ macro_rules! stub_impl {
                 type Input = $input;
                 type Output = serde_json::Value;
 
-                fn try_match(_input: &$input) -> Result<MatchScore, FailureScore> {
+                fn try_match(&self, _input: &$input) -> Result<MatchScore, FailureScore> {
                     Err(FailureScore(0))
                 }
 
                 fn description(
+                    &self,
                     f: &mut std::fmt::Formatter<'_>,
                     _input: Option<&$input>,
                 ) -> std::fmt::Result {
@@ -134,6 +135,7 @@ macro_rules! stub_impl {
                 }
 
                 fn run(
+                    &self,
                     _input: &$input,
                     _checkpoint: Checkpoint<'_>,
                     _output: &mut dyn Output,

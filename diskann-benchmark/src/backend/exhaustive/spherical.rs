@@ -12,10 +12,10 @@ crate::utils::stub_impl!("spherical-quantization", inputs::exhaustive::Spherical
 // Spherical - requires feature "spherical-quantization"
 #[cfg(feature = "spherical-quantization")]
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME);
-    benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME);
-    benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME);
-    benchmarks.register::<imp::SphericalQ<'static, 8>>(NAME);
+    benchmarks.register(NAME, imp::SphericalQ::<1>);
+    benchmarks.register(NAME, imp::SphericalQ::<2>);
+    benchmarks.register(NAME, imp::SphericalQ::<4>);
+    benchmarks.register(NAME, imp::SphericalQ::<8>);
 }
 
 // Stub implementation
@@ -79,16 +79,14 @@ mod imp {
     }
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct SphericalQ<'a, const NBITS: usize> {
-        input: &'a inputs::exhaustive::Spherical,
-    }
+    pub(super) struct SphericalQ<const NBITS: usize>;
 
-    impl<'a, const NBITS: usize> SphericalQ<'a, NBITS> {
-        pub(super) fn new(input: &'a inputs::exhaustive::Spherical) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results>
+    impl<const NBITS: usize> SphericalQ<NBITS> {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::Spherical,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results>
         where
             Unsigned: Representation<NBITS>,
             Plan: algos::CreateQuantComputer<Store<NBITS>>,
@@ -97,8 +95,7 @@ mod imp {
             SphericalQuantizer:
                 for<'x> CompressIntoWith<&'x [f32], DataMut<'x, NBITS>, ScopedAllocator<'x>>,
         {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -202,7 +199,7 @@ mod imp {
         }
     }
 
-    impl<const NBITS: usize> Benchmark for SphericalQ<'static, NBITS>
+    impl<const NBITS: usize> Benchmark for SphericalQ<NBITS>
     where
         Unsigned: Representation<NBITS>,
         Plan: algos::CreateQuantComputer<Store<NBITS>>,
@@ -214,7 +211,10 @@ mod imp {
         type Input = inputs::exhaustive::Spherical;
         type Output = Results;
 
-        fn try_match(input: &inputs::exhaustive::Spherical) -> Result<MatchScore, FailureScore> {
+        fn try_match(
+            &self,
+            input: &inputs::exhaustive::Spherical,
+        ) -> Result<MatchScore, FailureScore> {
             let num_bits = input.num_bits.get();
             if num_bits == NBITS {
                 Ok(MatchScore(0))
@@ -226,6 +226,7 @@ mod imp {
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&inputs::exhaustive::Spherical>,
         ) -> std::fmt::Result {
@@ -254,11 +255,12 @@ mod imp {
         }
 
         fn run(
+            &self,
             input: &inputs::exhaustive::Spherical,
             _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<Results> {
-            SphericalQ::<NBITS>::new(input).run(output)
+            self.run(input, output)
         }
     }
 
