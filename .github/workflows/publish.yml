@@ -60,6 +60,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+          fetch-depth: 0
 
       - name: Read Rust version from rust-toolchain.toml
         id: rust-version
@@ -90,6 +91,14 @@ jobs:
           CARGO_VERSION=$(grep -A 5 '^\[workspace\.package\]' Cargo.toml | grep 'version = ' | head -n1 | sed 's/.*"\(.*\)".*/\1/')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+      - name: Verify tag is on main branch
+        if: github.event_name == 'push'
+        run: |
+          if ! git branch --contains "$GITHUB_SHA" | grep -qE '\bmain$'; then
+            echo "::error::Tag must point to a commit on main"
             exit 1
           fi
 
