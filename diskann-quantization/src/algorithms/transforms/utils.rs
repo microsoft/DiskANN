@@ -17,7 +17,7 @@ pub enum TransformFailed {
     #[error(transparent)]
     AllocatorError(#[from] AllocatorError),
     #[cfg(feature = "linalg")]
-    #[error("SGEMM operation failed: {0}")]
+    #[error(transparent)]
     SgemmError(#[from] diskann_linalg::SgemmError),
 }
 
