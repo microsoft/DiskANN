@@ -14,10 +14,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use diskann::{ANNError, ANNResult};
 use diskann_linalg::{self, Transpose};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool},
-};
+use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
 use rayon::prelude::*;
 
 // This is the chunk size applied when computing the closest centers in a block.
@@ -90,11 +87,11 @@ fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
 
 /// Compute L2-squared norms of data stored in row-major num_points * dim,
 /// need to be pre-allocated
-pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
+pub fn compute_vecs_l2sq(
     vecs_l2sq: &mut [f32],
     data: &[f32],
     dim: usize,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
         ANNError::log_index_error(format_args!(
@@ -117,7 +114,6 @@ pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
             *vec_l2sq = compute_vec_l2sq(data, i, dim);
         }
     } else {
-        forward_threadpool!(pool = pool);
         vecs_l2sq
             .par_iter_mut()
             .enumerate()
@@ -149,7 +145,7 @@ pub fn compute_closest_centers_in_block(
     center_index: &mut [u32],
     dist_matrix: &mut [f32],
     k: usize,
-    pool: &RayonThreadPool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
@@ -252,7 +248,7 @@ pub fn compute_closest_centers_in_block(
 /// indices is an empty vector. Additionally, if pts_norms_squared is not null,
 /// then it will assume that point norms are pre-computed and use those values
 #[allow(clippy::too_many_arguments)]
-pub fn compute_closest_centers<Pool: AsThreadPool>(
+pub fn compute_closest_centers(
     data: &[f32],
     num_points: usize,
     dim: usize,
@@ -262,7 +258,7 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
     closest_centers_ivf: &mut [u32],
     mut inverted_index: Option<&mut Vec<Vec<usize>>>,
     pts_norms_squared: Option<&[f32]>,
-    pool: Pool,
+    pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
@@ -320,8 +316,6 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
             k
         )));
     }
-
-    forward_threadpool!(pool = pool);
 
     let mut owned_pts_norms_squared;
     let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
@@ -434,7 +428,7 @@ mod math_util_test {
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
 
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, pool.as_ref()).unwrap();
 
         let expected = [14.0, 77.0];
 
@@ -452,7 +446,7 @@ mod math_util_test {
         let dim = 8;
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, pool.as_ref()).unwrap();
 
         let expected = [204.0, 1292.0];
 
@@ -477,9 +471,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, pool.as_ref()).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, pool.as_ref()).unwrap();
         let mut center_index = vec![0; num_points];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
         let k = 1;
@@ -495,7 +489,7 @@ mod math_util_test {
             &mut center_index,
             &mut dist_matrix,
             k,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -524,9 +518,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, pool.as_ref()).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, pool.as_ref()).unwrap();
         let k = 2;
         let mut center_index = vec![0; num_points * k];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
@@ -542,7 +536,7 @@ mod math_util_test {
             &mut center_index,
             &mut dist_matrix,
             k,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -583,7 +577,7 @@ mod math_util_test {
             &mut closest_centers_ivf,
             Some(&mut inverted_index),
             None,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -619,13 +613,13 @@ mod math_util_test {
             &mut closest_centers_none,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
         // Compute with pre-computed norms
         let mut pts_norms = vec![0.0; num_points];
-        compute_vecs_l2sq(&mut pts_norms, &data, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut pts_norms, &data, dim, pool.as_ref()).unwrap();
         let mut closest_centers_precomputed = vec![0u32; num_points * k];
         compute_closest_centers(
             &data,
@@ -637,7 +631,7 @@ mod math_util_test {
             &mut closest_centers_precomputed,
             None,
             Some(&pts_norms),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -668,7 +662,7 @@ mod math_util_test {
             &mut closest_centers,
             None,
             Some(&invalid_norms),
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -685,7 +679,7 @@ mod math_util_test {
         let mut vecs_l2sq = vec![0.0; num_points + 1]; // Wrong length
         let pool = create_thread_pool_for_test();
 
-        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool);
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, pool.as_ref());
 
         assert!(result
             .unwrap_err()
@@ -714,7 +708,7 @@ mod math_util_test {
             &mut closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -744,7 +738,7 @@ mod math_util_test {
             &mut closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -778,7 +772,7 @@ mod math_util_test {
             &mut center_index,
             &mut dist_matrix,
             k,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -796,7 +790,7 @@ mod math_util_test {
         let pool = create_thread_pool_for_test();
 
         // 2 * usize::MAX overflows
-        let result = compute_vecs_l2sq(&mut vecs_l2sq_buffer, data, dim, &pool);
+        let result = compute_vecs_l2sq(&mut vecs_l2sq_buffer, data, dim, pool.as_ref());
 
         assert!(result
             .unwrap_err()
@@ -828,7 +822,7 @@ mod math_util_test {
             &mut closest_centers_buffer,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         // Will hit num_points * dim overflow in data validation
@@ -859,7 +853,7 @@ mod math_util_test {
             &mut closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -889,7 +883,7 @@ mod math_util_test {
             &mut closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -919,7 +913,7 @@ mod math_util_test {
             closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
@@ -949,7 +943,7 @@ mod math_util_test {
             closest_centers,
             None,
             None,
-            &pool,
+            pool.as_ref(),
         );
 
         assert!(result
