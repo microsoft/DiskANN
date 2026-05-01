@@ -53,5 +53,5 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
 /// compute_vecs_l2sq benchmark
 fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize, pool: &RayonThreadPool) {
     let mut docs_l2sq = vec![0.0; num_points];
-    compute_vecs_l2sq(&mut docs_l2sq, data, num_points, dim, pool).unwrap();
+    compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool).unwrap();
 }

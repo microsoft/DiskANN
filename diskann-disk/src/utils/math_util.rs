@@ -93,15 +93,21 @@ fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
 pub fn compute_vecs_l2sq<Pool: AsThreadPool>(
     vecs_l2sq: &mut [f32],
     data: &[f32],
-    num_points: usize,
     dim: usize,
     pool: Pool,
 ) -> ANNResult<()> {
-    if data.len() != num_points * dim {
-        return Err(ANNError::log_pq_error(format_args!(
-            "data.len() {} should be num_points {} * dim {}",
+    let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "vecs_l2sq.len() * dim overflowed: vecs_l2sq.len() ({}) * dim ({})",
+            vecs_l2sq.len(),
+            dim
+        ))
+    })?;
+    if data.len() != expected_data_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "data.len() ({}) should be vecs_l2sq.len() ({}) * dim ({})",
             data.len(),
-            num_points,
+            vecs_l2sq.len(),
             dim
         )));
     }
@@ -147,7 +153,7 @@ pub fn compute_closest_centers_in_block(
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
-            "ERROR: k ({}) > num_centers({})",
+            "k ({}) should be equal or less than num_centers ({})",
             k, num_centers
         )));
     }
@@ -260,23 +266,81 @@ pub fn compute_closest_centers<Pool: AsThreadPool>(
 ) -> ANNResult<()> {
     if k > num_centers {
         return Err(ANNError::log_index_error(format_args!(
-            "ERROR: k ({}) > num_centers({})",
+            "k ({}) should be equal or less than num_centers ({})",
             k, num_centers
+        )));
+    }
+
+    // Validate data slice length
+    let expected_data_len = num_points.checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_points * dim overflowed: num_points ({}) * dim ({})",
+            num_points, dim
+        ))
+    })?;
+
+    if data.len() != expected_data_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "data.len() ({}) should equal num_points ({}) * dim ({})",
+            data.len(),
+            num_points,
+            dim
+        )));
+    }
+
+    // Validate pivot_data slice length
+    let expected_pivot_len = num_centers.checked_mul(dim).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_centers * dim overflowed: num_centers ({}) * dim ({})",
+            num_centers, dim
+        ))
+    })?;
+
+    if pivot_data.len() != expected_pivot_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "pivot_data.len() ({}) should equal num_centers ({}) * dim ({})",
+            pivot_data.len(),
+            num_centers,
+            dim
+        )));
+    }
+
+    let expected_closest_centers_len = num_points.checked_mul(k).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "num_points * k overflowed: num_points ({}) * k ({})",
+            num_points, k
+        ))
+    })?;
+
+    if closest_centers_ivf.len() != expected_closest_centers_len {
+        return Err(ANNError::log_index_error(format_args!(
+            "closest_centers_ivf.len() ({}) should equal num_points ({}) * k ({})",
+            closest_centers_ivf.len(),
+            num_points,
+            k
         )));
     }
 
     forward_threadpool!(pool = pool);
 
-    let pts_norms_squared = if let Some(pts_norms) = pts_norms_squared {
-        pts_norms.to_vec()
+    let mut owned_pts_norms_squared;
+    let pts_norms_squared: &[f32] = if let Some(pts_norms) = pts_norms_squared {
+        if pts_norms.len() != num_points {
+            return Err(ANNError::log_index_error(format_args!(
+                "pts_norms_squared.len() ({}) should equal num_points ({})",
+                pts_norms.len(),
+                num_points
+            )));
+        }
+        pts_norms
     } else {
-        let mut norms_squared = vec![0.0; num_points];
-        compute_vecs_l2sq(&mut norms_squared, data, num_points, dim, pool)?;
-        norms_squared
+        owned_pts_norms_squared = vec![0.0; num_points];
+        compute_vecs_l2sq(&mut owned_pts_norms_squared, data, dim, pool)?;
+        &owned_pts_norms_squared
     };
 
     let mut pivs_norms_squared = vec![0.0; num_centers];
-    compute_vecs_l2sq(&mut pivs_norms_squared, pivot_data, num_centers, dim, pool)?;
+    compute_vecs_l2sq(&mut pivs_norms_squared, pivot_data, dim, pool)?;
 
     let mut distance_matrix = vec![0.0; POINTS_PER_CHUNK * num_centers];
     let mut closest_center_indices = vec![0; POINTS_PER_CHUNK * k];
@@ -370,7 +434,7 @@ mod math_util_test {
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
 
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
 
         let expected = [14.0, 77.0];
 
@@ -388,7 +452,7 @@ mod math_util_test {
         let dim = 8;
         let mut vecs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut vecs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool).unwrap();
 
         let expected = [204.0, 1292.0];
 
@@ -413,9 +477,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
         let mut center_index = vec![0; num_points];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
         let k = 1;
@@ -460,9 +524,9 @@ mod math_util_test {
         ];
         let mut docs_l2sq = vec![0.0; num_points];
         let pool = create_thread_pool_for_test();
-        compute_vecs_l2sq(&mut docs_l2sq, &data, num_points, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut docs_l2sq, &data, dim, &pool).unwrap();
         let mut centers_l2sq = vec![0.0; num_centers];
-        compute_vecs_l2sq(&mut centers_l2sq, &centers, num_centers, dim, &pool).unwrap();
+        compute_vecs_l2sq(&mut centers_l2sq, &centers, dim, &pool).unwrap();
         let k = 2;
         let mut center_index = vec![0; num_points * k];
         let mut dist_matrix = vec![0.0; num_points * num_centers];
@@ -529,5 +593,368 @@ mod math_util_test {
             vec.sort_unstable();
         }
         assert_eq!(inverted_index, vec![vec![0, 1], vec![2, 3]]);
+    }
+
+    #[test]
+    fn test_compute_closest_centers_with_precomputed_norms() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let data = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let pivot_data = vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0];
+        let k = 2;
+        let pool = create_thread_pool_for_test();
+
+        // Compute with None (baseline)
+        let mut closest_centers_none = vec![0u32; num_points * k];
+        compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_none,
+            None,
+            None,
+            &pool,
+        )
+        .unwrap();
+
+        // Compute with pre-computed norms
+        let mut pts_norms = vec![0.0; num_points];
+        compute_vecs_l2sq(&mut pts_norms, &data, dim, &pool).unwrap();
+        let mut closest_centers_precomputed = vec![0u32; num_points * k];
+        compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_precomputed,
+            None,
+            Some(&pts_norms),
+            &pool,
+        )
+        .unwrap();
+
+        assert_eq!(closest_centers_none, closest_centers_precomputed);
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_norms_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let data = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
+        let pivot_data = vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0];
+        let k = 2;
+        let pool = create_thread_pool_for_test();
+
+        let invalid_norms = vec![0.0; num_points + 1]; // Wrong length
+        let mut closest_centers = vec![0u32; num_points * k];
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            Some(&invalid_norms),
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pts_norms_squared.len() (5) should equal num_points (4)"));
+    }
+
+    #[test]
+    fn test_compute_vecs_l2sq_invalid_output_length() {
+        let num_points = 4;
+        let dim = 3;
+        let data = vec![1.0; num_points * dim];
+        let mut vecs_l2sq = vec![0.0; num_points + 1]; // Wrong length
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, dim, &pool);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("data.len() (12) should be vecs_l2sq.len() (5) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_k_exceeds_num_centers() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 3; // k > num_centers
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("k (3) should be equal or less than num_centers (2)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_output_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 2;
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points]; // Wrong length (should be num_points * k)
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("closest_centers_ivf.len() (4) should equal num_points (4) * k (2)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_in_block_k_exceeds_num_centers() {
+        let num_points = 2;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 3; // k > num_centers
+        let data = vec![1.0; num_points * dim];
+        let centers = vec![1.0; num_centers * dim];
+        let docs_l2sq = vec![1.0; num_points];
+        let centers_l2sq = vec![1.0; num_centers];
+        let mut center_index = vec![0u32; num_points * k];
+        let mut dist_matrix = vec![0.0; num_points * num_centers];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers_in_block(
+            &data,
+            num_points,
+            dim,
+            &centers,
+            num_centers,
+            &docs_l2sq,
+            &centers_l2sq,
+            &mut center_index,
+            &mut dist_matrix,
+            k,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("k (3) should be equal or less than num_centers (2)"));
+    }
+
+    #[test]
+    fn test_compute_vecs_l2sq_overflow() {
+        let dim = usize::MAX;
+        // Create a scenario where vecs_l2sq_buffer.len() * dim overflows. usize::MAX * 2 overflows
+        let mut vecs_l2sq_buffer = [0.0f32; 2];
+        let data = &[];
+        let pool = create_thread_pool_for_test();
+
+        // 2 * usize::MAX overflows
+        let result = compute_vecs_l2sq(&mut vecs_l2sq_buffer, data, dim, &pool);
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("vecs_l2sq.len() * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_output_buffer_overflow() {
+        // Test that num_points * k overflow is detected
+        // Note: This test checks data.len() validation overflow, not num_points * k,
+        // because data validation happens first
+        let num_points = usize::MAX;
+        let k = 2;
+        let dim = 2; // usize::MAX * 2 overflows
+        let num_centers = 2;
+        let data = &[];
+        let pivot_data = &[1.0f32; 4];
+        let mut closest_centers_buffer = [];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers_buffer,
+            None,
+            None,
+            &pool,
+        );
+
+        // Will hit num_points * dim overflow in data validation
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_points * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_data_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 1;
+        let data = vec![1.0; num_points * dim - 1]; // Wrong length (too short)
+        let pivot_data = vec![1.0; num_centers * dim];
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("data.len() (11) should equal num_points (4) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_invalid_pivot_data_length() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = 2;
+        let k = 1;
+        let data = vec![1.0; num_points * dim];
+        let pivot_data = vec![1.0; num_centers * dim + 2]; // Wrong length (too long)
+        let mut closest_centers = vec![0u32; num_points * k];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            &data,
+            num_points,
+            dim,
+            &pivot_data,
+            num_centers,
+            k,
+            &mut closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pivot_data.len() (8) should equal num_centers (2) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_data_overflow() {
+        let num_points = usize::MAX;
+        let dim = 2;
+        let num_centers = 2;
+        let k = 1;
+        let data = &[];
+        let pivot_data = &[1.0f32; 4]; // num_centers * dim = 2 * 2
+        let closest_centers = &mut [];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_points * dim overflowed"));
+    }
+
+    #[test]
+    fn test_compute_closest_centers_pivot_overflow() {
+        let num_points = 4;
+        let dim = 3;
+        let num_centers = usize::MAX;
+        let k = 1;
+        let data = &[1.0f32; 12];
+        let pivot_data = &[];
+        let closest_centers = &mut [0u32; 4];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_closest_centers(
+            data,
+            num_points,
+            dim,
+            pivot_data,
+            num_centers,
+            k,
+            closest_centers,
+            None,
+            None,
+            &pool,
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("num_centers * dim overflowed"));
     }
 }

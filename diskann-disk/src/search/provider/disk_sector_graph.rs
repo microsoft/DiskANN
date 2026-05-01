@@ -8,14 +8,11 @@
 use std::ops::Deref;
 
 use diskann::{ANNError, ANNResult};
-use diskann_quantization::{
-    alloc::{aligned_slice, AlignedSlice},
-    num::PowerOfTwo,
-};
+use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead},
+    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -37,7 +34,7 @@ pub struct DiskSectorGraph<AlignedReaderType: AlignedFileReader> {
     /// index info for multi-sector nodes
     /// node `i` is in sector: [i * max_node_len.div_ceil(block_size)]
     /// offset in sector: [0]
-    sectors_data: AlignedSlice<u8>,
+    sectors_data: Poly<[u8], AlignedAllocator>,
     /// Current sector index into which the next read reads data
     cur_sector_idx: u64,
 
@@ -76,9 +73,10 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
 
         Ok(Self {
             sector_reader,
-            sectors_data: aligned_slice(
+            sectors_data: Poly::broadcast(
+                0u8,
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
-                PowerOfTwo::new(block_size).map_err(ANNError::log_index_error)?,
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
             .map_err(ANNError::log_index_error)?,
             cur_sector_idx: 0,
@@ -94,9 +92,10 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     pub fn reconfigure(&mut self, max_n_batch_sector_read: usize) -> ANNResult<()> {
         if max_n_batch_sector_read > self.max_n_batch_sector_read {
             self.max_n_batch_sector_read = max_n_batch_sector_read;
-            self.sectors_data = aligned_slice(
+            self.sectors_data = Poly::broadcast(
+                0u8,
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
-                PowerOfTwo::new(self.block_size).map_err(ANNError::log_index_error)?,
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
             )
             .map_err(ANNError::log_index_error)?;
         }
@@ -137,7 +136,8 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
         );
         let mut sector_slices: Vec<&mut [u8]> =
             self.sectors_data[range].chunks_mut(len_per_node).collect();
-        let mut read_requests = Vec::with_capacity(sector_slices.len());
+        let mut read_requests: Vec<AlignedRead<'_, u8, AlignedReaderType::Alignment>> =
+            Vec::with_capacity(sector_slices.len());
         for (local_sector_idx, slice) in sector_slices.iter_mut().enumerate() {
             let sector_id = sectors_to_fetch[local_sector_idx];
             read_requests.push(AlignedRead::new(sector_id * self.block_size as u64, slice)?);
@@ -220,7 +220,7 @@ mod disk_sector_graph_test {
     ) -> DiskSectorGraph<<AlignedFileReaderFactory as AlignedReaderFactory>::AlignedReaderType>
     {
         DiskSectorGraph {
-            sectors_data: aligned_slice(512, PowerOfTwo::new(512).unwrap()).unwrap(),
+            sectors_data: Poly::broadcast(0u8, 512, AlignedAllocator::A512).unwrap(),
             sector_reader,
             cur_sector_idx: 0,
             num_nodes_per_sector,
