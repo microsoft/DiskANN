@@ -42,7 +42,7 @@ pub fn benchmark_kmeans_iai(data: Vec<f32>) {
         MAX_KMEANS_REPS,
         rng,
         &mut false,
-        &pool,
+        pool.as_ref(),
     )
     .unwrap();
 
@@ -60,5 +60,5 @@ pub fn snrm2_benchmark_rust_iai(data: Vec<f32>) {
 pub fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize) {
     let mut docs_l2sq = vec![0.0; num_points];
     let pool = create_thread_pool_for_bench();
-    compute_vecs_l2sq(&mut docs_l2sq, data, dim, &pool).unwrap();
+    compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool.as_ref()).unwrap();
 }
