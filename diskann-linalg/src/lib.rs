@@ -12,22 +12,39 @@ mod faer;
 use faer::{random_distance_preserving_matrix_impl, sgemm_impl, svd_into_impl};
 use rand::Rng;
 
+/// Matrix identifier for SGEMM operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixName {
+    A,
+    B,
+    C,
+}
+
+impl fmt::Display for MatrixName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MatrixName::A => write!(f, "a (m * k)"),
+            MatrixName::B => write!(f, "b (k * n)"),
+            MatrixName::C => write!(f, "c (m * n)"),
+        }
+    }
+}
+
 /// Error type for SGEMM operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SgemmError {
     /// Matrix has incorrect dimensions.
     InvalidMatrixDimensions {
-        matrix_name: &'static str,
+        matrix_name: MatrixName,
         expected_rows: usize,
         expected_cols: usize,
-        expected_len: usize,
         actual_len: usize,
     },
     /// Dimension overflow when computing matrix size.
     DimensionOverflow {
-        operation: &'static str,
-        dim1: usize,
-        dim2: usize,
+        matrix_name: MatrixName,
+        rows: usize,
+        cols: usize,
     },
 }
 
@@ -38,21 +55,24 @@ impl fmt::Display for SgemmError {
                 matrix_name,
                 expected_rows,
                 expected_cols,
-                expected_len,
                 actual_len,
             } => write!(
                 f,
-                "expected {}x{} matrix `{}` to have length {}, instead got {}",
-                expected_rows, expected_cols, matrix_name, expected_len, actual_len
+                "expected {}x{} matrix {} to have length {}, instead got {}",
+                expected_rows,
+                expected_cols,
+                matrix_name,
+                expected_rows * expected_cols,
+                actual_len
             ),
             SgemmError::DimensionOverflow {
-                operation,
-                dim1,
-                dim2,
+                matrix_name,
+                rows,
+                cols,
             } => write!(
                 f,
-                "dimension overflow in {}: {} * {} would overflow usize",
-                operation, dim1, dim2
+                "dimension overflow in matrix {}: {} * {} would overflow usize",
+                matrix_name, rows, cols
             ),
         }
     }
@@ -136,49 +156,46 @@ pub fn sgemm(
 ) -> Result<(), SgemmError> {
     // Check size requirements with overflow protection.
     let expected_a_len = m.checked_mul(k).ok_or(SgemmError::DimensionOverflow {
-        operation: "matrix a (m * k)",
-        dim1: m,
-        dim2: k,
+        matrix_name: MatrixName::A,
+        rows: m,
+        cols: k,
     })?;
 
     if a.len() != expected_a_len {
         return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: "a",
+            matrix_name: MatrixName::A,
             expected_rows: m,
             expected_cols: k,
-            expected_len: expected_a_len,
             actual_len: a.len(),
         });
     }
 
     let expected_b_len = k.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        operation: "matrix b (k * n)",
-        dim1: k,
-        dim2: n,
+        matrix_name: MatrixName::B,
+        rows: k,
+        cols: n,
     })?;
 
     if b.len() != expected_b_len {
         return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: "b",
+            matrix_name: MatrixName::B,
             expected_rows: k,
             expected_cols: n,
-            expected_len: expected_b_len,
             actual_len: b.len(),
         });
     }
 
     let expected_c_len = m.checked_mul(n).ok_or(SgemmError::DimensionOverflow {
-        operation: "matrix c (m * n)",
-        dim1: m,
-        dim2: n,
+        matrix_name: MatrixName::C,
+        rows: m,
+        cols: n,
     })?;
 
     if c.len() != expected_c_len {
         return Err(SgemmError::InvalidMatrixDimensions {
-            matrix_name: "c",
+            matrix_name: MatrixName::C,
             expected_rows: m,
             expected_cols: n,
-            expected_len: expected_c_len,
             actual_len: c.len(),
         });
     }
@@ -304,7 +321,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "expected 2x4 matrix `a` to have length 8, instead got 5"
+            "expected 2x4 matrix a (m * k) to have length 8, instead got 5"
         );
     }
 
@@ -327,7 +344,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "expected 4x3 matrix `b` to have length 12, instead got 10"
+            "expected 4x3 matrix b (k * n) to have length 12, instead got 10"
         );
     }
 
@@ -350,7 +367,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "expected 2x3 matrix `c` to have length 6, instead got 5"
+            "expected 2x3 matrix c (m * n) to have length 6, instead got 5"
         );
     }
 
@@ -429,6 +446,33 @@ mod tests {
                 "dimension overflow in matrix c (m * n): 2 * {} would overflow usize",
                 usize::MAX
             )
+        );
+    }
+
+    /// This test ensures the Result type doesn't grow unexpectedly.
+    /// A large Result size increases stack usage even for the Ok(()) case.
+    #[test]
+    fn test_sgemm_result_size() {
+        let mut c = [0.0f32; 6];
+        let result = sgemm(
+            Transpose::None,
+            Transpose::None,
+            2,
+            3,
+            4,
+            1.0,
+            &[0.0; 5],
+            &[0.0; 12],
+            None,
+            &mut c,
+        );
+
+        let result_size = std::mem::size_of_val(&result);
+        const EXPECTED_RESULT_SIZE: usize = 32;
+        assert_eq!(
+            result_size, EXPECTED_RESULT_SIZE,
+            "Result size is {} bytes, does not match the expected size of {} bytes.",
+            result_size, EXPECTED_RESULT_SIZE
         );
     }
 
