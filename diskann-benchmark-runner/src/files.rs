@@ -65,7 +65,7 @@ impl CheckDeserialization for InputFile {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{File, create_dir};
+    use std::fs::{create_dir, File};
 
     use super::*;
 

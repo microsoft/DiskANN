@@ -15,8 +15,8 @@
 mod api;
 
 pub use api::{
-    Description, DispatchRule, FailureScore, IMPLICIT_MATCH_SCORE, MatchScore, TaggedFailureScore,
-    Why,
+    Description, DispatchRule, FailureScore, MatchScore, TaggedFailureScore, Why,
+    IMPLICIT_MATCH_SCORE,
 };
 
 ///////////

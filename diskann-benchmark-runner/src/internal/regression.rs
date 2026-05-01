@@ -99,10 +99,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Any, Checker,
-    benchmark::{PassFail, internal::CheckedPassFail},
+    benchmark::{internal::CheckedPassFail, PassFail},
     internal::load_from_disk,
-    jobs, registry, result,
+    jobs, registry, result, Any, Checker,
 };
 
 ////////////
