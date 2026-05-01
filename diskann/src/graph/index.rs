@@ -73,6 +73,9 @@ pub enum QueryVisitDecision<I: VectorId> {
     Accept(Neighbor<I>),
     /// Reject this node; do not add it to the frontier.
     Reject,
+    /// Reject this node but signal that exploration queue should be enabled
+    /// (for low match rate scenarios where we need to traverse through non-matching nodes).
+    RejectAndNeedExpand,
     /// Stop the search immediately without accepting this node.
     Terminate,
 }

@@ -392,6 +392,44 @@ where
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }
+        SearchPhase::TopkHighSelectivityMultihopFilter(search_phase) => {
+            // Handle MultiHop Topk search phase with high-selectivity optimization
+            // This uses RejectAndNeedExpand to enable exploration queue
+            let mut result = BuildResult::new_topk(build_stats);
+
+            // Save construction stats before running queries.
+            checkpoint.checkpoint(&result)?;
+
+            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &search_phase.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+
+            let steps = search::knn::SearchSteps::new(
+                search_phase.reps,
+                &search_phase.num_threads,
+                &search_phase.runs,
+            );
+
+            let bit_maps =
+                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+
+            let multihop = benchmark_core::search::graph::MultiHop::new(
+                index,
+                queries,
+                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                bit_maps
+                    .into_iter()
+                    .map(utils::filters::as_high_selectivity_query_label_provider)
+                    .collect(),
+            )?;
+
+            let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
+            result.append(AggregatedSearchResults::Topk(search_results));
+            Ok(result)
+        }
     }
 }
 

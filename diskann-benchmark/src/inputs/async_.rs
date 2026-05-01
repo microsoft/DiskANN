@@ -263,6 +263,43 @@ impl CheckDeserialization for MultiHopSearchPhase {
     }
 }
 
+/// Multi-hop search phase with high-selectivity optimization enabled.
+///
+/// This search type uses `RejectAndNeedExpand` for rejected nodes, enabling
+/// the exploration queue mechanism. This is beneficial when the filter has
+/// high selectivity (few matching vectors), as it allows the search to
+/// continue exploring through non-matching nodes even when the primary
+/// queue is exhausted.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct HighSelectivityMultiHopSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: InputFile,
+    // Enable sweeping threads
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+}
+
+impl CheckDeserialization for HighSelectivityMultiHopSearchPhase {
+    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        // Check the validity of the input files.
+        self.queries.check_deserialization(checker)?;
+
+        self.query_predicates.check_deserialization(checker)?;
+        self.data_labels.check_deserialization(checker)?;
+
+        self.groundtruth.check_deserialization(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.check_deserialization(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+
+        Ok(())
+    }
+}
+
 /// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -333,6 +370,8 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    /// Multi-hop search with high-selectivity optimization (exploration queue enabled).
+    TopkHighSelectivityMultihopFilter(HighSelectivityMultiHopSearchPhase),
 }
 
 impl CheckDeserialization for SearchPhase {
@@ -342,6 +381,9 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::Range(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::TopkHighSelectivityMultihopFilter(phase) => {
+                phase.check_deserialization(checker)
+            }
         }
     }
 }
