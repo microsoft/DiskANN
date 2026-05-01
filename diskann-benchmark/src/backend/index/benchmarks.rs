@@ -40,10 +40,14 @@ use super::{
 };
 use crate::{
     backend::index::{
-        result::{AggregatedSearchResults, BuildResult},
+        post_processor,
+        result::{AggregatedSearchResults, BuildResult, SearchResults},
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::async_::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase,
+        TopkPostProcessor,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -120,7 +124,8 @@ impl<T> Benchmark for FullPrecision<'static, T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
+        + diskann::graph::SampleableForStart
+        + Into<f32>,
     datatype::Type<T>: DispatchRule<datatype::DataType>,
 {
     type Input = IndexOperation;
@@ -252,6 +257,12 @@ where
         + for<'a> provider::SetElement<&'a [T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
+    common::FullPrecision: for<'a> glue::SearchStrategy<DP, &'a [T]>,
+    for<'a> post_processor::DeterminantDiversity: glue::SearchPostProcess<
+        <common::FullPrecision as glue::SearchStrategy<DP, &'a [T]>>::SearchAccessor<'a>,
+        &'a [T],
+        u32,
+    >,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {
@@ -268,19 +279,104 @@ where
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
+            // Check if a post-processor is requested
+            let search_results = if let Some(TopkPostProcessor::DeterminantDiversity {
+                power,
+                eta,
+            }) =
+                search_phase.post_processor.as_ref()
+            {
+                // Use search_with API with post-processor
+                let strategy = common::FullPrecision;
+                let context = DefaultContext;
+                let det_div = post_processor::DeterminantDiversity::new(*power, *eta);
 
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
+                let mut all_results = Vec::new();
 
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+                for threads in search_phase.num_threads.iter() {
+                    for run in search_phase.runs.iter() {
+                        for search_l in run.search_l.iter() {
+                            let knn_params =
+                                diskann::graph::search::Knn::new(run.search_n, *search_l, None)
+                                    .unwrap();
+
+                            let mut all_recalls = Vec::new();
+
+                            for query_idx in 0..queries.nrows() {
+                                let query = queries.row(query_idx);
+                                let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
+                                utils::tokio::block_on(async {
+                                    index
+                                        .search_with(
+                                            knn_params,
+                                            &strategy,
+                                            det_div,
+                                            &context,
+                                            query,
+                                            &mut output,
+                                        )
+                                        .await
+                                })?;
+
+                                // Compute recall for this query
+                                let gt = groundtruth.row(query_idx);
+                                let mut matches = 0;
+                                for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
+                                    if i >= gt.len() {
+                                        break;
+                                    }
+                                    if gt.contains(&neighbor.id) {
+                                        matches += 1;
+                                    }
+                                }
+                                all_recalls.push(matches);
+                            }
+
+                            let avg_recall = all_recalls.iter().sum::<usize>() as f32
+                                / (queries.nrows() * run.recall_k) as f32;
+
+                            all_results.push(SearchResults {
+                                num_tasks: threads.get(),
+                                search_n: run.search_n,
+                                search_l: *search_l,
+                                qps: vec![],
+                                search_latencies: vec![],
+                                mean_latencies: vec![],
+                                p90_latencies: vec![],
+                                p99_latencies: vec![],
+                                recall: utils::recall::RecallMetrics {
+                                    recall_k: run.recall_k,
+                                    recall_n: run.search_n,
+                                    num_queries: queries.nrows(),
+                                    average: avg_recall as f64,
+                                    minimum: *all_recalls.iter().min().unwrap_or(&0),
+                                    maximum: *all_recalls.iter().max().unwrap_or(&0),
+                                },
+                                mean_cmps: 0.0,
+                                mean_hops: 0.0,
+                            });
+                        }
+                    }
+                }
+
+                all_results
+            } else {
+                // Use regular broadcast search
+                let knn = benchmark_core::search::graph::KNN::new(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                )?;
+
+                let steps = search::knn::SearchSteps::new(
+                    search_phase.reps,
+                    &search_phase.num_threads,
+                    &search_phase.runs,
+                );
+
+                search::knn::run(&knn, &groundtruth, steps)?
+            };
+
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }
@@ -399,7 +495,8 @@ impl<'a, T> BuildAndSearch<'a> for FullPrecision<'a, T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
+    + diskann::graph::SampleableForStart
+    + Into<f32>,
 {
     type Data = BuildResult;
     fn run(

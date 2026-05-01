@@ -126,6 +126,51 @@ pub(crate) struct TopkSearchPhase {
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
+    #[serde(default)]
+    pub(crate) post_processor: Option<TopkPostProcessor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub(crate) enum TopkPostProcessor {
+    DeterminantDiversity {
+        #[serde(default = "default_det_div_power")]
+        power: f32,
+        #[serde(default = "default_det_div_eta")]
+        eta: f32,
+    },
+}
+
+const fn default_det_div_power() -> f32 {
+    2.0
+}
+
+const fn default_det_div_eta() -> f32 {
+    0.01
+}
+
+impl CheckDeserialization for TopkPostProcessor {
+    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        match self {
+            TopkPostProcessor::DeterminantDiversity { power, eta } => {
+                if *power <= 0.0 {
+                    return Err(anyhow::anyhow!(
+                        "determinant-diversity power must be > 0.0, got: {}",
+                        power
+                    ));
+                }
+
+                if *eta < 0.0 {
+                    return Err(anyhow::anyhow!(
+                        "determinant-diversity eta must be >= 0.0, got: {}",
+                        eta
+                    ));
+                }
+
+                Ok(())
+            }
+        }
+    }
 }
 
 impl CheckDeserialization for TopkSearchPhase {
@@ -137,6 +182,12 @@ impl CheckDeserialization for TopkSearchPhase {
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.check_deserialization(checker)
                 .with_context(|| format!("search run {}", i))?;
+        }
+
+        if let Some(post_processor) = self.post_processor.as_mut() {
+            post_processor
+                .check_deserialization(checker)
+                .context("invalid topk post processor")?;
         }
 
         Ok(())
@@ -166,6 +217,7 @@ impl Example for TopkSearchPhase {
             reps: REPS,
             num_threads: THREAD_COUNTS.to_vec(),
             runs,
+            post_processor: None,
         }
     }
 }
