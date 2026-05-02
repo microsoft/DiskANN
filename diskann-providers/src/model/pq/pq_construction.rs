@@ -1227,7 +1227,7 @@ mod pq_test {
             2,            /* 2 vectors in dataset */
             7,            /* Each vector is dimension 7 */
             chunk_size,   /* Current chunk is size 3 */
-            chunk_offset, /* Get chunk 2 for each vector */
+            chunk_offset, /* Get chunk 1 for each vector */
         );
 
         // 0.0, 0.1, 0.2 are the first chunk of the first vector
