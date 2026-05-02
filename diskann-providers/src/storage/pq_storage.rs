@@ -17,7 +17,7 @@ use rand::Rng;
 use tracing::info;
 
 use crate::{
-    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, pq::METADATA_SIZE},
+    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, accum_row_inplace, pq::METADATA_SIZE},
     utils::{gen_random_slice, read_bin_from, write_bin_from},
 };
 
@@ -339,11 +339,7 @@ impl PQStorage {
         // If the centroid is non-zero, we need to add it to the pivots to restore the
         // numeric behavior.
         if centroids.as_slice().iter().any(|c| *c != 0.0) {
-            pivots.row_iter_mut().for_each(|pivot| {
-                std::iter::zip(pivot.iter_mut(), centroids.as_slice().iter()).for_each(|(p, c)| {
-                    *p += *c;
-                });
-            });
+            accum_row_inplace(pivots.as_mut_view(), centroids.as_slice())
         }
 
         FixedChunkPQTable::new(dim, pivots.into_inner(), chunk_offsets.into_inner())
