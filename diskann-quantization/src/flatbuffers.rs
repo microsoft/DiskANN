@@ -19,6 +19,7 @@ macro_rules! import_schema {
     ($module:ident, $path:literal) => {
         // The generated files don't compile cleanly - so we need to suppress some lints.
         #[allow(
+            unsafe_op_in_unsafe_fn,
             dead_code,
             unused_imports,
             clippy::extra_unused_lifetimes,

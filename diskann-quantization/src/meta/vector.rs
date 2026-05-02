@@ -546,9 +546,9 @@ where
 mod tests {
     use diskann_utils::{Reborrow, ReborrowMut};
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;

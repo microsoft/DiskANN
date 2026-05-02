@@ -5,9 +5,7 @@
 
 use std::convert::{AsMut, AsRef};
 
-use diskann_wide::arch::Target2;
-#[cfg(not(target_arch = "aarch64"))]
-use diskann_wide::{Architecture, Const, Constant, SIMDCast, SIMDVector};
+use diskann_wide::{arch::Target2, Architecture, Const, Constant, SIMDCast, SIMDVector};
 use half::f16;
 
 /// Perform a numeric cast on a slice of values.
@@ -119,12 +117,24 @@ where
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl<T, U, To, From> Target2<diskann_wide::arch::aarch64::Neon, (), T, U> for SliceCast<To, From>
+where
+    T: AsMut<[To]>,
+    U: AsRef<[From]>,
+    diskann_wide::arch::aarch64::Neon: SIMDConvert<To, From>,
+{
+    #[inline(always)]
+    fn run(self, arch: diskann_wide::arch::aarch64::Neon, mut to: T, from: U) {
+        simd_convert(arch, to.as_mut(), from.as_ref())
+    }
+}
+
 /////////////////////////////
 // General SIMD Conversion //
 /////////////////////////////
 
 /// A helper trait to fill in the gaps for the unrolled `simd_convert` method.
-#[cfg(target_arch = "x86_64")]
 trait SIMDConvert<To, From>: Architecture {
     /// A constant encoding the the SIMD width of the underlying schema.
     type Width: Constant<Type = usize>;
@@ -171,7 +181,6 @@ trait SIMDConvert<To, From>: Architecture {
 
 #[inline(never)]
 #[allow(clippy::panic)]
-#[cfg(target_arch = "x86_64")]
 fn emit_length_error(xlen: usize, ylen: usize) -> ! {
     panic!(
         "lengths must be equal, instead got: xlen = {}, ylen = {}",
@@ -206,7 +215,6 @@ fn emit_length_error(xlen: usize, ylen: usize) -> ! {
 /// This overlapping can only happen at the very end of the slice and only if the length
 /// of the slice is not a multiple of the SIMD width used.
 #[inline(always)]
-#[cfg(target_arch = "x86_64")]
 fn simd_convert<A, To, From>(arch: A, to: &mut [To], from: &[From])
 where
     A: SIMDConvert<To, From>,
@@ -379,6 +387,50 @@ impl SIMDConvert<f16, f32> for diskann_wide::arch::x86_64::V3 {
     }
 }
 
+//---------//
+// Aarch64 //
+//---------//
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDConvert<f32, f16> for diskann_wide::arch::aarch64::Neon {
+    type Width = Const<4>;
+    type WideTo = <diskann_wide::arch::aarch64::Neon as Architecture>::f32x4;
+    type WideFrom = diskann_wide::arch::aarch64::f16x4;
+
+    #[inline(always)]
+    fn simd_convert(from: Self::WideFrom) -> Self::WideTo {
+        from.into()
+    }
+
+    // SAFETY: We only access data in the valid range for `pto` and `pfrom`.
+    #[inline(always)]
+    unsafe fn handle_small(self, pto: *mut f32, pfrom: *const f16, len: usize) {
+        for i in 0..len {
+            *pto.add(i) = diskann_wide::cast_f16_to_f32(*pfrom.add(i))
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDConvert<f16, f32> for diskann_wide::arch::aarch64::Neon {
+    type Width = Const<4>;
+    type WideTo = diskann_wide::arch::aarch64::f16x4;
+    type WideFrom = <diskann_wide::arch::aarch64::Neon as Architecture>::f32x4;
+
+    #[inline(always)]
+    fn simd_convert(from: Self::WideFrom) -> Self::WideTo {
+        from.simd_cast()
+    }
+
+    // SAFETY: We only access data in the valid range for `pto` and `pfrom`.
+    #[inline(always)]
+    unsafe fn handle_small(self, pto: *mut f16, pfrom: *const f32, len: usize) {
+        for i in 0..len {
+            *pto.add(i) = diskann_wide::cast_f32_to_f16(*pfrom.add(i))
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -480,6 +532,15 @@ mod tests {
                 if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
                     SliceCast::<f16, f32>::new().run(arch, dst.as_mut_slice(), src.as_slice())
                 }
+
+                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
+                    SliceCast::<f16, f32>::new().run(arch, dst.as_mut_slice(), src.as_slice())
+                }
+            }
+
+            #[cfg(target_arch = "aarch64")]
+            if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                SliceCast::<f16, f32>::new().run(arch, dst.as_mut_slice(), src.as_slice())
             }
         }
     }
@@ -508,6 +569,15 @@ mod tests {
                 if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
                     SliceCast::<f32, f16>::new().run(arch, dst.as_mut_slice(), src.as_slice())
                 }
+
+                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
+                    SliceCast::<f32, f16>::new().run(arch, dst.as_mut_slice(), src.as_slice())
+                }
+            }
+
+            #[cfg(target_arch = "aarch64")]
+            if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                SliceCast::<f32, f16>::new().run(arch, dst.as_mut_slice(), src.as_slice())
             }
         }
     }

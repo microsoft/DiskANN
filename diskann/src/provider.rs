@@ -171,6 +171,13 @@ pub trait DataProvider: Sized + Send + Sync + 'static {
 
     type Error: ToRanked + std::fmt::Debug + Send + Sync + 'static;
 
+    /// The operation guard returned by [`SetElement::set_element`] to notify `self` if an
+    /// operation fails.
+    ///
+    /// This is required to be `'static` for multi-insert compatibility (where it is required
+    /// to cross spawn boundaries).
+    type Guard: Guard<Id = Self::InternalId> + 'static;
+
     /// Translate an external id to its corresponding internal id.
     ///
     /// The vector referenced by `gid` must already have been added to the provider via
@@ -304,18 +311,9 @@ where
 ////////////////
 
 /// An overloadable `DataProvider` sub-trait allowing element assignment.
-pub trait SetElement<T>: DataProvider
-where
-    T: ?Sized,
-{
+pub trait SetElement<T>: DataProvider {
     /// The kind of error yielded by `set_element`.
     type SetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
-
-    /// The operation guard returned by `set_element` to notify `self` if an operation fails.
-    ///
-    /// This is required to be '`static` for multi-insert compatibility (where it is required
-    /// to cross spawn boundaries).
-    type Guard: Guard<Id = Self::InternalId> + 'static;
 
     /// Internally store the value of `element` and associate it with `id`.
     ///
@@ -332,7 +330,7 @@ where
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &T,
+        element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send;
 }
 
@@ -394,34 +392,20 @@ where
 ///
 /// # Element Relationship
 ///
-/// Accessors are expected to define three associated element types:
+/// Accessors are expected to define two associated element types:
 ///
 /// * `Element<'_>`: The type returned by `get_element`. This is scoped to the borrow
 ///   of the accessor at the `get_element` call site. As a consequence, there may only
-///   be one sucn `Element` active at a time.
+///   be one such `Element` active at a time.
 ///
 /// * `ElementRef<'_>`: A generalized borrowed form of `Element` obtainable via
 ///   `Reborrow`. This is the type on which distance computations are defined and is the
 ///   element type provided to the `on_element_unordered` bulk operation.
 ///
-/// * `Extended`: An extended version of `Element` whose lifetime is only limited to the
-///   lifetime of the `Self` type (rather than scoped to a particular borrow).
-///
-///   This is needed to handle situations where two or more elements are needed
-///   simultaneously from the same `Accessor` and is an escape hatch for the lifetime in
-///   `Element`.
-///
-///   It is expected to [`Reborrow`] to `ElementRef`.
-///
 /// The below diagram summarizes the relationship.
 ///
 /// ```text
-///           Convert (may allocate)
-///      +----- escapes the borrow -------> Extended -----------+
-///      |         of Element                                   |
-///      |                                                   Reborrow
-///      |                                                      |
-/// Element<'_> ------ Reborrow ----> ElementRef<'_> <----------+
+/// Element<'_> ------ Reborrow ----> ElementRef<'_>
 ///        ~~~~                                 ~~~~
 ///         ^                                    ^
 ///         |                                    |
@@ -435,8 +419,6 @@ where
 /// The need for `ElementRef` arises to allow HRTB bounds to distance computers without
 /// inducing a `'static` bound on `Self`. In traits like [`BuildQueryComputer`], attempting
 /// to use `Element` directly will result in such a requirement on the implementing Accessor.
-///
-/// The associated `Extended` type is really only needed for index construction.
 pub trait Accessor: HasId + Send + Sync {
     /// A generalized reference type used for distance computations.
     ///
@@ -449,21 +431,9 @@ pub trait Accessor: HasId + Send + Sync {
     ///
     /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
     /// `Self::ElementRef`.
-    ///
-    /// To persist for a longer lifetime, it must be convertible via [`Into`] to
-    /// `Self::Extended`.
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>
-        + Into<Self::Extended>
-        + Send
-        + Sync
+    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
-
-    /// A version of `Self::Element` whose lifetime is not restricted to a borrow of `Self`.
-    ///
-    /// This is expected to still [`Reborrow`] to `ElementRef` for use in distance
-    /// computations.
-    type Extended: for<'a> Reborrow<'a, Target = Self::ElementRef<'a>> + Send + Sync;
 
     /// The error (if any) returned by [`Self::get_element`].
     type GetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
@@ -557,10 +527,7 @@ pub trait BuildDistanceComputer: Accessor {
 ///
 /// Query computers are allowed to preprocess the query to enable more efficient distance
 /// computations.
-pub trait BuildQueryComputer<T>: Accessor
-where
-    T: ?Sized,
-{
+pub trait BuildQueryComputer<T>: Accessor {
     /// The error type (if any) associated with distance computer construction.
     type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
@@ -577,7 +544,7 @@ where
     /// invoked once per search or graph insert.
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 
     /// Compute the distances for the elements in the iterator `itr` using the
@@ -1071,6 +1038,7 @@ mod tests {
         type InternalId = u32;
         type ExternalId = u32;
         type Error = ANNError;
+        type Guard = NoopGuard<u32>;
 
         fn to_internal_id(&self, _context: &DefaultContext, gid: &u32) -> Result<u32, ANNError> {
             Ok(*gid)
@@ -1106,7 +1074,6 @@ mod tests {
         type Id = u32;
     }
     impl Accessor for FloatAccessor<'_> {
-        type Extended = f32;
         type Element<'a>
             = f32
         where
@@ -1173,7 +1140,6 @@ mod tests {
         type Id = u32;
     }
     impl Accessor for StringAccessor<'_> {
-        type Extended = String;
         type Element<'a>
             = &'a str
         where
@@ -1333,7 +1299,6 @@ mod tests {
     common_test_accessor!(Allocating<'_>);
 
     impl Accessor for Allocating<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = Box<[u8]>
         where
@@ -1361,7 +1326,6 @@ mod tests {
     common_test_accessor!(Forwarding<'_>);
 
     impl<'provider> Accessor for Forwarding<'provider> {
-        type Extended = &'provider [u8];
         // NOTE: The lifetime of `Element` is `'provider` - not `'a`. This is what makes
         // it a forwarding accessor.
         type Element<'a>
@@ -1406,7 +1370,6 @@ mod tests {
     common_test_accessor!(Wrapping<'_>);
 
     impl Accessor for Wrapping<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = Wrapped<'a>
         where
@@ -1438,7 +1401,6 @@ mod tests {
     common_test_accessor!(Sharing<'_>);
 
     impl Accessor for Sharing<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = &'a [u8]
         where

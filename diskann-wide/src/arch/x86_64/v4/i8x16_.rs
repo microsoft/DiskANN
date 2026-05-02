@@ -30,7 +30,7 @@ macros::x86_retarget!(i8x16 => v3::i8x16);
 
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Add, add, _mm_add_epi8, "sse2");
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Sub, sub, _mm_sub_epi8, "sse2");
-helpers::unsafe_map_unary_op!(i8x16, SIMDAbs, abs_simd, _mm_abs_epi8, "sse3");
+helpers::unsafe_map_unary_op!(i8x16, SIMDAbs, abs_simd, _mm_abs_epi8, "ssse3");
 
 impl std::ops::Mul for i8x16 {
     type Output = Self;

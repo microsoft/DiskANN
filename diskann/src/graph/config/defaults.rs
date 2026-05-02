@@ -35,3 +35,7 @@ pub const MAX_MINIBATCH_PARALLELISM: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// Conservatively consider all candidates within a batch.
 pub const INTRA_BATCH_CANDIDATES: IntraBatchCandidates = IntraBatchCandidates::All;
+
+/// Default beta factor for filtered search.
+/// Values < 1.0 bias the search toward vectors matching the filter.
+pub const FILTER_BETA: f32 = 0.5;

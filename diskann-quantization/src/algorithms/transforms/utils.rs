@@ -51,11 +51,7 @@ pub(super) fn sign_to_bool(x: u32) -> bool {
 
 #[cfg(feature = "flatbuffers")]
 pub(super) fn bool_to_sign(x: bool) -> u32 {
-    if x {
-        0x8000_0000
-    } else {
-        0
-    }
+    if x { 0x8000_0000 } else { 0 }
 }
 
 pub(super) fn subsample_indices<R, A>(

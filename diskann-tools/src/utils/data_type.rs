@@ -20,9 +20,3 @@ pub enum DataType {
     /// Half precision float.
     Fp16,
 }
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-pub enum AssociatedDataType {
-    /// 32 bit unsigned integer.
-    U32,
-}

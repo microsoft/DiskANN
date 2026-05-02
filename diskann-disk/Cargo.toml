@@ -62,6 +62,8 @@ diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
 iai-callgrind.workspace = true
 diskann = { workspace = true }
+approx.workspace = true
+proptest.workspace = true
 
 [features]
 default = []

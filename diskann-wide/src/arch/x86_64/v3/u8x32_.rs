@@ -37,7 +37,12 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
-
+macros::x86_zipunzip!(
+    u8x32,
+    u8x16,
+    _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15),
+    _mm_setr_epi8(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15)
+);
 impl std::ops::Mul for u8x32 {
     type Output = Self;
     #[inline(always)]
@@ -119,7 +124,7 @@ impl X86LoadStore for u8x32 {
     unsafe fn store_simd(self, ptr: *mut u8) {
         // SAFETY: The pointer access is guaranteed by the caller.
         //
-        // `_mm256_storeuu_si256` requires AVX - implied by `V3`.
+        // `_mm256_storeu_si256` requires AVX - implied by `V3`.
         unsafe { _mm256_storeu_si256(ptr.cast::<__m256i>(), self.to_underlying()) }
     }
 
@@ -149,7 +154,7 @@ impl SIMDPartialOrd for u8x32 {
     fn lt_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_max_epu8`, `_mm256_empeq_epi8`, and
+        // SAFETY: The intrinsics `_mm256_max_epu8`, `_mm256_cmpeq_epi8`, and
         // `_mm256_xor_si256` require AVX2 - all of which are implied by `V3`.
         let m = unsafe {
             let max = _mm256_max_epu8(self.0, other.0);
@@ -162,7 +167,7 @@ impl SIMDPartialOrd for u8x32 {
     fn le_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_min_epu8` and `_mm256_empeq_epi8` require AVX2
+        // SAFETY: The intrinsics `_mm256_min_epu8` and `_mm256_cmpeq_epi8` require AVX2
         // - implied by `V3`.
         let m = unsafe { _mm256_cmpeq_epi8(self.0, _mm256_min_epu8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
@@ -223,6 +228,7 @@ mod test_x86_u8 {
     test_utils::ops::test_mul!(u8x32, 0x0f4caa80eceaa523, V3::new_checked_uncached());
     test_utils::ops::test_fma!(u8x32, 0xb8f702ba85375041, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(u8x32 => u8x16, 0x475a19e80c2f3977, V3::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(u8x32 => u8x16, 0xa1b2c3d4e5f67890, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(u8x32, 0x941757bd5cc641a1, V3::new_checked_uncached());
 

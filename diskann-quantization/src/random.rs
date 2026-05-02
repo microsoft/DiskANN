@@ -5,7 +5,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use rand::{rngs::StdRng, Rng, RngCore, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 
 /// Creation of random number generator in potentially parallelized applications.
 pub trait RngBuilder<T> {

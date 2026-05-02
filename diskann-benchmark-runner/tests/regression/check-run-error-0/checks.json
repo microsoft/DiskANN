@@ -1,0 +1,25 @@
+[
+  {
+    "status": "error",
+    "tolerance": {
+      "error_in_check": true,
+      "succeed": true
+    },
+    "error": "simulated check error"
+  },
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_when_checked": false
+    },
+    "result": "int8"
+  },
+  {
+    "status": "error",
+    "tolerance": {
+      "error_in_check": true,
+      "succeed": true
+    },
+    "error": "simulated check error"
+  }
+]

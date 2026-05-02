@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::data_model::GraphDataType;
 use diskann::{
     utils::{async_tools, vecid_from_usize, TryIntoVectorId, VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
@@ -18,18 +19,17 @@ use diskann::{
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
-        graph::{
-            provider::async_::inmem::DefaultProviderParameters,
-            traits::{AdHoc, GraphDataType},
-        },
-        IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
+        graph::provider::async_::inmem::DefaultProviderParameters, IndexConfiguration,
+        MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
     utils::{
-        create_thread_pool, find_medoid_with_sampling, load_bin, save_bin_u32, RayonThreadPool,
-        VectorDataIterator, MAX_MEDOID_SAMPLE_SIZE,
+        create_thread_pool, find_medoid_with_sampling, RayonThreadPoolRef, VectorDataIterator,
+        MAX_MEDOID_SAMPLE_SIZE,
     },
 };
+use diskann_utils::io::{read_bin, write_bin};
+use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
@@ -233,10 +233,10 @@ where
             self.index_configuration.num_threads
         );
 
-        self.generate_compressed_data(&pool).await?;
+        self.generate_compressed_data(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        self.build_inmem_index(&pool).await?;
+        self.build_inmem_index(pool.as_ref()).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         // Use physical file to pass the memory index to the disk writer
@@ -246,7 +246,7 @@ where
         Ok(())
     }
 
-    async fn generate_compressed_data(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn generate_compressed_data(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -289,13 +289,13 @@ where
 
         let generator = QuantDataGenerator::<
             Data::VectorDataType,
-            PQGeneration<Data::VectorDataType, StorageProvider, &RayonThreadPool>,
+            PQGeneration<Data::VectorDataType, StorageProvider>,
         >::new(
             self.index_writer.get_dataset_file(),
             generator_context,
             &quantizer_context,
         )?;
-        let progress = generator.generate_data(storage_provider, &pool, &self.chunking_config)?;
+        let progress = generator.generate_data(storage_provider, pool, &self.chunking_config)?;
 
         checkpoint_context.update(progress.clone())?;
         if let Progress::Processed(progress_point) = progress {
@@ -310,7 +310,7 @@ where
         Ok(())
     }
 
-    async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn build_inmem_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -324,7 +324,7 @@ where
         }
     }
 
-    async fn build_merged_vamana_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    async fn build_merged_vamana_index(&mut self, pool: RayonThreadPoolRef<'_>) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let mut workflow = MergedVamanaIndexWorkflow::new(self, pool);
 
@@ -508,8 +508,7 @@ where
 
     // Associated data will only be used in the write_disk_layout function which only requires the none-partitioned associated data stream.
     let dataset_iter = Arc::new(Mutex::new({
-        let iter =
-            VectorDataIterator::<_, AdHoc<T>>::new(data_path, Option::None, storage_provider)?;
+        let iter = VectorDataIterator::<_, T>::new(data_path, Option::None, storage_provider)?;
         iter.enumerate().skip(offset)
     }));
 
@@ -880,9 +879,9 @@ impl StartPoint {
                 path
             )));
         }
-        let (data, _, _) = load_bin::<u32, _>(&mut reader.open_reader(path)?, 0)?;
+        let data = read_bin::<u32>(&mut reader.open_reader(path)?)?;
 
-        let start_point_id = data.first().ok_or_else(|| {
+        let start_point_id = data.try_get(0, 0).ok_or_else(|| {
             ANNError::log_invalid_file_format(format!("Start point ID file {} is empty", path))
         })?;
 
@@ -894,12 +893,9 @@ impl StartPoint {
     where
         StorageWriter: StorageWriteProvider,
     {
-        save_bin_u32(
+        write_bin(
+            MatrixView::row_vector(std::slice::from_ref(&self.0)),
             &mut storage_provider.create_for_write(path)?,
-            std::slice::from_ref(&self.0),
-            1,
-            1,
-            0,
         )?;
         debug!("Saved start point ID {} to {}", self.0, path);
         Ok(())
@@ -915,8 +911,7 @@ mod start_point_tests {
     use std::io::Write;
 
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::utils::write_metadata;
-    use vfs::MemoryFS;
+    use diskann_utils::io::Metadata;
 
     use super::*;
 
@@ -930,8 +925,7 @@ mod start_point_tests {
     #[test]
     fn test_start_point_save_and_load() {
         let file_path = "/start_point_test.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create and save a start point
         let id = 42u32;
@@ -945,7 +939,7 @@ mod start_point_tests {
 
     #[test]
     fn test_start_point_load_nonexistent_file() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let result = StartPoint::load("/nonexistent_file.bin", &storage_provider);
         assert_eq!(
             result.err().unwrap().kind(),
@@ -956,8 +950,7 @@ mod start_point_tests {
     #[test]
     fn test_start_point_load_empty_file() {
         let file_path = "/empty_file.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create an empty file
         {
@@ -972,15 +965,14 @@ mod start_point_tests {
     #[test]
     fn test_start_point_load_invalid_data() {
         let file_path = "/invalid_data.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create a file with invalid data
         {
             let mut file = storage_provider.create_for_write(file_path).unwrap();
             let npts = 0;
             let dim = 1;
-            write_metadata(&mut file, npts, dim).unwrap();
+            Metadata::new(npts, dim).unwrap().write(&mut file).unwrap();
         }
 
         let result = StartPoint::load(file_path, &storage_provider);

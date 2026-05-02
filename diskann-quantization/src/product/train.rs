@@ -12,13 +12,11 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use thiserror::Error;
 
 use crate::{
-    algorithms::kmeans::{
-        self,
-        common::{square_norm, BlockTranspose},
-    },
-    cancel::Cancelation,
-    random::{BoxedRngBuilder, RngBuilder},
     Parallelism,
+    algorithms::kmeans::{self, common::square_norm},
+    cancel::Cancelation,
+    multi_vector::BlockTransposed,
+    random::{BoxedRngBuilder, RngBuilder},
 };
 
 pub struct LightPQTrainingParameters {
@@ -170,7 +168,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
 
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.row_iter().map(square_norm).collect();
-                let transpose = BlockTranspose::<16>::from_strided(view);
+                let transpose = BlockTransposed::<f32, 16>::from_strided(view);
                 let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
 
                 // Construct the random number generator seeded by the PQ chunk.
@@ -180,7 +178,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 kmeans::plusplus::kmeans_plusplus_into_inner(
                     centers.as_mut_view(),
                     view,
-                    &transpose,
+                    transpose.as_view(),
                     &norms,
                     &mut rng,
                 )
@@ -205,7 +203,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
                 kmeans::lloyds::lloyds_inner(
                     view,
                     &norms,
-                    &transpose,
+                    transpose.as_view(),
                     centers.as_mut_view(),
                     trainer.lloyds_reps,
                 );
@@ -270,10 +268,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
         rngs::StdRng,
         seq::SliceRandom,
-        Rng, SeedableRng,
     };
 
     use diskann_utils::lazy_format;

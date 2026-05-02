@@ -10,10 +10,7 @@ use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{
-    QueryComputer,
-    dynamic::{DistanceComputerConstructionError, VTable},
-};
+use super::{QueryComputer, dynamic::VTable};
 use crate::model::FixedChunkPQTable;
 
 pub trait PQVersion: Eq + Copy {}
@@ -192,27 +189,11 @@ where
 {
     /// Construct a `MultiDistanceComputer` from the provided table implementing the
     /// requested metric.
-    pub fn new(
-        table: MultiTable<T, I>,
-        metric: Metric,
-    ) -> Result<Self, DistanceComputerConstructionError> {
-        // Check if OPQ is used. If so, we cannot correctly perform distance computations.
-        match &table {
-            MultiTable::One { table, .. } => {
-                if table.has_opq() {
-                    return Err(DistanceComputerConstructionError::OPQNotSupported);
-                }
-            }
-            MultiTable::Two { new, old, .. } => {
-                if new.has_opq() || old.has_opq() {
-                    return Err(DistanceComputerConstructionError::OPQNotSupported);
-                }
-            }
-        };
-        Ok(Self {
+    pub fn new(table: MultiTable<T, I>, metric: Metric) -> Self {
+        Self {
             table,
             vtable: VTable::new(metric),
-        })
+        }
     }
 
     /// Return the versions associated with the tables in this schema.
@@ -549,7 +530,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new = test_utils::seed_pivot_table(config);
@@ -654,7 +634,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -666,7 +645,7 @@ mod tests {
         assert_eq!(*n, version);
         assert!(o.is_none());
 
-        let computer = MultiDistanceComputer::new(multi_table, metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table, metric);
 
         test_distance_computer_multi_with_one(
             &computer,
@@ -818,7 +797,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new_config = test_utils::TableConfig {
@@ -826,7 +804,6 @@ mod tests {
             pq_chunks: 5,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let new = test_utils::seed_pivot_table(new_config);
@@ -840,7 +817,7 @@ mod tests {
         assert_eq!(*n, new_version);
         assert_eq!(*o.unwrap(), old_version);
 
-        let computer = MultiDistanceComputer::new(multi_table.clone(), metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table.clone(), metric);
         test_distance_computer_multi_with_two(
             &computer,
             &new,
@@ -851,56 +828,6 @@ mod tests {
             100,
             &mut rng,
         );
-    }
-
-    ///////////////////////////////////////////
-    // Distance Computer Construction Errors //
-    ///////////////////////////////////////////
-
-    #[rstest]
-    fn test_multi_distance_computer_opq_error(
-        #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) {
-        let config_with_opq = test_utils::TableConfig {
-            dim: 17,
-            pq_chunks: 4,
-            num_pivots: 20,
-            start_value: 10.0,
-            use_opq: true,
-        };
-
-        let config = test_utils::TableConfig {
-            dim: 17,
-            pq_chunks: 4,
-            num_pivots: 20,
-            start_value: 10.0,
-            use_opq: false,
-        };
-
-        let expected_err = (DistanceComputerConstructionError::OPQNotSupported).to_string();
-        let table_with_opq = test_utils::seed_pivot_table(config_with_opq);
-        let table = test_utils::seed_pivot_table(config);
-
-        let schema = MultiTable::one(&table_with_opq, 0);
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        // Try all combinations of tables with OPQ.
-        let schema = MultiTable::two(&table_with_opq, &table, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        let schema = MultiTable::two(&table, &table_with_opq, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        let schema = MultiTable::two(&table_with_opq, &table_with_opq, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
     }
 
     ////////////////////////////////
@@ -998,7 +925,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -1127,7 +1053,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new_config = test_utils::TableConfig {
@@ -1135,7 +1060,6 @@ mod tests {
             pq_chunks: 5,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let old = test_utils::seed_pivot_table(old_config);

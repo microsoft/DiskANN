@@ -4,7 +4,6 @@
  */
 
 pub(crate) mod ann_error;
-pub(crate) use ann_error::ensure_positive;
 pub use ann_error::{ANNError, ANNErrorKind, ANNResult, DiskANNError, ErrorContext, IntoANNResult};
 
 pub(crate) mod ranked;

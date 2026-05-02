@@ -8,11 +8,11 @@
 use std::ops::Deref;
 
 use diskann::{ANNError, ANNResult};
-use diskann_providers::common::AlignedBoxWithSlice;
+use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
 use crate::{
     data_model::GraphHeader,
-    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead},
+    utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead, Alignment},
 };
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
@@ -34,7 +34,7 @@ pub struct DiskSectorGraph<AlignedReaderType: AlignedFileReader> {
     /// index info for multi-sector nodes
     /// node `i` is in sector: [i * max_node_len.div_ceil(block_size)]
     /// offset in sector: [0]
-    sectors_data: AlignedBoxWithSlice<u8>,
+    sectors_data: Poly<[u8], AlignedAllocator>,
     /// Current sector index into which the next read reads data
     cur_sector_idx: u64,
 
@@ -73,10 +73,12 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
 
         Ok(Self {
             sector_reader,
-            sectors_data: AlignedBoxWithSlice::new(
+            sectors_data: Poly::broadcast(
+                0u8,
                 max_n_batch_sector_read * num_sectors_per_node * block_size,
-                block_size,
-            )?,
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
+            )
+            .map_err(ANNError::log_index_error)?,
             cur_sector_idx: 0,
             num_nodes_per_sector,
             node_len,
@@ -90,10 +92,12 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     pub fn reconfigure(&mut self, max_n_batch_sector_read: usize) -> ANNResult<()> {
         if max_n_batch_sector_read > self.max_n_batch_sector_read {
             self.max_n_batch_sector_read = max_n_batch_sector_read;
-            self.sectors_data = AlignedBoxWithSlice::new(
+            self.sectors_data = Poly::broadcast(
+                0u8,
                 max_n_batch_sector_read * self.num_sectors_per_node * self.block_size,
-                self.block_size,
-            )?;
+                AlignedAllocator::new(AlignedReaderType::Alignment::VALUE),
+            )
+            .map_err(ANNError::log_index_error)?;
         }
         Ok(())
     }
@@ -116,12 +120,24 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
         }
 
         let len_per_node = self.num_sectors_per_node * self.block_size;
-        let mut sector_slices = self.sectors_data.split_into_nonoverlapping_mut_slices(
-            cur_sector_idx_usize * len_per_node
-                ..(cur_sector_idx_usize + sectors_to_fetch.len()) * len_per_node,
-            len_per_node,
-        )?;
-        let mut read_requests = Vec::with_capacity(sector_slices.len());
+        if len_per_node == 0 {
+            return Err(ANNError::log_index_error(format_args!(
+                "len_per_node is 0 (num_sectors_per_node={}, block_size={})",
+                self.num_sectors_per_node, self.block_size,
+            )));
+        }
+        let range = cur_sector_idx_usize * len_per_node
+            ..(cur_sector_idx_usize + sectors_to_fetch.len()) * len_per_node;
+        debug_assert!(
+            range.len() % len_per_node == 0,
+            "range length {} is not divisible by {}",
+            range.len(),
+            len_per_node
+        );
+        let mut sector_slices: Vec<&mut [u8]> =
+            self.sectors_data[range].chunks_mut(len_per_node).collect();
+        let mut read_requests: Vec<AlignedRead<'_, u8, AlignedReaderType::Alignment>> =
+            Vec::with_capacity(sector_slices.len());
         for (local_sector_idx, slice) in sector_slices.iter_mut().enumerate() {
             let sector_id = sectors_to_fetch[local_sector_idx];
             read_requests.push(AlignedRead::new(sector_id * self.block_size as u64, slice)?);
@@ -204,7 +220,7 @@ mod disk_sector_graph_test {
     ) -> DiskSectorGraph<<AlignedFileReaderFactory as AlignedReaderFactory>::AlignedReaderType>
     {
         DiskSectorGraph {
-            sectors_data: AlignedBoxWithSlice::new(512, 512).unwrap(),
+            sectors_data: Poly::broadcast(0u8, 512, AlignedAllocator::A512).unwrap(),
             sector_reader,
             cur_sector_idx: 0,
             num_nodes_per_sector,

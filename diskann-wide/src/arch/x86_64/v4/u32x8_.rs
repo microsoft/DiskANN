@@ -21,7 +21,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit unsigned integer
 /////
 
 macros::x86_define_register!(u32x8, __m256i, BitMask<8, V4>, u32, 8, V4);
@@ -35,6 +35,7 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip_perm32!(u32x8);
 
 helpers::unsafe_map_binary_op!(u32x8, std::ops::Add, add, _mm256_add_epi32, "avx2");
 helpers::unsafe_map_binary_op!(u32x8, std::ops::Sub, sub, _mm256_sub_epi32, "avx2");
@@ -130,6 +131,7 @@ mod test_x86_u32 {
 
     test_utils::ops::test_cmp!(u32x8, 0xbc62480ada063710, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(u32x8 => u32x4, 0xb151fcd6141b10c9, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(u32x8 => u32x4, 0xb8d1430e6f5a927c, V4::new_checked_uncached());
     test_utils::ops::test_select!(u32x8, 0xf1da67c57b7324f7, V4::new_checked_uncached());
 
     // Bit ops

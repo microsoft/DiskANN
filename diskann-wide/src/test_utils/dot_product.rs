@@ -70,6 +70,48 @@ impl ExpectedDot<i32, u8, i8, 4> for DotSchema {
     }
 }
 
+impl ExpectedDot<i32, i8, i8, 4> for DotSchema {
+    fn expected_dot_impl(accumulator: i32, left: &[i8; 4], right: &[i8; 4]) -> i32 {
+        let l0: i32 = left[0].into();
+        let l1: i32 = left[1].into();
+        let l2: i32 = left[2].into();
+        let l3: i32 = left[3].into();
+
+        let r0: i32 = right[0].into();
+        let r1: i32 = right[1].into();
+        let r2: i32 = right[2].into();
+        let r3: i32 = right[3].into();
+
+        accumulator.expected_add_(
+            l0.expected_mul_(r0)
+                .expected_add_(l1.expected_mul_(r1))
+                .expected_add_(l2.expected_mul_(r2))
+                .expected_add_(l3.expected_mul_(r3)),
+        )
+    }
+}
+
+impl ExpectedDot<u32, u8, u8, 4> for DotSchema {
+    fn expected_dot_impl(accumulator: u32, left: &[u8; 4], right: &[u8; 4]) -> u32 {
+        let l0: u32 = left[0].into();
+        let l1: u32 = left[1].into();
+        let l2: u32 = left[2].into();
+        let l3: u32 = left[3].into();
+
+        let r0: u32 = right[0].into();
+        let r1: u32 = right[1].into();
+        let r2: u32 = right[2].into();
+        let r3: u32 = right[3].into();
+
+        accumulator.expected_add_(
+            l0.expected_mul_(r0)
+                .expected_add_(l1.expected_mul_(r1))
+                .expected_add_(l2.expected_mul_(r2))
+                .expected_add_(l3.expected_mul_(r3)),
+        )
+    }
+}
+
 ////////////////
 // Test Macro //
 ////////////////
@@ -202,9 +244,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_u8_i8_to_i32() {
-        let a: &[[u8; 4]] = &[
+    fn u8_range() -> &'static [[u8; 4]] {
+        &[
             [u8::MIN, u8::MIN, u8::MIN, u8::MIN],
             [u8::MIN, u8::MIN, u8::MIN, u8::MAX],
             [u8::MIN, u8::MIN, u8::MAX, u8::MIN],
@@ -221,9 +262,11 @@ mod tests {
             [u8::MAX, u8::MAX, u8::MIN, u8::MAX],
             [u8::MAX, u8::MAX, u8::MAX, u8::MIN],
             [u8::MAX, u8::MAX, u8::MAX, u8::MAX],
-        ];
+        ]
+    }
 
-        let b: &[[i8; 4]] = &[
+    fn i8_range() -> &'static [[i8; 4]] {
+        &[
             [i8::MIN, i8::MIN, i8::MIN, i8::MIN],
             [i8::MIN, i8::MIN, i8::MIN, i8::MAX],
             [i8::MIN, i8::MIN, i8::MAX, i8::MIN],
@@ -240,7 +283,13 @@ mod tests {
             [i8::MAX, i8::MAX, i8::MIN, i8::MAX],
             [i8::MAX, i8::MAX, i8::MAX, i8::MIN],
             [i8::MAX, i8::MAX, i8::MAX, i8::MAX],
-        ];
+        ]
+    }
+
+    #[test]
+    fn test_u8_i8_to_i32() {
+        let a = u8_range();
+        let b = i8_range();
 
         let bases = [0, 1, -1, i16::MAX as i32, i16::MIN as i32];
 
@@ -250,6 +299,79 @@ mod tests {
                     .into_iter()
                     .zip((*right).into_iter())
                     .map(|(l, r)| (l as i32) * (r as i32))
+                    .sum();
+                for b in bases {
+                    let expected = dot + b;
+                    assert_eq!(
+                        expected,
+                        DotSchema::expected_dot(b, left, right),
+                        "failed for: base = {}, left = {:?}, right = {:?}",
+                        b,
+                        left,
+                        right,
+                    );
+
+                    assert_eq!(
+                        expected,
+                        DotSchema::expected_dot(b, right, left),
+                        "failed for: base = {}, left = {:?}, right = {:?}",
+                        b,
+                        right,
+                        left,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_i8_i8_to_i32() {
+        let a = i8_range();
+        let bases = [0, 1, -1, i16::MAX as i32, i16::MIN as i32];
+
+        for left in a {
+            for right in a {
+                let dot: i32 = (*left)
+                    .into_iter()
+                    .zip((*right).into_iter())
+                    .map(|(l, r)| (l as i32) * (r as i32))
+                    .sum();
+                for b in bases {
+                    let expected = dot + b;
+                    assert_eq!(
+                        expected,
+                        DotSchema::expected_dot(b, left, right),
+                        "failed for: base = {}, left = {:?}, right = {:?}",
+                        b,
+                        left,
+                        right,
+                    );
+
+                    assert_eq!(
+                        expected,
+                        DotSchema::expected_dot(b, right, left),
+                        "failed for: base = {}, left = {:?}, right = {:?}",
+                        b,
+                        right,
+                        left,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_u8_u8_to_u32() {
+        let a = u8_range();
+
+        let bases = [0, 1, i16::MAX as u32, u16::MAX as u32];
+
+        for left in a {
+            for right in a {
+                let dot: u32 = (*left)
+                    .into_iter()
+                    .zip((*right).into_iter())
+                    .map(|(l, r)| (l as u32) * (r as u32))
                     .sum();
                 for b in bases {
                     let expected = dot + b;

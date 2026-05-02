@@ -6,7 +6,7 @@
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::{DispatchRule, FailureScore, Map, MatchScore};
+use crate::dispatcher::{DispatchRule, FailureScore, MatchScore};
 
 /// An enum representation for common DiskANN data types.
 ///
@@ -59,11 +59,6 @@ impl std::fmt::Display for DataType {
 /// Lifting the enum `DataType` into the Rust type domain.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Type<T>(std::marker::PhantomData<T>);
-
-/// The `Type` meta variable maps to itself.
-impl<T: 'static> Map for Type<T> {
-    type Type<'a> = Self;
-}
 
 pub const MATCH_FAIL: FailureScore = FailureScore(1000);
 

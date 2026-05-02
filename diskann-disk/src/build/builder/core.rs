@@ -4,19 +4,18 @@
  */
 use std::mem::{self, size_of};
 
+use crate::data_model::GraphDataType;
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        graph::traits::GraphDataType, IndexConfiguration, GRAPH_SLACK_FACTOR,
-        MAX_PQ_TRAINING_SET_SIZE,
-    },
+    model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
     storage::PQStorage,
     utils::{
-        load_bin, load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
+        load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_utils::io::read_bin;
 use rand::{seq::SliceRandom, Rng};
 use tracing::info;
 
@@ -129,7 +128,7 @@ where
         let metadata = load_metadata_from_file(storage_provider, shard_base_file)?;
 
         let mut index_config = base_config.clone();
-        index_config.max_points = metadata.npoints;
+        index_config.max_points = metadata.npoints();
         index_config.config = low_degree_params;
 
         Ok(index_config)
@@ -145,13 +144,11 @@ where
         T: Default + bytemuck::Pod,
     {
         let storage_provider = self.storage_provider;
-        let (shard_ids, shard_size, _) = load_bin::<u32, StorageProvider::Reader>(
-            &mut storage_provider.open_reader(shard_ids_file)?,
-            0,
-        )?;
+        let shard_ids = read_bin::<u32>(&mut storage_provider.open_reader(shard_ids_file)?)?;
+        let shard_size = shard_ids.nrows();
         info!("Loaded {} shard ids from {}", shard_size, shard_ids_file);
-        let max_id = shard_ids.iter().max().copied().unwrap_or(0);
-        let sampling_rate = shard_ids.len() as f64 / (max_id + 1) as f64;
+        let max_id = shard_ids.as_slice().iter().max().copied().unwrap_or(0);
+        let sampling_rate = shard_ids.as_slice().len() as f64 / (max_id + 1) as f64;
 
         let mut dataset_reader: SampleVectorReader<T, _> = SampleVectorReader::new(
             dataset_file,
@@ -172,7 +169,7 @@ where
         shard_base_cached_writer.write(&dim.to_le_bytes())?;
 
         let mut num_written: u32 = 0;
-        dataset_reader.read_vectors(shard_ids.iter().copied(), |vector_t| {
+        dataset_reader.read_vectors(shard_ids.as_slice().iter().copied(), |vector_t| {
             // Casting Pod type to bytes always succeeds (u8 has alignment of 1)
             let vector_bytes: &[u8] = bytemuck::must_cast_slice(vector_t);
             shard_base_cached_writer.write(vector_bytes)?;
@@ -384,12 +381,9 @@ where
         Ok(())
     }
 
-    fn read_idmap(&self, idmaps_path: String) -> std::io::Result<Vec<u32>> {
-        let (data, _npts, _dim) = load_bin::<u32, StorageProvider::Reader>(
-            &mut self.storage_provider.open_reader(&idmaps_path)?,
-            0,
-        )?;
-        Ok(data)
+    fn read_idmap(&self, idmaps_path: String) -> Result<Vec<u32>, diskann_utils::io::ReadBinError> {
+        let data = read_bin::<u32>(&mut self.storage_provider.open_reader(&idmaps_path)?)?;
+        Ok(data.into_inner().into_vec())
     }
 
     fn merge_shards_and_cleanup(
@@ -474,7 +468,7 @@ pub(crate) fn determine_build_strategy<Data: GraphDataType>(
 }
 
 pub(crate) struct MergedVamanaIndexWorkflow<'a> {
-    pool: &'a RayonThreadPool,
+    pool: RayonThreadPoolRef<'a>,
     rng: diskann_providers::utils::StandardRng,
     dataset_file: String,
     max_degree: u32,
@@ -484,7 +478,7 @@ pub(crate) struct MergedVamanaIndexWorkflow<'a> {
 impl<'a> MergedVamanaIndexWorkflow<'a> {
     pub(crate) fn new<Data, StorageProvider>(
         builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        pool: &'a RayonThreadPool,
+        pool: RayonThreadPoolRef<'a>,
     ) -> Self
     where
         Data: GraphDataType<VectorIdType = u32>,
@@ -534,7 +528,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
                     builder.disk_build_param.build_memory_limit().in_bytes() as f64;
                 // calculate how many partitions we need, in order to fit in RAM budget
                 // save id_map for each partition to disk
-                partition_with_ram_budget::<Data::VectorDataType, _, _, _>(
+                partition_with_ram_budget::<Data::VectorDataType, _, _>(
                     &self.dataset_file,
                     builder.index_configuration.dim,
                     sampling_rate,
@@ -632,6 +626,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 pub(crate) mod disk_index_builder_tests {
     use std::{io::Read, sync::Arc};
 
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
@@ -639,12 +634,8 @@ pub(crate) mod disk_index_builder_tests {
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
-        common::AlignedBoxWithSlice,
         storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
-        utils::{file_util, BridgeErr, Timer},
+        utils::Timer,
     };
     use diskann_utils::test_data_root;
     use diskann_vector::{
@@ -787,15 +778,17 @@ pub(crate) mod disk_index_builder_tests {
                     .unwrap();
 
             assert_eq!(
-                self.params.dim, metadata.ndims,
+                self.params.dim,
+                metadata.ndims(),
                 "Parameters dimension {} and data dimension {} are not equal",
-                self.params.dim, metadata.ndims
+                self.params.dim,
+                metadata.ndims(),
             );
 
             let config = IndexConfiguration::new(
                 self.params.metric,
                 self.params.dim,
-                metadata.npoints,
+                metadata.npoints(),
                 ONE,
                 self.params.num_threads,
                 config,
@@ -1067,13 +1060,9 @@ pub(crate) mod disk_index_builder_tests {
             None,
         )?;
 
-        let (data, npoints, dim) = file_util::load_bin::<G::VectorDataType, _>(
-            storage_provider.as_ref(),
-            &params.data_path,
-            0,
-        )?;
         let data =
-            diskann_utils::views::Matrix::try_from(data.into(), npoints, dim).bridge_err()?;
+            read_bin::<G::VectorDataType>(&mut storage_provider.open_reader(&params.data_path)?)?;
+        let dim = data.ncols();
         let distance = <G::VectorDataType>::distance(params.metric, Some(dim));
 
         // Here, we use elements of the dataset to search the dataset itself.
@@ -1088,10 +1077,6 @@ pub(crate) mod disk_index_builder_tests {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query: AlignedBoxWithSlice<G::VectorDataType> =
-                AlignedBoxWithSlice::<G::VectorDataType>::new(dim, 8)?;
-            query.memcpy(query_data)?;
-
             let mut query_stats = QueryStatistics::default();
 
             let mut indices = vec![0u32; top_k];
@@ -1099,7 +1084,7 @@ pub(crate) mod disk_index_builder_tests {
             let mut associated_data = vec![(); top_k];
 
             _ = search_engine.search_internal(
-                &query,
+                query_data,
                 top_k,
                 search_l,
                 None, // beam_width

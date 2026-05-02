@@ -52,8 +52,5 @@ pub use tracing::{init_subscriber, init_test_subscriber};
 
 pub mod multi_label;
 pub use multi_label::MultiLabel;
-pub mod filter_search_utils;
-pub use filter_search_utils::*;
-
 pub mod relative_contrast;
 pub use relative_contrast::*;

@@ -332,6 +332,7 @@ where
 ///////////////
 
 /// A function pointer wrapper for [`MinMax`] distances.
+#[derive(Debug)]
 pub struct FnPtr<T>(fn(&[T], &[T]) -> f32);
 
 impl<T> FnPtr<T> {
@@ -353,6 +354,7 @@ impl<T> diskann_vector::DistanceFunction<&[T], &[T], f32> for FnPtr<T> {
 ///
 /// As a [`diskann_vector::PreprocessedDistanceFunction`], this implementation needs to work
 /// in a standalone manner, meaning that we need to keep a copy of the query.
+#[derive(Debug)]
 pub struct BufferedFnPtr<T> {
     query: Box<[T]>,
     f: fn(&[T], &[T]) -> f32,

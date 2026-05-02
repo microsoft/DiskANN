@@ -4,6 +4,7 @@
  */
 
 use rand::{rngs::StdRng, Rng};
+use rand_distr::StandardNormal;
 
 pub trait RoundFromf32 {
     fn round_from_f32(x: f32) -> Self;
@@ -60,7 +61,8 @@ impl WithApproximateNorm for i8 {
     }
 }
 
-// Note: private function
+// This function uses StandardNormal distribution. StandardNormal creates uniformly
+// distributed points on sphere surface, making the graph easier to navigate.
 fn generate_random_vector_with_norm_signed<T, F>(
     dim: usize,
     norm: f32,
@@ -71,16 +73,14 @@ fn generate_random_vector_with_norm_signed<T, F>(
 where
     F: Fn(f32) -> T,
 {
-    let mut vec: Vec<f32> = if signed {
-        (0..dim)
-            .map(|_| rng.random_range(-1.0f32..1.0f32))
-            .collect()
-    } else {
-        (0..dim).map(|_| rng.random_range(0.0f32..1.0f32)).collect()
-    };
+    let mut vec: Vec<f32> = (0..dim).map(|_| rng.sample(StandardNormal)).collect();
     let current_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     let scale = norm / current_norm;
-    vec.iter_mut().for_each(|x| *x *= scale);
+    if signed {
+        vec.iter_mut().for_each(|x| *x *= scale);
+    } else {
+        vec.iter_mut().for_each(|x| *x = (*x * scale).abs());
+    };
     vec.into_iter().map(f).collect()
 }
 
@@ -101,7 +101,7 @@ mod tests {
         let vec: Vec<f32> = WithApproximateNorm::with_approximate_norm(dim, norm, &mut rng);
         let computed_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         let tolerance = 1e-5;
-        assert!((computed_norm - norm).abs() < tolerance);
+        assert!((computed_norm - norm).abs() / norm < tolerance);
     }
 
     #[rstest]
@@ -197,5 +197,95 @@ mod tests {
     fn test_round_f32_to_f32(#[case] input: f32, #[case] expected: f32) {
         let result: f32 = RoundFromf32::round_from_f32(input);
         assert_eq!(result, expected);
+    }
+
+    /// Test that generated points are evenly distributed on a circle.
+    ///
+    /// **Testing methodology:**
+    /// 1. Split the circle into 36 buckets (signed) or 9 buckets (unsigned), each covering 10 degrees
+    /// 2. Generate points and count how many fall into each angular bucket
+    /// 3. Check that each bucket's count is within `tolerance_sigmas × σ` of the expected count,
+    ///    where σ = sqrt(expected) is the statistical noise for random sampling
+    /// 4. Fail if any bucket deviates too much (indicates clustering instead of uniform distribution)
+    ///
+    /// **Tolerance levels:**
+    ///   - tolerance_sigmas = 1.0 → Very strict, only allows ±1σ deviation (about 68% of buckets would naturally fall within this)
+    ///   - tolerance_sigmas = 3.0 → Moderate, allows ±3σ deviation (99.7% would naturally fall within this)
+    ///   - tolerance_sigmas = 6.0 → Very lenient, allows ±6σ deviation (99.9997% would naturally fall within this)
+    #[rstest]
+    #[case(true, 500, 3.0, 42)]
+    #[case(true, 500, 3.0, 43)]
+    #[case(true, 500, 3.0, 44)]
+    #[case(false, 500, 3.0, 42)]
+    #[case(false, 500, 3.0, 43)]
+    #[case(false, 500, 3.0, 44)]
+    fn test_generate_random_vector_with_norm_signed_produces_uniform_distribution_on_circle(
+        #[case] signed: bool,
+        #[case] expected_per_bucket: usize,
+        #[case] tolerance_sigmas: f32,
+        #[case] seed: u64,
+    ) {
+        let dim = 2;
+        let norm = 1.0;
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        // Step 1: Pick number of buckets and calculate samples
+        let num_buckets = if signed { 36 } else { 9 };
+        let num_samples = num_buckets * expected_per_bucket;
+
+        // Generate samples
+        let samples: Vec<Vec<f32>> = (0..num_samples)
+            .map(|_| generate_random_vector_with_norm_signed(dim, norm, signed, &mut rng, |x| x))
+            .collect();
+
+        // Step 2: Count hits per bucket
+        let mut counts = vec![0usize; num_buckets];
+
+        for sample in &samples {
+            let theta = sample[1].atan2(sample[0]); // atan2(y, x) returns [-π, π]
+
+            // Map to bucket: floor(θ / 2π × buckets)
+            let bucket = if signed {
+                // Full circle [0, 2π) → [0, 36)
+                let normalized_theta = if theta < 0.0 {
+                    theta + 2.0 * std::f32::consts::PI
+                } else {
+                    theta
+                };
+                ((normalized_theta / (2.0 * std::f32::consts::PI)) * num_buckets as f32).floor()
+                    as usize
+                    % num_buckets
+            } else {
+                // First quadrant [0, π/2) → [0, 9)
+                ((theta / (std::f32::consts::PI / 2.0)) * num_buckets as f32).floor() as usize
+            };
+
+            counts[bucket] += 1;
+        }
+
+        // Step 3: Check each bucket is within tolerance_sigmas × σ
+        // Noise per bucket: σ ≈ sqrt(expected)
+        // Threshold: |observed - expected| / expected > tolerance_sigmas / sqrt(expected)
+        let sigma = (expected_per_bucket as f32).sqrt();
+        let threshold = tolerance_sigmas / sigma;
+
+        let failed_count = counts
+            .iter()
+            .filter(|&&observed| {
+                let deviation = (observed as f32 - expected_per_bucket as f32).abs()
+                    / expected_per_bucket as f32;
+                deviation > threshold
+            })
+            .count();
+
+        assert_eq!(
+            failed_count,
+            0,
+            "Distribution not uniform: {} out of {} bucket(s) had point counts that deviated more than {}σ from expected. \
+             This indicates the generator is producing clustered points instead of evenly distributed points on the circle surface.",
+            failed_count,
+            num_buckets,
+            tolerance_sigmas
+        );
     }
 }

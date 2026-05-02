@@ -7,10 +7,10 @@ use std::fmt::Display;
 
 use crate::neighbor::Neighbor;
 
-/// An logger provided to various search tasks
+/// A logger provided to various search tasks
 pub trait SearchRecord<T>: Send + Sync + 'static
 where
-    T: Default + Eq,
+    T: Eq,
 {
     /// Provides a customization point for logging done during search.
     ///
@@ -52,19 +52,19 @@ impl NoopSearchRecord {
     }
 }
 
-impl<T> SearchRecord<T> for NoopSearchRecord where T: Default + Eq {}
+impl<T> SearchRecord<T> for NoopSearchRecord where T: Eq {}
 
 #[derive(Default)]
 pub struct VisitedSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     pub visited: Vec<Neighbor<T>>,
 }
 
 impl<T> std::fmt::Display for VisitedSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "visited search record")
@@ -73,7 +73,7 @@ where
 
 impl<T> VisitedSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     pub fn new(initial_reservation: usize) -> Self {
         Self {
@@ -84,11 +84,15 @@ where
     pub fn push(&mut self, neighbor: Neighbor<T>) {
         self.visited.push(neighbor);
     }
+
+    pub fn ids(&self) -> impl ExactSizeIterator<Item = T> + Clone + Send + Sync {
+        self.visited.iter().map(|n| n.id.clone())
+    }
 }
 
 impl<T> SearchRecord<T> for VisitedSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     fn record(&mut self, neighbor: Neighbor<T>, _hops: u32, _cmps: u32) {
         self.push(neighbor);
@@ -97,7 +101,7 @@ where
 
 pub struct RecallSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     groundtruth: Vec<T>,
     running_recall: usize,
@@ -108,7 +112,7 @@ where
 
 impl<T> std::fmt::Display for RecallSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "recall search record")
@@ -117,7 +121,7 @@ where
 
 impl<T> RecallSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     pub fn new(initial_reservation: usize, groundtruth: Vec<T>) -> Self {
         Self {
@@ -139,7 +143,7 @@ where
 
 impl<T> SearchRecord<T> for RecallSearchRecord<T>
 where
-    T: Default + Eq + Clone + Send + Sync + 'static,
+    T: Eq + Clone + Send + Sync + 'static,
 {
     fn record(&mut self, neighbor: Neighbor<T>, hops: u32, _cmps: u32) {
         self.push(neighbor, hops);

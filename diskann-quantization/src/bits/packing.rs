@@ -160,13 +160,9 @@ mod tests {
                     // Make sure the encoded portion matches.
                     let expected: u8 = ((encoded >> bitstart) & mask).try_into().unwrap();
                     assert_eq!(
-                        expected,
-                        value,
+                        expected, value,
                         "failed to propertly encode for NBITS = {}, before = {}, value = {}, bitstart = {}",
-                        NBITS,
-                        before,
-                        value,
-                        bitstart,
+                        NBITS, before, value, bitstart,
                     );
 
                     // Make sure decoding yields the correct value.

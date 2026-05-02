@@ -41,3 +41,30 @@ where
         Box::new(self.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_naive_continuation_tracker_default() {
+        let tracker = NaiveContinuationTracker::default();
+        // Verify it always returns Continue
+        match tracker.get_continuation_grant() {
+            ContinuationGrant::Continue => {}
+            _ => panic!("Expected Continue"),
+        }
+    }
+
+    #[test]
+    fn test_naive_continuation_tracker_clone_box() {
+        let tracker = NaiveContinuationTracker::default();
+        let boxed = tracker.clone_box();
+
+        // The boxed version should also return Continue
+        match boxed.get_continuation_grant() {
+            ContinuationGrant::Continue => {}
+            _ => panic!("Expected Continue"),
+        }
+    }
+}

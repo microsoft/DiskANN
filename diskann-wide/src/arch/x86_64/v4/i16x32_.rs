@@ -69,7 +69,7 @@ impl SIMDMulAdd for i16x32 {
     }
 }
 
-macros::x86_avx512_int_comparisons!(i16x32, _mm512_cmp_epi16_mask, "avx512bw,avx512vl");
+macros::x86_avx512_int_comparisons!(i16x32, _mm512_cmp_epi16_mask, "avx512bw");
 macros::x86_avx512_load_store!(
     i16x32,
     _mm512_loadu_epi16,

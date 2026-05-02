@@ -14,9 +14,10 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::{ArcSwap, Guard};
 #[cfg(test)]
 use diskann::utils::VectorRepr;
-use diskann::{ANNError, ANNResult, utils::object_pool::ObjectPool};
+use diskann::{ANNError, ANNResult};
 #[cfg(test)]
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use super::{VectorGuard, common::TestCallCount};
@@ -98,9 +99,7 @@ impl MemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(
-        &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -324,7 +323,6 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use crate::storage::VirtualStorageProvider;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -339,7 +337,6 @@ mod tests {
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, dim]),
-            None,
         )
         .unwrap();
 
@@ -380,7 +377,7 @@ mod tests {
         );
 
         // Distance Computer.
-        let d = provider.distance_computer().unwrap();
+        let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
                 &provider.get_vector_sync(0).unwrap(),
@@ -440,7 +437,7 @@ mod tests {
     fn test_direct_save_load() {
         type Provider = MemoryQuantVectorProviderAsync;
 
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
         // Save to disk.
@@ -464,7 +461,7 @@ mod tests {
     async fn test_async_save_load() {
         type Provider = MemoryQuantVectorProviderAsync;
 
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
         let prefix = "/data.bin";

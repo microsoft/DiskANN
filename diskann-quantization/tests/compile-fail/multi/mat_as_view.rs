@@ -8,7 +8,7 @@ use diskann_quantization::multi_vector::{Mat, Standard};
 // Test that `as_view` on Mat correctly captures an immutable borrow,
 // preventing mutation of the Mat while the view is in scope.
 fn main() {
-    let mut mat: Mat<Standard<f32>> = Mat::new(Standard::new(4, 3), 0.0f32).unwrap();
+    let mut mat: Mat<Standard<f32>> = Mat::new(Standard::new(4, 3).unwrap(), 0.0f32).unwrap();
     let view = mat.as_view();
     // This should fail: we cannot mutably borrow `mat` while `view` exists
     let _ = mat.as_view_mut();

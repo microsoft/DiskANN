@@ -6,7 +6,9 @@ use std::{marker::PhantomData, sync::Arc};
 
 use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{model::pq::PQData, storage::PQStorage, utils::load_metadata_from_file};
+use diskann_providers::{storage::PQStorage, utils::load_metadata_from_file};
+
+use crate::search::pq::PQData;
 use tracing::info;
 
 /// This struct is used by the DiskIndexSearcher to read the index data from storage. Noted that the index data here is different from index graph,
@@ -40,20 +42,20 @@ impl<VectorType> DiskIndexReader<VectorType> {
 
         let pq_compressed_data = PQStorage::load_pq_compressed_vectors_bin::<Storage>(
             &pq_compressed_data_path,
-            metadata.npoints,
+            metadata.npoints(),
             pq_pivot_table.get_num_chunks(),
             storage_provider,
         )?;
         info!(
             "Loaded PQ centroids and in-memory compressed vectors. #points:{} #pq_chunks: {}",
-            metadata.npoints,
+            metadata.npoints(),
             pq_pivot_table.get_num_chunks()
         );
 
         Ok(DiskIndexReader {
             phantom: PhantomData,
             pq_data: Arc::<PQData>::new(PQData::new(pq_pivot_table, pq_compressed_data)?),
-            num_points: metadata.npoints,
+            num_points: metadata.npoints(),
         })
     }
 

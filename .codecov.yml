@@ -20,6 +20,24 @@ coverage:
         threshold: 0%
         informational: false
 
+flag_management:
+  default_rules: # the rules that will be followed for any flag added, generally
+    carryforward: true
+    statuses:
+      - type: project
+        target: auto
+        threshold: 1%
+      - type: patch
+        target: 90%
+  individual_flags: # exceptions to the default rules above, stated flag by flag
+    - name: miri
+      carryforward: true
+      statuses:
+        - type: project
+          target: 0%
+        - type: patch
+          target: 0%
+
 comment:
   layout: "reach,diff,flags,tree"
   behavior: default

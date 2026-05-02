@@ -36,6 +36,12 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip_crosslane!(
+    i16x16,
+    _mm256_permutexvar_epi16,
+    _mm256_setr_epi16(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15),
+    _mm256_setr_epi16(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15)
+);
 
 helpers::unsafe_map_binary_op!(i16x16, std::ops::Add, add, _mm256_add_epi16, "avx2");
 helpers::unsafe_map_binary_op!(i16x16, std::ops::Sub, sub, _mm256_sub_epi16, "avx2");
@@ -46,8 +52,20 @@ helpers::unsafe_map_binary_op!(i16x16, std::ops::BitAnd, bitand, _mm256_and_si25
 helpers::unsafe_map_binary_op!(i16x16, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
 helpers::unsafe_map_binary_op!(i16x16, std::ops::BitXor, bitxor, _mm256_xor_si256, "avx2");
 
-helpers::unsafe_map_binary_op!(i16x16, std::ops::Shr, shr, _mm256_srav_epi16, "avx2");
-helpers::unsafe_map_binary_op!(i16x16, std::ops::Shl, shl, _mm256_sllv_epi16, "avx2");
+helpers::unsafe_map_binary_op!(
+    i16x16,
+    std::ops::Shr,
+    shr,
+    _mm256_srav_epi16,
+    "avx512bw,avx512vl"
+);
+helpers::unsafe_map_binary_op!(
+    i16x16,
+    std::ops::Shl,
+    shl,
+    _mm256_sllv_epi16,
+    "avx512bw,avx512vl"
+);
 helpers::scalar_shift_by_splat!(i16x16, i16);
 
 impl std::ops::Not for i16x16 {
@@ -120,6 +138,7 @@ mod test_x86_i16 {
 
     test_utils::ops::test_cmp!(i16x16, 0x242f7f6c3709920d, V4::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i16x16 => i16x8, 0x05931ca2c2577fae, V4::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i16x16 => i16x8, 0xe51a4c730d9bf286, V4::new_checked_uncached());
 
     // Bit ops
     test_utils::ops::test_bitops!(i16x16, 0xba0be356b04d6427, V4::new_checked_uncached());

@@ -73,7 +73,6 @@ impl SQStorage {
 #[cfg(test)]
 mod tests {
     use crate::storage::VirtualStorageProvider;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -122,7 +121,7 @@ mod tests {
 
     #[test]
     fn save_and_load_quantizer_roundtrip() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let sq_storage = SQStorage::new("/roundtrip");
         let quantizer = ScalarQuantizer::new(1.0, vec![0.0, 1.0, 2.0], None);
 

@@ -158,7 +158,6 @@ use crate::{
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let prefetch_cache_line_level = None;
@@ -208,7 +207,6 @@ use crate::{
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
-///     None,
 /// ).unwrap();
 ///
 /// let prefetch_cache_line_level = None;
@@ -577,6 +575,8 @@ where
     type ExternalId = u32;
     /// Use a general error type for now.
     type Error = ANNError;
+    /// The guard to (not) roll back pending changes.
+    type Guard = NoopGuard<u32>;
 
     /// Translate an external id to its corresponding internal id.
     fn to_internal_id(
@@ -696,7 +696,7 @@ where
 ////////////////
 
 // Assign to both the base and aux vector stores.
-impl<U, V, D, Ctx, T> SetElement<[T]> for DefaultProvider<U, V, D, Ctx>
+impl<U, V, D, Ctx, T> SetElement<&[T]> for DefaultProvider<U, V, D, Ctx>
 where
     T: VectorRepr,
     U: AsyncFriendly + SetElementHelper<T>,
@@ -705,7 +705,6 @@ where
     Ctx: ExecutionContext,
 {
     type SetError = ANNError;
-    type Guard = NoopGuard<u32>;
 
     /// Store the provided element in just the full-precision vector stores.
     fn set_element(

@@ -6,11 +6,11 @@ use std::{
     mem,
 };
 
+use crate::data_model::GraphDataType;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::graph::traits::GraphDataType,
     storage::{get_mem_index_file, path_utility::*},
     utils::{save_bytes, READ_WRITE_BLOCK_SIZE},
 };
@@ -597,8 +597,8 @@ impl DiskIndexWriter {
 
 #[cfg(test)]
 mod disk_index_storage_test {
+    use crate::test_utils::GraphDataF32VectorU32Data;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::test_utils::graph_data_type_utils::GraphDataF32VectorU32Data;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 

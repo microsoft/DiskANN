@@ -8,7 +8,7 @@ use crate::{Architecture, BitMask, Const, SIMDMask, SupportedLaneCount};
 // The maximum length supported for BitMasks.
 const MAXLEN: usize = 64;
 
-/// Utilities for checking compliance an implementation of the `SIMDMask` trait.
+/// Utilities for checking compliance of an implementation of the `SIMDMask` trait.
 pub(crate) fn test_keep_first<T, const N: usize, A, F>(arch: A, mut f: F)
 where
     A: Architecture,

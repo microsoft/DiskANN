@@ -13,6 +13,7 @@ use diskann_disk::{
         builder::build::DiskIndexBuilder,
         chunking::{checkpoint::CheckpointManager, continuation::ChunkingConfig},
     },
+    data_model::GraphDataType,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },
@@ -21,7 +22,7 @@ use diskann_disk::{
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{graph::traits::GraphDataType, IndexConfiguration},
+    model::IndexConfiguration,
     utils::{load_metadata_from_file, Timer},
 };
 use diskann_vector::distance::Metric;
@@ -113,17 +114,17 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, parameters.data_path)?;
 
-    if metadata.ndims != parameters.dim_values.dim() {
+    if metadata.ndims() != parameters.dim_values.dim() {
         return Err(ANNError::log_index_config_error(
             format!("{:?}", parameters.dim_values),
-            format!("dim_values must match with data_dim {}", metadata.ndims),
+            format!("dim_values must match with data_dim {}", metadata.ndims()),
         ));
     }
 
     let index_configuration = IndexConfiguration::new(
         parameters.metric,
-        metadata.ndims,
-        metadata.npoints,
+        metadata.ndims(),
+        metadata.npoints(),
         ONE,
         parameters.num_threads,
         config,
@@ -195,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_build_disk_index_with_num_of_pq_chunks() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let parameters = BuildDiskIndexParameters {
             metric: Metric::L2,
             data_path: "test_data_path",
@@ -220,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_build_disk_index_with_zero_num_of_pq_chunks() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let parameters = BuildDiskIndexParameters {
             metric: Metric::L2,
             data_path: "test_data_path",

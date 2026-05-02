@@ -10,8 +10,8 @@
 //! alternatives.
 
 use diskann_wide::{
-    arch::x86_64::{V3, V4},
     Architecture,
+    arch::x86_64::{V3, V4},
 };
 
 use crate::{

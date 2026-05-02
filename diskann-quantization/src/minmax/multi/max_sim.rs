@@ -34,18 +34,18 @@ impl MinMaxKernel {
     /// * `doc` - The document MinMax multi-vector
     /// * `f` - Callback invoked with `(query_index, min_distance)` for each query vector
     #[inline(always)]
-    pub(crate) fn max_sim_kernel<const NBITS: usize, F>(
+    pub(crate) fn max_sim_kernel<const NBITS: usize, const MBITS: usize, F>(
         query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
+        doc: MatRef<'_, MinMaxMeta<MBITS>>,
         mut f: F,
     ) -> Result<(), UnequalLengths>
     where
-        Unsigned: Representation<NBITS>,
+        Unsigned: Representation<NBITS> + Representation<MBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, MBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
         F: FnMut(usize, f32),
     {
         for (i, q_ref) in query.rows().enumerate() {
@@ -56,7 +56,7 @@ impl MinMaxKernel {
                 // Use MinMaxIP to compute negated inner product as distance
                 let dist = <MinMaxIP as PureDistanceFunction<
                     DataRef<'_, NBITS>,
-                    DataRef<'_, NBITS>,
+                    DataRef<'_, MBITS>,
                     distances::Result<f32>,
                 >>::evaluate(q_ref, d_ref)?;
 
@@ -74,22 +74,22 @@ impl MinMaxKernel {
 // MaxSim //
 ////////////
 
-impl<const NBITS: usize>
-    DistanceFunctionMut<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<NBITS>>>
+impl<const NBITS: usize, const MBITS: usize>
+    DistanceFunctionMut<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<MBITS>>>
     for MaxSim<'_>
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-        crate::bits::BitSlice<'x, NBITS, Unsigned>,
-        crate::bits::BitSlice<'y, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            crate::bits::BitSlice<'x, NBITS, Unsigned>,
+            crate::bits::BitSlice<'y, MBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     #[inline(always)]
     fn evaluate(
         &mut self,
         query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
+        doc: MatRef<'_, MinMaxMeta<MBITS>>,
     ) {
         assert!(
             self.size() == query.num_vectors(),
@@ -110,21 +110,21 @@ where
 // Chamfer //
 /////////////
 
-impl<const NBITS: usize>
-    PureDistanceFunction<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<NBITS>>, f32>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<MBITS>>, f32>
     for Chamfer
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     distances::InnerProduct: for<'a, 'b> PureDistanceFunction<
-        crate::bits::BitSlice<'a, NBITS, Unsigned>,
-        crate::bits::BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            crate::bits::BitSlice<'a, NBITS, Unsigned>,
+            crate::bits::BitSlice<'b, MBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     #[inline(always)]
     fn evaluate(
         query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
+        doc: MatRef<'_, MinMaxMeta<MBITS>>,
     ) -> f32 {
         let mut sum = 0.0f32;
 
@@ -139,13 +139,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::transforms::NullTransform;
+    use crate::CompressInto;
     use crate::algorithms::Transform;
+    use crate::algorithms::transforms::NullTransform;
     use crate::bits::{Representation, Unsigned};
     use crate::minmax::{Data, MinMaxQuantizer};
     use crate::multi_vector::{Defaulted, Mat, Standard};
     use crate::num::Positive;
-    use crate::CompressInto;
     use diskann_utils::ReborrowMut;
     use std::num::NonZeroUsize;
 
@@ -153,10 +153,15 @@ mod tests {
         ($name:ident, $func:ident) => {
             #[test]
             fn $name() {
-                $func::<1>();
-                $func::<2>();
-                $func::<4>();
-                $func::<8>();
+                // Homogeneous
+                $func::<1, 1>();
+                $func::<2, 2>();
+                $func::<4, 4>();
+                $func::<8, 8>();
+                // Heterogeneous
+                $func::<8, 4>();
+                $func::<8, 2>();
+                $func::<8, 1>();
             }
         };
     }
@@ -197,7 +202,7 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
     {
-        let input_mat = MatRef::new(Standard::<f32>::new(n, dim), input).unwrap();
+        let input_mat = MatRef::new(Standard::<f32>::new(n, dim).unwrap(), input).unwrap();
         let mut output: Mat<MinMaxMeta<NBITS>> =
             Mat::new(MinMaxMeta::new(n, dim), Defaulted).unwrap();
         quantizer
@@ -207,23 +212,23 @@ mod tests {
     }
 
     /// Naive max-sim for one query vector: min distance to any doc vector.
-    fn naive_max_sim_single<const NBITS: usize>(
+    fn naive_max_sim_single<const NBITS: usize, const MBITS: usize>(
         query: DataRef<'_, NBITS>,
-        doc: &MatRef<'_, MinMaxMeta<NBITS>>,
+        doc: &MatRef<'_, MinMaxMeta<MBITS>>,
     ) -> f32
     where
-        Unsigned: Representation<NBITS>,
+        Unsigned: Representation<NBITS> + Representation<MBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, MBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
     {
         doc.rows()
             .map(|d| {
                 <MinMaxIP as PureDistanceFunction<
                     DataRef<'_, NBITS>,
-                    DataRef<'_, NBITS>,
+                    DataRef<'_, MBITS>,
                     distances::Result<f32>,
                 >>::evaluate(query, d)
                 .unwrap()
@@ -231,14 +236,14 @@ mod tests {
             .fold(f32::MAX, f32::min)
     }
 
-    fn test_matches_naive<const NBITS: usize>()
+    fn test_matches_naive<const NBITS: usize, const MBITS: usize>()
     where
-        Unsigned: Representation<NBITS>,
+        Unsigned: Representation<NBITS> + Representation<MBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, MBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
     {
         for &(nq, nd, dim) in TEST_CASES {
             let quantizer = make_quantizer(dim);
@@ -247,7 +252,7 @@ mod tests {
             let doc_data = generate_input_mat(nd, dim, nq);
 
             let query_mat = compress_mat::<NBITS>(&quantizer, &query_data, nq, dim);
-            let doc_mat = compress_mat::<NBITS>(&quantizer, &doc_data, nd, dim);
+            let doc_mat = compress_mat::<MBITS>(&quantizer, &doc_data, nd, dim);
 
             let query: QueryMatRef<_> = query_mat.as_view().into();
             let doc = doc_mat.as_view();
@@ -264,7 +269,7 @@ mod tests {
             for (i, (&got, &exp)) in scores.iter().zip(expected.iter()).enumerate() {
                 assert!(
                     (got - exp).abs() < 1e-5,
-                    "NBITS={NBITS} ({nq},{nd},{dim}) MaxSim[{i}]: {got} != {exp}"
+                    "({NBITS},{MBITS}) ({nq},{nd},{dim}) MaxSim[{i}]: {got} != {exp}"
                 );
             }
 
@@ -273,7 +278,7 @@ mod tests {
             MinMaxKernel::max_sim_kernel(query, doc, |i, s| kernel_scores[i] = s).unwrap();
             assert_eq!(
                 scores, kernel_scores,
-                "NBITS={NBITS} ({nq},{nd},{dim}) kernel mismatch"
+                "({NBITS},{MBITS}) ({nq},{nd},{dim}) kernel mismatch"
             );
 
             // Test Chamfer equals sum of MaxSim
@@ -281,7 +286,7 @@ mod tests {
             let sum: f32 = scores.iter().sum();
             assert!(
                 (chamfer - sum).abs() < 1e-4,
-                "NBITS={NBITS} ({nq},{nd},{dim}) Chamfer {chamfer} != sum {sum}"
+                "({NBITS},{MBITS}) ({nq},{nd},{dim}) Chamfer {chamfer} != sum {sum}"
             );
         }
     }

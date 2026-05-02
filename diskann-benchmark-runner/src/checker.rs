@@ -54,6 +54,10 @@ impl Checker {
         T: serde::Serialize + CheckDeserialization + std::fmt::Debug + 'static,
     {
         value.check_deserialization(self)?;
+        #[expect(
+            clippy::expect_used,
+            reason = "crate infrastructure ensures an untagged Checker is not leaked"
+        )]
         Ok(Any::new(value, self.tag.expect("tag must be set")))
     }
 

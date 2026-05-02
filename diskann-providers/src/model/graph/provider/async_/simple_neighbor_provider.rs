@@ -368,7 +368,6 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
 #[cfg(test)]
 mod tests {
     use crate::storage::VirtualStorageProvider;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -408,7 +407,7 @@ mod tests {
             SimpleNeighborProviderAsync::<u32>::new(max_points, additional_points, max_degree, 1.0);
 
         // Setup a virtual storage provider with memory filesystem
-        let storage = VirtualStorageProvider::new(MemoryFS::new());
+        let storage = VirtualStorageProvider::new_memory();
 
         // Fill the graph, each node i will have neighbors [i+1, i+2, i+3]
         for i in 0..max_points + additional_points {

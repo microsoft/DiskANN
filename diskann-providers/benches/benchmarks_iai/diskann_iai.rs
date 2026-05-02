@@ -4,19 +4,17 @@
  */
 
 use diskann::provider::DefaultContext;
+use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     index::diskann_async,
-    model::graph::{
-        provider::async_::{
-            common::{FullPrecision, NoDeletes},
-            inmem::DefaultProviderParameters,
-        },
-        traits::AdHoc,
+    model::graph::provider::async_::{
+        common::{FullPrecision, NoDeletes},
+        inmem::DefaultProviderParameters,
     },
     storage::FileStorageProvider,
-    utils::{VectorDataIterator, create_thread_pool_for_bench, file_util::load_bin},
+    utils::{VectorDataIterator, create_thread_pool_for_bench},
 };
-use diskann_utils::views::MatrixView;
+use diskann_utils::io::read_bin;
 use diskann_vector::distance::Metric;
 use tokio::runtime::Runtime;
 
@@ -41,22 +39,26 @@ async fn test_sift_256_vectors_with_quant_vectors() {
     let file_path = "test_data/sift/siftsmall_learn_256pts.fbin";
 
     let storage_provider = FileStorageProvider;
-    let dataset_iterator = VectorDataIterator::<FileStorageProvider, AdHoc<f32>>::new(
+    let dataset_iterator = VectorDataIterator::<FileStorageProvider, f32>::new(
         get_test_file_path(file_path).as_str(),
         Option::None,
         &storage_provider,
     )
     .unwrap();
 
-    let (train_data, num_points, num_dim) =
-        load_bin(&storage_provider, get_test_file_path(file_path).as_str(), 0).unwrap();
+    let train_data = read_bin::<f32>(
+        &mut storage_provider
+            .open_reader(get_test_file_path(file_path).as_str())
+            .unwrap(),
+    )
+    .unwrap();
 
     let pool = create_thread_pool_for_bench();
     let pq_chunk_table = diskann_async::train_pq(
-        MatrixView::try_from(&train_data, num_points, num_dim).unwrap(),
+        train_data.as_view(),
         32,
         &mut diskann_providers::utils::create_rnd_in_tests(),
-        &pool,
+        pool.as_ref(),
     )
     .unwrap();
 
@@ -70,8 +72,8 @@ async fn test_sift_256_vectors_with_quant_vectors() {
     .unwrap();
 
     let provider_params = DefaultProviderParameters::simple(
-        num_points,
-        num_dim,
+        train_data.nrows(),
+        train_data.ncols(),
         Metric::L2,
         conf.max_degree_u32().get(),
     );

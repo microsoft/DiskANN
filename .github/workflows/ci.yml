@@ -19,8 +19,13 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
-  # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.92"
+  CARGO_TERM_COLOR: always
+  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
+  # of `diskann-quantization` requires additional setup and so must not be included by default.
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+
+  # Intel SDE version used for baseline and AVX-512 emulation jobs.
+  SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
 
 defaults:
   run:
@@ -30,13 +35,57 @@ permissions:
   contents: read
 
 jobs:
+  # Branch-protection gate
+  #
+  # Add "CI gate" as the sole required status check in branch protection.
+  #
+  # How it works:
+  #
+  # * If no upstream job fails or is cancelled, the `if` condition is `false`
+  #   and this job is *skipped*. GitHub treats a skipped required check as
+  #   passing.
+  #
+  #   Note: jobs that are conditionally skipped (e.g. `coverage` excludes
+  #   Dependabot) are neither failed nor cancelled, so the gate will still
+  #   pass. This is intentional -- conditional skips represent expected
+  #   behavior, not failures.
+  #
+  #   See: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks
+  #
+  # * If any upstream job fails or is cancelled, the `if` condition is `true`.
+  #   This job runs and exits 1, blocking the merge.
+  #
+  # All merge-blocking jobs should be listed in `needs` below.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    needs:
+      - fmt
+      - clippy-default-features
+      - clippy-features
+      - clippy-no-default-features
+      - basics
+      - codeql
+      - baseline
+      - sde
+      - test-workspace
+      - test-workspace-features
+      - coverage
+    if: ${{ always() && (cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    steps:
+      - name: Gate failure
+        run: |
+          echo "::error::One or more required CI jobs failed or were cancelled."
+          exit 1
+
   # Basic checks that must pass before we kick off more expensive tests.
   basics:
     name: basic checks
     runs-on: ubuntu-latest
     needs:
-      - clippy
       - fmt
+      - clippy-default-features
+      - clippy-features
       - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
@@ -48,11 +97,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
-          components: rustfmt
+      - name: Install Rust
+        run: rustup show && rustup component add rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
       - name: "cargo fmt --check"
@@ -62,68 +108,119 @@ jobs:
             exit 1
           fi
 
-  clippy:
+  clippy-default-features:
     strategy:
       matrix:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
+          - windows-latest
+
       fail-fast: false
-    name: clippy (${{ matrix.runner }})
+    name: clippy-default-features (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
-          components: clippy
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  clippy-features:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+      fail-fast: false
+    name: clippy-features (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --no-deps \
+            --features ${{ env.DISKANN_FEATURES }} \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
 
   clippy-no-default-features:
-    name: clippy ${{ matrix.crate }} (no default features)
+    name: clippy (no default features)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        crate:
-          # Core crates
-          - diskann
-          - diskann-providers
-          - diskann-disk
-          - diskann-quantization
-          - diskann-utils
-          # Benchmark/tools crates
-          - diskann-benchmark-core
-          - diskann-benchmark-runner
-          - diskann-benchmark
-          - diskann-tools
 
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
-          components: clippy
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          # Cache per-crate to avoid conflicts
-          key: ${{ matrix.crate }}
 
-      - name: Clippy ${{ matrix.crate }} (no default features)
+      - name: Clippy - select crates (no default features)
         run: |
-          cargo clippy --locked --package ${{ matrix.crate }} \
-            --no-default-features \
-            --profile ci \
-            --no-deps \
-            --config "$RUST_CONFIG"
+          set -euxo pipefail
+          crates=(
+            # Core crates
+            diskann
+            diskann-providers
+            diskann-disk
+            diskann-quantization
+            diskann-utils
+            # Benchmark/tools crates
+            diskann-benchmark-core
+            diskann-benchmark-runner
+            diskann-benchmark
+            diskann-tools
+          )
+          for crate in "${crates[@]}"; do
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --all-targets \
+              --profile ci \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
+          done
+
+  codeql:
+    name: CodeQL security analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+
+      - name: Install Rust
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --locked --profile ci
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -131,10 +228,8 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
+  #     - name: Install Rust
+  #       run: rustup show
   #     - uses: Swatinem/rust-cache@v2
   #     - name: "doc --workspace --no-deps"
   #       run: cargo doc --workspace --no-deps --document-private-items
@@ -142,57 +237,129 @@ jobs:
   #         RUSTDOCFLAGS: -Dwarnings
 
 
-  # This is a quick test to ensure that micro-architecture detection and dispatching works.
+  # Test micro-architecture detection and dispatching.
   #
   # The crate `diskann-wide` is the primary driver for this mechanism.
   #
-  # We test by:
+  # Verify that code compiled for the `x86-64` baseline does not accidentally emit
+  # AVX/AVX2 instructions. We compile with `-Ctarget-cpu=x86-64` and run the full
+  # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
+  # Intel SDE configured as a Nehalem CPU.
   #
-  # 1. Compiling the test binaries specifically for the old `x86-64` CPU target to ensure
-  #    the compiler does not emit `x86-64-v3` instructions.
+  # SDE will abort if any unrecognised instruction (e.g. AVX) is executed.
   #
-  # 2. We use QEMU to emulate an older CPU. QEMU will abort if an unrecognized instruction
-  #    is hit.
+  # EXCLUDED TESTS
   #
-  # The shell command for running tests is as follows:
-  #
-  # 1. `find ./target/**/deps`: Search for the generated artifacts from the test build.
-  #
-  # 2. `grep -e "dispatch-[a-f0-9]*$"`: Find a binary called `dispatch-a38d0...` that does
-  #    not end in ".d". In other words, the hash goes all the way to the end of the file name.
-  #
-  #    This means it's a test executable and not a library.
-  #
-  # 3. `xargs -n1`: Take the newline delimited executable and call the following command
-  #    once for each argument.
-  #
-  # 4. `qemu-x86_64 -cpu Nehalem`: Run the qemu binary using `Nehalem` as the target CPU.
-  #    This is a very old CPU model that will crash if any AVX/AVX2 instructions are executed.
-  #
-  # TODO: Enable whole test suite to run under QEMU. There are a few tests that need fixing.
-  qemu:
+  # * compile-tests: These don't behave well under SDE.
+  # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
+  #   architecture make this test take too long.
+  baseline:
     needs: basics
-    name: qemu-tests
+    name: sde-baseline-tests
     runs-on: ubuntu-latest
     env:
-      # For this test - we explicitly overwrite the flags in `.cargo/config.toml` because
-      # we want to ensure the `x86-64` target CPU.
+      # Compile for the x86-64 baseline — no AVX, no AVX2.
       RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+      # Run every test binary through SDE emulating a Nehalem CPU.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show
+
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install QEMU user-mode
-        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
 
-      - name: "QEMU Tests"
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          cargo test --package diskann-wide --locked
-          find ./target -type f -regex ".*/deps/dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
-          find ./target -type f -regex ".*/deps/float16_conversion-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
 
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      - name: "SDE Baseline Tests (Nehalem)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+              --package diskann-wide \
+              --package diskann-vector \
+              --package diskann-quantization \
+              -- --skip compile_tests \
+                 --skip pivots::tests::run_test_happy_path
+
+
+  # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
+  #
+  # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
+  # the diskann-wide V4 backend.
+  #
+  # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
+  # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
+  # special RUSTFLAGS are needed beyond the defaults.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
+  sde:
+    needs: basics
+    name: sde-avx512-tests
+    runs-on: ubuntu-latest
+    env:
+      # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
+      # Force diskann-wide tests to require V4 architecture.
+      WIDE_TEST_MIN_ARCH: "x86-64-v4"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
+
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
+
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      - name: "SDE Tests (AVX-512)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+            --package diskann-wide \
+            --package diskann-vector \
+            --package diskann-quantization \
+            -- --skip compile_tests
 
   test-workspace:
     needs: basics
@@ -203,16 +370,16 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
+      - name: Install Rust
+        run: rustup show
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -236,16 +403,15 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
+      - name: Install Rust
+        run: rustup show
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -260,8 +426,7 @@ jobs:
           cargo nextest run --locked --workspace \
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
-            --features \
-              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
+            --features ${{ env.DISKANN_FEATURES }}
 
           cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
@@ -276,11 +441,8 @@ jobs:
           lfs: true
           fetch-depth: 0
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
-          components: llvm-tools-preview
+      - name: Install Rust
+        run: rustup show && rustup component add llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
@@ -302,9 +464,10 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
+        env:
+          RUSTFLAGS: "--cfg=miri"
         run: |
-          cargo llvm-cov nextest --locked --cargo-profile ci \
-            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
+          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
@@ -326,28 +489,29 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  # miri:
-  #   needs: basics
-  #   name: miri-test
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         lfs: true
+  miri:
+    needs: basics
+    name: miri-test
+    # This step is slow, so it only runs after a PR merge to avoid slowing down pre-merge checks.
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
 
-  #     - name: Install Rust nightly with miri
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: nightly
-  #         components: miri
+      - name: Install Rust nightly with miri
+        run: rustup toolchain install nightly --component miri
 
-  #     - name: Install cargo-nextest
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-nextest
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: miri
-  #       run: cargo +nightly miri nextest run --locked --package diskann-quantization
-  #       env:
-  #         MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - uses: Swatinem/rust-cache@v2
+
+      - name: miri
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

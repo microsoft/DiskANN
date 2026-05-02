@@ -106,7 +106,7 @@ impl Default for ScalarQuantizationParameters {
 
 #[cfg(test)]
 mod tests {
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::test_util::create_test_problem;

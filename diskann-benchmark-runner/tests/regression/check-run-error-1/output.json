@@ -1,0 +1,20 @@
+[
+  {
+    "input": {
+      "content": {
+        "dim": 128
+      },
+      "type": "test-input-dim"
+    },
+    "results": 128
+  },
+  {
+    "input": {
+      "content": {
+        "dim": 512
+      },
+      "type": "test-input-dim"
+    },
+    "results": 512
+  }
+]

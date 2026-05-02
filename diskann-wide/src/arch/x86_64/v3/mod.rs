@@ -96,7 +96,7 @@ mod conversion;
 
 /// An [`Architecture`] supporting all the requirements of the
 /// [`x86-64-v3`](https://en.wikipedia.org/wiki/X86-64#Microarchitecture_levels).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct V3(Hidden);
 
 impl arch::sealed::Sealed for V3 {}
@@ -159,7 +159,7 @@ impl V3 {
                 // just check if the user specified level would have instantiated it.
                 if unsafe { Self::new_checked_with(super::test_arch_number()) }.is_some() {
                     panic!(
-                        "V4 architecture was requested but is not compatible on the current hardare"
+                        "V3 architecture was requested but is not compatible on the current hardware"
                     );
                 } else {
                     None
@@ -170,7 +170,7 @@ impl V3 {
 
     /// # Safety
     ///
-    /// The architecture number `version` can only be `ARCH_V3` is runtime checks have
+    /// The architecture number `version` can only be `ARCH_V3` if runtime checks have
     /// verified that it is safe to do so.
     unsafe fn new_checked_with(version: u64) -> Option<Self> {
         if version >= super::ARCH_V3 {
@@ -343,6 +343,10 @@ impl Architecture for V3 {
     arch::maskdef!();
     arch::typedef!();
 
+    fn level() -> arch::Level {
+        arch::Level::v3()
+    }
+
     #[inline(always)]
     fn run<F, R>(self, f: F) -> R
     where
@@ -430,9 +434,9 @@ impl Architecture for V3 {
     {
         let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V3` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
 
@@ -445,9 +449,9 @@ impl Architecture for V3 {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
             Self::run_function_with_2::<F, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V3` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
 
@@ -461,9 +465,9 @@ impl Architecture for V3 {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
             Self::run_function_with_3::<F, _, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // A `V3` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
 }

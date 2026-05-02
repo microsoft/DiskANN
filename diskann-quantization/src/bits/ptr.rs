@@ -27,7 +27,7 @@ impl<T> SlicePtr<'_, T> {
     /// It's the callers responsibility to ensure the correct lifetime is attached to
     /// the underlying pointer and that the constraints of any unsafe traits implemented by
     /// this type are upheld.
-    pub(super) unsafe fn new_unchecked(ptr: NonNull<T>) -> Self {
+    pub(crate) unsafe fn new_unchecked(ptr: NonNull<T>) -> Self {
         Self {
             ptr,
             lifetime: PhantomData,
@@ -35,8 +35,9 @@ impl<T> SlicePtr<'_, T> {
     }
 }
 
-// SAFETY: Slices are `Send` when `T: Send`.
-unsafe impl<T: Send> Send for SlicePtr<'_, T> {}
+// SAFETY: `SlicePtr` has shared-reference (`&'a T`) semantics.
+// `&T: Send` iff `T: Sync`.
+unsafe impl<T: Sync> Send for SlicePtr<'_, T> {}
 
 // SAFETY: Slices are `Sync` when `T: Sync`.
 unsafe impl<T: Sync> Sync for SlicePtr<'_, T> {}
@@ -57,7 +58,7 @@ impl<T> MutSlicePtr<'_, T> {
     /// It's the callers responsibility to ensure the correct lifetime is attached to
     /// the underlying pointer and that the constraints of any unsafe traits implemented by
     /// this type are upheld.
-    pub(super) unsafe fn new_unchecked(ptr: NonNull<T>) -> Self {
+    pub(crate) unsafe fn new_unchecked(ptr: NonNull<T>) -> Self {
         Self {
             ptr,
             lifetime: PhantomData,

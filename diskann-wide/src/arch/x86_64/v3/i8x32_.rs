@@ -23,9 +23,9 @@ use crate::{
     traits::{AsSIMD, SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
 };
 
-////////////////////
-// 8-bit unsigned //
-////////////////////
+//////////////////
+// 8-bit signed //
+//////////////////
 
 macros::x86_define_register!(i8x32, __m256i, mask8x32, i8, 32, V3);
 macros::x86_define_splat!(i8x32 as i8, _mm256_set1_epi8, "avx");
@@ -36,6 +36,12 @@ macros::x86_splitjoin!(
     _mm256_extracti128_si256,
     _mm256_set_m128i,
     "avx2"
+);
+macros::x86_zipunzip!(
+    i8x32,
+    i8x16,
+    _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15),
+    _mm_setr_epi8(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15)
 );
 
 impl std::ops::Mul for i8x32 {
@@ -150,7 +156,7 @@ impl SIMDPartialOrd for i8x32 {
     fn lt_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_max_epi8`, `_mm256_empeq_epi8`, and
+        // SAFETY: The intrinsics `_mm256_max_epi8`, `_mm256_cmpeq_epi8`, and
         // `_mm256_xor_si256` require AVX2 - all of which are implied by `V3`.
         let m = unsafe {
             let max = _mm256_max_epi8(self.0, other.0);
@@ -163,7 +169,7 @@ impl SIMDPartialOrd for i8x32 {
     fn le_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_min_epi8` and `_mm256_empeq_epi8` require AVX2
+        // SAFETY: The intrinsics `_mm256_min_epi8` and `_mm256_cmpeq_epi8` require AVX2
         // - implied by `V3`.
         let m = unsafe { _mm256_cmpeq_epi8(self.0, _mm256_min_epi8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
@@ -226,6 +232,7 @@ mod test_x86_i8 {
     test_utils::ops::test_abs!(i8x16, 0x40638a9d09522d1c, V3::new_checked_uncached());
 
     test_utils::ops::test_splitjoin!(i8x32 => i8x16, 0x475a19e80c2f3977, V3::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i8x32 => i8x16, 0xc7e3a92f1d8b5604, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i8x32, 0x941757bd5cc641a1, V3::new_checked_uncached());
 

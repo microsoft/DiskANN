@@ -4,9 +4,9 @@
  */
 
 use crate::{
+    AsFunctor, CompressInto,
     bits::{Binary, MutBitSlice, Representation},
     distances::Hamming,
-    AsFunctor, CompressInto,
 };
 
 /// A simple, training-free binary quantizer.
@@ -129,8 +129,8 @@ impl AsFunctor<Hamming> for BinaryQuantizer {
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{views::Matrix, ReborrowMut};
-    use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+    use diskann_utils::{ReborrowMut, views::Matrix};
+    use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::*;
     use crate::bits::{Binary, BoxedBitSlice};

@@ -342,14 +342,7 @@ impl ANNError {
         Self::message(ANNErrorKind::PQError, err.to_string())
     }
 
-    /// Create, log and return OPQError
-    #[track_caller]
-    #[inline(never)]
-    pub fn log_opq_error(err: String) -> Self {
-        Self::message(ANNErrorKind::OPQError, err)
-    }
-
-    /// Create, log and return OPQError
+    /// Create, log and return SQError
     #[track_caller]
     #[inline(never)]
     pub fn log_sq_error<E>(err: E) -> Self
@@ -381,12 +374,6 @@ impl ANNError {
     #[inline(never)]
     pub fn log_try_from_slice_error(err: TryFromSliceError) -> Self {
         Self::new(ANNErrorKind::TryFromSliceError, err)
-    }
-
-    #[track_caller]
-    #[inline(never)]
-    pub fn log_adjacency_list_conversion_error(err: String) -> Self {
-        Self::message(ANNErrorKind::AdjacencyListConversionError, err)
     }
 
     /// Create, log and return Serde error.
@@ -576,6 +563,48 @@ impl From<TryFromSliceError> for ANNError {
     }
 }
 
+impl From<diskann_utils::io::ReadBinError> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::io::ReadBinError) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
+impl From<diskann_utils::io::SaveBinError> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::io::SaveBinError) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
+impl<T, U> From<diskann_utils::io::MetadataError<T, U>> for ANNError
+where
+    T: std::error::Error + Send + Sync + 'static,
+    U: std::error::Error + Send + Sync + 'static,
+{
+    #[track_caller]
+    fn from(err: diskann_utils::io::MetadataError<T, U>) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
+impl From<diskann_utils::views::TryFromErrorLight> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::views::TryFromErrorLight) -> Self {
+        ANNError::new(ANNErrorKind::DimensionMismatchError, err)
+    }
+}
+
+impl<T> From<diskann_utils::views::TryFromError<T>> for ANNError
+where
+    T: diskann_utils::views::DenseData,
+{
+    #[track_caller]
+    fn from(err: diskann_utils::views::TryFromError<T>) -> Self {
+        Self::from(err.as_static())
+    }
+}
+
 /// An internal wrapper for error types that also tracks the file and line information
 /// for where the error was first converted and where context was propagated.
 #[derive(Debug)]
@@ -718,17 +747,6 @@ where
     }
 }
 
-pub(crate) fn ensure_positive<T, E>(value: T, error: E) -> Result<T, E>
-where
-    T: PartialOrd + Default + Debug,
-{
-    if value > T::default() {
-        Ok(value)
-    } else {
-        Err(error)
-    }
-}
-
 // /// An internal macro for creating opaque, adhoc errors to help when debugging.
 // macro_rules! ann_error {
 //     ($($arg:tt)+) => {{
@@ -858,8 +876,7 @@ pub enum DiskANNError {
     // Error happened when we construct PQ pivot or PQ compressed table
     PQError,
 
-    // OPQ construction error
-    // Error happened when we build the optimized PQ index
+    // OPQ construction error (deprecated — kept to preserve variant numbering)
     OPQError,
 
     // K-means error
@@ -1266,14 +1283,6 @@ Caused by:
     }
 
     #[test]
-    fn test_log_adjacency_list_conversion_error() {
-        let err_msg = "error message";
-        let ann_err = ANNError::log_adjacency_list_conversion_error(err_msg.to_string());
-        assert_eq!(ANNErrorKind::AdjacencyListConversionError, ann_err.kind());
-        assert!(ann_err.to_string().contains(err_msg));
-    }
-
-    #[test]
     fn test_log_serde_error() {
         let op = "serialize";
         let err = "custom error".to_string();
@@ -1403,14 +1412,6 @@ Caused by:
     }
 
     #[test]
-    fn test_log_opq_error() {
-        let err_msg = "OPQ error";
-        let ann_err = ANNError::log_opq_error(err_msg.to_string());
-        assert_eq!(ANNErrorKind::OPQError, ann_err.kind());
-        assert!(ann_err.to_string().contains(err_msg));
-    }
-
-    #[test]
     fn test_log_kmeans_error() {
         let err_msg = "KMeans error";
         let ann_err = ANNError::log_kmeans_error(err_msg.to_string());
@@ -1511,5 +1512,50 @@ Caused by:
         let message = "BuildIndicesOnShards";
         let ann_err = ANNError::log_build_interrupted(message);
         assert_eq!(ann_err.kind(), ANNErrorKind::BuildInterrupted);
+    }
+
+    #[test]
+    fn from_read_bin_error() {
+        let err = diskann_utils::io::ReadBinError::SizeMismatch {
+            expected: 100,
+            available: 50,
+            npoints: 10,
+            ndims: 5,
+            type_size: 2,
+        };
+        let ann_err = ANNError::from(err);
+        assert_eq!(ann_err.kind(), ANNErrorKind::IOError);
+    }
+
+    #[test]
+    fn from_save_bin_error() {
+        let err = diskann_utils::io::SaveBinError::DimensionOverflow { nrows: 1, ncols: 1 };
+        let ann_err = ANNError::from(err);
+        assert_eq!(ann_err.kind(), ANNErrorKind::IOError);
+    }
+
+    #[test]
+    fn from_metadata_error() {
+        let err = diskann_utils::io::Metadata::new(u64::MAX, 1u32).unwrap_err();
+        let ann_err = ANNError::from(err);
+        assert_eq!(ann_err.kind(), ANNErrorKind::IOError);
+    }
+
+    #[test]
+    fn from_try_from_error_light() {
+        let data: &[f32] = &[1.0, 2.0, 3.0];
+        let light = diskann_utils::views::MatrixView::try_from(data, 2, 2)
+            .unwrap_err()
+            .as_static();
+        let ann_err = ANNError::from(light);
+        assert_eq!(ann_err.kind(), ANNErrorKind::DimensionMismatchError);
+    }
+
+    #[test]
+    fn from_try_from_error() {
+        let data: &[f32] = &[1.0, 2.0, 3.0];
+        let err = diskann_utils::views::MatrixView::try_from(data, 2, 2).unwrap_err();
+        let ann_err = ANNError::from(err);
+        assert_eq!(ann_err.kind(), ANNErrorKind::DimensionMismatchError);
     }
 }

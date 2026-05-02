@@ -218,4 +218,51 @@ mod tests {
             "Legacy code should not be able to deserialize newer enum variants"
         );
     }
+
+    #[test]
+    fn test_checkpoint_record_default() {
+        let record = CheckpointRecord::default();
+        assert!(record.is_valid());
+        assert_eq!(record.get_work_stage(), WorkStage::Start);
+    }
+
+    #[test]
+    fn test_checkpoint_record_is_valid() {
+        let record = CheckpointRecord::new();
+        assert!(record.is_valid());
+
+        let invalid_record = record.mark_as_invalid();
+        assert!(!invalid_record.is_valid());
+    }
+
+    #[test]
+    fn test_get_resumption_point_with_matching_stage() {
+        let record = CheckpointRecord::new().update_progress(42);
+        let resumption = record.get_resumption_point(WorkStage::Start);
+        assert_eq!(resumption, Some(42));
+    }
+
+    #[test]
+    fn test_get_resumption_point_with_different_stage() {
+        let record = CheckpointRecord::new();
+        let resumption = record.get_resumption_point(WorkStage::QuantizeFPV);
+        assert_eq!(resumption, None);
+    }
+
+    #[test]
+    fn test_get_resumption_point_when_invalid() {
+        let record = CheckpointRecord::new()
+            .update_progress(100)
+            .mark_as_invalid();
+        let resumption = record.get_resumption_point(WorkStage::Start);
+        assert_eq!(resumption, Some(0)); // Should return 0 when invalid
+    }
+
+    #[test]
+    fn test_advance_work_type() {
+        let record = CheckpointRecord::new();
+        let advanced = record.advance_work_type(WorkStage::QuantizeFPV).unwrap();
+        assert_eq!(advanced.get_work_stage(), WorkStage::QuantizeFPV);
+        assert!(advanced.is_valid());
+    }
 }

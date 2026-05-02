@@ -17,3 +17,28 @@ impl Progress {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_map_processed() {
+        let progress = Progress::Processed(10);
+        let mapped = progress.map(|n| n * 2);
+        match mapped {
+            Progress::Processed(n) => assert_eq!(n, 20),
+            _ => panic!("Expected Processed variant"),
+        }
+    }
+
+    #[test]
+    fn test_progress_map_completed() {
+        let progress = Progress::Completed;
+        let mapped = progress.map(|n| n * 2);
+        match mapped {
+            Progress::Completed => {}
+            _ => panic!("Expected Completed variant"),
+        }
+    }
+}

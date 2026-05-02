@@ -53,6 +53,20 @@ impl From<diskann::ANNError> for CMDToolError {
         }
     }
 }
+impl From<diskann_utils::io::ReadBinError> for CMDToolError {
+    fn from(err: diskann_utils::io::ReadBinError) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
+impl From<diskann_utils::io::SaveBinError> for CMDToolError {
+    fn from(err: diskann_utils::io::SaveBinError) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
 impl From<diskann::graph::config::ConfigError> for CMDToolError {
     fn from(err: diskann::graph::config::ConfigError) -> Self {
         CMDToolError {
@@ -69,14 +83,99 @@ impl From<diskann_label_filter::JsonlReadError> for CMDToolError {
     }
 }
 
-impl<T, U> From<diskann_providers::utils::MetadataError<T, U>> for CMDToolError
+impl<T, U> From<diskann_utils::io::MetadataError<T, U>> for CMDToolError
 where
     T: std::error::Error + Send + Sync + 'static,
     U: std::error::Error + Send + Sync + 'static,
 {
-    fn from(err: diskann_providers::utils::MetadataError<T, U>) -> Self {
+    fn from(err: diskann_utils::io::MetadataError<T, U>) -> Self {
         // Leverage the existing conversion chain: MetadataError -> ANNError -> CMDToolError
         let ann_error: diskann::ANNError = err.into();
         ann_error.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cmd_tool_error_display() {
+        let error = CMDToolError {
+            details: "test error".to_string(),
+        };
+        assert_eq!(format!("{}", error), "test error");
+    }
+
+    #[test]
+    fn test_cmd_tool_error_debug() {
+        let error = CMDToolError {
+            details: "test error".to_string(),
+        };
+        assert_eq!(format!("{:?}", error), "test error");
+    }
+
+    #[test]
+    fn test_cmd_tool_error_description() {
+        let error = CMDToolError {
+            details: "test error".to_string(),
+        };
+        #[allow(deprecated)]
+        {
+            assert_eq!(error.description(), "test error");
+        }
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let cmd_error: CMDToolError = io_error.into();
+        assert!(cmd_error.details.contains("file not found"));
+    }
+
+    #[test]
+    fn test_from_normal_error() {
+        let normal_error = rand_distr::NormalError::BadVariance;
+        let cmd_error: CMDToolError = normal_error.into();
+        // Just verify the error was converted and has some details
+        assert!(!cmd_error.details.is_empty());
+    }
+
+    #[test]
+    fn test_from_ann_error() {
+        use diskann::ANNErrorKind;
+        let ann_error = diskann::ANNError::new(
+            ANNErrorKind::IndexError,
+            std::io::Error::other("test error"),
+        );
+        let cmd_error: CMDToolError = ann_error.into();
+        assert!(cmd_error.details.contains("test error"));
+    }
+
+    #[test]
+    fn test_from_config_error() {
+        // Construct an invalid graph config to trigger a real ConfigError
+        let config_error = diskann::graph::config::Builder::new(
+            10,
+            diskann::graph::config::MaxDegree::new(0),
+            50,
+            diskann::graph::config::PruneKind::TriangleInequality,
+        )
+        .build()
+        .unwrap_err();
+        let cmd_error: CMDToolError = config_error.into();
+        // Just verify the error was converted and has some details
+        assert!(!cmd_error.details.is_empty());
+    }
+
+    #[test]
+    fn test_from_jsonl_read_error() {
+        use diskann_label_filter::JsonlReadError;
+        let jsonl_error = JsonlReadError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid jsonl",
+        ));
+        let cmd_error: CMDToolError = jsonl_error.into();
+        assert!(cmd_error.details.contains("invalid jsonl"));
     }
 }

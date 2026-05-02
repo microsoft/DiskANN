@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use diskann::{
@@ -13,6 +13,7 @@ use diskann::{
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_disk::{
     build::builder::build::DiskIndexBuilder,
+    data_model::AdHoc,
     disk_index_build_parameter::{
         DiskIndexBuildParameters, MemoryBudget, NumPQChunks, DISK_SECTOR_LEN,
     },
@@ -27,11 +28,10 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use scopeguard::defer;
 
 use crate::{
-    backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
-    inputs::disk::DiskIndexBuild,
+    backend::disk_index::json_spancollector::JsonSpanCollector, inputs::disk::DiskIndexBuild,
 };
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskBuildStats {
     build_time: MicroSeconds,
     span_metrics: serde_json::Value,
@@ -43,6 +43,10 @@ impl DiskBuildStats {
             build_time,
             span_metrics,
         }
+    }
+
+    pub(super) fn build_time_seconds(&self) -> f64 {
+        self.build_time.as_seconds()
     }
 }
 
@@ -94,13 +98,13 @@ where
     let build_parameters = DiskIndexBuildParameters::new(
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
         params.quantization_type,
-        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims)?,
+        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
     );
 
     let index_configuration = IndexConfiguration::new(
         metric,
-        metadata.ndims,
-        metadata.npoints,
+        metadata.ndims(),
+        metadata.npoints(),
         ONE,
         params.num_threads,
         config,
@@ -114,7 +118,7 @@ where
         DISK_SECTOR_LEN,
     )?;
 
-    let mut disk_index = DiskIndexBuilder::<GraphData<T>, StorageProviderType>::new(
+    let mut disk_index = DiskIndexBuilder::<AdHoc<T>, StorageProviderType>::new(
         storage_provider,
         build_parameters,
         index_configuration,

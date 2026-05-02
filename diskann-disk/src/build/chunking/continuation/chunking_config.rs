@@ -52,3 +52,59 @@ impl fmt::Display for ChunkingConfig {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunking_config_clone() {
+        let config = ChunkingConfig {
+            continuation_checker: Box::<NaiveContinuationTracker>::default(),
+            data_compression_chunk_vector_count: 1000,
+            inmemory_build_chunk_vector_count: 5000,
+        };
+
+        let cloned = config.clone();
+
+        assert_eq!(
+            config.data_compression_chunk_vector_count,
+            cloned.data_compression_chunk_vector_count
+        );
+        assert_eq!(
+            config.inmemory_build_chunk_vector_count,
+            cloned.inmemory_build_chunk_vector_count
+        );
+    }
+
+    #[test]
+    fn test_chunking_config_display() {
+        let config = ChunkingConfig {
+            continuation_checker: Box::<NaiveContinuationTracker>::default(),
+            data_compression_chunk_vector_count: 1234,
+            inmemory_build_chunk_vector_count: 5678,
+        };
+
+        let display_string = format!("{}", config);
+
+        assert!(display_string.contains("ChunkingConfig"));
+        assert!(display_string.contains("1234"));
+        assert!(display_string.contains("5678"));
+        assert!(display_string.contains("data_compression_chunk_vector_count"));
+        assert!(display_string.contains("inmemory_build_chunk_vector_count"));
+    }
+
+    #[test]
+    fn test_chunking_config_default() {
+        let config = ChunkingConfig::default();
+
+        assert_eq!(
+            config.data_compression_chunk_vector_count,
+            PQ_COMPRESSION_DEFAULT_CHUNK_SIZE
+        );
+        assert_eq!(
+            config.inmemory_build_chunk_vector_count,
+            PQ_DEFAULT_BATCH_SIZE
+        );
+    }
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "input": {
+      "content": {
+        "dim": 128
+      },
+      "type": "test-input-dim"
+    },
+    "results": 128
+  }
+]

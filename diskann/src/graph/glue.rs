@@ -59,13 +59,13 @@
 //!   an [`Accessor`] and a random access [`DistanceFunction`] for performing distance
 //!   calculations on the retrieve elements.
 //!
-//!   One subtle aspect is the use of the [`FillSet`] trait. For clients with expensive
+//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with expensive
 //!   vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
 //!
-//!   This is done by using a hash-map to store the elements retrieved by the
+//!   This is done by using a working set to store the elements retrieved by the
 //!   `PruneAccessor`. To give implementers the ability to perform a hybrid prune
 //!   (consisting of a mix of full-precision and quantized vectors), **without** the index
-//!   algorithm being aware of these two levels, the trait [`FillSet`] is used to delegate
+//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to delegate
 //!   the responsibility of populating this cache to the [`DataProvider`].
 //!
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
@@ -76,15 +76,16 @@
 //!
 //!   Like insertion, this trait delegates pruning to a dedicated `PruneStrategy`.
 
-use std::{collections::HashMap, future::Future};
+use std::{future::Future, sync::Arc};
 
+use diskann_utils::Reborrow;
 use diskann_utils::future::AssertSend;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, RankedError, StandardError, ToRanked, TransientError},
-    graph::{AdjacencyList, SearchOutputBuffer},
+    error::{ErrorExt, StandardError},
+    graph::{AdjacencyList, SearchOutputBuffer, workingset},
     neighbor::Neighbor,
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
@@ -251,10 +252,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 /// ## Error Handling
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized
-where
-    T: ?Sized,
-{
+pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -291,19 +289,10 @@ where
 /// A search strategy for query objects of type `T`.
 ///
 /// This trait should be overloaded by data providers wishing to extend
-///
-/// The type `O` represents the type written into the output buffer
-/// during a search. This is often the same as the provider's internal ID type,
-/// but it can differ depending on the use case. For example, it might represent
-/// associated data or alternative identifiers.
-///
-/// [`crate::index::diskann_async::DiskANNIndex::search`].
-pub trait SearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    Send + Sync
+/// (search)[`crate::graph::DiskANNIndex::search`].
+pub trait SearchStrategy<Provider, T>: Send + Sync
 where
     Provider: DataProvider,
-    T: ?Sized,
-    O: Send,
 {
     /// The computer used by the associated accessor.
     ///
@@ -315,9 +304,6 @@ where
         > + Send
         + Sync
         + 'static;
-
-    /// The associated [`SearchPostProcess`]or for the final results.
-    type PostProcessor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
 
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
@@ -334,10 +320,64 @@ where
         provider: &'a Provider,
         context: &'a Provider::Context,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
+}
 
-    /// Construct the [`SearchPostProcess`] struct to post-process the results of search and
-    /// store them into the output container.
-    fn post_processor(&self) -> Self::PostProcessor;
+/// Opt-in trait for strategies that have a default post-processor.
+///
+/// Strategies implementing this trait can be used with index-level search APIs such as
+/// [`crate::index::diskann_async::DiskANNIndex::search`] and
+/// [`crate::index::diskann_async::DiskANNIndex::search_with`] when no explicit
+/// post-processor is specified. The search infrastructure will call
+/// `default_post_processor()` to obtain the processor and invoke its
+/// [`SearchPostProcess::post_process`] method.
+pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T>
+where
+    Provider: DataProvider,
+    O: Send,
+{
+    /// The default post-processor type.
+    type Processor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
+
+    /// Create the default post-processor.
+    fn default_post_processor(&self) -> Self::Processor;
+}
+
+/// Aggregate trait for strategies that support both search access and a default post-processor.
+pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>
+where
+    Provider: DataProvider,
+    O: Send,
+{
+}
+
+impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
+where
+    S: SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>,
+    Provider: DataProvider,
+    O: Send,
+{
+}
+
+/// Convenience macro for implementing [`DefaultPostProcessor`] when the processor
+/// is a [`Default`]-constructible type.
+///
+/// # Example
+///
+/// ```ignore
+/// impl DefaultPostProcessor<MyProvider, &[f32]> for MyStrategy {
+///     default_post_processor!(CopyIds);
+/// }
+/// ```
+#[macro_export]
+macro_rules! default_post_processor {
+    ($Processor:ty) => {
+        type Processor = $Processor;
+        fn default_post_processor(&self) -> Self::Processor {
+            Default::default()
+        }
+    };
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.
@@ -347,7 +387,6 @@ where
 pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     type Error: StandardError;
 
@@ -356,7 +395,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -374,13 +413,12 @@ pub struct CopyIds;
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
-        _query: &T,
+        _query: T,
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -400,7 +438,6 @@ where
 pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     /// A potentially modified version of the error yielded by the next state in the
     /// processing pipeline.
@@ -417,7 +454,7 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -435,7 +472,7 @@ pub struct FilterStartPoints;
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
     A: BuildQueryComputer<T> + SearchExt,
-    T: Send + Sync + ?Sized,
+    T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
     /// context idenfying the problem as occurring in a sub-process of filtering.
@@ -451,7 +488,7 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -504,7 +541,6 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -513,7 +549,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -535,7 +571,6 @@ where
 pub trait InsertStrategy<Provider, T>: SearchStrategy<Provider, T> + 'static
 where
     Provider: DataProvider,
-    T: ?Sized,
 {
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
@@ -568,6 +603,12 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
+    /// The [working set](crate::graph::workingset) used during pruning.
+    ///
+    /// For single insert this is typically an empty [`Map`](super::workingset::Map).
+    /// For multi-insert it may be pre-seeded with batch elements.
+    type WorkingSet: Send + Sync;
+
     /// The distance computer used during pruning.
     ///
     /// We could grab this type from the `PruneAccessor` associated type, but it's
@@ -582,18 +623,28 @@ where
 
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
-    /// Note that the majority of interactions with the working set will go through
-    /// [`FillSet`] rather than [`Accessor::get_element`].
+    /// The accessor implements [`workingset::Fill`] for the strategy's
+    /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
+    /// cached for distance computations.
     ///
-    /// Therefore, implementations are encouraged to have [`Accessor::get_element`] return
-    /// the highest-precision applicable value for a given element type.
+    /// Implementations are encouraged to have [`Accessor::get_element`] return the
+    /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
         + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer>
         + AsNeighborMut
-        + FillSet;
+        + workingset::Fill<Self::WorkingSet>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
+
+    /// Create a fresh working set pre-sized for up to `capacity` elements.
+    ///
+    /// Argument `capacity` is an upper-bound: callers guarantee that no more than
+    /// `capacity` elements will be inserted into the working set during a single
+    /// [fill](workingset::Fill).
+    ///
+    /// Implementations may use this to pre-allocate or panic if exceeded.
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet;
 
     /// Return the prune accessor.
     fn prune_accessor<'a>(
@@ -603,93 +654,91 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
 }
 
-/// An extension point for filling the working set used during pruning.
+/// Strategy for bulk insertion via [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
 ///
-/// A working set is needed because pruning operates computes distances between many
-/// different pairs of a relatively small set of elements. For providers where element
-/// retrieval is expensive, we need to cache these elements on the DiskANN layer to only
-/// retrieve each element once.
-///
-/// The motivation for this trait is as follows:
-///
-/// 1. It allows two-level [`DataProvider`]s (for example, those that have a full precision
-///    **and** and quantized copy of each element) to populate the working set with a
-///    mixture of full-precision and quantized vectors.
-///
-/// 2. This also allows accessors that have more efficient bulk accesses to implement some
-///    or all of the working set population using these more efficient implementations.
-///
-/// # Provided Implementation
-///
-/// The provided implementation use [`self.get_element()`] to retrieve items. This method
-/// is only called if the key is not already present in `set`.
-///
-/// This method allows transient errors.
-pub trait FillSet: Accessor {
-    /// Add `self.get_element(i)` for all `i` in `itr`.
+/// This trait delegates to its [`InsertStrategy`] for most selections during insert with
+/// one difference, the [working set](crate::graph::workingset) provided to the insertion
+/// [`PruneStrategy`] is seeded from [`Self::Seed`]. Seeding allows elements of the input
+/// batch `B` to be part of the working set throughout prune, saving on vector retrievals.
+pub trait MultiInsertStrategy<Provider, B>: Send + Sync
+where
+    Provider: DataProvider,
+    B: Batch,
+{
+    /// The working set for the insertion [`PruneStrategy`].
+    type WorkingSet: Send + Sync + 'static;
+
+    /// The working set "seed", potentially containing `B` for faster access.
+    type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
+
+    /// Any critical error that occurs during [`finish`](Self::finish).
+    type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
+
+    /// The delegated [`InsertStrategy`] for most insertion related decisions.
+    type InsertStrategy: for<'a> InsertStrategy<
+            Provider,
+            B::Element<'a>,
+            PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
+        >;
+
+    /// Construct the associated [`InsertStrategy`].
+    fn insert_strategy(&self) -> Self::InsertStrategy;
+
+    /// Package `batch` and the associated internal IDs into an intermediate seed.
     ///
-    /// Implementations should not remove elements from `set`, only add.
-    fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    /// This seed type will be used to create the actual pruning working set on the various
+    /// threads processing the batch insertion.
+    ///
+    /// Implementations may assume that `batch.len() == ids.len()`.
+    fn finish<Itr>(
+        &self,
+        provider: &Provider,
+        context: &Provider::Context,
+        batch: &Arc<B>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        use std::collections::hash_map;
-        async move {
-            // The dance here is a little complicated.
-            //
-            // If we observe a transient error, then we are obligated to continue processing
-            // items, but must return a transient error to inform the caller that not all
-            // the items made it through.
-            let mut err: Result<(), Self::GetError> = Ok(());
-            for i in itr {
-                let e = set.entry(i);
-                if matches!(e, hash_map::Entry::Vacant(_)) {
-                    match self.get_element(i).await {
-                        Ok(element) => {
-                            e.insert_entry(element.into());
-                        }
-                        Err(e) => match e.to_ranked() {
-                            RankedError::Transient(transient) => {
-                                if err.is_ok() {
-                                    err = Err(Self::GetError::from_transient(transient));
-                                } else {
-                                    transient.acknowledge(
-                                        "another non-critical error was observed first",
-                                    );
-                                }
-                            }
-                            RankedError::Error(e) => return Err(Self::GetError::from_error(e)),
-                        },
-                    }
-                }
-            }
-            err
-        }
+        Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
+}
+
+/// A batch of elements indexed positionally.
+///
+/// This provides random access to elements given to
+/// [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
+///
+/// Elements are indexed in the range `[0, self.len())`.
+///
+/// See: [`MultiInsertStrategy`] for usage as well as
+/// [`Overlay`](crate::graph::workingset::map::Overlay) for a working set seed compatible
+/// with [`Batch`].
+///
+/// The primary implementation of this trait is [`Matrix`](diskann_utils::views::Matrix).
+pub trait Batch: Send + Sync + 'static {
+    /// The element type of the batch.
+    type Element<'a>: Copy;
+
+    /// The number of elements in the batch.
+    fn len(&self) -> usize;
+
+    /// Return the element at index `i`, where `i` should be in `[0, self.len())`.
+    fn get(&self, i: usize) -> Self::Element<'_>;
+
+    /// Return `true` if the batch is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
-/// For compatibility with [`crate::index::diskann_async::DiskANNIndex::multi_insert`],
-/// we need the ability to take vectors supplied directly from the insert batch and use those
-/// vectors directly in pruning.
-///
-/// Vectors for `multi_insert` are constrained to be slices, but `Accessor::Element`
-/// is an opaque type. This trait works as a bridge from the input slices to
-/// `Accessor::Element` and often can be implemented cheaply.
-///
-/// This trait also accepts the internal id of the vector and is guaranteed to be called
-/// after [`SetElement`]. This allows the provider to simply retrieve a pre-processed
-/// vector from the internal store if that is more efficient.
-pub trait AsElement<T>: Accessor {
-    type Error: ToRanked + std::fmt::Debug + Send + Sync;
-    fn as_element(
-        &mut self,
-        vector: T,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send;
+impl<T: Send + Sync + 'static> Batch for diskann_utils::views::Matrix<T> {
+    type Element<'a> = &'a [T];
+
+    fn len(&self) -> usize {
+        self.nrows()
+    }
+
+    fn get(&self, i: usize) -> Self::Element<'_> {
+        self.row(i)
+    }
 }
 
 /// A strategy for supporting inplace deletes.
@@ -710,29 +759,18 @@ where
     /// The type provided to the search portion of inplace-deletion and used to instantiate
     /// the required `SearchStrategy`.
     ///
-    /// This is allowed to be different then `DeleteElementGuard` so we can support types
-    /// without lifetimes.
-    type DeleteElement<'a>: Send + Sync + ?Sized;
+    /// With the by-value `T` parameter design, `DeleteElement<'a>` is expected to be a
+    /// sized, `Copy` type (typically a reference like `&'a [f32]`).
+    type DeleteElement<'a>: Copy + Send + Sync;
 
-    /// Why do we need the `Lower` bound here?
+    /// The guard type returned by `get_delete_element`.
     ///
-    /// The answer is that search strategies are implemented to `T: ?Sized`, but the return
-    /// type of an accessor can never be `?Sized`.
-    ///
-    /// This presents a conundrum because if we implement, for example,
-    /// [`SearchStrategy<[f32]>`], we would like to be able to reuse that search strategy
-    /// for the search portion of inplace deletes.
-    ///
-    /// This means that we need to be able to transform the value returned by
-    /// [`Accessor::get_element`] to be able to decay to a non-reference type.
-    ///
-    /// Note that it is possible for particular `DeleteElements` to `Deref` to themselves.
-    ///
-    /// Additionally, the `Deref` bound allows a guard to be returned instead of the raw
-    /// type while still dispatching to an unguarded search routine.
+    /// The guard holds the retrieved element data and must be convertible to
+    /// `DeleteElement<'a>` via [`Reborrow`]. This allows the guard's lifetime to scope the
+    /// validity of the extracted element.
     type DeleteElementGuard: Send
         + Sync
-        + for<'a> diskann_utils::reborrow::AsyncLower<'a, Self::DeleteElement<'a>>
+        + for<'a> Reborrow<'a, Target = Self::DeleteElement<'a>>
         + 'static;
 
     /// Error type for accessing for search.
@@ -741,14 +779,37 @@ where
     /// The pruning strategy to use after the initial search is complete.
     type PruneStrategy: PruneStrategy<Provider>;
 
+    /// The accessor used during the delete-search phase.
+    ///
+    /// This is technically redundant information as in theory, we could project through
+    /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
+    /// the "caching" provider), rustc is unable to project all the way through the layers
+    /// of associated types.
+    ///
+    /// Lifting the accessor all the way to the trait level makes the caching provider possible.
+    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
+        + SearchExt;
+
+    /// The processor used during the delete-search phase.
+    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
+        + Send
+        + Sync;
+
     /// The type of the search strategy to use for graph traversal.
-    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>;
+    type SearchStrategy: for<'a> SearchStrategy<
+            Provider,
+            Self::DeleteElement<'a>,
+            SearchAccessor<'a> = Self::DeleteSearchAccessor<'a>,
+        >;
 
     /// Construct the prune strategy object.
     fn prune_strategy(&self) -> Self::PruneStrategy;
 
     /// Construct the search strategy object.
     fn search_strategy(&self) -> Self::SearchStrategy;
+
+    /// Construct the search post-processor for the delete-search phase.
+    fn search_post_processor(&self) -> Self::SearchPostProcessor;
 
     /// Construct the accessor used to retrieve the item being deleted.
     fn get_delete_element<'a>(
@@ -777,16 +838,6 @@ where
     fn id_iterator(&mut self) -> impl std::future::Future<Output = Result<I, ANNError>>;
 }
 
-pub mod aliases {
-    use super::*;
-
-    /// A convenience alias returning the prune accessor for an insert strategy `Strategy`.
-    pub type InsertPruneAccessor<'a, Strategy, Provider, T> = <<Strategy as InsertStrategy<
-        Provider,
-        T,
-    >>::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>;
-}
-
 ///////////
 // Tests //
 ///////////
@@ -800,7 +851,6 @@ mod tests {
 
     use diskann_vector::PreprocessedDistanceFunction;
     use futures_util::future;
-    use thiserror::Error;
 
     use super::*;
     use crate::{
@@ -835,6 +885,7 @@ mod tests {
         type InternalId = u32;
         type ExternalId = u32;
         type Error = ANNError;
+        type Guard = crate::provider::NoopGuard<u32>;
 
         /// Translate an external id to its corresponding internal id.
         fn to_internal_id(
@@ -859,7 +910,6 @@ mod tests {
     struct Retriever<'a> {
         provider: &'a SimpleProvider,
         count: &'a CountGetVector,
-        errors_are_unrecoverable: bool,
     }
 
     impl SearchExt for Retriever<'_> {
@@ -869,16 +919,8 @@ mod tests {
     }
 
     impl<'a> Retriever<'a> {
-        fn new(
-            provider: &'a SimpleProvider,
-            count: &'a CountGetVector,
-            errors_are_unrecoverable: bool,
-        ) -> Self {
-            Self {
-                provider,
-                count,
-                errors_are_unrecoverable,
-            }
+        fn new(provider: &'a SimpleProvider, count: &'a CountGetVector) -> Self {
+            Self { provider, count }
         }
     }
 
@@ -887,14 +929,13 @@ mod tests {
     }
 
     impl Accessor for Retriever<'_> {
-        type Extended = f32;
         type Element<'a>
             = f32
         where
             Self: 'a;
         type ElementRef<'a> = f32;
 
-        type GetError = InvalidVectorId;
+        type GetError = ANNError;
         fn get_element(
             &mut self,
             id: Self::Id,
@@ -905,7 +946,7 @@ mod tests {
                     self.count.count.fetch_add(1, Ordering::Relaxed);
                     Ok(*v)
                 }
-                None => Err(InvalidVectorId::new(self.errors_are_unrecoverable)),
+                None => panic!("invalid id: {}", id),
             };
             async move { result }
         }
@@ -922,71 +963,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Error)]
-    #[error("invalid vector id")]
-    struct InvalidVectorId {
-        unrecoverable: bool,
-        acknowledged: bool,
-    }
-
-    impl InvalidVectorId {
-        fn new(unrecoverable: bool) -> Self {
-            Self {
-                unrecoverable,
-                acknowledged: false,
-            }
-        }
-    }
-
-    impl TransientError<Self> for InvalidVectorId {
-        fn acknowledge<D: std::fmt::Display>(mut self, _why: D) {
-            assert!(!self.unrecoverable);
-            self.acknowledged = true;
-        }
-
-        fn escalate<D: std::fmt::Display>(mut self, _why: D) -> Self {
-            assert!(!self.acknowledged);
-            self.unrecoverable = true;
-            self
-        }
-    }
-
-    impl ToRanked for InvalidVectorId {
-        type Transient = Self;
-        type Error = Self;
-
-        fn to_ranked(self) -> RankedError<Self, Self> {
-            if self.unrecoverable {
-                RankedError::Error(self)
-            } else {
-                RankedError::Transient(self)
-            }
-        }
-
-        fn from_transient(transient: Self) -> Self {
-            transient
-        }
-
-        fn from_error(error: Self) -> Self {
-            error
-        }
-    }
-
-    impl Drop for InvalidVectorId {
-        fn drop(&mut self) {
-            if !self.unrecoverable && !self.acknowledged {
-                panic!("Unacknowledged recoverable error dropped!");
-            }
-        }
-    }
-
-    impl From<InvalidVectorId> for ANNError {
-        fn from(value: InvalidVectorId) -> Self {
-            assert!(value.unrecoverable);
-            ANNError::log_async_error(value)
-        }
-    }
-
     struct QueryComputer;
     impl PreprocessedDistanceFunction<f32, f32> for QueryComputer {
         fn evaluate_similarity(&self, _changing: f32) -> f32 {
@@ -997,7 +973,7 @@ mod tests {
     impl BuildQueryComputer<f32> for Retriever<'_> {
         type QueryComputerError = ANNError;
         type QueryComputer = QueryComputer;
-        fn build_query_computer(&self, _from: &f32) -> Result<QueryComputer, ANNError> {
+        fn build_query_computer(&self, _from: f32) -> Result<QueryComputer, ANNError> {
             Ok(QueryComputer)
         }
     }
@@ -1006,13 +982,10 @@ mod tests {
 
     // This strategy explicitly does not define `post_process` so we can test the provided
     // implementation.
-    struct Strategy {
-        errors_are_unrecoverable: bool,
-    }
+    struct Strategy;
 
     impl SearchStrategy<SimpleProvider, f32> for Strategy {
         type QueryComputer = QueryComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
         type SearchAccessor<'a> = Retriever<'a>;
 
@@ -1021,27 +994,18 @@ mod tests {
             provider: &'a SimpleProvider,
             context: &'a CountGetVector,
         ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-            Ok(Retriever::new(
-                provider,
-                context,
-                self.errors_are_unrecoverable,
-            ))
-        }
-
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
+            Ok(Retriever::new(provider, context))
         }
     }
 
-    // Use the provided implementation.
-    impl FillSet for Retriever<'_> {}
+    impl DefaultPostProcessor<SimpleProvider, f32> for Strategy {
+        default_post_processor!(CopyIds);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_default_post_process() {
         let ctx = CountGetVector::default();
-        let strategy = Strategy {
-            errors_are_unrecoverable: true,
-        };
+        let strategy = Strategy;
 
         let num_points: usize = 100;
         let provider = SimpleProvider {
@@ -1071,7 +1035,7 @@ mod tests {
         ctx.clear();
 
         let query = 11.5;
-        let computer = accessor.build_query_computer(&query).unwrap();
+        let computer = accessor.build_query_computer(query).unwrap();
 
         for input_len in 0..10 {
             let input: Vec<_> = (0..input_len)
@@ -1081,10 +1045,10 @@ mod tests {
                 let mut output = vec![Neighbor::<u32>::default(); output_len];
 
                 let count = strategy
-                    .post_processor()
+                    .default_post_processor()
                     .post_process(
                         &mut accessor,
-                        &query,
+                        query,
                         &computer,
                         input.iter().copied(),
                         &mut neighbor::BackInserter::new(output.as_mut_slice()),
@@ -1110,107 +1074,5 @@ mod tests {
 
         // Ensure that no reads were emitted.
         assert_eq!(ctx.count(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_default_fill_set() {
-        let ctx = CountGetVector::default();
-        let num_points: usize = 100;
-        let provider = SimpleProvider {
-            items: (0..num_points).map(|i| i as f32).collect(),
-        };
-
-        let mut s = HashMap::new();
-        let mut accessor = Retriever::new(&provider, &ctx, true);
-
-        assert_eq!(ctx.count(), 0, "default count should be 0");
-        accessor
-            .fill_set(&mut s, [0, 1, 2, 3].into_iter())
-            .await
-            .unwrap();
-        assert_eq!(s.len(), 4);
-        assert_eq!(*s.get(&0).unwrap(), 0.0);
-        assert_eq!(*s.get(&1).unwrap(), 1.0);
-        assert_eq!(*s.get(&2).unwrap(), 2.0);
-        assert_eq!(*s.get(&3).unwrap(), 3.0);
-
-        assert_eq!(ctx.count(), 4, "expected 1 load per element");
-        ctx.clear();
-
-        accessor
-            .fill_set(&mut s, [2, 3, 4, 5].into_iter())
-            .await
-            .unwrap();
-        assert_eq!(s.len(), 6);
-        assert_eq!(*s.get(&0).unwrap(), 0.0);
-        assert_eq!(*s.get(&1).unwrap(), 1.0);
-        assert_eq!(*s.get(&2).unwrap(), 2.0);
-        assert_eq!(*s.get(&3).unwrap(), 3.0);
-        assert_eq!(*s.get(&4).unwrap(), 4.0);
-        assert_eq!(*s.get(&5).unwrap(), 5.0);
-
-        assert_eq!(
-            ctx.count(),
-            2,
-            "expected 1 load per element not already in the set"
-        );
-
-        // Check error propagation.
-        let _: InvalidVectorId = accessor
-            .fill_set(&mut s, [8, 9, num_points as u32].into_iter())
-            .await
-            .unwrap_err();
-    }
-
-    #[tokio::test]
-    async fn test_default_fill_set_transient_error() {
-        let ctx = CountGetVector::default();
-        let num_points: usize = 100;
-        let provider = SimpleProvider {
-            items: (0..num_points).map(|i| i as f32).collect(),
-        };
-
-        let mut s = HashMap::new();
-        let mut accessor = Retriever::new(&provider, &ctx, false);
-
-        assert_eq!(ctx.count(), 0, "default count should be 0");
-        accessor
-            .fill_set(&mut s, [0, 1, 2, 3].into_iter())
-            .await
-            .unwrap();
-        assert_eq!(s.len(), 4);
-        assert_eq!(*s.get(&0).unwrap(), 0.0);
-        assert_eq!(*s.get(&1).unwrap(), 1.0);
-        assert_eq!(*s.get(&2).unwrap(), 2.0);
-        assert_eq!(*s.get(&3).unwrap(), 3.0);
-
-        assert_eq!(ctx.count(), 4, "expected 1 load per element");
-        ctx.clear();
-
-        // Transient errors should be recorded and asknowledged, but not stop processing.
-        let err = accessor
-            .fill_set(
-                &mut s,
-                [2, 3, num_points as u32, 4, num_points as u32 + 1, 5].into_iter(),
-            )
-            .await
-            .unwrap_err();
-
-        assert!(!err.unrecoverable);
-        err.acknowledge("acknowledging to satisfy drop logic");
-
-        assert_eq!(s.len(), 6);
-        assert_eq!(*s.get(&0).unwrap(), 0.0);
-        assert_eq!(*s.get(&1).unwrap(), 1.0);
-        assert_eq!(*s.get(&2).unwrap(), 2.0);
-        assert_eq!(*s.get(&3).unwrap(), 3.0);
-        assert_eq!(*s.get(&4).unwrap(), 4.0);
-        assert_eq!(*s.get(&5).unwrap(), 5.0);
-
-        assert_eq!(
-            ctx.count(),
-            2,
-            "expected 1 load per element not already in the set"
-        );
     }
 }

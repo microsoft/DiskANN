@@ -38,8 +38,7 @@ impl X86Splat for f16x8 {
         // (1) .to_bits() -> Returns the underlying `u16` from the `f16`.
         // (2) as i16 -> Bit-cast to `i16` to give to the intrinsic.
         //
-        // SAFETY: Safe invocation of this function is gated by the CFG macro conditionally
-        // compiling this implementation.
+        // SAFETY: `_mm_set1_epi16` requires SSE2, implied by V3.
         Self(unsafe { _mm_set1_epi16(value.to_bits() as i16) })
     }
 }

@@ -23,3 +23,16 @@ pub enum WorkStage {
     Start,
     // Always add new stages at the end of the enum to avoid breaking the serialization order.
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_work_stage_serialization() {
+        let stage = WorkStage::BuildIndicesOnShards(42);
+        let serialized = bincode::serialize(&stage).unwrap();
+        let deserialized: WorkStage = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(stage, deserialized);
+    }
+}

@@ -1,0 +1,3 @@
+# The tolerance needle matches the float16 input via is_subset, but no registered
+# regression benchmark accepts float16 — so benchmark dispatch fails.
+check verify --tolerances $TOLERANCES --input-file $INPUT

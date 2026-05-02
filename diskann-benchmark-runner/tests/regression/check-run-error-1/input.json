@@ -1,0 +1,18 @@
+{
+  "search_directories": [],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "test-input-dim",
+      "content": {
+        "dim": 128
+      }
+    },
+    {
+      "type": "test-input-dim",
+      "content": {
+        "dim": 512
+      }
+    }
+  ]
+}

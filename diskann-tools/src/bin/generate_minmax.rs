@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use diskann_providers::utils::write_metadata;
+use diskann_providers::storage::StorageReadProvider;
 use diskann_quantization::{
     algorithms::transforms::{DoubleHadamard, TargetDim},
     alloc::GlobalAllocator,
@@ -19,6 +19,7 @@ use diskann_quantization::{
     num::Positive,
     CompressInto,
 };
+use diskann_utils::io::Metadata;
 use half::f16;
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -101,20 +102,15 @@ where
     diskann_quantization::bits::Unsigned: diskann_quantization::bits::Representation<NBITS>,
 {
     // Load input data
-    let (input_data, num_points, dim) = diskann_providers::utils::file_util::load_bin::<T, _>(
-        &diskann_providers::storage::FileStorageProvider,
-        input_path,
-        0,
+    let input_data = diskann_utils::io::read_bin::<T>(
+        &mut diskann_providers::storage::FileStorageProvider
+            .open_reader(input_path)
+            .with_context(|| format!("Failed to open {}", input_path))?,
     )
     .with_context(|| format!("Failed to load data from {}", input_path))?;
 
-    if input_data.len() != num_points * dim {
-        anyhow::bail!(
-            "Data size mismatch: expected {} elements, got {}",
-            num_points * dim,
-            input_data.len()
-        );
-    }
+    let num_points = input_data.nrows();
+    let dim = input_data.ncols();
 
     println!("Input file: {} points, {} dimensions", num_points, dim);
 
@@ -142,7 +138,8 @@ where
     let mut writer = BufWriter::new(output_file);
 
     // Write output header: num_points (u32) and bytes_per_vector (u32)
-    write_metadata(&mut writer, num_points, bytes_per_vector)
+    Metadata::new(num_points, bytes_per_vector)?
+        .write(&mut writer)
         .context("Failed to write metadata header")?;
 
     println!("Processing {} vectors...", num_points);
@@ -152,12 +149,7 @@ where
     // Process vectors one by one
     for i in 0..num_points {
         // Get input vector
-        let start_idx = i * dim;
-        let end_idx = start_idx + dim;
-        let input_vector: Vec<f32> = input_data[start_idx..end_idx]
-            .iter()
-            .map(|x| (*x).into())
-            .collect();
+        let input_vector = input_data.row(i);
 
         // Create buffer for quantized data with proper alignment
         let mut quantized_buffer = vec![0u8; bytes_per_vector];
@@ -169,7 +161,7 @@ where
 
         // Compress the vector
         let loss_x = quantizer
-            .compress_into(input_vector.as_slice(), quantized_data)
+            .compress_into(input_vector, quantized_data)
             .with_context(|| format!("Failed to compress vector {}", i))?;
 
         loss += loss_x.as_f32();

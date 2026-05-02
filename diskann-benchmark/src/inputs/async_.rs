@@ -8,7 +8,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
-    graph::{self, config, RangeSearchParams, RangeSearchParamsError, StartPointStrategy},
+    graph::{self, config, search::Range, RangeSearchError, StartPointStrategy},
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
@@ -25,7 +25,7 @@ use diskann_providers::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{self, as_input, save_and_load, Example, Input},
+    inputs::{self, as_input, save_and_load, Example},
     utils::SimilarityMeasure,
 };
 
@@ -42,11 +42,11 @@ as_input!(DynamicIndexRun);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<IndexOperation>::new())?;
-    registry.register(Input::<IndexPQOperation>::new())?;
-    registry.register(Input::<IndexSQOperation>::new())?;
-    registry.register(Input::<SphericalQuantBuild>::new())?;
-    registry.register(Input::<DynamicIndexRun>::new())?;
+    registry.register::<IndexOperation>()?;
+    registry.register::<IndexPQOperation>()?;
+    registry.register::<IndexSQOperation>()?;
+    registry.register::<SphericalQuantBuild>()?;
+    registry.register::<DynamicIndexRun>()?;
     Ok(())
 }
 
@@ -90,13 +90,11 @@ pub(crate) struct GraphRangeSearch {
 }
 
 impl GraphRangeSearch {
-    pub(crate) fn construct_params(
-        &self,
-    ) -> Result<Vec<RangeSearchParams>, RangeSearchParamsError> {
+    pub(crate) fn construct_params(&self) -> Result<Vec<Range>, RangeSearchError> {
         self.initial_search_l
             .iter()
             .map(|&l| {
-                RangeSearchParams::new(
+                Range::with_options(
                     self.max_returned,
                     l,
                     self.beam_width,
@@ -111,7 +109,7 @@ impl GraphRangeSearch {
 }
 
 impl CheckDeserialization for GraphRangeSearch {
-    // all necessary checks are carried out when RangeSearchParams is initialized
+    // all necessary checks are carried out when Range is initialized
     fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.construct_params()
             .context("invalid range search params")?;
@@ -386,8 +384,8 @@ impl IndexLoad {
 
         let index_config = IndexConfiguration::new(
             self.distance.into(),
-            metadata.ndims,
-            metadata.npoints,
+            metadata.ndims(),
+            metadata.npoints(),
             num_frozen_pts,
             1,
             config,

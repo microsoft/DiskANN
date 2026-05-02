@@ -284,7 +284,6 @@ mod sampling_test {
     use byteorder::{LittleEndian, WriteBytesExt};
     use diskann::ANNErrorKind;
     use rstest::rstest;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -345,8 +344,7 @@ mod sampling_test {
     ) {
         use rand::seq::SliceRandom;
 
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         create_test_binary_data(
             &storage_provider,
             TEST_BINARY_FILE,
@@ -393,8 +391,7 @@ mod sampling_test {
     #[case(SamplingDensity::Dense)]
     #[case(SamplingDensity::Sparse)]
     fn test_sample_vector_reader_out_of_bounds(#[case] sampling_density: SamplingDensity) {
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         create_test_binary_data(
             &storage_provider,
             TEST_BINARY_FILE,
@@ -420,8 +417,7 @@ mod sampling_test {
     #[case(SamplingDensity::Dense)]
     #[case(SamplingDensity::Sparse)]
     fn test_sample_vector_reader_invalid_file(#[case] sampling_density: SamplingDensity) {
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         {
             // Create file with wrong size

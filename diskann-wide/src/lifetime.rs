@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Tools to pass objects with lifetimes across the funtion pointer API.
+//! Tools to pass objects with lifetimes across the function pointer API.
 //!
 //! Useful helpers include
 //!
@@ -17,8 +17,8 @@ use std::marker::PhantomData;
 
 /// A lifetime annotator for the function pointer API of [`crate::Architecture`].
 ///
-/// This mainly works around limitations the Rust compiler's ability to infer the proper
-/// of dispatched function pointers.
+/// This mainly works around limitations in the Rust compiler's ability to infer the proper
+/// lifetimes of dispatched function pointers.
 pub trait AddLifetime: 'static {
     /// The type with a lifetime (if any).
     type Of<'a>;

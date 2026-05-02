@@ -227,12 +227,12 @@ where
         )
     }
 
-    fn closest_notvisited(&mut self) -> Neighbor<P::Id> {
-        let neighbor_with_attribute = self.global_queue.closest_notvisited();
-        Neighbor::new(
+    fn closest_notvisited(&mut self) -> Option<Neighbor<P::Id>> {
+        let neighbor_with_attribute = self.global_queue.closest_notvisited()?;
+        Some(Neighbor::new(
             neighbor_with_attribute.id.id,
             neighbor_with_attribute.distance,
-        )
+        ))
     }
 
     fn has_notvisited_node(&self) -> bool {
@@ -476,19 +476,20 @@ mod diverse_priority_queue_test {
 
         assert!(queue.has_notvisited_node());
 
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 1); // Best unvisited
         assert_eq!(nbr.distance, 0.5);
 
         assert!(queue.has_notvisited_node());
 
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 0); // Next best
 
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 2); // Last one
 
         assert!(!queue.has_notvisited_node());
+        assert!(queue.closest_notvisited().is_none());
     }
 
     #[test]
@@ -502,8 +503,9 @@ mod diverse_priority_queue_test {
         queue.insert(Neighbor::new(0, 1.0));
         assert!(queue.has_notvisited_node());
 
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert!(!queue.has_notvisited_node());
+        assert!(queue.closest_notvisited().is_none());
     }
 
     #[test]
