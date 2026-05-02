@@ -7,6 +7,7 @@ pub(crate) mod async_;
 pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
+pub(crate) mod multi;
 pub(crate) mod save_and_load;
 
 pub(crate) fn register_inputs(
@@ -16,6 +17,7 @@ pub(crate) fn register_inputs(
     exhaustive::register_inputs(registry)?;
     disk::register_inputs(registry)?;
     filters::register_inputs(registry)?;
+    multi::register_inputs(registry)?;
     Ok(())
 }
 

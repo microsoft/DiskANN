@@ -114,6 +114,10 @@ pub(super) struct SearchResults {
     pub(super) qps: Vec<f64>,
     pub(super) search_latencies: Vec<MicroSeconds>,
     pub(super) mean_latencies: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mean_first_stage_latencies: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mean_rerank_latencies: Option<Vec<f64>>,
     pub(super) p90_latencies: Vec<MicroSeconds>,
     pub(super) p99_latencies: Vec<MicroSeconds>,
     pub(super) recall: utils::recall::RecallMetrics,
@@ -148,6 +152,8 @@ impl SearchResults {
             qps,
             search_latencies: end_to_end_latencies,
             mean_latencies,
+            mean_first_stage_latencies: None,
+            mean_rerank_latencies: None,
             p90_latencies,
             p99_latencies,
             recall: (&recall).into(),
@@ -170,23 +176,31 @@ where
     }
 
     let has_batch = batch_formatter.is_some();
-    let headers: &[&str] = if has_batch {
-        &[
+    let has_stage_latencies = results
+        .iter()
+        .any(|r| r.mean_first_stage_latencies.is_some() || r.mean_rerank_latencies.is_some());
+
+    let headers: &[&str] = match (has_batch, has_stage_latencies) {
+        (true, true) => &[
             "Batch",
             "Ls",
-            "KNN",
+            "K",
+            "N",
             "Avg cmps",
             "Avg hops",
             "QPS - mean(max)",
+            "Avg First Stage",
+            "Avg Rerank",
             "Avg Latency",
             "p99 Latency",
             "Recall",
             "Threads",
-        ]
-    } else {
-        &[
+        ],
+        (true, false) => &[
+            "Batch",
             "Ls",
-            "KNN",
+            "K",
+            "N",
             "Avg cmps",
             "Avg hops",
             "QPS - mean(max)",
@@ -194,7 +208,33 @@ where
             "p99 Latency",
             "Recall",
             "Threads",
-        ]
+        ],
+        (false, true) => &[
+            "Ls",
+            "K",
+            "N",
+            "Avg cmps",
+            "Avg hops",
+            "QPS - mean(max)",
+            "Avg First Stage",
+            "Avg Rerank",
+            "Avg Latency",
+            "p99 Latency",
+            "Recall",
+            "Threads",
+        ],
+        (false, false) => &[
+            "Ls",
+            "K",
+            "N",
+            "Avg cmps",
+            "Avg hops",
+            "QPS - mean(max)",
+            "Avg Latency",
+            "p99 Latency",
+            "Recall",
+            "Threads",
+        ],
     };
 
     let mut table = diskann_benchmark_runner::utils::fmt::Table::new(headers, results.len());
@@ -208,24 +248,39 @@ where
         }
 
         row.insert(r.search_l, col_idx);
-        row.insert(r.search_n, col_idx + 1);
-        row.insert(r.mean_cmps, col_idx + 2);
-        row.insert(r.mean_hops, col_idx + 3);
+        row.insert(r.recall.recall_k, col_idx + 1);
+        row.insert(r.recall.recall_n, col_idx + 2);
+        row.insert(r.mean_cmps, col_idx + 3);
+        row.insert(r.mean_hops, col_idx + 4);
         row.insert(
             format!(
                 "{:.1} ({:.1})",
                 MaybeDisplay(percentiles::mean(&r.qps), "missing"),
                 MaybeDisplay(percentiles::max_f64(&r.qps), "missing"),
             ),
-            col_idx + 4,
+            col_idx + 5,
         );
+        col_idx += 6;
+
+        if has_stage_latencies {
+            row.insert(
+                format_latency_mean(r.mean_first_stage_latencies.as_deref()),
+                col_idx,
+            );
+            row.insert(
+                format_latency_mean(r.mean_rerank_latencies.as_deref()),
+                col_idx + 1,
+            );
+            col_idx += 2;
+        }
+
         row.insert(
             format!(
                 "{:.1}us ({:.1}us)",
                 MaybeDisplay(percentiles::mean(&r.mean_latencies), "missing"),
                 MaybeDisplay(percentiles::max_f64(&r.mean_latencies), "missing"),
             ),
-            col_idx + 5,
+            col_idx,
         );
         row.insert(
             format!(
@@ -233,13 +288,24 @@ where
                 MaybeDisplay(percentiles::mean(&r.p99_latencies), "missing"),
                 MaybeDisplay(r.p99_latencies.iter().max(), "missing"),
             ),
-            col_idx + 6,
+            col_idx + 1,
         );
-        row.insert(format!("{:3}", r.recall.average), col_idx + 7);
-        row.insert(r.num_tasks, col_idx + 8);
+        row.insert(format!("{:3}", r.recall.average), col_idx + 2);
+        row.insert(r.num_tasks, col_idx + 3);
     });
 
     write!(f, "{}", table)
+}
+
+fn format_latency_mean(values: Option<&[f64]>) -> String {
+    match values {
+        Some(values) => format!(
+            "{:.1}us ({:.1}us)",
+            MaybeDisplay(percentiles::mean(values), "missing"),
+            MaybeDisplay(percentiles::max_f64(values), "missing"),
+        ),
+        None => "missing".to_string(),
+    }
 }
 
 impl std::fmt::Display for DisplayWrapper<'_, [SearchResults]> {
@@ -377,5 +443,47 @@ where
 impl std::fmt::Display for DisplayWrapper<'_, [RangeSearchResults]> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         format_range_search_results_table(f, self, None::<fn(usize) -> String>)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_result(search_n: usize, recall_k: usize, recall_n: usize) -> SearchResults {
+        SearchResults {
+            num_tasks: 1,
+            search_n,
+            search_l: 50,
+            qps: vec![3.0],
+            search_latencies: vec![MicroSeconds::new(3)],
+            mean_latencies: vec![3.0],
+            mean_first_stage_latencies: None,
+            mean_rerank_latencies: None,
+            p90_latencies: vec![MicroSeconds::new(3)],
+            p99_latencies: vec![MicroSeconds::new(3)],
+            recall: utils::recall::RecallMetrics {
+                recall_k,
+                recall_n,
+                num_queries: 2,
+                average: 0.5,
+                minimum: 0,
+                maximum: recall_k,
+            },
+            mean_cmps: 11.0,
+            mean_hops: 2.0,
+        }
+    }
+
+    #[test]
+    fn display_uses_recall_k_and_n_not_search_n_as_knn() {
+        let results = [search_result(100, 7, 13)];
+        let rendered = format!("{}", DisplayWrapper(&results[..]));
+
+        assert!(!rendered.contains("KNN"));
+        assert!(!rendered.contains("Search N"));
+        assert!(rendered.contains("7"));
+        assert!(rendered.contains("13"));
+        assert!(!rendered.contains("100"));
     }
 }

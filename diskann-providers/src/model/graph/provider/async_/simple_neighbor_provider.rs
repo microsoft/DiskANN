@@ -19,6 +19,7 @@ use crate::storage::{
     self, AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith,
 };
 
+#[derive(Debug)]
 pub struct SimpleNeighborProviderAsync<I: VectorId> {
     // Each adjacency list is stored in a fixed size slice of size max_degree * graph_slack_factor + 1.
     // The length of the list is stored in the extra element at the end.
