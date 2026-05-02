@@ -441,7 +441,7 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer = T::Distance;
+    type DistanceComputer<'a> = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;

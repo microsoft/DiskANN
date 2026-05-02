@@ -808,7 +808,7 @@ impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, &[T], GarnetId> for 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     type PruneAccessor<'a> = FullAccessor<'a, T>;
     type PruneAccessorError = GarnetProviderError;
-    type DistanceComputer = T::Distance;
+    type DistanceComputer<'a> = T::Distance;
     type WorkingSet = WorkingSet<T>;
 
     fn prune_accessor<'a>(

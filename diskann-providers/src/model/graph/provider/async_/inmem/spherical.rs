@@ -614,7 +614,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer =
+    type DistanceComputer<'a> =
         UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
     type PruneAccessor<'a> = QuantAccessor<'a, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;

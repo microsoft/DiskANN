@@ -1525,7 +1525,7 @@ where
     D: AsyncFriendly,
 {
     type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
-    type DistanceComputer = T::Distance;
+    type DistanceComputer<'a> = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D>;
     type PruneAccessorError = diskann::error::Infallible;
 
@@ -1548,7 +1548,7 @@ where
     D: AsyncFriendly,
 {
     type WorkingSet = distances::pq::HybridMap<T, u8>;
-    type DistanceComputer = distances::pq::HybridComputer<T>;
+    type DistanceComputer<'a> = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D>;
     type PruneAccessorError = diskann::error::Infallible;
 

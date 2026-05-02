@@ -977,7 +977,7 @@ where
     E: StandardError,
 {
     type WorkingSet = Cached<S::WorkingSet>;
-    type DistanceComputer = S::DistanceComputer;
+    type DistanceComputer<'a> = S::DistanceComputer<'a>;
     type PruneAccessor<'a> = CachingAccessor<
         PruneAccessor<'a, S, DP>,
         <C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor,

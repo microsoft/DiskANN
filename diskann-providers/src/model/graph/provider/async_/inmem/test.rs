@@ -268,7 +268,7 @@ static START_COUNT: Mutex<usize> = Mutex::new(STATIC_PRUNE_THRESHOLD);
 type WorkingSet = map::Map<u32, Box<[f32]>, map::Ref<[f32]>>;
 
 impl PruneStrategy<TestProvider> for Flaky {
-    type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
+    type DistanceComputer<'a> = <FullAccessor<'a> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = WorkingSet;
