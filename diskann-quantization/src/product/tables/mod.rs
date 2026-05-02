@@ -4,6 +4,7 @@
  */
 
 mod basic;
+mod padded;
 mod transposed;
 
 #[cfg(test)]
