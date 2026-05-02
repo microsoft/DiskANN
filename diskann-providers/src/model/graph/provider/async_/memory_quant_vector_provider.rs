@@ -359,7 +359,7 @@ mod tests {
 
         let slice: &[f32] = &[-0.5, -0.5];
         assert_eq!(
-            d.evaluate_similarity(slice, &**provider.get_vector_sync(3).unwrap()),
+            d.evaluate_similarity(slice, provider.get_vector_sync(3).unwrap().as_slice()),
             expected,
         );
     }
