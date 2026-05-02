@@ -48,7 +48,7 @@ cargo publish --locked --workspace --dry-run
 
    ```bash
    git checkout main && git pull
-   git checkout -b release-0.46.0
+   git checkout -b release-X.Y.Z
    ```
 
 2. **Update version** in root `Cargo.toml`:
@@ -57,14 +57,14 @@ cargo publish --locked --workspace --dry-run
 
      ```toml
      [workspace.package]
-     version = "0.46.0"
+     version = "X.Y.Z"
      ```
 
    - Update **all internal crate entries** under `[workspace.dependencies]` to match:
 
      ```toml
-     diskann-wide = { path = "diskann-wide", version = "0.46.0" }
-     diskann-vector = { path = "diskann-vector", version = "0.46.0" }
+     diskann-wide = { path = "diskann-wide", version = "X.Y.Z" }
+     diskann-vector = { path = "diskann-vector", version = "X.Y.Z" }
      # ... etc
      ```
 
@@ -77,8 +77,8 @@ cargo publish --locked --workspace --dry-run
 4. **Push and open a pull request** to `main`:
 
    ```bash
-   git commit -am "Bump version to 0.46.0"
-   git push origin release-0.46.0
+   git commit -am "Bump version to X.Y.Z"
+   git push origin release-X.Y.Z
    ```
 
    Open a PR on GitHub. The **Publish to crates.io / Dry-run publish test** check runs automatically.
@@ -89,7 +89,7 @@ cargo publish --locked --workspace --dry-run
 
 7. **Create a release** via the GitHub UI:
    - Go to **Releases → Draft a new release**
-   - Create a new tag `v0.46.0` targeting `main`
+   - Create a new tag `vX.Y.Z` targeting `main`
    - Add release notes describing changes
    - Click **Publish release**
 
