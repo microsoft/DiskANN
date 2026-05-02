@@ -618,8 +618,7 @@ where
             <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
             f32,
         > + Send
-        + Sync
-        + 'static;
+        + Sync;
 
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///

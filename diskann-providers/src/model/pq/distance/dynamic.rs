@@ -8,6 +8,7 @@ use std::{ops::Deref, sync::Arc};
 use diskann::ANNResult;
 use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+use diskann_quantization::product;
 
 // Concrete implementations
 use super::{cosine::DirectCosine, innerproduct::TableIP, l2::TableL2};
@@ -288,17 +289,13 @@ mod tests {
     // `PreprocessedDistanceFunction`.
     //
     // This lets us reuse the testing infrastructure for the `QueryComputer`.
-    struct PreprocessedWrapper<T>
-    where
-        T: Deref<Target = FixedChunkPQTable>,
+    struct PreprocessedWrapper<'a>
     {
-        table: DistanceComputer<T>,
+        table: DistanceComputer<'a>,
         query: Vec<f32>,
     }
 
-    impl<T> PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<T>
-    where
-        T: Deref<Target = FixedChunkPQTable>,
+    impl PreprocessedDistanceFunction<&[u8], f32> for PreprocessedWrapper<'_>
     {
         fn evaluate_similarity(&self, x: &[u8]) -> f32 {
             self.table.evaluate_similarity(&*self.query, x)

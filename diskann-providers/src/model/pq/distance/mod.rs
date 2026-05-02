@@ -9,7 +9,7 @@ pub mod dynamic;
 pub mod innerproduct;
 pub mod l2;
 
-pub mod multi;
+// pub mod multi;
 
 // Exports
 pub use dynamic::{DistanceComputer, QueryComputer};

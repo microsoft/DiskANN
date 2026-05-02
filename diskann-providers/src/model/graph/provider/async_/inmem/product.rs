@@ -546,7 +546,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> = distances::pq::HybridComputer<T>;
+    type DistanceComputer<'a> = distances::pq::HybridComputer<'a, T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = FullPrecisionTracker;
@@ -692,7 +692,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
+    type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
     type PruneAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;

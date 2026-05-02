@@ -112,8 +112,8 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(&self) -> DistanceComputer {
-        DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
+    pub fn distance_computer(&self) -> DistanceComputer<'_> {
+        DistanceComputer::new(&self.pq_chunk_table, self.metric)
     }
 
     /// Return an "immutable" slice over the PQ data at index `i`.
