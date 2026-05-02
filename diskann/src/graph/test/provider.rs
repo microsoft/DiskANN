@@ -1188,7 +1188,7 @@ impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
 
 impl glue::PruneStrategy<Provider> for Strategy {
     type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-    type DistanceComputer = <f32 as VectorRepr>::Distance;
+    type DistanceComputer<'a> = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
 

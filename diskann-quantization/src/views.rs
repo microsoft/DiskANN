@@ -193,6 +193,20 @@ where
     pub fn as_slice(&self) -> &[usize] {
         self.offsets.as_slice()
     }
+
+    /// Return the maximum chunk dimension.
+    pub fn max_chunk_dim(&self) -> NonZeroUsize {
+        let mut itr = self.offsets.as_slice().iter();
+        let mut previous = itr.next().expect("there must be at least one entry");
+        let mut max = *previous;
+        while let Some(next) = itr.next() {
+            // This cannot underflow because offsets are verified to be strictly monotonic.
+            let dim = next - previous;
+            max = max.max(dim);
+            previous = next;
+        }
+        NonZeroUsize::new(max).expect("offsets are strictly monotonic")
+    }
 }
 
 pub type ChunkOffsetsView<'a> = ChunkOffsetsBase<&'a [usize]>;

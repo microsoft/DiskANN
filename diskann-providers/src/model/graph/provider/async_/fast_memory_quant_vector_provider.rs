@@ -55,7 +55,7 @@ pub struct FastMemoryQuantVectorProviderAsync {
     vec_pool: Arc<ObjectPool<Vec<f32>>>,
 }
 
-type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
+type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
 type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
 
 impl FastMemoryQuantVectorProviderAsync {

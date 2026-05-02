@@ -206,20 +206,20 @@ pub mod pq {
     /// When both operands are full-precision, the native distance function is used. When
     /// at least one is quantized, the PQ distance table is used instead. Mixed pairs
     /// (full vs quant) convert the full-precision side to `f32` for the PQ lookup.
-    pub struct HybridComputer<T>
+    pub struct HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
-        quant: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
+        quant: pq::distance::DistanceComputer<'a>,
         full: T::Distance,
     }
 
-    impl<T> HybridComputer<T>
+    impl<'a, T> HybridComputer<'a, T>
     where
         T: VectorRepr,
     {
         pub fn new(
-            quant: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
+            quant: pq::distance::DistanceComputer<'a>,
             full: T::Distance,
         ) -> Self {
             Self { quant, full }
@@ -227,7 +227,7 @@ pub mod pq {
     }
 
     /// The implementation of `DistanceFunction` for the hybrid computer.
-    impl<T> DistanceFunction<Hybrid<&[T], &[u8]>, Hybrid<&[T], &[u8]>, f32> for HybridComputer<T>
+    impl<T> DistanceFunction<Hybrid<&[T], &[u8]>, Hybrid<&[T], &[u8]>, f32> for HybridComputer<'_, T>
     where
         T: VectorRepr,
     {

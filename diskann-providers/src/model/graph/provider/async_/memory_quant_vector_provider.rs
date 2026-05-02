@@ -44,7 +44,7 @@ pub struct MemoryQuantVectorProviderAsync {
     vec_pool: Arc<ObjectPool<Vec<f32>>>,
 }
 
-type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
+type DistanceComputer<'a> = pq::distance::DistanceComputer<'a>;
 type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
 
 impl MemoryQuantVectorProviderAsync {
@@ -285,7 +285,7 @@ impl storage::bin::GetData for MemoryQuantVectorProviderAsync {
 
 /// Overload `DistanceFunction` for `Guard<Arc<Vec<u8>>>` by dereferencing the
 /// guard to a slice.
-impl DistanceFunction<&[f32], &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer {
+impl DistanceFunction<&[f32], &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, left: &[f32], right: &Guard<Arc<Vec<u8>>>) -> f32 {
         let right: &[u8] = right;
@@ -295,7 +295,7 @@ impl DistanceFunction<&[f32], &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer {
 
 /// Overload `DistanceFunction` for `Guard<Arc<Vec<u8>>>` by dereferencing the
 /// guard to a slice.
-impl DistanceFunction<&Guard<Arc<Vec<u8>>>, &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer {
+impl DistanceFunction<&Guard<Arc<Vec<u8>>>, &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer<'_> {
     #[inline(always)]
     fn evaluate_similarity(&self, left: &Guard<Arc<Vec<u8>>>, right: &Guard<Arc<Vec<u8>>>) -> f32 {
         let left: &[u8] = left;

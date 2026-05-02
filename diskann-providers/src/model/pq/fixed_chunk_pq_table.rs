@@ -27,6 +27,9 @@ pub struct FixedChunkPQTable {
 
     /// centroid of each dimension
     centroids: Box<[f32]>,
+
+    /// Padded
+    padded: product::tables::PaddedTable,
 }
 
 // These free functions use internals of the `FixedChunkPQTable`.
@@ -142,9 +145,18 @@ impl FixedChunkPQTable {
         chunk_offsets: Box<[usize]>,
     ) -> ANNResult<Self> {
         let len = pq_table.len();
+        let pivots = MatrixBase::try_from(pq_table, len / dim, dim).bridge_err()?;
+        let chunk_offsets = ChunkOffsetsBase::new(chunk_offsets).bridge_err()?;
+
+        // TODO: Do the right thing with the centroids.
+        let padded = product::tables::PaddedTable::from_parts(
+            pivots.as_view(),
+            chunk_offsets.clone(),
+        ).unwrap();
+
         let table = BasicTable::new(
-            MatrixBase::try_from(pq_table, len / dim, dim).bridge_err()?,
-            ChunkOffsetsBase::new(chunk_offsets).bridge_err()?,
+            pivots,
+            chunk_offsets,
         )
         .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
@@ -156,7 +168,7 @@ impl FixedChunkPQTable {
             )));
         }
 
-        Ok(Self { table, centroids })
+        Ok(Self { table, centroids, padded })
     }
 
     /// Get chunk number.
@@ -302,88 +314,92 @@ impl FixedChunkPQTable {
         -res
     }
 
-    // Apply a resumable distance function between the PQ pivots pointed to the the left
-    // and right hand compressed vectors.
-    fn self_distance<T>(&self, left: &[u8], right: &[u8]) -> f32
-    where
-        T: distance::simd::ResumableSIMDSchema<f32, f32, FinalReturn = f32>,
-    {
-        assert_eq!(
-            left.len(),
-            self.get_num_chunks(),
-            "pq vector must have length {}",
-            self.get_num_chunks()
-        );
-        assert_eq!(
-            right.len(),
-            self.get_num_chunks(),
-            "pq vector must have length {}",
-            self.get_num_chunks()
-        );
-
-        let mut accumulator = distance::simd::Resumable::new(T::init(ARCH));
-
-        let pq_table: &[f32] = self.table.view_pivots().into();
-        let chunk_offsets: &[usize] = self.table.view_offsets().into();
-
-        let mut start = chunk_offsets[0];
-        let dim = self.get_dim();
-        (0..self.get_num_chunks()).for_each(|chunk_index| {
-            let stop = chunk_offsets[chunk_index + 1];
-
-            let make_range = |offset: usize| (dim * offset + start)..(dim * offset + stop);
-
-            let left_offset: usize = left[chunk_index].into();
-            let right_offset: usize = right[chunk_index].into();
-
-            let left_slice = &pq_table[make_range(left_offset)];
-            let right_slice = &pq_table[make_range(right_offset)];
-
-            accumulator = distance::simd::simd_op(&accumulator, ARCH, left_slice, right_slice);
-            start = stop;
-        });
-        accumulator.consume().sum()
+    pub fn distance(&self, metric: distance::Metric) -> product::tables::padded::Distance<'_> {
+        self.padded.distance(metric.into())
     }
 
-    /// Compute the square L2 distance between two compressed vectors that use the same
-    /// pivot table.
-    ///
-    /// Requires `left.len() == right.len()`.
-    ///
-    /// This function yields valid results both when zero centering is used and when it
-    /// is not used.
-    pub fn qq_l2_distance(&self, left: &[u8], right: &[u8]) -> f32 {
-        self.self_distance::<distance::simd::ResumableL2<diskann_wide::arch::Current>>(left, right)
-    }
+    // // Apply a resumable distance function between the PQ pivots pointed to the the left
+    // // and right hand compressed vectors.
+    // fn self_distance<T>(&self, left: &[u8], right: &[u8]) -> f32
+    // where
+    //     T: distance::simd::ResumableSIMDSchema<f32, f32, FinalReturn = f32>,
+    // {
+    //     assert_eq!(
+    //         left.len(),
+    //         self.get_num_chunks(),
+    //         "pq vector must have length {}",
+    //         self.get_num_chunks()
+    //     );
+    //     assert_eq!(
+    //         right.len(),
+    //         self.get_num_chunks(),
+    //         "pq vector must have length {}",
+    //         self.get_num_chunks()
+    //     );
 
-    /// Compute the inner product between two compressed vectors that use the same
-    /// pivot table.
-    ///
-    /// NOTE: This function returns the negated inner product as is common throughout the
-    /// code base. This implies that **lower** values have **higher** similarity.
-    ///
-    /// Requires `left.len() == right.len()`.
-    ///
-    /// This function yields valid results only when zero centering is *NOT* used.
-    pub fn qq_ip_distance(&self, left: &[u8], right: &[u8]) -> f32 {
-        -self.self_distance::<distance::simd::ResumableIP<diskann_wide::arch::Current>>(left, right)
-    }
+    //     let mut accumulator = distance::simd::Resumable::new(T::init(ARCH));
 
-    /// Compute the cosine similarity between two compressed vectors that use the same
-    /// pivot table.
-    ///
-    /// NOTE: This function applies the transformation `1.0 - cosine_similarity` to yield
-    /// a result between 0 and 2. This implies that **lower** values have **higher**
-    /// similarity.
-    ///
-    /// Requires `left.len() == right.len()`.
-    ///
-    /// This function yields valid results only when zero centering is *NOT* used.
-    pub fn qq_cosine_distance(&self, left: &[u8], right: &[u8]) -> f32 {
-        1.0 - self.self_distance::<distance::simd::ResumableCosine<diskann_wide::arch::Current>>(
-            left, right,
-        )
-    }
+    //     let pq_table: &[f32] = self.table.view_pivots().into();
+    //     let chunk_offsets: &[usize] = self.table.view_offsets().into();
+
+    //     let mut start = chunk_offsets[0];
+    //     let dim = self.get_dim();
+    //     (0..self.get_num_chunks()).for_each(|chunk_index| {
+    //         let stop = chunk_offsets[chunk_index + 1];
+
+    //         let make_range = |offset: usize| (dim * offset + start)..(dim * offset + stop);
+
+    //         let left_offset: usize = left[chunk_index].into();
+    //         let right_offset: usize = right[chunk_index].into();
+
+    //         let left_slice = &pq_table[make_range(left_offset)];
+    //         let right_slice = &pq_table[make_range(right_offset)];
+
+    //         accumulator = distance::simd::simd_op(&accumulator, ARCH, left_slice, right_slice);
+    //         start = stop;
+    //     });
+    //     accumulator.consume().sum()
+    // }
+
+    // /// Compute the square L2 distance between two compressed vectors that use the same
+    // /// pivot table.
+    // ///
+    // /// Requires `left.len() == right.len()`.
+    // ///
+    // /// This function yields valid results both when zero centering is used and when it
+    // /// is not used.
+    // pub fn qq_l2_distance(&self, left: &[u8], right: &[u8]) -> f32 {
+    //     self.self_distance::<distance::simd::ResumableL2<diskann_wide::arch::Current>>(left, right)
+    // }
+
+    // /// Compute the inner product between two compressed vectors that use the same
+    // /// pivot table.
+    // ///
+    // /// NOTE: This function returns the negated inner product as is common throughout the
+    // /// code base. This implies that **lower** values have **higher** similarity.
+    // ///
+    // /// Requires `left.len() == right.len()`.
+    // ///
+    // /// This function yields valid results only when zero centering is *NOT* used.
+    // pub fn qq_ip_distance(&self, left: &[u8], right: &[u8]) -> f32 {
+    //     -self.self_distance::<distance::simd::ResumableIP<diskann_wide::arch::Current>>(left, right)
+    // }
+
+    // /// Compute the cosine similarity between two compressed vectors that use the same
+    // /// pivot table.
+    // ///
+    // /// NOTE: This function applies the transformation `1.0 - cosine_similarity` to yield
+    // /// a result between 0 and 2. This implies that **lower** values have **higher**
+    // /// similarity.
+    // ///
+    // /// Requires `left.len() == right.len()`.
+    // ///
+    // /// This function yields valid results only when zero centering is *NOT* used.
+    // pub fn qq_cosine_distance(&self, left: &[u8], right: &[u8]) -> f32 {
+    //     1.0 - self.self_distance::<distance::simd::ResumableCosine<diskann_wide::arch::Current>>(
+    //         left, right,
+    //     )
+    // }
 
     // Miscellaneous helper methods.
 

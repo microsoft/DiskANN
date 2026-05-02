@@ -3,12 +3,17 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{DenseData, MatrixBase, MatrixView};
+use diskann_utils::{
+    strided,
+    views::{DenseData, Matrix, MatrixBase, MatrixView},
+};
+use diskann_vector::{DistanceFunction, distance::Metric as VectorMetric};
 use diskann_wide::{
     SIMDFloat, SIMDSumTree, SIMDVector,
-    arch::{Architecture, Scalar, Target, Dispatched3, FTarget3, dispatch_no_features},
+    arch::{Architecture, Dispatched3, FTarget3, Scalar, Target, dispatch_no_features},
     lifetime::{self, Ref},
 };
+use thiserror::Error;
 
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
@@ -16,19 +21,19 @@ use diskann_wide::arch::x86_64::{V3, V4};
 #[cfg(target_arch = "aarch64")]
 use diskann_wide::arch::aarch64::Neon;
 
-use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
+use crate::views::{ChunkOffsets, ChunkOffsetsBase, ChunkOffsetsView};
 
 /// A PQ table that stores pivots grouped by chunk in the following dense, row-major form:
 /// ```text
 ///            | -- pivot 0 --    | -- pivot 1 --    | .... | -- pivot K-1 --    |
 ///            +------------------+------------------+------+--------------------+
-///  chunk 0   | c000 c001 ... 00 | c010 c011 ... 00 | .... | c0K0 c0K1 ...  00 |
-///  chunk 1   | c100 c101 ... 00 | c110 c111 ... 00 | .... | c1K0 c1K1 ...  00 |
+///  chunk 0   | c000 c001 ... 0X | c010 c011 ... 0X | .... | c0K0 c0K1 ...  0X |
+///  chunk 1   | c100 c101 ... 0X | c110 c111 ... 0X | .... | c1K0 c1K1 ...  0X |
 ///    ...     |       ...        |       ...        | .... |       ...         |
-///  chunk N-1 | cN00 cN01 ... 00 | cN10 cN11 ... 00 | .... | cNK0 cNK1 ...  00 |
+///  chunk N-1 | cN00 cN01 ... 0X | cN10 cN11 ... 0X | .... | cNK0 cNK1 ...  0X |
 /// ```
-/// where `cCPD` is dimension `D` of pivot `P` in chunk `C`, and trailing `00`s denote
-/// zero-padding to the SIMD-aligned pivot width.
+/// where `cCPD` is dimension `D` of pivot `P` in chunk `C`, and trailing `0X`s denote
+/// potential zero-padding to the SIMD-aligned pivot width.
 ///
 /// The member `offsets` describes the number of *unpadded* dimensions of each chunk.
 ///
@@ -37,41 +42,87 @@ use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
 /// This makes distance computations between pivots very fast for computing distances
 /// between two product-quantized vectors.
 #[derive(Debug, Clone)]
-pub struct PaddedTableBase<T = Box<[f32]>, U = Box<[usize]>>
-where
-    T: DenseData<Elem = f32>,
-    U: DenseData<Elem = usize>,
-{
-    pivots: MatrixBase<T>,
-    offsets: ChunkOffsetsBase<U>,
+pub struct PaddedTable {
+    pivots: Matrix<f32>,
+    offsets: ChunkOffsets,
+    pivots_per_chunk: usize,
 }
 
-type PaddedTableView<'a> = PaddedTableBase<&'a [f32], &'a [usize]>;
+impl PaddedTable {
+    pub fn from_parts(
+        pivots: MatrixView<'_, f32>,
+        offsets: ChunkOffsets,
+    ) -> Result<Self, PaddedTableError> {
+        let pivot_dim = pivots.ncols();
+        let offsets_dim = offsets.dim();
+        if pivot_dim != offsets_dim {
+            return Err(PaddedTableError::DimMismatch {
+                pivot_dim,
+                offsets_dim,
+            });
+        }
 
-impl<T, U> PaddedTableBase<T, U>
-where
-    T: DenseData<Elem = f32>,
-    U: DenseData<Elem = usize>,
-{
+        let pivots_per_chunk = pivots.nrows();
+
+        // Compute the padded dimension of the pivots.
+        //
+        // There exists a corner case where `pivots` barely fits within the `isize` limit
+        // of an allocation and padding will put us beyond that threshold, but that is
+        // exceedingly unlikely for typical data.
+        let max_chunk_dim = offsets.max_chunk_dim().get();
+        let simd_width = dispatch_no_features(DetectSIMDWidth);
+        let padded_dim = max_chunk_dim.next_multiple_of(simd_width);
+
+        let rows = pivots_per_chunk * offsets.len();
+        let mut padded = Matrix::new(0.0, rows, padded_dim);
+        let mut row = 0;
+
+        // Since we padded, we use a custom "copy_from_slice" that allows `dst` to shrink.
+        fn copy_from_slice_subset(dst: &mut [f32], src: &[f32]) {
+            dst[..src.len()].copy_from_slice(src)
+        }
+
+        // Copy the pivots.
+        (0..offsets.len()).for_each(|i| {
+            let range = offsets.at(i);
+
+            let view = strided::StridedView::try_shrink_from(
+                &(pivots.as_slice()[range.start..]),
+                pivots.nrows(),
+                range.len(),
+                offsets.dim(),
+            )
+            .expect("the check on `pivot_dim` and `offsets_dim` should cause this to never error");
+
+            view.row_iter().for_each(|src| {
+                copy_from_slice_subset(padded.row_mut(row), src);
+                row += 1;
+            });
+        });
+
+        Ok(Self {
+            pivots: padded,
+            offsets,
+            pivots_per_chunk,
+        })
+    }
+
     pub fn distance(&self, metric: Metric) -> Distance<'_> {
-        let distance = match metric {
-            Metric::SquaredL2 => dispatch_no_features(SquaredL2),
-            Metric::InnerProduct => dispatch_no_features(InnerProduct),
-            Metric::Cosine => dispatch_no_features(Cosine),
-        };
-
         Distance {
-            table: self.view(),
-            distance,
+            table: self,
+            distance: dispatch_no_features(metric),
         }
     }
+}
 
-    pub fn view(&self) -> PaddedTableView<'_> {
-        PaddedTableBase {
-            pivots: self.pivots.as_view(),
-            offsets: self.offsets.as_view(),
-        }
-    }
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum PaddedTableError {
+    #[error("pivots have {pivot_dim} dimensions while the offsets expect {offsets_dim}")]
+    DimMismatch {
+        pivot_dim: usize,
+        offsets_dim: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,27 +132,36 @@ pub enum Metric {
     Cosine,
 }
 
-#[derive(Debug)]
-struct View;
-
-impl lifetime::AddLifetime for View {
-    type Of<'a> = PaddedTableBase<&'a [f32], &'a [usize]>;
+impl From<VectorMetric> for Metric {
+    fn from(metric: VectorMetric) -> Self {
+        match metric {
+            VectorMetric::L2 => Self::SquaredL2,
+            VectorMetric::InnerProduct => Self::InnerProduct,
+            VectorMetric::Cosine => Self::Cosine,
+            VectorMetric::CosineNormalized => Self::Cosine,
+        }
+    }
 }
 
-type Dispatched = Dispatched3<f32, View, Ref<[u8]>, Ref<[u8]>>;
+type Dispatched = Dispatched3<f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Distance<'a> {
-    table: PaddedTableBase<&'a [f32], &'a [usize]>,
+    table: &'a PaddedTable,
     distance: Dispatched,
+}
+
+impl DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
+    fn evaluate_similarity(&self, a: &[u8], b: &[u8]) -> f32 {
+        self.distance.call(self.table, a, b)
+    }
 }
 
 //-----------------------//
 // Architecture Specific //
 //-----------------------//
 
-trait Preferred: Architecture
-{
+trait Preferred: Architecture {
     type f32s: SIMDVector<Scalar = f32, Arch = Self>;
 }
 
@@ -192,7 +252,7 @@ where
     }
 
     fn reduce(a: Self::Accum, b: Self::Accum, c: Self::Accum, d: Self::Accum) -> f32 {
-        ((a + b) + (c + d)).sum_tree()
+        -((a + b) + (c + d)).sum_tree()
     }
 }
 
@@ -237,34 +297,45 @@ where
             0.0
         } else {
             let v = xy / (xnorm.sqrt() * ynorm.sqrt());
-            (-1.0f32).max(1.0f32.min(v))
+            1.0 - (-1.0f32).max(1.0f32.min(v))
+        }
+    }
+}
+
+impl<A> Target<A, Dispatched> for Metric
+where
+    A: Preferred,
+    SquaredL2: Op<A::f32s>,
+    InnerProduct: Op<A::f32s>,
+    Cosine: Op<A::f32s>,
+{
+    #[inline(always)]
+    fn run(self, arch: A) -> Dispatched {
+        match self {
+            Self::SquaredL2 => {
+                arch.dispatch3::<SquaredL2, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>()
+            }
+            Self::InnerProduct => {
+                arch.dispatch3::<InnerProduct, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>()
+            }
+            Self::Cosine => arch.dispatch3::<Cosine, f32, Ref<PaddedTable>, Ref<[u8]>, Ref<[u8]>>(),
         }
     }
 }
 
 macro_rules! target {
     ($op:ident) => {
-        impl<A> FTarget3<A, f32, PaddedTableView<'_>, &[u8], &[u8]> for $op
+        impl<A> FTarget3<A, f32, &PaddedTable, &[u8], &[u8]> for $op
         where
             A: Preferred,
             Self: Op<A::f32s>,
         {
             #[inline(always)]
-            fn run(arch: A, table: PaddedTableView<'_>, a: &[u8], b: &[u8]) -> f32 {
+            fn run(arch: A, table: &PaddedTable, a: &[u8], b: &[u8]) -> f32 {
                 invoke::<A::f32s, Self>(arch, table, a, b)
             }
         }
-
-        impl<A> Target<A, Dispatched> for $op
-        where
-            A: Preferred,
-            Self: Op<A::f32s>,
-        {
-            fn run(self, arch: A) -> Dispatched {
-                arch.dispatch3::<Self, f32, View, Ref<[u8]>, Ref<[u8]>>()
-            }
-        }
-    }
+    };
 }
 
 target!(SquaredL2);
@@ -272,18 +343,13 @@ target!(InnerProduct);
 target!(Cosine);
 
 #[inline(always)]
-fn invoke<V, O>(
-    arch: V::Arch,
-    table: PaddedTableView<'_>,
-    a: &[u8],
-    b: &[u8],
-) -> f32
+fn invoke<V, O>(arch: V::Arch, table: &PaddedTable, a: &[u8], b: &[u8]) -> f32
 where
     V: SIMDVector<Scalar = f32>,
     O: Op<V>,
 {
     // TODO: Safety Checks
-    unsafe { kernel::<V, O>(arch, table.pivots, 0, a, b) }
+    unsafe { kernel::<V, O>(arch, table.pivots.as_view(), table.pivots_per_chunk, a, b) }
 }
 
 #[inline(always)]

@@ -124,7 +124,7 @@ where
 #[derive(Debug)]
 pub struct VTable {
     pub distance_fn: fn(&FixedChunkPQTable, &[f32], &[u8]) -> f32,
-    pub distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32,
+    // pub distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32,
 }
 
 impl Clone for VTable {
@@ -143,16 +143,16 @@ impl VTable {
             Metric::CosineNormalized => FixedChunkPQTable::cosine_normalized_distance,
         };
 
-        let distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32 = match distance {
-            Metric::L2 => FixedChunkPQTable::qq_l2_distance,
-            Metric::Cosine => FixedChunkPQTable::qq_cosine_distance,
-            Metric::InnerProduct => FixedChunkPQTable::qq_ip_distance,
-            Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_distance,
-        };
+        // let distance_fn_qq: fn(&FixedChunkPQTable, &[u8], &[u8]) -> f32 = match distance {
+        //     Metric::L2 => FixedChunkPQTable::qq_l2_distance,
+        //     Metric::Cosine => FixedChunkPQTable::qq_cosine_distance,
+        //     Metric::InnerProduct => FixedChunkPQTable::qq_ip_distance,
+        //     Metric::CosineNormalized => FixedChunkPQTable::qq_cosine_distance,
+        // };
 
         Self {
             distance_fn,
-            distance_fn_qq,
+            // distance_fn_qq,
         }
     }
 }
@@ -167,17 +167,14 @@ impl VTable {
 ///
 /// Internally, a mini v-table is kept to invoke the correct distance function.
 #[derive(Debug)]
-pub struct DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+pub struct DistanceComputer<'a>
 {
-    table: T,
+    table: &'a FixedChunkPQTable,
     vtable: VTable,
+    quantquant: product::tables::padded::Distance<'a>,
 }
 
-impl<T> DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl<'a> DistanceComputer<'a>
 {
     /// Create a new distance computer implementing the `DistanceFunction` API for
     /// full-precision/quant and quant/quant combinations.
@@ -192,10 +189,11 @@ where
     /// * `Metric::Cosine`
     /// * `Metric::CosineNormalized`
     ///
-    pub fn new(table: T, distance: Metric) -> Self {
+    pub fn new(table: &'a FixedChunkPQTable, distance: Metric) -> Self {
         Self {
             table,
             vtable: VTable::new(distance),
+            quantquant: table.distance(distance),
         }
     }
 }
@@ -203,9 +201,7 @@ where
 const INVALID_PQ_DIMENSION: &str = "invalid PQ dimension";
 
 /// Perform a comparison between a full-precision vector and quantized vector.
-impl<T> DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&[f32], &[u8], f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &[u8]) -> f32 {
@@ -220,23 +216,20 @@ where
 }
 
 /// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&[u8], &[u8], f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &[u8], q1: &[u8]) -> f32 {
-        let num_pq_chunks = self.table.get_num_chunks();
-        assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
-        (self.vtable.distance_fn_qq)(&self.table, q0, q1)
+        self.quantquant.evaluate_similarity(q0, q1)
+        // let num_pq_chunks = self.table.get_num_chunks();
+        // assert_eq!(q0.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
+        // assert_eq!(q1.len(), num_pq_chunks, "{}", INVALID_PQ_DIMENSION);
+        // (self.vtable.distance_fn_qq)(&self.table, q0, q1)
     }
 }
 
 /// Perform a comparison between a full-precision vector and quantized vector.
-impl<T> DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&[f32], &&[u8], f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &&[u8]) -> f32 {
@@ -245,9 +238,7 @@ where
     }
 }
 
-impl<T> DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&[f32], &Vec<u8>, f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &Vec<u8>) -> f32 {
@@ -256,9 +247,7 @@ where
 }
 
 /// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&&[u8], &&[u8], f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &&[u8], q1: &&[u8]) -> f32 {
@@ -269,9 +258,7 @@ where
 }
 
 /// Perform a comparison between two quantized vectors.
-impl<T> DistanceFunction<&Vec<u8>, &Vec<u8>, f32> for DistanceComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
+impl DistanceFunction<&Vec<u8>, &Vec<u8>, f32> for DistanceComputer<'_>
 {
     #[inline(always)]
     fn evaluate_similarity(&self, q0: &Vec<u8>, q1: &Vec<u8>) -> f32 {

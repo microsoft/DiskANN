@@ -217,14 +217,14 @@ where
     }
 }
 
-impl<V, D, Ctx> BuildDistanceComputer for QuantAccessor<'_, V, D, Ctx>
+impl<'a, V, D, Ctx> BuildDistanceComputer for QuantAccessor<'a, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
     type DistanceComputerError = ANNError;
-    type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
+    type DistanceComputer = pq::distance::DistanceComputer<'a>;
 
     fn build_distance_computer(
         &self,
@@ -351,14 +351,14 @@ where
     }
 }
 
-impl<T, D, Ctx> BuildDistanceComputer for HybridAccessor<'_, T, D, Ctx>
+impl<'a, T, D, Ctx> BuildDistanceComputer for HybridAccessor<'a, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
     type DistanceComputerError = ANNError;
-    type DistanceComputer = distances::pq::HybridComputer<T>;
+    type DistanceComputer = distances::pq::HybridComputer<'a, T>;
 
     fn build_distance_computer(
         &self,
