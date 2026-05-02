@@ -85,7 +85,7 @@ cargo publish --locked --workspace --dry-run
 
 5. **Wait for checks** — the dry-run and CI must both pass before merge.
 
-6. **Merge the PR** into `main`.
+6. **Merge the PR** into `main` and delete the release branch (GitHub offers this on the merged PR page).
 
 7. **Create a release** via the GitHub UI:
    - Go to **Releases → Draft a new release**
@@ -103,9 +103,11 @@ cargo publish --locked --workspace --dry-run
 
 ## Pre-release Checklist
 
-- [ ] All CI checks pass on the PR
-- [ ] Version number is updated in `Cargo.toml`
-- [ ] CHANGELOG is updated (if applicable)
-- [ ] Documentation is up to date
-- [ ] Breaking changes are clearly documented
-- [ ] **Dry-run publish check passes on the PR**
+The release author should verify the following on the version-bump PR before merging:
+
+- [ ] `workspace.package.version` and all `[workspace.dependencies]` versions are updated in `Cargo.toml`
+- [ ] CHANGELOG includes an entry for the new version summarising notable changes
+- [ ] Breaking changes are called out in the CHANGELOG and in the PR description
+- [ ] All CI checks pass
+- [ ] **Dry-run publish check passes**
+- [ ] Release branch deleted after merge
