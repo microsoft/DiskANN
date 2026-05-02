@@ -57,8 +57,8 @@ mod imp {
             search,
         },
         inputs::{
-            graph_index::{SearchPhase, SphericalQuantBuild},
             exhaustive,
+            graph_index::{SearchPhase, SphericalQuantBuild},
         },
         utils::{
             self, datafiles,

@@ -14,17 +14,44 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         use half::f16;
 
         // f32
-        benchmarks.register("graph-index-sq-8-bit-f32", imp::ScalarQuantized::<8, f32>::new());
-        benchmarks.register("graph-index-sq-4-bit-f32", imp::ScalarQuantized::<4, f32>::new());
-        benchmarks.register("graph-index-sq-2-bit-f32", imp::ScalarQuantized::<2, f32>::new());
-        benchmarks.register("graph-index-sq-1-bit-f32", imp::ScalarQuantized::<1, f32>::new());
+        benchmarks.register(
+            "graph-index-sq-8-bit-f32",
+            imp::ScalarQuantized::<8, f32>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-4-bit-f32",
+            imp::ScalarQuantized::<4, f32>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-2-bit-f32",
+            imp::ScalarQuantized::<2, f32>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-1-bit-f32",
+            imp::ScalarQuantized::<1, f32>::new(),
+        );
         // f16
-        benchmarks.register("graph-index-sq-8-bit-f16", imp::ScalarQuantized::<8, f16>::new());
-        benchmarks.register("graph-index-sq-4-bit-f16", imp::ScalarQuantized::<4, f16>::new());
-        benchmarks.register("graph-index-sq-2-bit-f16", imp::ScalarQuantized::<2, f16>::new());
-        benchmarks.register("graph-index-sq-1-bit-f16", imp::ScalarQuantized::<1, f16>::new());
+        benchmarks.register(
+            "graph-index-sq-8-bit-f16",
+            imp::ScalarQuantized::<8, f16>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-4-bit-f16",
+            imp::ScalarQuantized::<4, f16>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-2-bit-f16",
+            imp::ScalarQuantized::<2, f16>::new(),
+        );
+        benchmarks.register(
+            "graph-index-sq-1-bit-f16",
+            imp::ScalarQuantized::<1, f16>::new(),
+        );
         // i8
-        benchmarks.register("graph-index-sq-1-bit-i8", imp::ScalarQuantized::<1, i8>::new());
+        benchmarks.register(
+            "graph-index-sq-1-bit-i8",
+            imp::ScalarQuantized::<1, i8>::new(),
+        );
     }
 
     // Stub implementation

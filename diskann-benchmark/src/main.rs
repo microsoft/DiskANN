@@ -644,13 +644,16 @@ mod tests {
             }
         };
 
-        let mut raw =
-            value_from_file(&example_directory().join("graph-index-filter-ground-truth-small.json"));
+        let mut raw = value_from_file(
+            &example_directory().join("graph-index-filter-ground-truth-small.json"),
+        );
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("graph-index-filter-ground-truth-small.json");
+        let input_path = tempdir
+            .path()
+            .join("graph-index-filter-ground-truth-small.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");

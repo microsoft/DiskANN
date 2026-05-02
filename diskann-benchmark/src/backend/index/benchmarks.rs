@@ -56,8 +56,14 @@ use crate::{
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
     // Full Precision
-    benchmarks.register("graph-index-full-precision-f32", FullPrecision::<f32>::new());
-    benchmarks.register("graph-index-full-precision-f16", FullPrecision::<f16>::new());
+    benchmarks.register(
+        "graph-index-full-precision-f32",
+        FullPrecision::<f32>::new(),
+    );
+    benchmarks.register(
+        "graph-index-full-precision-f16",
+        FullPrecision::<f16>::new(),
+    );
     benchmarks.register("graph-index-full-precision-u8", FullPrecision::<u8>::new());
     benchmarks.register("graph-index-full-precision-i8", FullPrecision::<i8>::new());
 

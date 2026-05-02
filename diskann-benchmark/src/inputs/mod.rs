@@ -3,10 +3,10 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) mod graph_index;
 pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
+pub(crate) mod graph_index;
 pub(crate) mod save_and_load;
 
 pub(crate) fn register_inputs(

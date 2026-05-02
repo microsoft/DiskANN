@@ -6,7 +6,10 @@
 use diskann_benchmark_runner::registry::Benchmarks;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!("product-quantization", inputs::graph_index::IndexPQOperation);
+crate::utils::stub_impl!(
+    "product-quantization",
+    inputs::graph_index::IndexPQOperation
+);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
