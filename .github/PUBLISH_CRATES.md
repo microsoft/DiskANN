@@ -101,6 +101,33 @@ cargo publish --locked --workspace --dry-run
    cargo search diskann --limit 20
    ```
 
+## Recovering from a Partial Publish
+
+If the publish workflow fails midway through, some crates will have been published
+and others will not. `cargo publish --workspace` will refuse to re-publish crates
+whose version already exists on crates.io, so you have two options:
+
+### Option 1: Retry with `--exclude` (same version)
+
+If the failure was transient (network issue, registry timeout), exclude the
+already-published crates and re-run:
+
+```bash
+cargo publish --locked --workspace \
+  --exclude already-published-crate-1 \
+  --exclude already-published-crate-2
+```
+
+You can trigger this via **workflow_dispatch** with `dry_run = false`, or run it
+locally with a valid `CARGO_REGISTRY_TOKEN`.
+
+### Option 2: Bump version and re-release
+
+If the failure was caused by a packaging or metadata error in a specific crate,
+fix the issue, bump the version, and go through the full release process again.
+Already-published crates at the old version will remain on crates.io — this is
+harmless since consumers pin to specific versions.
+
 ## Pre-release Checklist
 
 The release author should verify the following on the version-bump PR before merging:
