@@ -80,12 +80,7 @@ where
         // Alignment means that the size of `query` gets increased ...
         // This makes is VERY hard to do error checking on dimension propagation.
         assert!(self.parent.get_dim() <= query.len());
-        let mut local_query: Vec<f32> = query.iter().map(|x| (*x).into()).collect();
-
-        // This function does the following:
-        // 1. Centers the data (if the centorid is non-zero).
-        // 2. Applies the OPQ transformation matrix (if it exists).
-        self.parent.preprocess_query(&mut local_query);
+        let local_query: Vec<f32> = query.iter().map(|x| (*x).into()).collect();
 
         // Compute the partial distances into the lookup-table.
         self.parent

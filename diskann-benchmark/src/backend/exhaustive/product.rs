@@ -108,7 +108,6 @@ mod imp {
             let quantizer = diskann_providers::model::pq::FixedChunkPQTable::new(
                 data.ncols(),
                 base.flatten().into(),
-                vec![0.0; data.ncols()].into(),
                 offsets.into(),
             )?;
 

@@ -149,10 +149,7 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     }
 
     assert_eq!(pivots.len(), config.dim * config.num_pivots);
-
-    let centroid = vec![0.0f32; config.dim];
-
-    FixedChunkPQTable::new(config.dim, pivots.into(), centroid.into(), offsets.into()).unwrap()
+    FixedChunkPQTable::new(config.dim, pivots.into(), offsets.into()).unwrap()
 }
 
 /// Generate a random PQ code spanning the requested number of pivots and chunks.
@@ -198,9 +195,7 @@ pub(super) fn test_l2_inner<'a, T, F, R>(
 {
     for _ in 0..num_trials {
         let input: Vec<T> = T::generate(config.dim, rng);
-        let mut input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
-
-        table.preprocess_query(&mut input_f32);
+        let input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
 
         let computer = create(table, &input);
         for _ in 0..num_trials {

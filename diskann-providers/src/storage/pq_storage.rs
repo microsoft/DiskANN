@@ -61,16 +61,22 @@ impl PQStorage {
         Ok(())
     }
 
-    /// Write the pivot table to file
+    /// Write the pivot table to file.
+    ///
     /// # Arguments
     /// * `full_pivot_data` - the pivot table data
-    /// * `centroid` - the centroid of the pivot table
+    /// * `centroid` - Optional per-dimension centroid. Pass `None` for the standard
+    ///   (non-legacy) code path; a zero vector of length `dim` is written to preserve
+    ///   the on-disk file format. Pass `Some(centroid)` only when legacy centroid
+    ///   centering is enabled (see [`GeneratePivotArguments::with_legacy_centering`]).
     /// * `chunk_offsets` - the chunk offsets of the pivot table
     /// * `num_centers` - the number of centers
     /// * `dim` - the dimension of the pivot table
     /// * `storage_provider` - the storage provider
+    ///
     /// # Return
     /// * `Result` - the result of writing the pivot table
+    ///
     /// # Remarks
     /// * 4k bytes are reserved for metadata at the beginning of the file
     /// * the metadata is written in the following order:
@@ -84,7 +90,7 @@ impl PQStorage {
     pub fn write_pivot_data<Storage>(
         &self,
         full_pivot_data: &[f32],
-        centroid: &[f32],
+        centroid: Option<&[f32]>,
         chunk_offsets: &[usize],
         num_centers: usize,
         dim: usize,
@@ -105,7 +111,11 @@ impl PQStorage {
         cumul_bytes[1] = cumul_bytes[0] + write_bin(pivot_view, writer)?;
 
         // Write the centroid of PQ centroid vectors
-        cumul_bytes[2] = cumul_bytes[1] + write_bin(MatrixView::column_vector(centroid), writer)?;
+        let centroid_bytes = match centroid {
+            Some(centroid) => write_bin(MatrixView::column_vector(centroid), writer)?,
+            None => write_bin(Matrix::<f32>::new(0.0, dim, 1).as_view(), writer)?,
+        };
+        cumul_bytes[2] = cumul_bytes[1] + centroid_bytes;
 
         // Write PQ chunk offsets
         let chunk_offsets_u32: Vec<u32> = chunk_offsets.iter().map(|&x| x as u32).collect();
@@ -146,6 +156,16 @@ impl PQStorage {
         Ok(Metadata::read(reader)?.into_dims())
     }
 
+    /// Load the raw pivot data, centroid, and chunk offsets from a pivot file.
+    ///
+    /// Unlike [`Self::load_pq_pivots_bin`], this method returns the centroid
+    /// separately without folding it into the pivot data. Callers that need the
+    /// effective (centroid-adjusted) pivots must apply the centroid themselves,
+    /// e.g. via [`accum_row_inplace`](crate::model::pq::accum_row_inplace).
+    ///
+    /// For files written without legacy centering (`centroid = None` in
+    /// [`Self::write_pivot_data`]), the returned centroid will be all zeros and
+    /// can safely be accumulated as a no-op.
     pub fn load_existing_pivot_data<Storage>(
         &self,
         num_pq_chunks: &usize,
@@ -278,7 +298,7 @@ impl PQStorage {
         }
         let file_offset_data = offsets.map(|x| x.into_usize());
 
-        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
+        let mut pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)])?;
         if pivots.nrows() > NUM_PQ_CENTROIDS {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
@@ -316,12 +336,17 @@ impl PQStorage {
         }
         let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
 
-        FixedChunkPQTable::new(
-            dim,
-            pivots.into_inner(),
-            centroids.into_inner(),
-            chunk_offsets.into_inner(),
-        )
+        // If the centroid is non-zero, we need to add it to the pivots to restore the
+        // numeric behavior.
+        if centroids.as_slice().iter().any(|c| *c != 0.0) {
+            pivots.row_iter_mut().for_each(|pivot| {
+                std::iter::zip(pivot.iter_mut(), centroids.as_slice().iter()).for_each(|(p, c)| {
+                    *p += *c;
+                });
+            });
+        }
+
+        FixedChunkPQTable::new(dim, pivots.into_inner(), chunk_offsets.into_inner())
     }
 
     /// streams data from the file, and samples each vector with probability p_val
@@ -443,6 +468,115 @@ mod pq_storage_tests {
         assert_eq!(pq_pivot_data.len(), 256 * 128);
         assert_eq!(centroids.len(), 128);
         assert_eq!(chunk_offsets.len(), 2);
+    }
+
+    /// Write pivot data with `centroid = None`, read it back via
+    /// `load_existing_pivot_data`, and verify the pivots are unchanged and the
+    /// centroid is all zeros.
+    #[test]
+    fn write_read_roundtrip_no_centroid() {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/roundtrip_no_centroid_pivots.bin";
+
+        let num_centers = 3;
+        let dim = 4;
+        let num_pq_chunks = 2;
+        let pivots: Vec<f32> = (0..num_centers * dim).map(|i| i as f32).collect();
+        let chunk_offsets = vec![0, 2, dim];
+
+        let pq_storage = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None);
+        pq_storage
+            .write_pivot_data(
+                &pivots,
+                None,
+                &chunk_offsets,
+                num_centers,
+                dim,
+                &storage_provider,
+            )
+            .unwrap();
+
+        let (loaded_pivots, loaded_centroid, loaded_offsets) = pq_storage
+            .load_existing_pivot_data(&num_pq_chunks, &num_centers, &dim, &storage_provider)
+            .unwrap();
+
+        assert_eq!(
+            loaded_pivots, pivots,
+            "pivots should survive the round-trip unchanged"
+        );
+        assert!(
+            loaded_centroid.iter().all(|&c| c == 0.0),
+            "centroid should be all zeros when written with None"
+        );
+        assert_eq!(loaded_offsets, chunk_offsets);
+    }
+
+    /// Write pivot data with a non-zero centroid, read it back, and verify that
+    /// folding the centroid via `accum_row_inplace` produces the expected
+    /// adjusted pivots.
+    #[test]
+    fn write_read_roundtrip_with_legacy_centroid() {
+        use crate::model::pq::accum_row_inplace;
+        use diskann_utils::views::MutMatrixView;
+
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let pivot_path = "/roundtrip_legacy_centroid_pivots.bin";
+
+        let num_centers = 3;
+        let dim = 4;
+        let num_pq_chunks = 2;
+        let pivots: Vec<f32> = (0..num_centers * dim).map(|i| i as f32).collect();
+        let centroid: Vec<f32> = vec![10.0, 20.0, 30.0, 40.0];
+        let chunk_offsets = vec![0, 2, dim];
+
+        let pq_storage = PQStorage::new(pivot_path, PQ_COMPRESSED_PATH, None);
+        pq_storage
+            .write_pivot_data(
+                &pivots,
+                Some(&centroid),
+                &chunk_offsets,
+                num_centers,
+                dim,
+                &storage_provider,
+            )
+            .unwrap();
+
+        let (mut loaded_pivots, loaded_centroid, loaded_offsets) = pq_storage
+            .load_existing_pivot_data(&num_pq_chunks, &num_centers, &dim, &storage_provider)
+            .unwrap();
+
+        assert_eq!(
+            loaded_pivots, pivots,
+            "raw pivots should match what was written"
+        );
+        assert_eq!(
+            loaded_centroid, centroid,
+            "centroid should round-trip exactly"
+        );
+        assert_eq!(loaded_offsets, chunk_offsets);
+
+        // Fold the centroid into the pivots — this is what production callers do.
+        let mut pivot_mat =
+            MutMatrixView::try_from(loaded_pivots.as_mut_slice(), num_centers, dim).unwrap();
+        accum_row_inplace(pivot_mat.as_mut_view(), &loaded_centroid);
+
+        // Each pivot row should have the centroid added element-wise.
+        for (idx, (pivot, &orig)) in loaded_pivots.iter().zip(pivots.iter()).enumerate() {
+            let d = idx % dim;
+            let expected = orig + centroid[d];
+            assert_eq!(
+                *pivot, expected,
+                "pivot[{}]: expected {expected}, got {pivot}",
+                idx
+            );
+        }
+
+        // Check that `load_pq_pivots_bin` correctly does the centroid folding.
+        let table = pq_storage
+            .load_pq_pivots_bin(pivot_path, num_pq_chunks, &storage_provider)
+            .unwrap();
+
+        assert_eq!(loaded_pivots, table.view_pivots().as_slice());
     }
 
     #[test]

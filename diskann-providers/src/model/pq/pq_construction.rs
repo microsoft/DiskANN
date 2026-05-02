@@ -63,8 +63,16 @@ where
 /// k-means in each chunk to compute the PQ pivots and stores in bin format in
 /// file pq_pivots_path as a s num_centers*dim floating point binary file
 /// PQ pivot table layout: {pivot offsets data: METADATA_SIZE}{pivot vector:[dim; num_centroid]}{centroid vector:[dim; 1]}{chunk offsets:[chunk_num+1; 1]}
+///
+/// Argument `legacy_center_data` will center the provided data by the dataset mean.
+/// This is to supply backwards compatibility with some `diskann-disk` tests that used this
+/// feature and require exact reproducibility in some tests.
+///
+/// This argument should **only** be used if the distance metric being used is L2. Otherwise
+/// any computed distance on the resulting PQ compressed data will be incorrect.
 pub fn generate_pq_pivots<Storage, Random>(
     parameters: GeneratePivotArguments,
+    legacy_center_data: bool,
     train_data: &mut [f32],
     pq_storage: &PQStorage,
     storage_provider: &Storage,
@@ -85,7 +93,7 @@ where
     }
 
     let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
-    if parameters.translate_to_center() {
+    if legacy_center_data {
         move_train_data_by_centroid(
             train_data,
             parameters.num_train(),
@@ -124,7 +132,7 @@ where
 
     pq_storage.write_pivot_data(
         &full_pivot_data,
-        &centroid,
+        Some(&centroid),
         &chunk_offsets,
         parameters.num_centers(),
         parameters.dim(),
@@ -151,7 +159,6 @@ where
 pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     parameters: &GeneratePivotArguments,
     train_data_slice: &[T],
-    centroid: &mut [f32],
     offsets: &mut [usize],
     full_pivot_data: &mut [f32],
     rng: &mut (impl Rng + ?Sized),
@@ -161,12 +168,6 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     if full_pivot_data.len() != parameters.num_centers() * parameters.dim() {
         return Err(ANNError::log_pq_error(
             "Error: full_pivot_data size is not num_centers * dim.",
-        ));
-    }
-
-    if centroid.len() != parameters.dim() {
-        return Err(ANNError::log_pq_error(
-            "Error: centroid size is not equal to dim.",
         ));
     }
 
@@ -183,24 +184,10 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     }
 
     // Convert train_data to f32
-    let mut train_data = train_data_slice
+    let train_data = train_data_slice
         .iter()
         .map(|x| (*x).into())
         .collect::<Vec<f32>>();
-
-    // Calculate the centroid if needed and move the train_data to the centroid
-    if parameters.translate_to_center() {
-        move_train_data_by_centroid(
-            &mut train_data,
-            parameters.num_train(),
-            parameters.dim(),
-            centroid,
-        );
-    } else {
-        for val in centroid.iter_mut() {
-            *val = 0.0;
-        }
-    }
 
     // Calculate the chunk offsets
     calculate_chunk_offsets(parameters.dim(), parameters.num_pq_chunks(), offsets);
@@ -555,7 +542,6 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
     vector_data: &[T],
     pivot_data: &[f32],
     num_pivots: usize,
-    centroid: Option<&[f32]>,
     offsets: &[usize],
     pq_out: &mut [u8],
 ) -> ANNResult<()> {
@@ -573,25 +559,10 @@ pub fn generate_pq_data_from_pivots_from_membuf<T: Copy + Into<f32>>(
     )
     .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
-    let mut data = vector_data
+    let data = vector_data
         .iter()
         .map(|x| (*x).into())
         .collect::<Vec<f32>>();
-
-    // Validate centroid dimensionality is correct (if provided).
-    // Furthermore, if the centroid is provided, use it to adjust our local copy of the
-    // data.
-    centroid.map_or(Ok(()), |centroid_unwrapped| -> ANNResult<()> {
-        if centroid_unwrapped.len() != vector_data.len() {
-            return Err(ANNError::log_pq_error(
-                "Error: centroids vector size does not match dimension!",
-            ));
-        }
-        for (dim_index, item) in data.iter_mut().enumerate() {
-            *item -= centroid_unwrapped[dim_index];
-        }
-        Ok(())
-    })?;
 
     table
         .compress_into(data.as_slice(), pq_out)
@@ -610,7 +581,6 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
     parameters: &GeneratePivotArguments,
     vector_data: &[T],
     pivot_data: &[f32],
-    centroid: &[f32],
     offsets: &[usize],
     pq_out: &mut [u8],
     pool: RayonThreadPoolRef<'_>,
@@ -633,8 +603,6 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
             "Error: Invalid PQ buffer input size.",
         ));
     }
-    let translate_to_center = parameters.translate_to_center();
-    let centroid_option: Option<&[f32]> = translate_to_center.then_some(centroid);
 
     pq_out
         .par_chunks_mut(num_pq_chunks)
@@ -644,7 +612,6 @@ pub fn generate_pq_data_from_pivots_from_membuf_batch<T: Copy + Sync + Into<f32>
                 vector_slice,
                 pivot_data,
                 parameters.num_centers(),
-                centroid_option,
                 offsets,
                 pq_slice,
             )
@@ -706,7 +673,8 @@ mod pq_test {
         ];
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
-            GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
+            GeneratePivotArguments::new(5, 8, 2, 2, 5).unwrap(),
+            true,
             &mut train_data,
             &pq_storage,
             &storage_provider,
@@ -747,11 +715,9 @@ mod pq_test {
     }
 
     #[rstest]
-    #[case(false, 2)]
-    #[case(true, 2)]
-    #[case(false, 3)]
-    #[case(true, 3)]
-    fn generate_pq_pivots_membuf_test(#[case] make_zero_mean: bool, #[case] num_pq_chunks: usize) {
+    #[case(2)]
+    #[case(3)]
+    fn generate_pq_pivots_membuf_test(#[case] num_pq_chunks: usize) {
         let num_train = 5;
         let dim = 8;
         let num_centers = 2;
@@ -764,21 +730,11 @@ mod pq_test {
         ];
 
         let mut full_pivot_data: Vec<f32> = vec![0.0; num_centers * dim];
-        let mut centroids: Vec<f32> = vec![0.0; dim];
         let mut offsets: Vec<usize> = vec![0; num_pq_chunks + 1];
         let pool = create_thread_pool_for_test();
         let result = generate_pq_pivots_from_membuf(
-            &GeneratePivotArguments::new(
-                num_train,
-                dim,
-                num_centers,
-                num_pq_chunks,
-                5,
-                make_zero_mean,
-            )
-            .unwrap(),
+            &GeneratePivotArguments::new(num_train, dim, num_centers, num_pq_chunks, 5).unwrap(),
             &train_data, // train_data
-            &mut centroids,
             &mut offsets,
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
@@ -813,9 +769,9 @@ mod pq_test {
                 num_centers,
                 num_pq_chunks,
                 max_k_means_reps,
-                true,
             )
             .unwrap(),
+            true,
             &mut train_data,
             &pq_storage,
             &storage_provider,
@@ -857,7 +813,8 @@ mod pq_test {
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
-            GeneratePivotArguments::new(5, 8, 2, 2, 5, true).unwrap(),
+            GeneratePivotArguments::new(5, 8, 2, 2, 5).unwrap(),
+            true,
             &mut train_data,
             &pq_storage,
             &storage_provider,
@@ -892,14 +849,9 @@ mod pq_test {
     }
 
     #[rstest]
-    #[case(false, 2)]
-    #[case(true, 2)]
-    #[case(false, 3)]
-    #[case(true, 3)]
-    fn generate_pq_data_from_pivots_membuf_test(
-        #[case] make_zero_mean: bool,
-        #[case] num_pq_chunks: usize,
-    ) {
+    #[case(2)]
+    #[case(3)]
+    fn generate_pq_data_from_pivots_membuf_test(#[case] num_pq_chunks: usize) {
         let num_train: usize = 5;
         let dim: usize = 8;
         let num_centers: usize = 2;
@@ -912,7 +864,6 @@ mod pq_test {
             100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
         ];
 
-        let mut centroids: Vec<f32> = vec![f32::MAX; dim];
         let mut offsets: Vec<usize> = vec![usize::MAX; num_pq_chunks + 1];
         let mut pivot_data: Vec<f32> = vec![f32::MAX; num_centers * dim];
         let pool = create_thread_pool_for_test();
@@ -923,11 +874,9 @@ mod pq_test {
                 num_centers,
                 num_pq_chunks,
                 max_k_means_reps,
-                make_zero_mean,
             )
             .unwrap(),
             &train_data,
-            &mut centroids,
             &mut offsets,
             &mut pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
@@ -942,18 +891,12 @@ mod pq_test {
                 &train_data[dim * i..dim * (i + 1)],
                 &pivot_data,
                 num_centers,
-                make_zero_mean.then_some(&centroids),
                 &offsets,
                 &mut pq,
             )
             .unwrap();
         }
 
-        // Check if any value is equal to max
-        assert!(
-            !centroids.contains(&f32::MAX),
-            "centroids contains max value!"
-        );
         assert!(
             !offsets.contains(&usize::MAX),
             "offsets contains max value!"
@@ -962,22 +905,15 @@ mod pq_test {
             !pivot_data.contains(&f32::MAX),
             "pivot_data contains max value!"
         );
-
-        if !make_zero_mean {
-            assert!(
-                centroids.iter().all(|&x| x == 0.0),
-                "centroids is not all 0"
-            );
-        }
     }
 
     #[rstest]
-    #[case(true, 16)]
-    #[case(true, 32)]
-    #[case(true, 17)]
-    #[case(true, 13)]
+    #[case(false, 16)]
+    #[case(false, 32)]
+    #[case(false, 17)]
+    #[case(false, 13)]
     fn verify_identical_results_for_membuf_api(
-        #[case] make_zero_mean: bool,
+        #[case] legacy_center_data: bool,
         #[case] num_pq_chunks: usize,
     ) {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
@@ -1006,9 +942,9 @@ mod pq_test {
                 NUM_PQ_CENTROIDS,
                 num_pq_chunks,
                 NUM_KMEANS_REPS_PQ,
-                false,
             )
             .expect("Failed to create pivot parameters"),
+            legacy_center_data,
             &mut full_data_vector,
             &pq_storage,
             &storage_provider,
@@ -1053,7 +989,6 @@ mod pq_test {
                     &full_data_vector[train_dim * i..train_dim * (i + 1)],
                     &full_pivot_data,
                     NUM_PQ_CENTROIDS,
-                    make_zero_mean.then_some(&centroid),
                     &offsets,
                     membuf_slice,
                 )
@@ -1150,7 +1085,6 @@ mod pq_test {
             RandGenStrategy::RandDivByRand
         )]
         rand_strategy: RandGenStrategy,
-        #[values(false, true)] make_zero_mean: bool,
         #[values(256)] npts: usize,
         #[case] dim: usize,
         #[case] num_pq_chunks: usize,
@@ -1185,7 +1119,6 @@ mod pq_test {
 
         // Generate pivot data
         let mut full_pivot_data: Vec<f32> = vec![0.0; NUM_PQ_CENTROIDS * dim];
-        let mut centroids: Vec<f32> = vec![0.0; dim];
         let mut offsets: Vec<usize> = vec![0; num_pq_chunks + 1];
         let pool = create_thread_pool_for_test();
         let result = generate_pq_pivots_from_membuf(
@@ -1195,11 +1128,9 @@ mod pq_test {
                 NUM_PQ_CENTROIDS,
                 num_pq_chunks,
                 crate::model::pq::pq_construction::NUM_KMEANS_REPS_PQ,
-                make_zero_mean,
             )
             .unwrap(),
             &full_data_vector,
-            &mut centroids,
             &mut offsets,
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
@@ -1214,7 +1145,6 @@ mod pq_test {
                 &full_data_vector[(dim * i)..(dim * (i + 1))],
                 &full_pivot_data,
                 NUM_PQ_CENTROIDS,
-                make_zero_mean.then_some(&centroids),
                 &offsets,
                 &mut membuf_pq_data,
             );
@@ -1297,7 +1227,7 @@ mod pq_test {
             2,            /* 2 vectors in dataset */
             7,            /* Each vector is dimension 7 */
             chunk_size,   /* Current chunk is size 3 */
-            chunk_offset, /* Get chunk 1 for each vector */
+            chunk_offset, /* Get chunk 2 for each vector */
         );
 
         // 0.0, 0.1, 0.2 are the first chunk of the first vector
@@ -1336,7 +1266,6 @@ mod pq_test {
 
         // Generate pivot data
         let mut full_pivot_data: Vec<f32> = vec![0.0; NUM_PQ_CENTROIDS * train_dim];
-        let mut centroid: Vec<f32> = vec![0.0; train_dim];
         let mut offsets: Vec<usize> = vec![0; num_pq_chunks + 1];
         let pivot_args = GeneratePivotArguments::new(
             train_size,
@@ -1344,7 +1273,6 @@ mod pq_test {
             NUM_PQ_CENTROIDS,
             num_pq_chunks,
             crate::model::pq::pq_construction::NUM_KMEANS_REPS_PQ,
-            false,
         )
         .unwrap();
         let pool = create_thread_pool_for_test();
@@ -1352,7 +1280,6 @@ mod pq_test {
         generate_pq_pivots_from_membuf(
             &pivot_args,
             &train_data_vector,
-            &mut centroid,
             &mut offsets,
             &mut full_pivot_data,
             &mut crate::utils::create_rnd_in_tests(),
@@ -1377,7 +1304,6 @@ mod pq_test {
             pivot_args.num_centers(),
             pivot_args.num_pq_chunks(),
             pivot_args.max_k_means_reps(),
-            pivot_args.translate_to_center(),
         )
         .unwrap();
 
@@ -1387,20 +1313,14 @@ mod pq_test {
             &pivot_args,
             &full_data_vector,
             &full_pivot_data,
-            &centroid,
             &offsets,
             &mut pq_data,
             pool.as_ref(),
         )
         .unwrap();
 
-        let fixed_chunk_pq_table = FixedChunkPQTable::new(
-            train_dim,
-            full_pivot_data.into(),
-            centroid.clone().into(),
-            offsets.into(),
-        )
-        .unwrap();
+        let fixed_chunk_pq_table =
+            FixedChunkPQTable::new(train_dim, full_pivot_data.into(), offsets.into()).unwrap();
 
         // Hook into here to test pairwise distances.
         let pairs = [(0, 1), (1, 0), (10, 10), (23, 42)];
@@ -1410,9 +1330,7 @@ mod pq_test {
 
             let self_l2 = fixed_chunk_pq_table.qq_l2_distance(left, right);
 
-            let mut inflated = fixed_chunk_pq_table.inflate_vector(left);
-            fixed_chunk_pq_table.preprocess_query(&mut inflated);
-
+            let inflated = fixed_chunk_pq_table.inflate_vector(left);
             let from_inflated = fixed_chunk_pq_table.l2_distance(&inflated, right);
             assert_relative_eq!(self_l2, from_inflated, max_relative = 1e-6);
         }

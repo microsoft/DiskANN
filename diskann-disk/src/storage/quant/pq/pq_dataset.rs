@@ -10,22 +10,10 @@ use diskann_providers::model::FixedChunkPQTable;
 use diskann_quantization::product::TransposedTable;
 use diskann_utils::views::Matrix;
 
-/// Behind the scenes, we can use either the [`FixedChunkPQTable`] or a
-/// [`diskann_quantization::product::TransposedTable`]. The [`TransposedTable`] is much faster
-/// for preprocessing, but does not support removal of the dataset centroid.
-///
-/// So, we can only use the [`TransposedTable`] when the dataset centroid
-/// is all zero.
-#[derive(Debug)]
-pub enum PQTable {
-    Transposed(TransposedTable),
-    Fixed(FixedChunkPQTable),
-}
-
 #[derive(Debug)]
 pub struct PQData {
     // pq pivot table.
-    pq_pivot_table: PQTable,
+    pq_pivot_table: TransposedTable,
 
     // pq compressed vectors, shape `num_points × num_pq_chunks`.
     pq_compressed_data: Matrix<u8>,
@@ -36,18 +24,11 @@ impl PQData {
         pq_pivot_table: FixedChunkPQTable,
         pq_compressed_data: Matrix<u8>,
     ) -> ANNResult<Self> {
-        // Check if we can use the transposed table. If so, go for it.
-        let centroid_is_zero = pq_pivot_table.get_centroids().iter().all(|i| *i == 0.0);
-        let pq_pivot_table = if centroid_is_zero {
-            let transposed = TransposedTable::from_parts(
-                pq_pivot_table.view_pivots(),
-                pq_pivot_table.view_offsets().to_owned(),
-            )
-            .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
-            PQTable::Transposed(transposed)
-        } else {
-            PQTable::Fixed(pq_pivot_table)
-        };
+        let pq_pivot_table = TransposedTable::from_parts(
+            pq_pivot_table.view_pivots(),
+            pq_pivot_table.view_offsets().to_owned(),
+        )
+        .map_err(|err| ANNError::log_pq_error(diskann_quantization::error::format(&err)))?;
 
         Ok(Self {
             pq_pivot_table,
@@ -56,24 +37,18 @@ impl PQData {
     }
 
     /// Get pq_table
-    pub fn pq_table(&self) -> &PQTable {
+    pub fn pq_table(&self) -> &TransposedTable {
         &self.pq_pivot_table
     }
 
     /// Return the number of chunks in the underlying PQ schema.
     pub fn get_num_chunks(&self) -> usize {
-        match &self.pq_pivot_table {
-            PQTable::Transposed(table) => table.nchunks(),
-            PQTable::Fixed(table) => table.get_num_chunks(),
-        }
+        self.pq_pivot_table.nchunks()
     }
 
     /// Return the number of centers in the underlying PQ schema.
     pub fn get_num_centers(&self) -> usize {
-        match &self.pq_pivot_table {
-            PQTable::Transposed(table) => table.ncenters(),
-            PQTable::Fixed(table) => table.get_num_centers(),
-        }
+        self.pq_pivot_table.ncenters()
     }
 
     /// Get pq_compressed_data
@@ -97,13 +72,8 @@ mod tests {
     fn create_pq_data() -> ANNResult<PQData> {
         let dim = 2;
 
-        let pq_pivot_table = FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0, 1.0, 1.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
+        let pq_pivot_table =
+            FixedChunkPQTable::new(dim, Box::new([0.0, 0.0, 1.0, 1.0]), Box::new([0, 2])).unwrap();
         let pq_compressed_data = Matrix::try_from(Box::new([123u8, 111, 255]) as Box<[u8]>, 3, 1)
             .expect("valid matrix shape");
 

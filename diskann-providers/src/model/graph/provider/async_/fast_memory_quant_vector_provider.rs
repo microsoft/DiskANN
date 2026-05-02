@@ -261,7 +261,7 @@ impl FastMemoryQuantVectorProviderAsync {
         let table = &self.pq_chunk_table;
         pq_storage.write_pivot_data(
             table.get_pq_table(),
-            table.get_centroids(),
+            None,
             table.get_chunk_offsets(),
             table.get_num_centers(),
             table.get_dim(),
@@ -367,13 +367,11 @@ mod tests {
     #[tokio::test]
     async fn common_errors() {
         let dim = 5;
-        let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
         let pq_chunk_table =
-            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
         let provider = FastMemoryQuantVectorProviderAsync::new(Metric::L2, 10, pq_chunk_table);
 
         // try to set an out of bounds vector
@@ -400,7 +398,6 @@ mod tests {
         let table = FixedChunkPQTable::new(
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
-            Box::new([0.0, 0.0]),
             Box::new([0, dim]),
         )
         .unwrap();

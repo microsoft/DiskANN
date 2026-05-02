@@ -270,13 +270,11 @@ mod tests {
     #[tokio::test]
     async fn common_errors() {
         let dim = 5;
-        let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
         let pq_chunk_table =
-            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
 
         let bf_tree_config = Config::default();
         let provider =
@@ -306,7 +304,6 @@ mod tests {
         let table = FixedChunkPQTable::new(
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
-            Box::new([0.0, 0.0]),
             Box::new([0, dim]),
         )
         .unwrap();
@@ -379,12 +376,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
         let dim = 2;
-        let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
         let pq_chunk_table =
-            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
 
         let bf_tree_config = Config::default();
         let provider = Arc::new(

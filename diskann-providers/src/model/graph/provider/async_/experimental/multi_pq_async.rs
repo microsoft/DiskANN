@@ -150,7 +150,6 @@ impl TestMultiPQProviderAsync {
             &vector_f32,
             table.get_pq_table(),
             table.get_num_centers(),
-            Some(table.get_centroids()),
             table.get_chunk_offsets(),
             &mut quant_vector,
         )
