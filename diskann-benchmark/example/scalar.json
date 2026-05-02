@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "async-index-build-sq",
+      "type": "graph-index-build-sq",
       "content": {
         "index_operation": {
           "source": {
@@ -48,7 +48,7 @@
       }
     },
     {
-      "type": "async-index-build-sq",
+      "type": "graph-index-build-sq",
       "content": {
         "index_operation": {
           "source": {
@@ -92,7 +92,7 @@
       }
     },
     {
-      "type": "async-index-build-sq",
+      "type": "graph-index-build-sq",
       "content": {
         "index_operation": {
           "source": {
@@ -136,7 +136,7 @@
       }
     },
     {
-      "type": "async-index-build-sq",
+      "type": "graph-index-build-sq",
       "content": {
         "index_operation": {
           "source": {

@@ -93,17 +93,17 @@ cargo run --release --package diskann-benchmark -- inputs
 which will list something like
 ```
 Available input kinds are listed below:
-    async-index-build
-    async-index-build-pq
+    graph-index-build
+    graph-index-build-pq
 ```
 To obtain the JSON schema for an input, add its name to the query like
 ```sh
-cargo run --release --package diskann-benchmark -- inputs async-index-build
+cargo run --release --package diskann-benchmark -- inputs graph-index-build
 ```
 which will generate something like
 ```json
 {
-  "type": "async_index_build",
+  "type": "graph-index-build",
   "content": {
     "data_type": "float32",
     "data": "path/to/data",
@@ -186,9 +186,9 @@ cargo run --release --package diskann-benchmark -- benchmarks
 Example output is shown below:
 ```
 Registered Benchmarks:
-    async-full-precision-f32: tag: "async-index-build", float32
-    async-full-precision-f16: tag: "async-index-build", float16
-    async-pq-f32: tag: "async-index-build-pq", float32
+    graph-index-full-precision-f32: tag: "graph-index-build", float32
+    graph-index-full-precision-f16: tag: "graph-index-build", float16
+    graph-index-pq-f32: tag: "graph-index-build-pq", float32
 ```
 The keyword after "tag" corresponds to the type of input that the benchmark accepts.
 
@@ -196,7 +196,7 @@ The keyword after "tag" corresponds to the type of input that the benchmark acce
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async.json --output-file output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index.json --output-file output.json
 ```
 
 A benchmark run happens in several phases.
@@ -237,10 +237,10 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index-dynamic.json --output-file dynamic-output.json
 ```
-Note in the example json that the benchmark is registered under `async-dynamic-index-run`,
-instead of `async-index-build` etc..
+Note in the example json that the benchmark is registered under `graph-index-dynamic-run`,
+instead of `graph-index-build` etc..
 
 A streaming run happens in several phases.
 First, the input file is parsed and data is checked for its validity. The check consists of
@@ -284,7 +284,7 @@ input, a `DispatchRule` from the `dispatcher` crate (via
 registered `diskann_benchmark_runner::Inputs`.
 
 The rule can be as simple as checking a down cast or as complicated such as lifting run-time
-information to the type/compile time realm, as is done for the async index tests for the data
+information to the type/compile time realm, as is done for the graph index tests for the data
 type.
 
 Once this is complete, the benchmark will be reachable by its input and can live peacefully

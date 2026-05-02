@@ -8,11 +8,11 @@ use diskann_benchmark_runner::registry::Benchmarks;
 // Create a stub-module if the "spherical-quantization" feature is disabled.
 crate::utils::stub_impl!(
     "spherical-quantization",
-    inputs::async_::SphericalQuantBuild
+    inputs::graph_index::SphericalQuantBuild
 );
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    const NAME: &str = "async-spherical-quantization";
+    const NAME: &str = "graph-index-spherical-quantization";
 
     #[cfg(feature = "spherical-quantization")]
     {
@@ -57,7 +57,7 @@ mod imp {
             search,
         },
         inputs::{
-            async_::{SearchPhase, SphericalQuantBuild},
+            graph_index::{SearchPhase, SphericalQuantBuild},
             exhaustive,
         },
         utils::{
