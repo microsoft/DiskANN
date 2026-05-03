@@ -106,9 +106,9 @@ class AbstractIndex
         std::function<float(const std::uint8_t *, size_t)> rerank_fn = nullptr);
 
     // Debug filtered search: same as debug_search with label filtering.
-    template <typename IDType>
+    template <typename data_type, typename IDType>
     std::pair<uint32_t, uint32_t> debug_search_with_filters(
-        const DataType &query, const std::vector<std::string> &raw_labels,
+        const data_type *query, const std::vector<std::string> &raw_labels,
         const size_t K, const uint32_t L,
         IDType *indices, float *distances,
         DebugTraversalInfo &debug_info,

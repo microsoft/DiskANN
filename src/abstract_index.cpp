@@ -400,17 +400,18 @@ std::pair<uint32_t, uint32_t> AbstractIndex::debug_search(
                          debug_info, maxLperSeller, std::move(rerank_fn));
 }
 
-template <typename IDType>
+template <typename data_type, typename IDType>
 std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters(
-    const DataType &query, const std::vector<std::string> &raw_labels,
+    const data_type *query, const std::vector<std::string> &raw_labels,
     const size_t K, const uint32_t L,
     IDType *indices, float *distances,
     DebugTraversalInfo &debug_info,
     const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn)
 {
+    auto any_query   = std::any(query);
     auto any_indices = std::any(indices);
-    return _debug_search_with_filters(query, raw_labels, K, L, any_indices, distances,
+    return _debug_search_with_filters(any_query, raw_labels, K, L, any_indices, distances,
                                       debug_info, maxLperSeller, std::move(rerank_fn));
 }
 
@@ -445,14 +446,34 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_se
     DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn);
 
-// Explicit instantiations for debug_search_with_filters (uint32_t/uint64_t indices)
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<uint32_t>(
-    const DataType &query, const std::vector<std::string> &raw_labels,
+// Explicit instantiations for debug_search_with_filters (float/uint8_t/int8_t × uint32_t/uint64_t indices)
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<float, uint32_t>(
+    const float *query, const std::vector<std::string> &raw_labels,
     const size_t K, const uint32_t L, uint32_t *indices, float *distances,
     DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<uint64_t>(
-    const DataType &query, const std::vector<std::string> &raw_labels,
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<uint8_t, uint32_t>(
+    const uint8_t *query, const std::vector<std::string> &raw_labels,
+    const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
+    std::function<float(const std::uint8_t *, size_t)> rerank_fn);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<int8_t, uint32_t>(
+    const int8_t *query, const std::vector<std::string> &raw_labels,
+    const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
+    std::function<float(const std::uint8_t *, size_t)> rerank_fn);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<float, uint64_t>(
+    const float *query, const std::vector<std::string> &raw_labels,
+    const size_t K, const uint32_t L, uint64_t *indices, float *distances,
+    DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
+    std::function<float(const std::uint8_t *, size_t)> rerank_fn);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<uint8_t, uint64_t>(
+    const uint8_t *query, const std::vector<std::string> &raw_labels,
+    const size_t K, const uint32_t L, uint64_t *indices, float *distances,
+    DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
+    std::function<float(const std::uint8_t *, size_t)> rerank_fn);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters<int8_t, uint64_t>(
+    const int8_t *query, const std::vector<std::string> &raw_labels,
     const size_t K, const uint32_t L, uint64_t *indices, float *distances,
     DebugTraversalInfo &debug_info, const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn);
