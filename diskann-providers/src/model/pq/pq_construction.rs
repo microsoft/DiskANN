@@ -23,7 +23,7 @@ use diskann_quantization::{
 };
 use diskann_utils::{
     io::Metadata,
-    views::{MatrixView, MutMatrixView, accum_row_inplace},
+    views::{MatrixView, MutMatrixView},
 };
 use rand::{Rng, distr::Distribution};
 use rayon::prelude::*;
@@ -355,7 +355,9 @@ where
     let mut full_pivot_data_mat =
         MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
-    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
+    full_pivot_data_mat
+        .broadcast_rows_mut(centroid.as_slice(), |a, b| *a += *b)
+        .bridge_err()?;
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,

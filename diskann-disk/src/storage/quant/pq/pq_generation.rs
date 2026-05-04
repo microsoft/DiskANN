@@ -5,15 +5,15 @@
 
 use std::marker::PhantomData;
 
-use diskann::{utils::VectorRepr, ANNError};
+use diskann::{ANNError, utils::VectorRepr};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{pq::generate_pq_pivots, GeneratePivotArguments},
+    model::{GeneratePivotArguments, pq::generate_pq_pivots},
     storage::PQStorage,
     utils::{BridgeErr, RayonThreadPoolRef, Timer},
 };
-use diskann_quantization::{product::TransposedTable, CompressInto};
-use diskann_utils::views::{accum_row_inplace, MatrixBase};
+use diskann_quantization::{CompressInto, product::TransposedTable};
+use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
 use tracing::info;
 
@@ -133,7 +133,9 @@ where
         )
         .bridge_err()?;
 
-        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
+        full_pivot_data_mat
+            .broadcast_rows_mut(centroid.as_slice(), |a, b| *a += *b)
+            .bridge_err()?;
 
         let table = TransposedTable::from_parts(
             full_pivot_data_mat.as_view(),
@@ -173,12 +175,12 @@ where
 #[cfg(test)]
 mod pq_generation_tests {
     use diskann::ANNError;
-    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::model::GeneratePivotArguments;
+    use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool_for_test, RayonThreadPoolRef};
+    use diskann_providers::utils::{RayonThreadPoolRef, create_thread_pool_for_test};
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,

@@ -161,6 +161,15 @@ impl<T: DenseData> TryFromError<T> {
     }
 }
 
+/// Error returned when a broadcast vector's length does not match the matrix's column
+/// count.
+#[derive(Debug, Error)]
+#[error("broadcast vector length {broadcast_len} does not match matrix ncols {ncols}")]
+pub struct BroadcastLenMismatch {
+    pub ncols: usize,
+    pub broadcast_len: usize,
+}
+
 /// A generator for initializing the entries in a matrix via `Matrix::new`.
 pub trait Generator<T> {
     fn generate(&mut self) -> T;
@@ -386,6 +395,32 @@ where
     {
         let ncols = self.ncols();
         self.data.as_mut_slice().chunks_exact_mut(ncols)
+    }
+
+    /// Apply `op(row[j], &broadcast[j])` to every entry of every row, broadcasting
+    /// `broadcast` across the rows of the matrix through an `op`.
+    ///
+    /// Returns an error if `broadcast.len() != self.ncols()`. The matrix is left
+    /// unmodified in the error case.
+    pub fn broadcast_rows_mut<U, F>(
+        &mut self,
+        broadcast: &[U],
+        mut op: F,
+    ) -> Result<(), BroadcastLenMismatch>
+    where
+        T: MutDenseData,
+        F: FnMut(&mut T::Elem, &U),
+    {
+        if self.ncols() != broadcast.len() {
+            return Err(BroadcastLenMismatch {
+                ncols: self.ncols(),
+                broadcast_len: broadcast.len(),
+            });
+        }
+        self.row_iter_mut().for_each(|row| {
+            std::iter::zip(row.iter_mut(), broadcast.iter()).for_each(|(a, b)| op(a, b));
+        });
+        Ok(())
     }
 
     /// Return an iterator that divides the matrix into sub-matrices with (up to)
@@ -671,23 +706,6 @@ impl<'a, T> From<MutMatrixView<'a, T>> for &'a [T] {
     fn from(view: MutMatrixView<'a, T>) -> Self {
         view.data
     }
-}
-
-/// Add the row `y` to every row in `x`.
-///
-/// # Panics
-///
-/// Panics if `y.len() != x.ncols()`.
-pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
-where
-    T: Copy + std::ops::AddAssign,
-{
-    assert_eq!(x.ncols(), y.len());
-    x.row_iter_mut().for_each(|row| {
-        std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
-            *a += *b;
-        });
-    });
 }
 
 /// Return a reference to the item at entry `(row, col)` in the matrix.
@@ -2196,5 +2214,72 @@ mod tests {
 
         // Verify all elements are 43
         assert!(m.as_slice().iter().all(|&x| x == 43));
+    }
+
+    #[test]
+    fn test_broadcast_rows_mut() {
+        // Use the canonical test fixture and broadcast-add a length-3 row across all
+        // rows. The resulting rows are the original rows offset by [10, 20, 30].
+        let data = make_test_matrix();
+        let mut m = Matrix::try_from(data.into(), 4, 3).unwrap();
+        let bias = [10usize, 20, 30];
+
+        m.broadcast_rows_mut(&bias, |a, b| *a += *b).unwrap();
+        assert_eq!(m.row(0), &[10, 21, 32]);
+        assert_eq!(m.row(1), &[11, 22, 33]);
+        assert_eq!(m.row(2), &[12, 23, 34]);
+        assert_eq!(m.row(3), &[13, 24, 35]);
+
+        // Subtract the same bias to confirm op generality and that we round-trip back to
+        // the canonical fixture.
+        m.broadcast_rows_mut(&bias, |a, b| *a -= *b).unwrap();
+        test_basic_indexing(&m);
+
+        // Broadcast also works through a `MutMatrixView`.
+        let mut data = make_test_matrix();
+        let mut view = MutMatrixView::try_from(data.as_mut_slice(), 4, 3).unwrap();
+        view.broadcast_rows_mut(&bias, |a, b| *a += *b).unwrap();
+        assert_eq!(view.row(0), &[10, 21, 32]);
+        assert_eq!(view.row(3), &[13, 24, 35]);
+
+        // Heterogeneous element types: matrix is f32, broadcast is i32.
+        let mut fmat = Matrix::<f32>::new(0.0, 2, 3);
+        let scale: [i32; 3] = [1, 2, 3];
+        fmat.broadcast_rows_mut(&scale, |a, b| *a += *b as f32)
+            .unwrap();
+        assert_eq!(fmat.row(0), &[1.0, 2.0, 3.0]);
+        assert_eq!(fmat.row(1), &[1.0, 2.0, 3.0]);
+
+        // Single-row degenerate case.
+        let mut single = Matrix::<i32>::new(5, 1, 4);
+        single
+            .broadcast_rows_mut(&[1, 2, 3, 4], |a, b| *a += *b)
+            .unwrap();
+        assert_eq!(single.row(0), &[6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn test_broadcast_rows_mut_length_mismatch() {
+        let data = make_test_matrix();
+        let mut m = Matrix::try_from(data.clone().into(), 4, 3).unwrap();
+
+        // Too short.
+        let err = m.broadcast_rows_mut(&[1, 2], |a, b| *a += *b).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "broadcast vector length 2 does not match matrix ncols 3"
+        );
+        // Matrix must be unmodified after a failed call.
+        assert_eq!(m.as_slice(), data.as_slice());
+
+        // Too long.
+        let err = m
+            .broadcast_rows_mut(&[1, 2, 3, 4], |a, b| *a += *b)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "broadcast vector length 4 does not match matrix ncols 3"
+        );
+        assert_eq!(m.as_slice(), data.as_slice());
     }
 }
