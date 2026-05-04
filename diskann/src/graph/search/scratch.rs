@@ -7,7 +7,8 @@
 
 //! Scratch space for in-memory index based search
 
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 
 use crate::{
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -68,6 +69,16 @@ where
     /// Only used during range search
     pub in_range: Vec<Neighbor<I>>,
 
+    /// Filtered results for two-queue search.
+    /// Max-heap of filter-passing neighbors (worst/largest distance on top for pruning).
+    /// Only used during two-queue filtered search.
+    pub filtered_results: BinaryHeap<Neighbor<I>>,
+
+    /// Min-heap of explore candidates for two-queue filtered search.
+    /// Wrapping in `Reverse` makes the standard max-heap behave as a min-heap
+    /// (closest distance first). Only used during two-queue filtered search.
+    pub candidates: BinaryHeap<Reverse<Neighbor<I>>>,
+
     /// A tracker for how many hops we have taken during the current search
     pub hops: u32,
 
@@ -114,7 +125,7 @@ where
             None => HashSet::new(),
         };
 
-        let best = match nbest {
+        let best: NeighborPriorityQueue<I> = match nbest {
             PriorityQueueConfiguration::Fixed(capacity) => NeighborPriorityQueue::new(capacity),
             PriorityQueueConfiguration::Resizable(capacity) => {
                 NeighborPriorityQueue::auto_resizable_with_search_param_l(capacity)
@@ -127,6 +138,38 @@ where
             id_scratch: Vec::new(),
             beam_nodes: Vec::new(),
             in_range: Vec::new(),
+            filtered_results: BinaryHeap::new(),
+            candidates: BinaryHeap::new(),
+            range_frontier: VecDeque::new(),
+            hops: 0,
+            cmps: 0,
+        }
+    }
+
+    /// Create a new `SearchScratch` for two-queue filtered search.
+    ///
+    /// This initializes the `candidates` min-heap and `filtered_results` max-heap
+    /// used by the two-queue search path. The `best` priority queue is set to a
+    /// minimal zero-capacity queue since it is unused by two-queue search.
+    ///
+    /// # Parameters
+    ///
+    /// * `result_size`: Capacity hint for the filtered_results max-heap.
+    /// * `explore_ef`: Capacity hint for the candidates min-heap.
+    /// * `size_hint`: Optional hint for the capacity of the visited set.
+    pub fn new_two_queue(result_size: usize, explore_ef: usize, size_hint: Option<usize>) -> Self {
+        let visited = match size_hint {
+            Some(size_hint) => HashSet::with_capacity(size_hint),
+            None => HashSet::new(),
+        };
+        Self {
+            best: NeighborPriorityQueue::new(0),
+            visited,
+            id_scratch: Vec::new(),
+            beam_nodes: Vec::new(),
+            in_range: Vec::new(),
+            filtered_results: BinaryHeap::with_capacity(result_size),
+            candidates: BinaryHeap::with_capacity(explore_ef),
             range_frontier: VecDeque::new(),
             hops: 0,
             cmps: 0,
@@ -151,6 +194,8 @@ where
         self.id_scratch.clear();
         self.beam_nodes.clear();
         self.in_range.clear();
+        self.filtered_results.clear();
+        self.candidates.clear();
         self.range_frontier.clear();
 
         self.hops = 0;
@@ -315,5 +360,36 @@ mod tests {
 
         assert!(x.hops == 0);
         assert!(x.cmps == 0);
+    }
+
+    #[test]
+    pub fn test_new_two_queue() {
+        let x = SearchScratch::<u32, NeighborPriorityQueue<u32>>::new_two_queue(50, 100, None);
+
+        // best queue should be zero-capacity (unused by two-queue search)
+        assert_eq!(x.best.capacity(), 0);
+        assert_eq!(x.best.size(), 0);
+
+        // filtered_results and candidates should be empty but allocated
+        assert!(x.filtered_results.is_empty());
+        assert!(x.candidates.is_empty());
+
+        // Other fields should be default
+        assert!(x.visited.is_empty());
+        assert!(x.id_scratch.is_empty());
+        assert!(x.beam_nodes.is_empty());
+        assert!(x.in_range.is_empty());
+        assert_eq!(x.hops, 0);
+        assert_eq!(x.cmps, 0);
+    }
+
+    #[test]
+    pub fn test_new_two_queue_with_size_hint() {
+        let x =
+            SearchScratch::<u32, NeighborPriorityQueue<u32>>::new_two_queue(50, 100, Some(1000));
+
+        // visited set should be pre-allocated with the size hint
+        assert!(x.visited.capacity() >= 1000);
+        assert!(x.visited.is_empty());
     }
 }

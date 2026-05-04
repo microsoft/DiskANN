@@ -86,6 +86,8 @@ where
             beam_nodes: Vec::with_capacity(self.inner.beam_width().get()),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),
+            filtered_results: std::collections::BinaryHeap::new(),
+            candidates: std::collections::BinaryHeap::new(),
             hops: 0,
             cmps: 0,
         }

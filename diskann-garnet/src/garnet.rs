@@ -43,12 +43,15 @@ pub type ReadModifyWriteCallback =
 pub type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
 pub type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
 
+pub type FilterCandidateCallback = unsafe extern "C" fn(context: u64, internal_id: u32) -> u8;
+
 #[derive(Copy, Clone)]
 pub struct Callbacks {
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
+    filter_callback: FilterCandidateCallback,
 }
 
 impl Callbacks {
@@ -57,12 +60,14 @@ impl Callbacks {
         write_callback: WriteCallback,
         delete_callback: DeleteCallback,
         rmw_callback: ReadModifyWriteCallback,
+        filter_callback: FilterCandidateCallback,
     ) -> Self {
         Self {
             read_callback,
             write_callback,
             delete_callback,
             rmw_callback,
+            filter_callback,
         }
     }
 
@@ -84,6 +89,10 @@ impl Callbacks {
     #[cfg(test)]
     pub fn rmw_callback(&self) -> ReadModifyWriteCallback {
         self.rmw_callback
+    }
+
+    pub fn filter_callback(&self) -> FilterCandidateCallback {
+        self.filter_callback
     }
 
     pub fn exists_iid(&self, ctx: Context, id: u32) -> bool {
