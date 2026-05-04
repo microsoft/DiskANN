@@ -241,9 +241,9 @@ mod tests {
         strategy: S,
         data: MatrixView<'_, f32>,
     ) where
-        DP: DataProvider<ExternalId = u32> + SetElement<[f32]>,
+        DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,
-        S: InsertStrategy<DP, [f32]> + Clone,
+        S: for<'a> InsertStrategy<DP, &'a [f32]> + Clone,
     {
         let ctx = &DP::Context::default();
         for (i, v) in data.row_iter().enumerate() {
@@ -277,7 +277,7 @@ mod tests {
             train_data.as_view(),
             pq_bytes,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            2,
+            crate::utils::create_thread_pool(2).unwrap().as_ref(),
         )
         .unwrap();
 

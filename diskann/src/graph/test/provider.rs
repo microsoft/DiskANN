@@ -6,20 +6,23 @@
 //! A pedantic provider implementation used for testing alorithmic logic.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult,
-    error::{Infallible, message},
-    graph::{AdjacencyList, glue, test::synthetic},
+    ANNError, ANNResult, default_post_processor,
+    error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
+    graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
+    neighbor::Neighbor,
     provider,
     utils::VectorRepr,
 };
@@ -414,6 +417,33 @@ impl Provider {
     pub fn neighbors(&self) -> NeighborAccessor<'_> {
         NeighborAccessor::new(self)
     }
+
+    /// Return the adjacency lists in `self` as `source -> { destinations ... }` pairs.
+    ///
+    /// If `sort == true` then:
+    ///
+    /// * The returned vector will be ordered with the `source` entry increasing.
+    /// * Each `destination` adjacency list will be sorted by increasing ID.
+    pub fn dump_neighbors(&self, sort: bool) -> Vec<(u32, AdjacencyList<u32>)> {
+        let mut neighbors: Vec<_> = self
+            .terms
+            .iter()
+            .map(|ref_multi| {
+                let mut neighbors = ref_multi.value().neighbors.clone();
+                if sort {
+                    neighbors.sort();
+                }
+                (*ref_multi.key(), neighbors)
+            })
+            .collect();
+
+        if sort {
+            // Unstable sort is fine: `DashMap` ensures the keys are unique.
+            neighbors.sort_unstable_by_key(|(id, _)| *id);
+        }
+
+        neighbors
+    }
 }
 
 /// Provider level metrics.
@@ -598,12 +628,27 @@ impl From<InvalidId> for ANNError {
     }
 }
 
+impl IntoIterator for &Provider {
+    type Item = u32;
+    type IntoIter = std::vec::IntoIter<u32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.terms
+            .iter()
+            .map(|entry| *entry.key())
+            .filter(|id| !self.config.start_points.contains_key(id))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
 impl provider::DataProvider for Provider {
     type Context = Context;
     type InternalId = u32;
     type ExternalId = u32;
 
     type Error = InvalidId;
+    type Guard = provider::NoopGuard<u32>;
 
     fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
         let valid = self.terms.contains_key(gid);
@@ -680,9 +725,8 @@ impl provider::Delete for Provider {
     }
 }
 
-impl provider::SetElement<[f32]> for Provider {
+impl provider::SetElement<&[f32]> for Provider {
     type SetError = ANNError;
-    type Guard = provider::NoopGuard<u32>;
 
     async fn set_element(
         &self,
@@ -740,6 +784,102 @@ impl From<AccessedInvalidId> for ANNError {
     #[track_caller]
     fn from(err: AccessedInvalidId) -> Self {
         Self::opaque(err)
+    }
+}
+
+/// A transient error from the test accessor — the ID exists but the retrieval
+/// temporarily failed. Must be acknowledged or escalated before being dropped.
+///
+/// Amognst other things, this is used to test the transient error handling of the blanket
+/// implementation of [`workingset::Fill`] for [`workingset::Map`].
+#[derive(Debug)]
+pub struct TransientAccessError {
+    id: u32,
+    handled: bool,
+}
+
+impl TransientAccessError {
+    fn new(id: u32) -> Self {
+        Self { id, handled: false }
+    }
+}
+
+impl std::fmt::Display for TransientAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "transient error accessing id: {}", self.id)
+    }
+}
+
+impl std::error::Error for TransientAccessError {}
+
+impl Drop for TransientAccessError {
+    fn drop(&mut self) {
+        assert!(
+            self.handled,
+            "dropping an unhandled transient error for id {}!",
+            self.id
+        );
+    }
+}
+
+impl TransientError<AccessedInvalidId> for TransientAccessError {
+    fn acknowledge<D>(mut self, _why: D)
+    where
+        D: std::fmt::Display,
+    {
+        self.handled = true;
+    }
+
+    fn escalate<D>(mut self, _why: D) -> AccessedInvalidId
+    where
+        D: std::fmt::Display,
+    {
+        self.handled = true;
+        AccessedInvalidId(self.id)
+    }
+}
+
+/// A test error that can represent both transient (flaky) and critical (invalid
+/// ID) errors.
+///
+/// Paired with [`Accessor`]'s configurable flakiness to exercise transient error
+/// handling paths in both `Map::fill_with` and `index.rs` operations.
+#[derive(Debug)]
+pub enum AccessError {
+    /// The ID does not exist in the provider.
+    InvalidId(AccessedInvalidId),
+    /// The ID exists but the retrieval temporarily failed.
+    Transient(TransientAccessError),
+}
+
+impl std::fmt::Display for AccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidId(e) => e.fmt(f),
+            Self::Transient(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for AccessError {}
+
+impl ToRanked for AccessError {
+    type Transient = TransientAccessError;
+    type Error = AccessedInvalidId;
+
+    fn to_ranked(self) -> RankedError<TransientAccessError, AccessedInvalidId> {
+        match self {
+            Self::InvalidId(e) => RankedError::Error(e),
+            Self::Transient(e) => RankedError::Transient(e),
+        }
+    }
+
+    fn from_transient(transient: TransientAccessError) -> Self {
+        Self::Transient(transient)
+    }
+
+    fn from_error(error: AccessedInvalidId) -> Self {
+        Self::InvalidId(error)
     }
 }
 
@@ -855,15 +995,35 @@ pub struct Accessor<'a> {
     provider: &'a Provider,
     buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
+    /// IDs that will produce transient errors when accessed.
+    transient_ids: Option<Cow<'a, HashSet<u32>>>,
 }
 
 impl<'a> Accessor<'a> {
+    /// Return the underlying [`Provider`] reference.
+    pub fn provider(&self) -> &'a Provider {
+        self.provider
+    }
+
+    /// Creates an accessor with no flaky behavior (backward-compatible).
     pub fn new(provider: &'a Provider) -> Self {
+        Self::new_inner(provider, None)
+    }
+
+    /// Creates an accessor where `get_element` returns a transient error for
+    /// any ID in `transient_ids`. The ID must still exist in the provider —
+    /// accessing a truly missing ID remains a critical `InvalidId` error.
+    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
+        Self::new_inner(provider, Some(transient_ids))
+    }
+
+    fn new_inner(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
         let buffer = (0..provider.dim()).map(|_| 0.0).collect();
         Self {
             provider,
             buffer,
             get_vector: provider.get_vector.local(),
+            transient_ids,
         }
     }
 }
@@ -873,22 +1033,27 @@ impl provider::HasId for Accessor<'_> {
 }
 
 impl provider::Accessor for Accessor<'_> {
-    type Extended = Box<[f32]>;
     type Element<'a>
         = &'a [f32]
     where
         Self: 'a;
     type ElementRef<'a> = &'a [f32];
-    type GetError = AccessedInvalidId;
+    type GetError = AccessError;
 
-    async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessedInvalidId> {
+    async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessError> {
         match self.provider.terms.get(&id) {
             Some(term) => {
+                if let Some(transient) = &self.transient_ids
+                    && transient.contains(&id)
+                {
+                    return Err(AccessError::Transient(TransientAccessError::new(id)));
+                }
+
                 self.get_vector.increment();
                 self.buffer.copy_from_slice(&term.data);
                 Ok(&*self.buffer)
             }
-            None => Err(AccessedInvalidId(id)),
+            None => Err(AccessError::InvalidId(AccessedInvalidId(id))),
         }
     }
 }
@@ -900,7 +1065,7 @@ impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
     }
 }
 
-impl provider::BuildQueryComputer<[f32]> for Accessor<'_> {
+impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
     type QueryComputerError = Infallible;
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
@@ -936,23 +1101,75 @@ impl glue::SearchExt for Accessor<'_> {
     }
 }
 
-impl glue::ExpandBeam<[f32]> for Accessor<'_> {}
-impl glue::FillSet for Accessor<'_> {}
+impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
-#[derive(Debug, Default, Clone, Copy)]
+impl glue::IdIterator<std::vec::IntoIter<u32>> for Accessor<'_> {
+    async fn id_iterator(&mut self) -> Result<std::vec::IntoIter<u32>, ANNError> {
+        let ids: Vec<u32> = self.provider.terms.iter().map(|r| *r.key()).collect();
+        Ok(ids.into_iter())
+    }
+}
+
+impl provider::CacheableAccessor for Accessor<'_> {
+    type Map = diskann_utils::lifetime::Slice<f32>;
+
+    fn from_cached<'a>(element: &'a [f32]) -> &'a [f32]
+    where
+        Self: 'a,
+    {
+        element
+    }
+
+    fn as_cached<'a, 'b>(element: &'a &'b [f32]) -> &'a &'b [f32]
+    where
+        Self: 'a + 'b,
+    {
+        element
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Strategy {
-    _phantom: (),
+    // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded
+    // baseline tests, this must be set to `false` to obtain repeatable `get_vector` calls.
+    working_set_reuse: bool,
+    transient_ids: Option<Arc<HashSet<u32>>>,
 }
 
 impl Strategy {
     pub fn new() -> Self {
-        Self { _phantom: () }
+        Self {
+            working_set_reuse: true,
+            transient_ids: None,
+        }
+    }
+
+    pub fn with_options(working_set_reuse: bool) -> Self {
+        Self {
+            working_set_reuse,
+            transient_ids: None,
+        }
+    }
+
+    pub fn with_transient(
+        working_set_reuse: bool,
+        transient_ids: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        Self {
+            working_set_reuse,
+            transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
+        }
     }
 }
 
-impl glue::SearchStrategy<Provider, [f32]> for Strategy {
+impl Default for Strategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Infallible;
     type SearchAccessor<'a> = Accessor<'a>;
 
@@ -963,31 +1180,45 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     ) -> Result<Accessor<'a>, Infallible> {
         Ok(Accessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
+
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        let cap = if self.working_set_reuse {
+            workingset::map::Capacity::Default
+        } else {
+            workingset::map::Capacity::None
+        };
+
+        workingset::map::Builder::new(cap).build(capacity)
+    }
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(Accessor::new(provider))
+        match &self.transient_ids {
+            Some(ids) => Ok(Accessor::flaky(provider, Cow::Borrowed(ids))),
+            None => Ok(Accessor::new(provider)),
+        }
     }
 }
 
-impl glue::InsertStrategy<Provider, [f32]> for Strategy {
+impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn insert_search_accessor<'a>(
@@ -999,30 +1230,97 @@ impl glue::InsertStrategy<Provider, [f32]> for Strategy {
     }
 }
 
-impl<'a> glue::AsElement<&'a [f32]> for Accessor<'a> {
-    type Error = Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
+impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
+    type FinishError = Infallible;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        self.clone()
+    }
+
+    fn finish<Itr>(
+        &self,
+        _provider: &Provider,
+        _ctx: &Context,
+        batch: &Arc<Matrix<f32>>,
+        ids: Itr,
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
+    where
+        Itr: ExactSizeIterator<Item = u32> + Send,
+    {
+        use workingset::map::{Builder, Capacity, Overlay};
+
+        let capacity = if self.working_set_reuse {
+            Capacity::Default
+        } else {
+            Capacity::None
+        };
+
+        std::future::ready(Ok(
+            Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
+        ))
+    }
+}
+
+/// A [`glue::SearchPostProcessStep`] for [`Accessor`] that removes deleted IDs from the
+/// candidate stream.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilterDeleted;
+
+impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for FilterDeleted {
+    type Error<NextError>
+        = NextError
+    where
+        NextError: StandardError;
+
+    type NextAccessor = Accessor<'a>;
+
+    fn post_process_step<I, B, Next>(
+        &self,
+        next: &Next,
+        accessor: &mut Accessor<'a>,
+        query: &'b [f32],
+        computer: &<f32 as VectorRepr>::QueryDistance,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+        Next: glue::SearchPostProcess<Self::NextAccessor, &'b [f32], O> + Sync,
+    {
+        let provider = accessor.provider;
+        next.post_process(
+            accessor,
+            query,
+            computer,
+            candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
+            output,
+        )
     }
 }
 
 impl glue::InplaceDeleteStrategy<Provider> for Strategy {
-    type DeleteElement<'a> = [f32];
+    type DeleteElement<'a> = &'a [f32];
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
+    type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn search_strategy(&self) -> Self::SearchStrategy {
-        *self
+        self.clone()
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        glue::Pipeline::new(FilterDeleted, glue::CopyIds)
     }
 
     async fn get_delete_element<'a>(

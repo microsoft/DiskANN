@@ -10,12 +10,9 @@ use rand::Rng;
 use rand_distr::{Distribution, StandardUniform};
 use tracing::info;
 
-use crate::{
-    model::graph::traits::AdHoc,
-    utils::{
-        VectorDataIterator, load_metadata_from_file,
-        sampling::{SampleVectorReader, SamplingDensity},
-    },
+use crate::utils::{
+    VectorDataIterator, load_metadata_from_file,
+    sampling::{SampleVectorReader, SamplingDensity},
 };
 
 /// Suggested maximum sample size for medoid calculation
@@ -175,8 +172,8 @@ where
     T: VectorRepr,
     Reader: StorageReadProvider,
 {
-    let iter: VectorDataIterator<Reader, AdHoc<T>> =
-        VectorDataIterator::<Reader, AdHoc<T>>::new(path, None, reader)?;
+    let iter: VectorDataIterator<Reader, T> =
+        VectorDataIterator::<Reader, T>::new(path, None, reader)?;
     let num_points = iter.get_num_points();
 
     let mut iter = iter.peekable();
@@ -186,7 +183,7 @@ where
         let centroid = calculate_centroid(iter, full_dimension, num_points)?;
 
         // Find medoid (point closest to centroid)
-        let iter = VectorDataIterator::<Reader, AdHoc<T>>::new(path, None, reader)?;
+        let iter = VectorDataIterator::<Reader, T>::new(path, None, reader)?;
         let (medoid, medoid_id) = find_nearest_vector_with_id(iter, &centroid)?
             .ok_or_else(|| ANNError::log_index_error("medoid not found"))?;
 
@@ -242,7 +239,7 @@ where
     let centroid = calculate_centroid_with_sampling::<T, _>(path, reader, sampling_rate, rng)?;
 
     // Find medoid (point closest to centroid) from the full dataset
-    let iter = VectorDataIterator::<Reader, AdHoc<T>>::new(path, None, reader)?;
+    let iter = VectorDataIterator::<Reader, T>::new(path, None, reader)?;
     let (medoid, medoid_id) = find_nearest_vector_with_id(iter, &centroid)?
         .ok_or_else(|| ANNError::log_index_error("medoid not found"))?;
 

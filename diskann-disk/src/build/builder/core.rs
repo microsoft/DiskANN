@@ -4,16 +4,14 @@
  */
 use std::mem::{self, size_of};
 
+use crate::data_model::GraphDataType;
 use diskann::ANNResult;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{
-        graph::traits::GraphDataType, IndexConfiguration, GRAPH_SLACK_FACTOR,
-        MAX_PQ_TRAINING_SET_SIZE,
-    },
+    model::{IndexConfiguration, GRAPH_SLACK_FACTOR, MAX_PQ_TRAINING_SET_SIZE},
     storage::PQStorage,
     utils::{
-        load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
+        load_metadata_from_file, RayonThreadPoolRef, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
     },
 };
@@ -470,7 +468,7 @@ pub(crate) fn determine_build_strategy<Data: GraphDataType>(
 }
 
 pub(crate) struct MergedVamanaIndexWorkflow<'a> {
-    pool: &'a RayonThreadPool,
+    pool: RayonThreadPoolRef<'a>,
     rng: diskann_providers::utils::StandardRng,
     dataset_file: String,
     max_degree: u32,
@@ -480,7 +478,7 @@ pub(crate) struct MergedVamanaIndexWorkflow<'a> {
 impl<'a> MergedVamanaIndexWorkflow<'a> {
     pub(crate) fn new<Data, StorageProvider>(
         builder: &mut DiskIndexBuilderCore<'_, Data, StorageProvider>,
-        pool: &'a RayonThreadPool,
+        pool: RayonThreadPoolRef<'a>,
     ) -> Self
     where
         Data: GraphDataType<VectorIdType = u32>,
@@ -530,7 +528,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
                     builder.disk_build_param.build_memory_limit().in_bytes() as f64;
                 // calculate how many partitions we need, in order to fit in RAM budget
                 // save id_map for each partition to disk
-                partition_with_ram_budget::<Data::VectorDataType, _, _, _>(
+                partition_with_ram_budget::<Data::VectorDataType, _, _>(
                     &self.dataset_file,
                     builder.index_configuration.dim,
                     sampling_rate,
@@ -628,6 +626,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
 pub(crate) mod disk_index_builder_tests {
     use std::{io::Read, sync::Arc};
 
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::config,
         utils::{IntoUsize, VectorRepr, ONE},
@@ -635,11 +634,7 @@ pub(crate) mod disk_index_builder_tests {
     };
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::{
-        common::AlignedBoxWithSlice,
         storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file},
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
         utils::Timer,
     };
     use diskann_utils::test_data_root;
@@ -1082,10 +1077,6 @@ pub(crate) mod disk_index_builder_tests {
                     distance.evaluate_similarity(a, b)
                 });
 
-            let mut query: AlignedBoxWithSlice<G::VectorDataType> =
-                AlignedBoxWithSlice::<G::VectorDataType>::new(dim, 8)?;
-            query.memcpy(query_data)?;
-
             let mut query_stats = QueryStatistics::default();
 
             let mut indices = vec![0u32; top_k];
@@ -1093,7 +1084,7 @@ pub(crate) mod disk_index_builder_tests {
             let mut associated_data = vec![(); top_k];
 
             _ = search_engine.search_internal(
-                &query,
+                query_data,
                 top_k,
                 search_l,
                 None, // beam_width

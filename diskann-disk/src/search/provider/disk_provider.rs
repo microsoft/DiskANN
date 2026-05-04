@@ -15,32 +15,33 @@ use std::{
     time::Instant,
 };
 
+use crate::data_model::GraphDataType;
 use diskann::{
     graph::{
         self,
-        glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{
+            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
+            SearchStrategy,
+        },
         search::Knn,
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
+        search_output_buffer, AdjacencyList, DiskANNIndex,
     },
     neighbor::Neighbor,
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
-        NeighborAccessor,
+        NeighborAccessor, NoopGuard,
     },
-    utils::{
-        object_pool::{ObjectPool, PoolOption, TryAsPooled},
-        IntoUsize, VectorRepr,
-    },
+    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{
-        compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
-        pq::quantizer_preprocess, PQData, PQScratch,
-    },
+    model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
+
+use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;
 use tokio::runtime::Runtime;
@@ -99,6 +100,8 @@ where
     type InternalId = u32;
 
     type ExternalId = u32;
+
+    type Guard = NoopGuard<u32>;
 
     type Error = ANNError;
 
@@ -279,7 +282,7 @@ impl<'a> RerankAndFilter<'a> {
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        [Data::VectorDataType],
+        &[Data::VectorDataType],
         (
             <DiskProvider<Data> as DataProvider>::InternalId,
             Data::AssociatedDataType,
@@ -300,7 +303,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
     {
         let provider = accessor.provider;
 
@@ -335,15 +340,8 @@ where
     }
 }
 
-impl<'this, Data, ProviderFactory>
-    SearchStrategy<
-        DiskProvider<Data>,
-        [Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
-    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+impl<'this, Data, ProviderFactory> SearchStrategy<DiskProvider<Data>, &[Data::VectorDataType]>
+    for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
@@ -351,7 +349,6 @@ where
     type QueryComputer = DiskQueryComputer;
     type SearchAccessor<'a> = DiskAccessor<'a, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = RerankAndFilter<'this>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -366,8 +363,24 @@ where
             self.scratch_pool,
         )
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
+impl<'this, Data, ProviderFactory>
+    DefaultPostProcessor<
+        DiskProvider<Data>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    type Processor = RerankAndFilter<'this>;
+
+    fn default_post_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }
@@ -393,7 +406,7 @@ impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
     }
 }
 
-impl<Data, VP> BuildQueryComputer<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> BuildQueryComputer<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -411,7 +424,6 @@ where
                 .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
-                .as_slice()
                 .to_vec(),
         })
     }
@@ -430,7 +442,7 @@ where
     }
 }
 
-impl<Data, VP> ExpandBeam<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> ExpandBeam<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -561,7 +573,7 @@ where
             ids,
             self.provider.pq_data.get_num_chunks(),
             &pq_scratch.aligned_pqtable_dist_scratch,
-            self.provider.pq_data.pq_compressed_data().get_data(),
+            self.provider.pq_data.pq_compressed_data().as_slice(),
             &mut pq_scratch.aligned_pq_coord_scratch,
             &mut pq_scratch.aligned_dist_scratch,
         )?;
@@ -617,11 +629,9 @@ where
             },
         )?;
 
-        scratch.pq_scratch.set(
-            provider.graph_header.metadata().dims,
-            query,
-            1.0_f32, // Normalization factor
-        )?;
+        scratch
+            .pq_scratch
+            .set(provider.graph_header.metadata().dims, query)?;
         let start_vertex_id = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();
@@ -643,6 +653,7 @@ where
             query,
         })
     }
+
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
         if ids.is_empty() {
             return Ok(());
@@ -677,26 +688,20 @@ where
     type Id = u32;
 }
 
-impl<'a, Data, VP> Accessor for DiskAccessor<'a, Data, VP>
+impl<Data, VP> Accessor for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    /// This references the PQ vector in the underlying `pq_data` store.
-    type Extended = &'a [u8];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// Since the underlying PQ store is shared, we ignore the `'b` lifetime here and
-    /// instead use `'a`.
-    type Element<'b>
+    type Element<'a>
         = &'a [u8]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` can have arbitrary lifetimes.
-    type ElementRef<'b> = &'b [u8];
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
@@ -1043,6 +1048,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 
 #[cfg(test)]
 mod disk_provider_tests {
+    use crate::test_utils::{GraphDataF32VectorU32Data, GraphDataF32VectorUnitData};
     use diskann::{
         graph::{
             search::{record::VisitedSearchRecord, Knn},
@@ -1054,16 +1060,10 @@ mod disk_provider_tests {
     use diskann_providers::storage::{
         DynWriteProvider, StorageReadProvider, VirtualStorageProvider,
     };
-    use diskann_providers::{
-        common::AlignedBoxWithSlice,
-        test_utils::graph_data_type_utils::{
-            GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
-        },
-        utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
-    };
+    use diskann_providers::utils::{create_thread_pool, PQPathNames, ParallelIteratorInPool};
     use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
-    use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
+    use rayon::prelude::IndexedParallelIterator;
     use rstest::rstest;
     use vfs::OverlayFS;
 
@@ -1128,7 +1128,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
             k: 10,
             l: 20,
-            dim: 104,
         });
         // Test multi thread.
         test_disk_search(TestDiskSearchParams {
@@ -1139,7 +1138,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_100DIM,
             k: 10,
             l: 20,
-            dim: 104,
         });
     }
 
@@ -1167,7 +1165,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
             k: 10,
             l: 20,
-            dim: 128,
         });
         // Test multi thread.
         test_disk_search(TestDiskSearchParams {
@@ -1178,7 +1175,6 @@ mod disk_provider_tests {
             truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
             k: 10,
             l: 20,
-            dim: 128,
         });
     }
 
@@ -1232,7 +1228,6 @@ mod disk_provider_tests {
                     truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
                     k: 10,
                     l: 20,
-                    dim: 128,
                 },
                 None,
             );
@@ -1247,7 +1242,6 @@ mod disk_provider_tests {
                     truth_result_file_path: TEST_TRUTH_RESULT_10PTS_128DIM,
                     k: 10,
                     l: 20,
-                    dim: 128,
                 },
                 None,
             );
@@ -1356,7 +1350,6 @@ mod disk_provider_tests {
         truth_result_file_path: &'a str,
         k: usize,
         l: usize,
-        dim: usize,
     }
 
     struct TestDiskSearchAssociateParams<'a, StorageType> {
@@ -1373,59 +1366,43 @@ mod disk_provider_tests {
         truth_result_file_path: &'a str,
         k: usize,
         l: usize,
-        dim: usize,
     }
 
     fn test_disk_search<StorageType: StorageReadProvider>(
         params: TestDiskSearchParams<StorageType>,
     ) {
-        let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
-            .unwrap()
-            .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
-
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
-
+        let queries = read_bin::<f32>(
+            &mut params
+                .storage_provider
+                .open_reader(params.query_file_path)
+                .unwrap(),
+        )
+        .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
 
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
-        // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
-            .par_iter()
+            .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
-                // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
-                let mut temp = Vec::with_capacity(query.len() + 1);
-                temp.push(0.0);
-                temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
-
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let mut query_stats = QueryStatistics::default();
                 let mut indices = vec![0u32; 10];
                 let mut distances = vec![0f32; 10];
                 let mut associated_data = vec![(); 10];
 
-                let result = params
-                    .index_search_engine
-                    //.search_with_associated_data(query, params.k as u32, params.l as u32)
-                    .search_internal(
-                        query,
-                        params.k,
-                        params.l as u32,
-                        None, // beam_width
-                        &mut query_stats,
-                        &mut indices,
-                        &mut distances,
-                        &mut associated_data,
-                        &(|_| true),
-                        false,
-                    );
+                let result = params.index_search_engine.search_internal(
+                    query,
+                    params.k,
+                    params.l as u32,
+                    None, // beam_width
+                    &mut query_stats,
+                    &mut indices,
+                    &mut distances,
+                    &mut associated_data,
+                    &(|_| true),
+                    false,
+                );
 
                 // Calculate the range of the truth_result for this query
                 let truth_slice = &truth_result[i * params.k..(i + 1) * params.k];
@@ -1455,29 +1432,20 @@ mod disk_provider_tests {
         params: TestDiskSearchAssociateParams<StorageType>,
         beam_width: Option<usize>,
     ) {
-        let query_vector = load_aligned_bin(params.storage_provider, params.query_file_path)
-            .unwrap()
-            .0;
-        let mut aligned_query = AlignedBoxWithSlice::<f32>::new(query_vector.len(), 32).unwrap();
-        aligned_query.memcpy(query_vector.as_slice()).unwrap();
-        let queries = aligned_query
-            .split_into_nonoverlapping_mut_slices(0..aligned_query.len(), params.dim)
-            .unwrap();
+        let queries = read_bin::<f32>(
+            &mut params
+                .storage_provider
+                .open_reader(params.query_file_path)
+                .unwrap(),
+        )
+        .unwrap();
         let truth_result =
             load_query_result(params.storage_provider, params.truth_result_file_path);
         let pool = create_thread_pool(params.thread_num.into_usize()).unwrap();
-        // Convert query_vector to number of Vertex with data type f32 and dimension equals to dim.
         queries
-            .par_iter()
+            .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
-                // Test search_with_associated_data with an unaligned query. Some distance functions require aligned data.
-                let mut aligned_box = AlignedBoxWithSlice::<f32>::new(query.len() + 1, 32).unwrap();
-                let mut temp = Vec::with_capacity(query.len() + 1);
-                temp.push(0.0);
-                temp.extend_from_slice(query);
-                aligned_box.memcpy(temp.as_slice()).unwrap();
-                let query = &aligned_box.as_slice()[1..];
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
                     .search(query, params.k as u32, params.l as u32, beam_width, None, false)

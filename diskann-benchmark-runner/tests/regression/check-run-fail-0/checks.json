@@ -1,0 +1,17 @@
+[
+  {
+    "status": "fail",
+    "tolerance": {
+      "error_in_check": false,
+      "succeed": false
+    },
+    "result": "we didn't do it!"
+  },
+  {
+    "status": "pass",
+    "tolerance": {
+      "error_when_checked": false
+    },
+    "result": "int8"
+  }
+]

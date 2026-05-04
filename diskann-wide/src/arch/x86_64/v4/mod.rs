@@ -17,13 +17,15 @@
 //! * `avx512vl`
 //! * `avx512dq`
 //! * `avx512vnni`
-//! * `avx512bitalg` (upcoming - pending CI resources)
-//! * `avx512vpopcntdq` (upcoming - pending CI resources)
+//! * `avx512bitalg`
+//! * `avx512vpopcntdq`
+//! * `avx512vbmi`
 //!
-//! Note that the requirement of `avx512vnni`, `avx512bitalg`, and `avx512vpopcntdq` extend
-//! beyond the traditional requirements of `x86-64-v4`. These are included to assist with
-//! quantized distance functions and to avoid adding an additional backend solely for these
-//! features.
+//! Note that the requirement of `avx512vnni`, `avx512bitalg`, `avx512vpopcntdq`, and
+//! `avx512vbmi` extend beyond the traditional requirements of `x86-64-v4`. These are
+//! included to assist with quantized distance functions and to avoid adding an additional
+//! backend solely for these features. These extensions are available on Ice Lake Server+
+//! and AMD Zen4+.
 //!
 //! ## Miri Support
 //!
@@ -169,6 +171,7 @@ mod conversion;
 /// * `avx512vnni`
 /// * `avx512bitalg`
 /// * `avx512vpopcntdq`
+/// * `avx512vbmi`
 ///
 /// Overall, the implications and requirements of `V4` are those of [`V3`] plus:
 ///
@@ -178,8 +181,9 @@ mod conversion;
 /// * `avx512vl`
 /// * `avx512dq`
 /// * `avx512vnni`
-/// * `avx512bitalg` (upcoming - pending CI resources)
-/// * `avx512vpopcntdq` (upcoming - pending CI resources)
+/// * `avx512bitalg`
+/// * `avx512vpopcntdq`
+/// * `avx512vbmi`
 ///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct V4(Hidden);
@@ -199,7 +203,7 @@ macro_rules! v4_features {
         #[cfg_attr(
             not(miri),
             target_feature(
-                enable = "avx2,avx,bmi1,bmi2,f16c,fma,lzcnt,movbe,xsave,avx512f,avx512bw,avx512cd,avx512vl,avx512dq,avx512vnni"
+                enable = "avx2,avx,bmi1,bmi2,f16c,fma,lzcnt,movbe,xsave,avx512f,avx512bw,avx512cd,avx512vl,avx512dq,avx512vnni,avx512bitalg,avx512vpopcntdq,avx512vbmi"
             )
         )]
         $($args)*

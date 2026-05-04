@@ -58,15 +58,12 @@ pub(crate) fn simplified_builder(
     Ok((config, params))
 }
 
-pub fn train_pq<Pool>(
+pub fn train_pq(
     data: diskann_utils::views::MatrixView<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
-    pool: Pool,
-) -> ANNResult<model::pq::FixedChunkPQTable>
-where
-    Pool: crate::utils::AsThreadPool,
-{
+    pool: crate::utils::RayonThreadPoolRef<'_>,
+) -> ANNResult<model::pq::FixedChunkPQTable> {
     let dim = data.ncols();
     let pivot_args = model::GeneratePivotArguments::new(
         data.nrows(),
@@ -91,13 +88,7 @@ where
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(
-        dim,
-        full_pivot_data.into(),
-        centroid.into(),
-        offsets.into(),
-        None,
-    )
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -171,12 +162,16 @@ pub(crate) mod tests {
     };
 
     use crate::storage::VirtualStorageProvider;
+    use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
-            index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
+            glue::{
+                DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+                SearchStrategy,
+            },
+            index::{QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
         },
@@ -185,7 +180,7 @@ pub(crate) mod tests {
             AsNeighbor, AsNeighborMut, BuildQueryComputer, DataProvider, DefaultContext, Delete,
             ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
-        utils::{IntoUsize, ONE, async_tools::VectorIdBoxSlice},
+        utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
     use diskann_utils::{test_data_root, views::Matrix};
@@ -210,7 +205,7 @@ pub(crate) mod tests {
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+        utils::{VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -258,7 +253,8 @@ pub(crate) mod tests {
     pub(crate) async fn populate_data<DP, Ctx, T>(provider: &DP, context: &Ctx, source: &[Vec<T>])
     where
         Ctx: ExecutionContext,
-        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32> + SetElement<[T]>,
+        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32>
+            + for<'a> SetElement<&'a [T]>,
     {
         for (i, v) in source.iter().enumerate() {
             let guard = provider.set_element(context, &(i as u32), v).await.unwrap();
@@ -280,6 +276,17 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn grid_from_dim(dim: usize) -> Grid {
+        Grid::from_dim(dim)
+            .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
+    }
+
+    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+        (0..matrix.nrows())
+            .map(|i| matrix.row(i).to_vec())
+            .collect()
+    }
+
     // Grid generators for different types //
     pub(crate) trait GenerateGrid: Sized {
         /// Generate a synthetic dataset that is a hypercube of point beginning at the
@@ -297,34 +304,19 @@ pub(crate) mod tests {
 
     impl GenerateGrid for f32 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_f32(size as u32),
-                3 => utils::generate_3d_grid_vectors_f32(size as u32),
-                4 => utils::generate_4d_grid_vectors_f32(size as u32),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data(size))
         }
     }
 
     impl GenerateGrid for i8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_i8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_i8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_i8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| i8::try_from(v).unwrap()))
         }
     }
 
     impl GenerateGrid for u8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_u8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_u8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_u8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| u8::try_from(v).unwrap()))
         }
     }
 
@@ -343,12 +335,12 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        S: DefaultSearchStrategy<DP, Q>,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -390,13 +382,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: &S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        S: DefaultSearchStrategy<DP, Q>,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -435,13 +427,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         strategy: S,
         parameters: &SearchParameters<DP::Context>,
-        query: &Q,
+        query: Q,
         groundtruth: &mut Vec<Neighbor<u32>>,
         max_candidates: usize,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: SearchStrategy<DP, Q> + 'static,
-        Q: std::fmt::Debug + Send + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
     {
         assert!(max_candidates <= groundtruth.len());
         let mut state = index
@@ -500,9 +492,9 @@ pub(crate) mod tests {
         full_strategy: FS,
         quant_strategy: QS,
     ) where
-        DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, [T]> + Clone + 'static,
-        QS: SearchStrategy<DP, [T]> + Clone + 'static,
+        DP: DataProvider<InternalId = u32, Context: Default>,
+        FS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
+        QS: for<'a> DefaultSearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -516,7 +508,7 @@ pub(crate) mod tests {
         // all-zeros query is as far from the entry point as possible.
         let query = vec![T::default(); dim];
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -574,9 +566,6 @@ pub(crate) mod tests {
 
         let checker = |position, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
             assert_eq!(position, 0);
-            if id as usize == num_points - 1 {
-                return Err(Box::new("start point should not be returned"));
-            }
             if id as usize != num_points - 2 {
                 return Err(Box::new(format!(
                     "expected {} as the nearest id",
@@ -611,7 +600,7 @@ pub(crate) mod tests {
 
         // Paged Search
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 10,
             // Since we are looking at one of the corners of the grid, we retrieve
             // `dim + 1` points. The closest neighbor should have 0 distance, while the
@@ -661,12 +650,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = match dim {
-            1 => utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let mut adjacency_lists = grid_from_dim(dim).neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -680,7 +664,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -757,7 +741,7 @@ pub(crate) mod tests {
             })
             .unwrap();
 
-        let mut vectors = T::generate_grid(dim, grid_size);
+        let mut vectors: Vec<Vec<T>> = T::generate_grid(dim, grid_size);
         assert_eq!(vectors.len(), num_points);
 
         // This is a little subtle, but we need `vectors` to contain the start point as
@@ -770,11 +754,14 @@ pub(crate) mod tests {
             dim
         ]);
 
+        // A matrix view of all vectors (including the start point at the end).
+        let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
+
         let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
+            matrix.map(|i| (*i).into()).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -789,7 +776,7 @@ pub(crate) mod tests {
             .unwrap();
             index
                 .provider()
-                .set_start_points(std::iter::once(vectors.last().unwrap().as_slice()))
+                .set_start_points(std::iter::once(matrix.row(num_points)))
                 .unwrap();
             index
         };
@@ -797,10 +784,10 @@ pub(crate) mod tests {
         // Build with full-precision single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
+            let ctx = Default::default();
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
                 index
-                    .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
+                    .insert(FullPrecision, &ctx, &(i as u32), v)
                     .await
                     .unwrap();
             }
@@ -811,12 +798,9 @@ pub(crate) mod tests {
         // Build with quantized single insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
-                index
-                    .insert(hybrid, &ctx, &(i as u32), v.as_slice())
-                    .await
-                    .unwrap();
+            let ctx = Default::default();
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+                index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
             }
 
             check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
@@ -825,23 +809,24 @@ pub(crate) mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-
-            let mut itr = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()));
+            let ctx = Default::default();
 
             // Partition by `max_minibatch_par`.
-            loop {
-                let v: Vec<_> = itr.by_ref().take(2 * minibatch_par).collect();
-                if v.is_empty() {
-                    break;
-                }
+            let chunk_size = 2 * minibatch_par;
+            for (batch, batch_data) in matrix
+                .subview(0..num_points)
+                .unwrap()
+                .window_iter(chunk_size)
+                .enumerate()
+            {
+                let batch_data = Arc::new(batch_data.to_owned());
+                let start = batch * chunk_size;
+                let batch_ids: Arc<[u32]> = (start..start + batch_data.nrows())
+                    .map(|i| i as u32)
+                    .collect();
 
                 index
-                    .multi_insert(FullPrecision, &ctx, v.into())
+                    .multi_insert::<_, Matrix<T>>(FullPrecision, &ctx, batch_data, batch_ids)
                     .await
                     .unwrap();
             }
@@ -852,15 +837,14 @@ pub(crate) mod tests {
         // Build with quantized multi-insert
         {
             let index = init_index();
-            let ctx = DefaultContext;
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+            let ctx = Default::default();
+            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
+            let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-            index.multi_insert(hybrid, &ctx, batch).await.unwrap();
+            index
+                .multi_insert::<_, Matrix<T>>(hybrid, &ctx, batch, batch_ids)
+                .await
+                .unwrap();
 
             check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
         }
@@ -890,10 +874,13 @@ pub(crate) mod tests {
                     radius: f32,
                     rng: &mut StdRng,
                 ) -> Vec<Vec<Self>> {
-                    use crate::utils::math_util;
+                    use diskann_utils::sampling::random::WithApproximateNorm;
 
-                    let mut vectors =
-                        math_util::generate_vectors_with_norm::<$T>(num, dim, radius, rng).unwrap();
+                    let mut vectors = Vec::with_capacity(num);
+                    for _ in 0..num {
+                        let vector = <$T>::with_approximate_norm(dim, radius, rng);
+                        vectors.push(vector);
+                    }
                     assert_eq!(vectors.len(), num);
 
                     let mut start_point = vec![<$T>::default(); dim];
@@ -923,8 +910,8 @@ pub(crate) mod tests {
         rng: &mut StdRng,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -937,7 +924,7 @@ pub(crate) mod tests {
             num_queries,
         } = params;
 
-        let ctx = &DefaultContext;
+        let ctx = &Default::default();
         let l_search = 10;
 
         let (config, params) =
@@ -946,7 +933,13 @@ pub(crate) mod tests {
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
             let train_data: diskann_utils::views::Matrix<f32> = squish(data.iter(), dim);
-            train_pq(train_data.as_view(), 2.min(dim), rng, 1usize).unwrap()
+            train_pq(
+                train_data.as_view(),
+                2.min(dim),
+                rng,
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
+            )
+            .unwrap()
         };
 
         let index = new_quant_index::<T, _, _>(config, params, table, NoDeletes).unwrap();
@@ -966,7 +959,7 @@ pub(crate) mod tests {
         let distance = T::distance(metric, None);
 
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 20,
             search_k: 10,
             to_check: 10,
@@ -1050,8 +1043,8 @@ pub(crate) mod tests {
         #[case] radius: f32,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1112,7 +1105,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1126,7 +1119,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1145,7 +1138,7 @@ pub(crate) mod tests {
         // then walk through the list, verifying monotonicity and that the filter was
         // applied properly.
         let parameters = SearchParameters {
-            context: DefaultContext,
+            context: Default::default(),
             search_l: 40,
             search_k: 20,
             to_check: 20,
@@ -1229,7 +1222,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1243,7 +1236,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1391,7 +1384,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -1401,7 +1394,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xdd81b895605c73d4),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1541,357 +1534,6 @@ pub(crate) mod tests {
     // Deletion //
     //////////////
 
-    async fn setup_inplace_delete_test() -> Arc<TestIndex> {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4]),
-            AdjacencyList::from_iter_untrusted([1, 3]),
-        ];
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        index
-    }
-
-    #[tokio::test]
-    async fn test_return_refs_to_deleted_vertex() {
-        let index = setup_inplace_delete_test().await;
-
-        // Expected outcome:
-        // * Index 0 is unchanged because it doesn't contain an edge to 1
-        // * Index 2's adjacency list should be changed to remove index 1.
-        // * Index 4's adjacency list should be changed to remove index 1.
-        //
-        // Indices 2 and 4 should be returned.
-
-        let candidates: Vec<u32> = vec![0, 2, 4];
-
-        let ret_list = index
-            .return_refs_to_deleted_vertex(&mut index.provider().neighbors(), 1, &candidates)
-            .await
-            .unwrap();
-
-        // Check that the return list contains only candidates 2 and 4.
-        assert_eq!(&ret_list, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_is_any_neighbor_deleted() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let ctx = DefaultContext;
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // expected outcome: adjacency lists 0, 1, 4 should return true
-        // adjacency lists 2, 3 should return false
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let msg = "Error in is_any_neighbor_deleted";
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 0))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 1))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 2))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 3))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 4))
-                .await
-                .expect(msg)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_drop_deleted_neighbors() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        let drop_msg = "Error in drop_deleted_neighbors";
-        let adj_msg = "Error in get_neighbors";
-
-        // call drop_deleted_neighbors on vertex 0 with check_delete = false
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 0, false)
-            .await
-            .expect(drop_msg);
-
-        let mut list0 = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(0, &mut list0)
-            .await
-            .expect(adj_msg);
-        list0.sort();
-        assert_eq!(&*list0, &[1, 2]);
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is not dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_before_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_before_drop)
-            .await
-            .expect(adj_msg);
-        list1_before_drop.sort();
-        assert_eq!(&*list1_before_drop, &[2, 3, 4]);
-
-        // drop vertex 3's adjacency list
-
-        index
-            .drop_adj_list(neighbor_accessor, 3)
-            .await
-            .expect("Error in drop_adj_list");
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_after_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_after_drop)
-            .await
-            .expect(adj_msg);
-        list1_after_drop.sort();
-        assert_eq!(&*list1_after_drop, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_get_undeleted_neighbors() {
-        // create small index instance
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        index
-            .data_provider
-            .delete(&DefaultContext, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0 and 2
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1, 2]);
-            deleted.sort();
-            assert_eq!(&deleted, &[3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in deleted");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-        }
-
-        // delete id number 2
-        index
-            .data_provider
-            .delete(&DefaultContext, &2_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0, 2, and 3
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2, 3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 3)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[0, 4]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2]);
-        }
-    }
-
     #[tokio::test]
     async fn test_inplace_delete_2d() {
         test_inplace_delete_2d_impl(FullPrecision).await;
@@ -1922,7 +1564,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2044,7 +1685,6 @@ pub(crate) mod tests {
             Box::new([0.0, 0.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, 2]),
-            None,
         )
         .unwrap();
 
@@ -2143,9 +1783,9 @@ pub(crate) mod tests {
         #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
         #[values(1, 10)] batchsize: usize,
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2237,9 +1877,9 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2280,23 +1920,27 @@ pub(crate) mod tests {
             {
                 // Full Precision Search.
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
                 // Quantized Search
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &Hybrid::new(None), ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &Hybrid::new(None), ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
@@ -2313,27 +1957,30 @@ pub(crate) mod tests {
                     1.0,
                 )
                 .unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, Some(inner_radius));
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
 
             {
                 // Test with a lower initial beam to trigger more two-round searches
                 // We don't expect results to exactly match here
                 let range_search = Range::new(lower_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
-                for id in &result.ids {
-                    assert!(ids_set.insert(*id));
+                for n in &results {
+                    assert!(ids_set.insert(n.id));
                 }
             }
         }
@@ -2352,7 +1999,7 @@ pub(crate) mod tests {
         C: FnOnce(Arc<Matrix<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
         B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -2371,8 +2018,8 @@ pub(crate) mod tests {
     async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<Matrix<f32>>)
     where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
-        Quantized: InsertStrategy<DP, [f32]> + Clone + Send + Sync,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
+        Quantized: for<'a> InsertStrategy<DP, &'a [f32]> + Clone + Send + Sync,
     {
         let ctx = &DefaultContext;
         for (i, vector) in data.row_iter().enumerate() {
@@ -2797,8 +2444,7 @@ pub(crate) mod tests {
         let strategy = inmem::spherical::Quantized::build();
         let accessor = <inmem::spherical::Quantized as SearchStrategy<
             DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
-            [f32],
-            _,
+            &[f32],
         >>::search_accessor(&strategy, index.provider(), ctx)
         .unwrap();
         let computer = accessor.build_query_computer(data.row(0)).unwrap();
@@ -2820,7 +2466,7 @@ pub(crate) mod tests {
                 data.as_view(),
                 32,
                 &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-                1,
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
             )
             .unwrap();
 
@@ -2958,20 +2604,16 @@ pub(crate) mod tests {
         train_data: diskann_utils::views::MatrixView<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
-            + SetElement<[f32]>
+            + for<'a> SetElement<&'a [f32]>
             + SetStartPoints<[f32]>,
-        S: InsertStrategy<DefaultProvider<U, V, D>, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DefaultProvider<U, V, D>, [f32]>:
-            AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<DefaultProvider<U, V, D>, &'a [f32]>
+            + MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 
@@ -2991,17 +2633,18 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let pairs: Box<[_]> = data
-                    .iter()
-                    .map(|(v, _)| {
-                        let r = VectorIdBoxSlice::new(i, v.clone());
+                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
+                let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
+                    .map(|(dst, (v, _))| {
+                        dst.copy_from_slice(v);
+                        let id = i;
                         i += 1;
-                        r
+                        id
                     })
                     .collect();
 
                 index
-                    .multi_insert(strategy.clone(), ctx, pairs)
+                    .multi_insert::<S, _>(strategy.clone(), ctx, Arc::new(vectors), ids)
                     .await
                     .unwrap();
             }
@@ -3016,9 +2659,9 @@ pub(crate) mod tests {
         startpoint: StartPointStrategy,
     ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
     where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -3029,7 +2672,7 @@ pub(crate) mod tests {
             train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            1,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3061,13 +2704,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -3163,13 +2804,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -3613,81 +3252,6 @@ pub(crate) mod tests {
         }
     }
 
-    // This test uses a "Flaky" accessor that spuriously fails with non-critical errors to
-    // check that such errors are not propagated by DiskANN.
-    #[tokio::test]
-    async fn test_flaky_consolidate() {
-        // What we need to do is populate a graph with an element that has an adjacency list
-        // that exceeds the configured maximum degree.
-        //
-        // We then need to try to consolidate that element and ensure that retrieval of
-        // that element's data results in a transient error.
-
-        // create small index instance
-        let dim = 2;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            4,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            10,         // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        let start_point: &[f32] = &[0.5, 0.5];
-
-        index
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-            .unwrap();
-
-        // vectors are the four corners of a square, with the start point in the middle
-        // the middle point forms an edge to each corner, while corners form an edge
-        // to their opposite vertex vertically and horizontally as well as the middle
-        let vectors = [
-            vec![0.0, 0.0], // point 0
-            vec![0.0, 1.0], // point 1
-            vec![1.0, 0.0], // point 2
-            vec![1.0, 1.0], // point 3
-            vec![2.0, 2.0], // point 4
-            vec![0.0, 2.0], // point 5
-            vec![2.0, 0.0], // point 6
-        ];
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0
-            AdjacencyList::from_iter_untrusted([4, 0, 3, 6]),    // point 1
-            AdjacencyList::from_iter_untrusted([4, 3, 0, 6]),    // point 2
-            AdjacencyList::from_iter_untrusted([4, 2, 1, 6]),    // point 3
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 6]), // point 4
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 6]), // point 5
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 3]), // point 6 -- start point
-        ];
-
-        let ctx = &DefaultContext;
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, ctx, &vectors).await;
-
-        let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
-            .await
-            .unwrap();
-        assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
-    }
-
     async fn create_retry_saturated_index(
         retry: NonZeroU32,
         saturated: bool,
@@ -4053,7 +3617,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4063,7 +3627,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x1234567890abcdef),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -4116,7 +3680,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4126,7 +3690,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xfedcba0987654321),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -4184,7 +3748,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4194,7 +3758,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0xabcdef1234567890),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -4331,7 +3895,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         adjacency_lists.push((num_points as u32 - 1).into());
@@ -4341,7 +3905,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim),
             &mut create_rnd_from_seed_in_tests(0x9876543210fedcba),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -4427,19 +3991,7 @@ pub(crate) mod tests {
         }
 
         let query_count: usize = 1;
-        let mut queries = crate::common::AlignedBoxWithSlice::<half::f16>::new(
-            query_count * VECTORS_DIMENSION,
-            32,
-        )
-        .unwrap();
-
-        for i in 0..query_count {
-            for val in queries.as_mut_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION]
-                .iter_mut()
-            {
-                *val = half::f16::from_f32(0f32);
-            }
-        }
+        let queries: Vec<half::f16> = vec![half::f16::default(); query_count * VECTORS_DIMENSION];
 
         let top_k = l_build;
         let search_l = l_build;
@@ -4448,8 +4000,7 @@ pub(crate) mod tests {
         let ctx = DefaultContext;
         let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
         for i in 0..query_count {
-            let query_vector =
-                &queries.as_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
+            let query_vector = &queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);

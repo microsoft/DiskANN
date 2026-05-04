@@ -15,7 +15,7 @@ use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, ge
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, Example, Input},
+    inputs::{as_input, Example},
     utils::SimilarityMeasure,
 };
 
@@ -28,7 +28,7 @@ as_input!(DiskIndexOperation);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<DiskIndexOperation>::new())?;
+    registry.register::<DiskIndexOperation>()?;
     Ok(())
 }
 

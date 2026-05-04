@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use serde::{ser::SerializeSeq, Serialize, Serializer};
+use serde::{ser::SerializeSeq, Deserialize, Serialize, Serializer};
 
 /// A helper to generate incremental snapshots of data while a benchmark is progressing.
 ///
@@ -49,11 +49,6 @@ impl<'a> Checkpoint<'a> {
                 }),
             })
         }
-    }
-
-    /// Create an empty checkpointer that turns calls to `checkpoint` into a no-op.
-    pub(crate) fn empty() -> Self {
-        Self { inner: None }
     }
 
     /// Atomically save the zip of the inputs and results to the configured path.
@@ -116,6 +111,19 @@ where
     serde_json::to_writer_pretty(buffer, object)?;
     std::fs::rename(&temp, path)?;
     Ok(())
+}
+
+/// A utility for loading results previously saved via [`Checkpoint::checkpoint`].
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct RawResult {
+    pub(crate) input: serde_json::Value,
+    pub(crate) results: serde_json::Value,
+}
+
+impl RawResult {
+    pub(crate) fn load(path: &Path) -> anyhow::Result<Vec<Self>> {
+        crate::internal::load_from_disk(path)
+    }
 }
 
 ////////////////////////////
@@ -249,15 +257,6 @@ mod tests {
         let message = format!("{:?}", err);
         assert!(message.contains("Temporary file"));
         assert!(message.contains("already exists"));
-    }
-
-    #[test]
-    fn test_empty() {
-        let checkpoint = Checkpoint::empty();
-
-        // Make sure we can still call "save" and "checkpoint".
-        assert!(checkpoint.save().is_ok());
-        assert!(checkpoint.checkpoint("hello world").is_ok());
     }
 
     #[test]

@@ -3,10 +3,7 @@
  * Licensed under the MIT license.
  */
 
-pub mod object_pool;
-
 pub mod async_tools;
-pub use async_tools::VectorIdBoxSlice;
 
 #[allow(clippy::module_inception)]
 pub mod utils;

@@ -14,36 +14,12 @@ crate::utils::stub_impl!(
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     const NAME: &str = "async-spherical-quantization";
 
-    // Spherical - requires feature "spherical-quantization"
     #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    #[cfg(feature = "spherical-quantization")]
-    benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME, |object, checkpoint, output| {
-        use crate::backend::index::benchmarks::BuildAndSearch;
-
-        match object.run(checkpoint, output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
+    {
+        benchmarks.register(NAME, imp::SphericalQ::<1>);
+        benchmarks.register(NAME, imp::SphericalQ::<2>);
+        benchmarks.register(NAME, imp::SphericalQ::<4>);
+    }
 
     // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
@@ -60,9 +36,9 @@ mod imp {
     use diskann_benchmark_core as benchmark_core;
     use diskann_benchmark_runner::{
         describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+        dispatcher::{DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
-        Any, Checkpoint, Output,
+        Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
         index::diskann_async::{self},
@@ -76,7 +52,6 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::BuildAndSearch,
             build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,
             search,
@@ -92,109 +67,7 @@ mod imp {
     };
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct SphericalQ<'a, const NBITS: usize> {
-        input: &'a SphericalQuantBuild,
-    }
-
-    impl<'a, const NBITS: usize> SphericalQ<'a, NBITS> {
-        pub(super) fn new(input: &'a SphericalQuantBuild) -> Self {
-            Self { input }
-        }
-    }
-
-    impl<const NBITS: usize> dispatcher::Map for SphericalQ<'static, NBITS> {
-        type Type<'a> = SphericalQ<'a, NBITS>;
-    }
-
-    impl<'a, const NBITS: usize> DispatchRule<&'a SphericalQuantBuild> for SphericalQ<'a, NBITS> {
-        type Error = std::convert::Infallible;
-
-        fn try_match(from: &&'a SphericalQuantBuild) -> Result<MatchScore, FailureScore> {
-            // If this is multi-insert, return a very-close failure.
-            let mut failure_score: Option<u32> = None;
-            if from.build.multi_insert.is_some() {
-                failure_score = Some(1);
-            }
-
-            // Ensure the data type is compatible (float32).
-            if let Err(FailureScore(_)) = datatype::Type::<f32>::try_match(&from.build.data_type) {
-                *failure_score.get_or_insert(0) += 1;
-            }
-
-            // Match the number of bits.
-            let num_bits = from.num_bits.get();
-            if num_bits != NBITS {
-                *failure_score.get_or_insert(0) +=
-                    NBITS.abs_diff(num_bits).try_into().unwrap_or(u32::MAX);
-            }
-
-            match failure_score {
-                None => Ok(MatchScore(0)),
-                Some(score) => Err(FailureScore(score)),
-            }
-        }
-
-        fn convert(from: &'a SphericalQuantBuild) -> Result<Self, Self::Error> {
-            assert_eq!(from.num_bits.get(), NBITS);
-            Ok(Self::new(from))
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a SphericalQuantBuild>,
-        ) -> std::fmt::Result {
-            match from {
-                None => {
-                    describeln!(
-                        f,
-                        "- Index Build and Search using {}-bit spherical quantization",
-                        NBITS
-                    )?;
-                    describeln!(f, "- Requires `float32` data")?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                    describeln!(f, "- Does not support multi-insert")?;
-                }
-                Some(input) => {
-                    let num_bits = input.num_bits.get();
-                    if num_bits != NBITS {
-                        describeln!(f, "- Expected {} bits, got {}", NBITS, num_bits)?;
-                    }
-
-                    if input.build.multi_insert.is_some() {
-                        describeln!(f, "- Spherical Quantization does not support multi-insert")?;
-                    }
-
-                    if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
-                        describeln!(
-                            f,
-                            "- Only `float32` data type is supported. Instead, got {}",
-                            input.build.data_type
-                        )?;
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    impl<'a, const NBITS: usize> DispatchRule<&'a Any> for SphericalQ<'a, NBITS> {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<SphericalQuantBuild, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<SphericalQuantBuild, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<SphericalQuantBuild, Self>(f, from, SphericalQuantBuild::tag())
-        }
-    }
+    pub(super) struct SphericalQ<const NBITS: usize>;
 
     macro_rules! write_field {
         ($f:ident, $field:tt, $fmt:literal, $($expr:tt)*) => {
@@ -244,33 +117,115 @@ mod imp {
 
     macro_rules! build_and_search {
         ($N:literal) => {
-            impl<'a> BuildAndSearch<'a> for SphericalQ<'a, $N> {
-                type Data = SphericalBuildResult;
-                fn run(
-                    self,
-                    _checkpoint: Checkpoint<'_>,
-                    mut output: &mut dyn Output,
-                ) -> Result<Self::Data, anyhow::Error> {
-                    writeln!(output, "{}", self.input)?;
+            impl Benchmark for SphericalQ<$N> {
+                type Input = SphericalQuantBuild;
+                type Output = SphericalBuildResult;
 
-                    let build = &self.input.build;
+                fn try_match(
+                    &self,
+                    input: &SphericalQuantBuild,
+                ) -> Result<MatchScore, FailureScore> {
+                    let mut failure_score: Option<u32> = None;
+                    if input.build.multi_insert.is_some() {
+                        failure_score = Some(1);
+                    }
+
+                    if let Err(FailureScore(_)) =
+                        datatype::Type::<f32>::try_match(&input.build.data_type)
+                    {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
+                    let num_bits = input.num_bits.get();
+                    if num_bits != $N {
+                        *failure_score.get_or_insert(0) += ($N as usize)
+                            .abs_diff(num_bits)
+                            .try_into()
+                            .unwrap_or(u32::MAX);
+                    }
+
+                    match failure_score {
+                        None => Ok(MatchScore(0)),
+                        Some(score) => Err(FailureScore(score)),
+                    }
+                }
+
+                fn description(
+                    &self,
+                    f: &mut std::fmt::Formatter<'_>,
+                    input: Option<&SphericalQuantBuild>,
+                ) -> std::fmt::Result {
+                    match input {
+                        None => {
+                            describeln!(
+                                f,
+                                "- Index Build and Search using {}-bit spherical quantization",
+                                $N
+                            )?;
+                            describeln!(f, "- Requires `float32` data")?;
+                            describeln!(
+                                f,
+                                "- Implements `squared_l2` or `inner_product` distance",
+                            )?;
+                            describeln!(f, "- Does not support multi-insert")?;
+                        }
+                        Some(input) => {
+                            let num_bits = input.num_bits.get();
+                            if num_bits != $N {
+                                describeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
+                            }
+
+                            if input.build.multi_insert.is_some() {
+                                describeln!(
+                                    f,
+                                    "- Spherical Quantization does not support multi-insert"
+                                )?;
+                            }
+
+                            if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
+                                describeln!(
+                                    f,
+                                    "- Only `float32` data type is supported. Instead, got {}",
+                                    input.build.data_type
+                                )?;
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+
+                fn run(
+                    &self,
+                    input: &SphericalQuantBuild,
+                    checkpoint: Checkpoint<'_>,
+                    mut output: &mut dyn Output,
+                ) -> anyhow::Result<SphericalBuildResult> {
+                    assert_eq!(
+                        input.num_bits.get(),
+                        $N,
+                        "INTERNAL ERROR: this should not have passed the match check"
+                    );
+
+                    writeln!(output, "{}", input)?;
+
+                    let build = &input.build;
 
                     let data: Arc<Matrix<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
 
                     let start = std::time::Instant::now();
                     let m: diskann_vector::distance::Metric = build.distance.into();
-                    let pre_scale = match self.input.pre_scale {
+                    let pre_scale = match input.pre_scale {
                         Some(v) => v.try_into()?,
                         None => diskann_quantization::spherical::PreScale::None,
                     };
 
                     let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                         data.as_view(),
-                        (&self.input.transform_kind).into(),
+                        (&input.transform_kind).into(),
                         m.try_into()?,
                         pre_scale,
-                        &mut rand::rngs::StdRng::seed_from_u64(self.input.seed),
+                        &mut rand::rngs::StdRng::seed_from_u64(input.seed),
                         GlobalAllocator,
                     )?;
 
@@ -279,8 +234,8 @@ mod imp {
                     // We manually inline the build and search loops because we support
                     // multiple different kinds of searches.
                     let index = diskann_async::new_quant_index::<f32, _, _>(
-                        self.input.try_as_config()?.build()?,
-                        self.input.inmem_parameters(data.nrows(), data.ncols()),
+                        input.try_as_config()?.build()?,
+                        input.inmem_parameters(data.nrows(), data.ncols()),
                         diskann_quantization::spherical::iface::Impl::<$N>::new(quantizer)?,
                         NoDeletes,
                     )?;
@@ -309,12 +264,12 @@ mod imp {
                         runs: Vec::new(),
                     };
 
-                    match &self.input.search_phase {
+                    match &input.search_phase {
                         SearchPhase::Topk(search_phase) => {
                             // Handle Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -330,7 +285,7 @@ mod imp {
                                 &search_phase.runs,
                             );
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let knn = benchmark_core::search::graph::KNN::new(
                                     index.clone(),
                                     queries.clone(),
@@ -352,7 +307,7 @@ mod imp {
                             // Handle Range search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -368,7 +323,7 @@ mod imp {
                                 &search_phase.runs,
                             );
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let range = benchmark_core::search::graph::Range::new(
                                     index.clone(),
                                     queries.clone(),
@@ -393,7 +348,7 @@ mod imp {
                             // Handle Beta Filtered Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -419,7 +374,7 @@ mod imp {
                                 .map(utils::filters::as_query_label_provider)
                                 .collect();
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_strategies = setup_filter_strategies(
                                     search_phase.beta,
@@ -449,7 +404,7 @@ mod imp {
                             // Handle Beta Filtered Topk search phase
 
                             // Save construction stats before running queries.
-                            _checkpoint.checkpoint(&result)?;
+                            checkpoint.checkpoint(&result)?;
 
                             let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(
                                 datafiles::BinFile(&search_phase.queries),
@@ -475,7 +430,7 @@ mod imp {
                                 .map(utils::filters::as_query_label_provider)
                                 .collect();
 
-                            for &layout in self.input.query_layouts.iter() {
+                            for &layout in input.query_layouts.iter() {
                                 let multihop = benchmark_core::search::graph::MultiHop::new(
                                     index.clone(),
                                     queries.clone(),

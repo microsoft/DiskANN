@@ -240,6 +240,7 @@ mod tests {
     use crate::{
         algorithms::transforms::{test_utils, Transform, TransformFailed, TransformKind},
         alloc::GlobalAllocator,
+        test_util::Check,
     };
 
     impl test_utils::Transformer for RandomRotation {
@@ -257,18 +258,18 @@ mod tests {
     #[test]
     fn test_transform_matrix() {
         let nonsubsampled_errors = test_utils::ErrorSetup {
-            norm: test_utils::Check::ulp(10),
-            l2: test_utils::Check::ulp(10),
-            ip: test_utils::Check::absrel(2e-5, 1e-4),
+            norm: Check::ulp(10),
+            l2: Check::ulp(10),
+            ip: Check::absrel(2e-5, 1e-4),
         };
 
         // Because we're using relatively low dimensions, subsampling yields pretty large
         // variances. We can't use higher dimensionality, though, because then the tests
         // would never complete.
         let subsampled_errors = test_utils::ErrorSetup {
-            norm: test_utils::Check::absrel(0.0, 0.18),
-            l2: test_utils::Check::absrel(0.0, 0.18),
-            ip: test_utils::Check::skip(),
+            norm: Check::absrel(0.0, 0.18),
+            l2: Check::absrel(0.0, 0.18),
+            ip: Check::skip(),
         };
 
         let target_dim = |v| TargetDim::Override(NonZeroUsize::new(v).unwrap());

@@ -13,11 +13,11 @@ use crate::neighbor::Neighbor;
 #[derive(Debug)]
 pub struct SortedNeighbors<'a, I>(&'a [Neighbor<I>])
 where
-    I: Default + Eq;
+    I: Eq;
 
 impl<'a, I> SortedNeighbors<'a, I>
 where
-    I: Default + Eq + std::fmt::Debug,
+    I: Eq + std::fmt::Debug,
 {
     /// Create a new `SortedNeighbors` around `neighbors` truncated to `max` length.
     ///
@@ -45,7 +45,7 @@ where
 
 impl<I> Deref for SortedNeighbors<'_, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     type Target = [Neighbor<I>];
     fn deref(&self) -> &Self::Target {

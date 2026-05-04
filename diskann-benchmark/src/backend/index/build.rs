@@ -258,7 +258,8 @@ pub(super) async fn save_index<DP, T>(
     save_path: &str,
 ) -> anyhow::Result<()>
 where
-    DP: DataProvider<Context = DefaultContext, ExternalId = u32> + provider::SetElement<[T]>,
+    DP: DataProvider<Context = DefaultContext, ExternalId = u32>
+        + for<'a> provider::SetElement<&'a [T]>,
     DiskANNIndex<DP>: SaveWith<AsyncIndexMetadata, Error = ANNError>,
 {
     index

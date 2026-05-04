@@ -38,8 +38,9 @@ cfg_if::cfg_if! {
         target_feature = "avx512dq",
         target_feature = "avx512vl",
         target_feature = "avx512vnni",
-        // target_feature = "avx512bitalg",
-        // target_feature = "avx512vpopcntdq",
+        target_feature = "avx512bitalg",
+        target_feature = "avx512vpopcntdq",
+        target_feature = "avx512vbmi",
     ))] {
         pub type Current = V4;
 
@@ -123,8 +124,9 @@ fn arch_number() -> u64 {
             && is_x86_feature_detected!("avx512dq")
             && is_x86_feature_detected!("avx512vl")
             && is_x86_feature_detected!("avx512vnni")
-        // && is_x86_feature_detected!("avx512bitalg")
-        // && is_x86_feature_detected!("avx512vpopcntdq")
+            && is_x86_feature_detected!("avx512bitalg")
+            && is_x86_feature_detected!("avx512vpopcntdq")
+            && is_x86_feature_detected!("avx512vbmi")
         {
             ARCH_V4
         } else {

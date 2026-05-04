@@ -4,6 +4,7 @@
  */
 
 use benchmarks_iai::aligned_file_reader_bench_iai::aligned_file_reader_bench_iai;
+use benchmarks_iai::kmeans_bench_iai::kmeans_bench_iai;
 use iai_callgrind::{main, EventKind, LibraryBenchmarkConfig, RegressionConfig};
 
 mod benchmarks_iai;
@@ -16,4 +17,5 @@ main!(
         );
     library_benchmark_groups =
         aligned_file_reader_bench_iai,
+        kmeans_bench_iai,
 );

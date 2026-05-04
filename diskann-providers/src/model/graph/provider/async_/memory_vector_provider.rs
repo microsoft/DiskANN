@@ -12,26 +12,23 @@ use std::sync::Arc;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::ArcSwap;
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNResult, utils::VectorRepr};
 
 use super::{VectorGuard, common::TestCallCount};
-use crate::{
-    model::graph::traits::GraphDataType,
-    storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
-};
+use crate::storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith};
 
-pub struct MemoryVectorProviderAsync<Data: GraphDataType> {
+pub struct MemoryVectorProviderAsync<T: VectorRepr> {
     dim: usize,
     max_vectors: usize,
-    vectors: Vec<ArcSwap<Vec<Data::VectorDataType>>>,
+    vectors: Vec<ArcSwap<Vec<T>>>,
 
     pub num_get_calls: TestCallCount,
 }
 
-impl<Data: GraphDataType> MemoryVectorProviderAsync<Data> {
+impl<T: VectorRepr> MemoryVectorProviderAsync<T> {
     pub fn new(max_vectors: usize, dim: usize) -> Self {
         let vectors = (0..max_vectors)
-            .map(|_| ArcSwap::new(Arc::new(vec![Data::VectorDataType::default(); dim])))
+            .map(|_| ArcSwap::new(Arc::new(vec![T::default(); dim])))
             .collect();
 
         Self {
@@ -57,7 +54,7 @@ impl<Data: GraphDataType> MemoryVectorProviderAsync<Data> {
     /// Return a protected slice over the data at index `i`.
     ///
     /// Errors if `i >= self.total()`.
-    pub(crate) fn get_vector_sync(&self, i: usize) -> ANNResult<VectorGuard<Data::VectorDataType>> {
+    pub(crate) fn get_vector_sync(&self, i: usize) -> ANNResult<VectorGuard<T>> {
         self.num_get_calls.increment();
         match self.vectors.get(i) {
             Some(vector) => Ok(VectorGuard::from_guard(vector.load())),
@@ -73,7 +70,7 @@ impl<Data: GraphDataType> MemoryVectorProviderAsync<Data> {
     ///
     /// * `i >= self.total()`: `i` must be inbounds.
     /// * `v.dim() != self.dim()`: The slice must have the proper length.
-    pub(crate) fn set_vector_sync(&self, i: usize, v: &[Data::VectorDataType]) -> ANNResult<()> {
+    pub(crate) fn set_vector_sync(&self, i: usize, v: &[T]) -> ANNResult<()> {
         if v.len() != self.dim {
             return Err(ANNError::log_index_error(
                 "Vector dimension is not equal to the expected dimension.",
@@ -119,9 +116,9 @@ impl<Data: GraphDataType> MemoryVectorProviderAsync<Data> {
 }
 
 /// This is an adaptor for compatibility with the async index serialization.
-impl<Data> SaveWith<AsyncIndexMetadata> for MemoryVectorProviderAsync<Data>
+impl<T> SaveWith<AsyncIndexMetadata> for MemoryVectorProviderAsync<T>
 where
-    Data: GraphDataType,
+    T: VectorRepr,
 {
     type Ok = usize;
     type Error = ANNError;
@@ -139,9 +136,9 @@ where
     }
 }
 
-impl<Data> LoadWith<AsyncQuantLoadContext> for MemoryVectorProviderAsync<Data>
+impl<T> LoadWith<AsyncQuantLoadContext> for MemoryVectorProviderAsync<T>
 where
-    Data: GraphDataType,
+    T: VectorRepr,
 {
     type Error = ANNError;
 
@@ -157,8 +154,8 @@ where
 }
 
 /// Hook into [`storage::bin::load_from_bin`] by implementing [`storage::bin::SetData`].
-impl<Data: GraphDataType> storage::bin::SetData for MemoryVectorProviderAsync<Data> {
-    type Item = Data::VectorDataType;
+impl<T: VectorRepr> storage::bin::SetData for MemoryVectorProviderAsync<T> {
+    type Item = T;
 
     fn set_data(&mut self, i: usize, element: &[Self::Item]) -> ANNResult<()> {
         self.set_vector_sync(i, element)
@@ -166,8 +163,8 @@ impl<Data: GraphDataType> storage::bin::SetData for MemoryVectorProviderAsync<Da
 }
 
 /// Hook into [`storage::bin::save_to_bin`] by implementing [`storage::bin::GetData`].
-impl<Data: GraphDataType> storage::bin::GetData for MemoryVectorProviderAsync<Data> {
-    type Element = Data::VectorDataType;
+impl<T: VectorRepr> storage::bin::GetData for MemoryVectorProviderAsync<T> {
+    type Element = T;
     type Item<'a> = VectorGuard<Self::Element>;
 
     fn get_data(&self, i: usize) -> ANNResult<Self::Item<'_>> {
@@ -176,12 +173,12 @@ impl<Data: GraphDataType> storage::bin::GetData for MemoryVectorProviderAsync<Da
 
     /// Return the total number of points, including frozen points.
     fn total(&self) -> usize {
-        MemoryVectorProviderAsync::<Data>::total(self)
+        MemoryVectorProviderAsync::<T>::total(self)
     }
 
     /// Return the dimension of each vector.
     fn dim(&self) -> usize {
-        MemoryVectorProviderAsync::<Data>::dim(self)
+        MemoryVectorProviderAsync::<T>::dim(self)
     }
 }
 
@@ -198,13 +195,11 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use super::*;
-    use crate::test_utils::graph_data_type_utils::GraphDataF32VectorUnitData;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_vector_provider() {
         let num_points = 100;
-        let vector_provider =
-            Arc::new(MemoryVectorProviderAsync::<GraphDataF32VectorUnitData>::new(num_points, 3));
+        let vector_provider = Arc::new(MemoryVectorProviderAsync::<f32>::new(num_points, 3));
         let mut handles = Vec::new();
         for i in 0..num_points {
             let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
@@ -227,15 +222,12 @@ mod tests {
         assert_eq!(vector_provider.num_get_calls.get(), num_points);
     }
 
-    fn create_test_provider() -> MemoryVectorProviderAsync<GraphDataF32VectorUnitData> {
+    fn create_test_provider() -> MemoryVectorProviderAsync<f32> {
         let num_points = 3;
         let frozen_points = 2;
         let dim = 3;
 
-        let provider = MemoryVectorProviderAsync::<GraphDataF32VectorUnitData>::new(
-            num_points + frozen_points,
-            dim,
-        );
+        let provider = MemoryVectorProviderAsync::<f32>::new(num_points + frozen_points, dim);
 
         assert_eq!(provider.total(), num_points + frozen_points);
         assert_eq!(provider.dim(), dim);
@@ -268,8 +260,8 @@ mod tests {
     }
 
     fn check_providers_equal(
-        original: &MemoryVectorProviderAsync<GraphDataF32VectorUnitData>,
-        reloaded: &MemoryVectorProviderAsync<GraphDataF32VectorUnitData>,
+        original: &MemoryVectorProviderAsync<f32>,
+        reloaded: &MemoryVectorProviderAsync<f32>,
     ) {
         assert_eq!(original.total(), reloaded.total());
         assert_eq!(original.dim(), reloaded.dim());
@@ -288,7 +280,7 @@ mod tests {
     // Test Saving and Loading.
     #[test]
     fn test_direct_save_load() {
-        type Provider = MemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+        type Provider = MemoryVectorProviderAsync<f32>;
         let storage = VirtualStorageProvider::new_memory();
         let provider = create_test_provider();
 
@@ -310,7 +302,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_async_save() {
-        type Provider = MemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+        type Provider = MemoryVectorProviderAsync<f32>;
 
         let storage = VirtualStorageProvider::new_memory();
 

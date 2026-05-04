@@ -1,0 +1,134 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# DiskANN Benchmarks Workflow
+#
+# This workflow runs macro benchmarks comparing the current branch against a baseline.
+# It is manually triggered and requires a baseline reference (branch, tag, or commit).
+
+name: Disk Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: 'A branch, commit SHA, or tag name to compare the current branch with'
+        required: true
+        default: 'main'
+        type: string
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'diskann/**'
+      - 'diskann-disk/**'
+      - 'diskann-linalg/**'
+      - 'diskann-providers/**'
+      - 'diskann-quantization/**'
+      - 'diskann-vector/**'
+      - 'diskann-wide/**'
+      - 'diskann-utils/**'
+      - 'diskann-platform/**'
+      - 'diskann-label-filter/**'
+      - 'diskann-benchmark/**'
+      - 'diskann-benchmark-runner/**'
+      - '.github/workflows/disk-benchmarks.yml'
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+  PERF_INPUTS: diskann-benchmark/perf_test_inputs
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  # Macro benchmark: compare current branch against baseline
+  macro-benchmark:
+    name: Macro Benchmark - ${{ matrix.dataset }}
+    runs-on: ubuntu-latest
+    # TODO: For production benchmarks, consider using a self-hosted runner with:
+    # - NVMe storage for consistent I/O performance
+    # - CPU pinning (taskset) for reduced variance
+    # - Dedicated hardware to avoid noisy neighbor effects
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dataset: wikipedia-100K
+            config: wikipedia-100K-disk-index.json
+            archive: wikipedia-100K.tar.gz
+            data_dir: wikipedia_cohere
+          - dataset: openai-100K
+            config: openai-100K-disk-index.json
+            archive: openai-100K.tar.gz
+            data_dir: OpenAIArXiv
+
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          path: diskann_rust
+          lfs: true
+
+      - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline_ref || 'main' }}
+          path: baseline
+          lfs: true
+
+      - name: Setup benchmark environment
+        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
+        with:
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: diskann_rust/target/tmp
+
+      - name: Copy dataset to baseline
+        run: |
+          mkdir -p baseline/target/tmp
+          cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
+
+      - name: Run baseline benchmark
+        working-directory: baseline
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_baseline.json
+
+      - name: Run current branch benchmark
+        working-directory: diskann_rust
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --output-file target/tmp/${{ matrix.dataset }}_target.json
+
+      - name: Validate benchmark results
+        working-directory: diskann_rust
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            check run \
+            --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
+            --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            --before ../baseline/target/tmp/${{ matrix.dataset }}_baseline.json \
+            --after target/tmp/${{ matrix.dataset }}_target.json
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()  # Upload even if validation fails
+        with:
+          name: benchmark-results-${{ matrix.dataset }}
+          path: |
+            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
+            baseline/target/tmp/${{ matrix.dataset }}_baseline.json
+          retention-days: 30

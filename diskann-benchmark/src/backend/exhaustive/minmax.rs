@@ -12,37 +12,10 @@ crate::utils::stub_impl!("minmax-quantization", inputs::exhaustive::MinMax);
 // MinMax - requires feature "minmax-quantization"
 #[cfg(feature = "minmax-quantization")]
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<imp::MinMaxQ<'static, 1>>(
-        NAME,
-        |object, _checkpoint, output| match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        },
-    );
-
-    benchmarks.register::<imp::MinMaxQ<'static, 2>>(
-        NAME,
-        |object, _checkpoint, output| match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        },
-    );
-
-    benchmarks.register::<imp::MinMaxQ<'static, 4>>(
-        NAME,
-        |object, _checkpoint, output| match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        },
-    );
-
-    benchmarks.register::<imp::MinMaxQ<'static, 8>>(
-        NAME,
-        |object, _checkpoint, output| match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        },
-    );
+    benchmarks.register(NAME, imp::MinMaxQ::<1>);
+    benchmarks.register(NAME, imp::MinMaxQ::<2>);
+    benchmarks.register(NAME, imp::MinMaxQ::<4>);
+    benchmarks.register(NAME, imp::MinMaxQ::<8>);
 }
 
 // Stub implementation
@@ -61,9 +34,9 @@ mod imp {
 
     use diskann_benchmark_runner::{
         describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
+        dispatcher::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
-        Any, Output,
+        Benchmark, Output,
     };
     use diskann_quantization::{
         algorithms::transforms::Transform,
@@ -112,49 +85,21 @@ mod imp {
         Ok(progress)
     }
 
-    /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct MinMaxQ<'a, const NBITS: usize> {
-        input: &'a inputs::exhaustive::MinMax,
-    }
+    /// The dispatcher target for `minmax-quantization` operations.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct MinMaxQ<const NBITS: usize>;
 
-    impl<'a, const NBITS: usize> MinMaxQ<'a, NBITS> {
-        pub(super) fn new(input: &'a inputs::exhaustive::MinMax) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results>
+    impl<const NBITS: usize> MinMaxQ<NBITS> {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::MinMax,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results>
         where
             Unsigned: Representation<NBITS>,
-            MinMaxL2Squared: for<'x, 'y> PureDistanceFunction<
-                    DataRef<'x, NBITS>,
-                    DataRef<'y, NBITS>,
-                    distances::Result<f32>,
-                > + for<'x, 'y> PureDistanceFunction<
-                    minmax::FullQueryRef<'x>,
-                    DataRef<'y, NBITS>,
-                    distances::Result<f32>,
-                >,
-            MinMaxIP: for<'x, 'y> PureDistanceFunction<
-                    DataRef<'x, NBITS>,
-                    DataRef<'y, NBITS>,
-                    distances::Result<f32>,
-                > + for<'x, 'y> PureDistanceFunction<
-                    minmax::FullQueryRef<'x>,
-                    DataRef<'y, NBITS>,
-                    distances::Result<f32>,
-                > + for<'x, 'y> PureDistanceFunction<
-                    DataRef<'x, NBITS>,
-                    DataRef<'y, NBITS>,
-                    distances::MathematicalResult<f32>,
-                > + for<'x, 'y> PureDistanceFunction<
-                    minmax::FullQueryRef<'x>,
-                    DataRef<'y, NBITS>,
-                    distances::MathematicalResult<f32>,
-                >,
             Plan: algos::CreateQuantComputer<Store<NBITS>>,
         {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -164,13 +109,13 @@ mod imp {
 
             let dim = NonZeroUsize::new(data.ncols()).unwrap();
             let transform = Transform::new(
-                (&self.input.transform_kind).into(),
+                (&input.transform_kind).into(),
                 dim,
                 Some(&mut rng),
                 diskann_quantization::alloc::GlobalAllocator,
             )?;
 
-            let quantizer = MinMaxQuantizer::new(transform, Positive::new(self.input.scale)?);
+            let quantizer = MinMaxQuantizer::new(transform, Positive::new(input.scale)?);
 
             let training_time: MicroSeconds = start.elapsed().into();
 
@@ -251,15 +196,19 @@ mod imp {
         }
     }
 
-    impl<const NBITS: usize> dispatcher::Map for MinMaxQ<'static, NBITS> {
-        type Type<'a> = MinMaxQ<'a, NBITS>;
-    }
+    impl<const NBITS: usize> Benchmark for MinMaxQ<NBITS>
+    where
+        Unsigned: Representation<NBITS>,
+        Plan: algos::CreateQuantComputer<Store<NBITS>>,
+    {
+        type Input = inputs::exhaustive::MinMax;
+        type Output = Results;
 
-    impl<'a, const NBITS: usize> DispatchRule<&'a inputs::exhaustive::MinMax> for MinMaxQ<'a, NBITS> {
-        type Error = std::convert::Infallible;
-
-        fn try_match(from: &&'a inputs::exhaustive::MinMax) -> Result<MatchScore, FailureScore> {
-            let num_bits = from.num_bits.get();
+        fn try_match(
+            &self,
+            input: &inputs::exhaustive::MinMax,
+        ) -> Result<MatchScore, FailureScore> {
+            let num_bits = input.num_bits.get();
             if num_bits == NBITS {
                 Ok(MatchScore(0))
             } else {
@@ -269,20 +218,12 @@ mod imp {
             }
         }
 
-        fn convert(from: &'a inputs::exhaustive::MinMax) -> Result<Self, Self::Error> {
-            assert_eq!(
-                from.num_bits.get(),
-                NBITS,
-                "This should not have occurred. Please file a bug report"
-            );
-            Ok(Self::new(from))
-        }
-
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a inputs::exhaustive::MinMax>,
+            input: Option<&inputs::exhaustive::MinMax>,
         ) -> std::fmt::Result {
-            match from {
+            match input {
                 None => {
                     describeln!(
                         f,
@@ -305,28 +246,14 @@ mod imp {
             }
             Ok(())
         }
-    }
 
-    impl<'a, const NBITS: usize> DispatchRule<&'a Any> for MinMaxQ<'a, NBITS> {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<inputs::exhaustive::MinMax, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<inputs::exhaustive::MinMax, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<inputs::exhaustive::MinMax, Self>(
-                f,
-                from,
-                inputs::exhaustive::MinMax::tag(),
-            )
+        fn run(
+            &self,
+            input: &inputs::exhaustive::MinMax,
+            _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
+            output: &mut dyn Output,
+        ) -> anyhow::Result<Results> {
+            self.run(input, output)
         }
     }
 
@@ -598,6 +525,10 @@ mod imp {
                 minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
+                DataRef<'b, NBITS>,
+                distances::Result<f32>,
             >,
         MinMaxIP: for<'a, 'b> PureDistanceFunction<
                 DataRef<'a, NBITS>,
@@ -615,6 +546,14 @@ mod imp {
                 minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::MathematicalResult<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
+                DataRef<'b, NBITS>,
+                distances::Result<f32>,
+            > + for<'a, 'b> PureDistanceFunction<
+                DataRef<'a, 8>,
+                DataRef<'b, NBITS>,
+                distances::MathematicalResult<f32>,
             >,
     {
         type Computer<'a> = Boxed<NBITS>;
@@ -624,33 +563,43 @@ mod imp {
             store: &Store<NBITS>,
             query: &[f32],
         ) -> anyhow::Result<Self::Computer<'_>> {
-            // let query_copy = query.to_vec();
             let quantizer = &store.quantizer;
-
             let output_dim = quantizer.output_dim();
+
+            // Pair the freshly-compressed query with the right `MinMax*` distance functor
+            // for `self.measure` and erase the concrete query type behind a `Boxed<NBITS>`.
+            //
+            // Implemented as a macro because expressing it as a generic function would need
+            // higher-ranked bounds on `<Q as Reborrow<'a>>::Target` that the current trait
+            // solver cannot discharge for the concrete `Q`s used below.
+            macro_rules! box_for_measure {
+                ($compressed:expr) => {
+                    match self.measure {
+                        SimilarityMeasure::SquaredL2 => {
+                            let inner: MinMaxL2Squared = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::InnerProduct => {
+                            let inner: MinMaxIP = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::Cosine => {
+                            let inner: MinMaxCosine = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                        SimilarityMeasure::CosineNormalized => {
+                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
+                            Boxed::new(Curried::new(inner, $compressed))
+                        }
+                    }
+                };
+            }
+
             match self.layout {
                 MinMaxQuery::SameAsData => {
                     let mut compressed = Data::<NBITS>::new_boxed(output_dim);
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
-
-                    match self.measure {
-                        SimilarityMeasure::SquaredL2 => {
-                            let inner: MinMaxL2Squared = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::InnerProduct => {
-                            let inner: MinMaxIP = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::Cosine => {
-                            let inner: MinMaxCosine = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::CosineNormalized => {
-                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                    }
+                    Ok(box_for_measure!(compressed))
                 }
                 MinMaxQuery::FullPrecision => {
                     let mut compressed = minmax::FullQuery::new_in(
@@ -658,25 +607,12 @@ mod imp {
                         diskann_quantization::alloc::GlobalAllocator,
                     )?;
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
-
-                    match self.measure {
-                        SimilarityMeasure::SquaredL2 => {
-                            let inner: MinMaxL2Squared = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::InnerProduct => {
-                            let inner: MinMaxIP = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::Cosine => {
-                            let inner: MinMaxCosine = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                        SimilarityMeasure::CosineNormalized => {
-                            let inner: MinMaxCosineNormalized = quantizer.as_functor();
-                            Ok(Boxed::new(Curried::new(inner, compressed)))
-                        }
-                    }
+                    Ok(box_for_measure!(compressed))
+                }
+                MinMaxQuery::EightBit => {
+                    let mut compressed = Data::<8>::new_boxed(output_dim);
+                    quantizer.compress_into(query, compressed.reborrow_mut())?;
+                    Ok(box_for_measure!(compressed))
                 }
             }
         }

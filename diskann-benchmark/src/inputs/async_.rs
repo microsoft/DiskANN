@@ -25,7 +25,7 @@ use diskann_providers::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{self, as_input, save_and_load, Example, Input},
+    inputs::{self, as_input, save_and_load, Example},
     utils::SimilarityMeasure,
 };
 
@@ -42,11 +42,11 @@ as_input!(DynamicIndexRun);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<IndexOperation>::new())?;
-    registry.register(Input::<IndexPQOperation>::new())?;
-    registry.register(Input::<IndexSQOperation>::new())?;
-    registry.register(Input::<SphericalQuantBuild>::new())?;
-    registry.register(Input::<DynamicIndexRun>::new())?;
+    registry.register::<IndexOperation>()?;
+    registry.register::<IndexPQOperation>()?;
+    registry.register::<IndexSQOperation>()?;
+    registry.register::<SphericalQuantBuild>()?;
+    registry.register::<DynamicIndexRun>()?;
     Ok(())
 }
 

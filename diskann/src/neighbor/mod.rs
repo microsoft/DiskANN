@@ -27,7 +27,7 @@ pub use diverse_priority_queue::{
 #[derive(Debug, Clone, Copy)]
 pub struct Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     /// The id of the node
     pub id: VectorIdType,
@@ -38,7 +38,7 @@ where
 
 impl<VectorIdType> Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     /// Create the neighbor node and it has not been visited
     pub fn new(id: VectorIdType, distance: f32) -> Self {
@@ -65,7 +65,7 @@ where
 
 impl<VectorIdType> PartialEq for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq,
+    VectorIdType: Eq,
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -73,13 +73,13 @@ where
     }
 }
 
-impl<VectorIdType> Eq for Neighbor<VectorIdType> where VectorIdType: Default + Eq {}
+impl<VectorIdType> Eq for Neighbor<VectorIdType> where VectorIdType: Eq {}
 
 /// PERF SENSITIVE: does not do well with comparing item with self.
 /// Not doing so, allows for a 1% gain. So use it with care.
 impl<VectorIdType> Ord for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq + Debug,
+    VectorIdType: Eq + Debug,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         debug_assert!(
@@ -98,7 +98,7 @@ where
 /// Not doing so, allows for a 1% gain. So use it with care.
 impl<VectorIdType> PartialOrd for Neighbor<VectorIdType>
 where
-    VectorIdType: Default + Eq + Debug,
+    VectorIdType: Eq + Debug,
 {
     #[inline]
     fn lt(&self, other: &Self) -> bool {
@@ -121,7 +121,7 @@ where
 #[derive(Debug)]
 pub struct BackInserter<'a, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     buffer: &'a mut [Neighbor<I>],
     position: usize,
@@ -129,11 +129,11 @@ where
 
 impl<'a, I> BackInserter<'a, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     /// Construct a new [`BackInserter`] around the provided slice.
     ///
-    /// THe buffer will have a capacity equal to the length of `buffer`.
+    /// The buffer will have a capacity equal to the length of `buffer`.
     pub fn new(buffer: &'a mut [Neighbor<I>]) -> Self {
         Self {
             buffer,
@@ -149,7 +149,7 @@ where
 
 impl<I> SearchOutputBuffer<I> for BackInserter<'_, I>
 where
-    I: Default + Eq,
+    I: Eq,
 {
     fn size_hint(&self) -> Option<usize> {
         // We maintain the invariant that `self.position <= self.buffer.len()`, so this
@@ -192,6 +192,36 @@ where
         self.position += i;
 
         i
+    }
+}
+
+impl<I> SearchOutputBuffer<I> for Vec<Neighbor<I>>
+where
+    I: Eq,
+{
+    fn size_hint(&self) -> Option<usize> {
+        None
+    }
+
+    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
+        self.push(Neighbor::new(id, distance));
+        search_output_buffer::BufferState::Available
+    }
+
+    fn current_len(&self) -> usize {
+        self.len()
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
+    where
+        Itr: IntoIterator<Item = (I, f32)>,
+    {
+        let before = self.len();
+        Extend::extend(
+            self,
+            itr.into_iter().map(|(id, dist)| Neighbor::new(id, dist)),
+        );
+        self.len() - before
     }
 }
 
@@ -345,5 +375,27 @@ mod neighbor_test {
 
             assert_eq!(&buffer, &[f(1), f(2), f(3), f(4), f(5)]);
         }
+    }
+
+    #[test]
+    fn test_vec_neighbor_search_output_buffer() {
+        use crate::graph::search_output_buffer::SearchOutputBuffer;
+
+        let mut buf: Vec<Neighbor<u32>> = Vec::new();
+        assert_eq!(SearchOutputBuffer::<u32>::size_hint(&buf), None);
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 0);
+
+        // push grows unboundedly
+        assert!(SearchOutputBuffer::push(&mut buf, 1, 0.5).is_available());
+        assert!(SearchOutputBuffer::push(&mut buf, 2, 1.0).is_available());
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 2);
+        assert_eq!(buf[0], Neighbor::new(1, 0.5));
+        assert_eq!(buf[1], Neighbor::new(2, 1.0));
+
+        // extend appends and returns count
+        let count = SearchOutputBuffer::extend(&mut buf, vec![(3u32, 1.5), (4, 2.0), (5, 2.5)]);
+        assert_eq!(count, 3);
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 5);
+        assert_eq!(buf[4], Neighbor::new(5, 2.5));
     }
 }

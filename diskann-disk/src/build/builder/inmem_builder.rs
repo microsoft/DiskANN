@@ -205,7 +205,7 @@ impl<T, Q> InmemIndexBuilder<T> for QuantInMemBuilder<T, Q>
 where
     T: VectorRepr,
     Q: AsyncFriendly + VectorStore + SetElementHelper<T>,
-    Quantized: InsertStrategy<DefaultProvider<NoStore, Q>, [T]>
+    Quantized: for<'a> InsertStrategy<DefaultProvider<NoStore, Q>, &'a [T]>
         + PruneStrategy<DefaultProvider<NoStore, Q>>,
     DefaultProvider<NoStore, Q>: SaveWith<(u32, AsyncIndexMetadata), Error = ANNError>,
 {

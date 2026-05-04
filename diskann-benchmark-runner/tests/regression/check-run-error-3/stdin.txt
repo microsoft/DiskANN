@@ -1,0 +1,5 @@
+# Setup: generate output with integer results from the dim benchmark.
+run --input-file $INPUT --output-file $OUTPUT --allow-debug
+
+# Test: reuse that output for a type benchmark, so the result payload shape is wrong.
+check run --tolerances $TOLERANCES --input-file $REGRESSION_INPUT --before $OUTPUT --after $OUTPUT --output-file $CHECK_OUTPUT

@@ -1,0 +1,13 @@
+[
+  {
+    "input": {
+      "content": {
+        "data_type": "float32",
+        "dim": 128,
+        "error_when_checked": false
+      },
+      "type": "test-input-types"
+    },
+    "results": "float32"
+  }
+]
