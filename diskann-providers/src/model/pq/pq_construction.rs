@@ -19,7 +19,7 @@ use diskann::{
 use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
-    views::calculate_chunk_offsets,
+    views::{ChunkOffsets, ChunkOffsetsView},
 };
 use diskann_utils::{
     io::Metadata,
@@ -97,12 +97,8 @@ where
         );
     }
 
-    let mut chunk_offsets: Vec<usize> = vec![0; parameters.num_pq_chunks() + 1];
-    calculate_chunk_offsets(
-        parameters.dim(),
-        parameters.num_pq_chunks(),
-        &mut chunk_offsets,
-    );
+    let chunk_offsets =
+        ChunkOffsets::from_dimensions(parameters.dim(), parameters.num_pq_chunks()).bridge_err()?;
 
     forward_threadpool!(pool = pool);
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -115,8 +111,7 @@ where
             .train(
                 MatrixView::try_from(train_data, parameters.num_train(), parameters.dim())
                     .bridge_err()?,
-                diskann_quantization::views::ChunkOffsetsView::new(chunk_offsets.as_slice())
-                    .bridge_err()?,
+                chunk_offsets.as_view(),
                 diskann_quantization::Parallelism::Rayon,
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
@@ -129,7 +124,7 @@ where
     pq_storage.write_pivot_data(
         &full_pivot_data,
         &centroid,
-        &chunk_offsets,
+        chunk_offsets.as_slice(),
         parameters.num_centers(),
         parameters.dim(),
         storage_provider,
@@ -206,8 +201,13 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
         }
     }
 
-    // Calculate the chunk offsets
-    calculate_chunk_offsets(parameters.dim(), parameters.num_pq_chunks(), offsets);
+    // Calculate the chunk offsets, filling the caller-owned buffer.
+    let chunk_offsets_view = ChunkOffsetsView::from_dimensions_into(
+        parameters.dim(),
+        parameters.num_pq_chunks(),
+        offsets,
+    )
+    .bridge_err()?;
 
     forward_threadpool!(pool = pool);
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -240,7 +240,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>, Pool: AsThreadPool>(
                     parameters.dim(),
                 )
                 .bridge_err()?,
-                diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
+                chunk_offsets_view,
                 diskann_quantization::Parallelism::Rayon,
                 &rng_builder,
                 &cancelation,
@@ -1037,9 +1037,8 @@ mod pq_test {
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
-        let mut offsets = vec![0; num_pq_chunks + 1];
-        calculate_chunk_offsets(train_dim, num_pq_chunks, &mut offsets);
-        let offset_view = diskann_quantization::views::ChunkOffsetsView::new(&offsets).unwrap();
+        let chunk_offsets = ChunkOffsets::from_dimensions(train_dim, num_pq_chunks).unwrap();
+        let offset_view = chunk_offsets.as_view();
         let full_data =
             MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();
         let pivot_view =

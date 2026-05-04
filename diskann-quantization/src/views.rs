@@ -54,6 +54,8 @@ pub enum ChunkOffsetError {
         start: usize,
         next_val: usize,
     },
+    #[error("scratch buffer length {actual} does not match expected length {expected}")]
+    ScratchLengthMismatch { expected: usize, actual: usize },
 }
 
 impl<T> ChunkOffsetsBase<T>
@@ -205,20 +207,52 @@ impl<'a> From<ChunkOffsetsView<'a>> for &'a [usize] {
     }
 }
 
-/// Calculate the chunk offsets for the product quantization algorithm.  Fills `offsets`
-/// with the prefix-sum partitioning of `dimensions` into `num_pq_chunks` chunks, where
-/// the first `dimensions % num_pq_chunks` chunks are one element larger than the rest.
-///
-/// # Arguments
-/// * `dimensions` - Number of dimensions of the input data.
-/// * `num_pq_chunks` - Number of chunks that will be used in the PQ calculation.  Each
-///   vector will be split into these number of chunks and each chunk will be compressed
-///   down to one byte.
-/// * `offsets` - An output slice of offsets, where the length must equal `num_pq_chunks + 1`.
-#[inline]
-pub fn calculate_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets: &mut [usize]) {
-    // Calculate each chunk's offset
-    // If we have 8 dimension and 3 chunks then offsets would be [0,3,6,8]
+impl ChunkOffsets {
+    /// Build a chunk-offset plan that partitions `dimensions` into `num_pq_chunks`
+    /// near-equal chunks. The first `dimensions % num_pq_chunks` chunks are one element
+    /// larger than the rest.
+    ///
+    /// Returns an error if the requested partition is not valid (e.g. `dimensions == 0`,
+    /// `num_pq_chunks == 0`, or `num_pq_chunks > dimensions`).
+    pub fn from_dimensions(
+        dimensions: usize,
+        num_pq_chunks: usize,
+    ) -> Result<Self, ChunkOffsetError> {
+        let mut offsets = vec![0usize; num_pq_chunks + 1].into_boxed_slice();
+        fill_chunk_offsets(dimensions, num_pq_chunks, &mut offsets);
+        Self::new(offsets)
+    }
+}
+
+impl<'a> ChunkOffsetsView<'a> {
+    /// Fill the caller-owned `scratch` buffer with the partition for `(dimensions,
+    /// num_pq_chunks)` and return a validated view borrowing it.
+    ///
+    /// See [`ChunkOffsets::from_dimensions`] for the partitioning rule.
+    ///
+    /// Returns an error if `scratch.len() != num_pq_chunks + 1` or if the requested
+    /// partition is not valid (e.g. `dimensions == 0`, `num_pq_chunks == 0`, or
+    /// `num_pq_chunks > dimensions`).
+    pub fn from_dimensions_into(
+        dimensions: usize,
+        num_pq_chunks: usize,
+        scratch: &'a mut [usize],
+    ) -> Result<Self, ChunkOffsetError> {
+        let expected = num_pq_chunks + 1;
+        if scratch.len() != expected {
+            return Err(ChunkOffsetError::ScratchLengthMismatch {
+                expected,
+                actual: scratch.len(),
+            });
+        }
+        fill_chunk_offsets(dimensions, num_pq_chunks, scratch);
+        Self::new(scratch)
+    }
+}
+
+/// Internal helper: fill `offsets` (of length `num_pq_chunks + 1`) with the prefix-sum
+/// partitioning of `dimensions` into `num_pq_chunks` chunks.
+fn fill_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets: &mut [usize]) {
     let mut chunk_offset: usize = 0;
     offsets[0] = chunk_offset;
     for chunk_index in 0..num_pq_chunks {
@@ -228,14 +262,6 @@ pub fn calculate_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets:
         }
         offsets[chunk_index + 1] = chunk_offset;
     }
-}
-
-/// Allocating wrapper around [`calculate_chunk_offsets`] that returns a fresh
-/// `Vec<usize>` of length `num_pq_chunks + 1`.
-pub fn calculate_chunk_offsets_auto(dimensions: usize, num_pq_chunks: usize) -> Vec<usize> {
-    let mut offsets = vec![0; num_pq_chunks + 1];
-    calculate_chunk_offsets(dimensions, num_pq_chunks, offsets.as_mut_slice());
-    offsets
 }
 
 ///////////////
@@ -456,6 +482,84 @@ mod tests {
             "offsets must be strictly increasing, instead entry 0 at position 0 \
             is followed by 0"
         );
+    }
+
+    //////////////////////////////
+    // from_dimensions builders //
+    //////////////////////////////
+
+    #[test]
+    fn from_dimensions_happy_path() {
+        // Even split: 9 / 3 = 3 each.
+        let offsets = ChunkOffsets::from_dimensions(9, 3).unwrap();
+        assert_eq!(offsets.as_slice(), &[0, 3, 6, 9]);
+        assert_eq!(offsets.dim(), 9);
+        assert_eq!(offsets.len(), 3);
+
+        // Uneven split: 8 / 3 = 2 r 2 -> first two chunks get an extra element.
+        let offsets = ChunkOffsets::from_dimensions(8, 3).unwrap();
+        assert_eq!(offsets.as_slice(), &[0, 3, 6, 8]);
+
+        // Single chunk degenerate case.
+        let offsets = ChunkOffsets::from_dimensions(5, 1).unwrap();
+        assert_eq!(offsets.as_slice(), &[0, 5]);
+
+        // dimensions == num_pq_chunks: each chunk is size 1.
+        let offsets = ChunkOffsets::from_dimensions(4, 4).unwrap();
+        assert_eq!(offsets.as_slice(), &[0, 1, 2, 3, 4]);
+
+        // The view-into variant matches the owning constructor.
+        let mut scratch = [0usize; 4];
+        let view = ChunkOffsetsView::from_dimensions_into(8, 3, &mut scratch).unwrap();
+        assert_eq!(view.as_slice(), &[0, 3, 6, 8]);
+        assert_eq!(view.dim(), 8);
+        assert_eq!(view.len(), 3);
+        assert_eq!(scratch.as_slice(), &[0, 3, 6, 8]);
+    }
+
+    #[test]
+    fn from_dimensions_construction_errors() {
+        // num_pq_chunks > dimensions -> some chunk would be empty -> NonMonotonic.
+        let err = ChunkOffsets::from_dimensions(3, 5).unwrap_err();
+        assert!(
+            matches!(err, ChunkOffsetError::NonMonotonic { .. }),
+            "expected NonMonotonic, got {err:?}"
+        );
+
+        // dimensions == 0 -> trivially non-monotonic.
+        let err = ChunkOffsets::from_dimensions(0, 1).unwrap_err();
+        assert!(matches!(err, ChunkOffsetError::NonMonotonic { .. }));
+
+        // num_pq_chunks == 0 -> length 1 buffer, fails LengthNotAtLeastTwo.
+        let err = ChunkOffsets::from_dimensions(8, 0).unwrap_err();
+        assert!(matches!(err, ChunkOffsetError::LengthNotAtLeastTwo(1)));
+
+        // Scratch length too short -> ScratchLengthMismatch error (no panic).
+        let mut too_short = [0usize; 3];
+        let err = ChunkOffsetsView::from_dimensions_into(8, 3, &mut too_short).unwrap_err();
+        assert!(matches!(
+            err,
+            ChunkOffsetError::ScratchLengthMismatch {
+                expected: 4,
+                actual: 3
+            }
+        ));
+
+        // Scratch length too long -> ScratchLengthMismatch error.
+        let mut too_long = [0usize; 5];
+        let err = ChunkOffsetsView::from_dimensions_into(8, 3, &mut too_long).unwrap_err();
+        assert!(matches!(
+            err,
+            ChunkOffsetError::ScratchLengthMismatch {
+                expected: 4,
+                actual: 5
+            }
+        ));
+
+        // Partition validation errors propagate through the view builder too.
+        let mut scratch = [0usize; 6];
+        let err = ChunkOffsetsView::from_dimensions_into(3, 5, &mut scratch).unwrap_err();
+        assert!(matches!(err, ChunkOffsetError::NonMonotonic { .. }));
     }
 
     ///////////////

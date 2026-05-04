@@ -87,10 +87,10 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_quantization::views::calculate_chunk_offsets_auto(
+            let offsets = diskann_quantization::views::ChunkOffsets::from_dimensions(
                 data.ncols(),
                 input.num_pq_chunks.get(),
-            );
+            )?;
 
             let base = {
                 let threadpool = rayon::ThreadPoolBuilder::new()
@@ -99,7 +99,7 @@ mod imp {
                 threadpool.install(|| -> anyhow::Result<_> {
                     Ok(parameters.train(
                         data.as_view(),
-                        diskann_quantization::views::ChunkOffsetsView::new(offsets.as_slice())?,
+                        offsets.as_view(),
                         diskann_quantization::Parallelism::Rayon,
                         &diskann_quantization::random::StdRngBuilder::new(input.seed),
                         &diskann_quantization::cancel::DontCancel,
@@ -111,7 +111,7 @@ mod imp {
                 data.ncols(),
                 base.flatten().into(),
                 vec![0.0; data.ncols()].into(),
-                offsets.into(),
+                offsets.as_slice().into(),
             )?;
 
             let training_time: MicroSeconds = start.elapsed().into();
