@@ -75,8 +75,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
         FullPrecision::<f32>::new()
             .search(plugins::Topk)
             .search(plugins::Range)
-            .search(plugins::BetaFilter)
-            .search(plugins::MultihopFilter),
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter),
     );
 
     benchmarks.register(
@@ -196,15 +196,14 @@ where
 
         match input {
             Some(arg) => {
-                let data_type = match &arg.source {
-                    IndexSource::Load(load) => &load.data_type,
-                    IndexSource::Build(build) => &build.data_type,
-                };
-                writeln!(
-                    f,
-                    "Data/Query Type: {}",
-                    Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
-                )?;
+                let data_type = arg.source.data_type();
+                if datatype::Type::<T>::try_match(data_type).is_err() {
+                    writeln!(
+                        f,
+                        "Data/Query Type: {}",
+                        Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
+                    )?;
+                }
 
                 if !self.plugins.is_match(&arg.search_phase) {
                     writeln!(
@@ -535,7 +534,7 @@ where
 // BetaFilter //
 //------------//
 
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::BetaFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
@@ -594,7 +593,7 @@ where
 // MultihopFilter //
 //----------------//
 
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::MultihopFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,

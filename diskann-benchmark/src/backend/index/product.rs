@@ -152,13 +152,14 @@ mod imp {
 
             match input {
                 Some(arg) => {
-                    writeln!(
-                        f,
-                        "{}",
-                        Why::<datatype::DataType, datatype::Type<T>>::new(
-                            arg.index_operation.source.data_type()
-                        )
-                    )?;
+                    let data_type = arg.index_operation.source.data_type();
+                    if datatype::Type::<T>::try_match(data_type).is_err() {
+                        writeln!(
+                            f,
+                            "Data/Query Type: {}",
+                            Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
+                        )?;
+                    }
 
                     if !self
                         .quant_search
@@ -262,18 +263,13 @@ mod imp {
             // Save construction stats before running queries.
             checkpoint.checkpoint(&build_stats)?;
 
+            let search_phase = &input.index_operation.search_phase;
             let search = if input.use_fp_for_search {
-                self.full_search.run(
-                    index,
-                    &input.index_operation.search_phase,
-                    &Strategy::new(common::FullPrecision),
-                )?
+                self.full_search
+                    .run(index, search_phase, &Strategy::new(common::FullPrecision))?
             } else {
-                self.quant_search.run(
-                    index,
-                    &input.index_operation.search_phase,
-                    &Strategy::new(hybrid),
-                )?
+                self.quant_search
+                    .run(index, search_phase, &Strategy::new(hybrid))?
             };
 
             let result = QuantBuildResult {

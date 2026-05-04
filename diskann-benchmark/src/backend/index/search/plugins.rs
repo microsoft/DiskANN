@@ -124,11 +124,15 @@ where
         index: Arc<DiskANNIndex<DP>>,
         kind: &Kind,
         parameters: &Params,
-    ) -> anyhow::Result<AggregatedSearchResults> {
+    ) -> anyhow::Result<AggregatedSearchResults>
+    where
+        Kind: std::fmt::Debug,
+    {
         match self.plugins.iter().find(|p| p.is_match(kind)) {
             Some(plugin) => plugin.run(index, kind, parameters),
             None => Err(anyhow::anyhow!(
-                "INTERNAL ERROR: Could not find a suitable search plugin",
+                "INTERNAL ERROR: Could not find a suitable search plugin for {:?}",
+                kind
             )),
         }
     }
@@ -158,9 +162,9 @@ impl Range {
 
 /// A search plugin for beta-filtered search.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BetaFilter;
+pub(crate) struct TopkBetaFilter;
 
-impl BetaFilter {
+impl TopkBetaFilter {
     /// Returns [`SearchPhaseKind::TopkBetaFilter`].
     pub(crate) fn kind() -> SearchPhaseKind {
         SearchPhaseKind::TopkBetaFilter
@@ -169,9 +173,9 @@ impl BetaFilter {
 
 /// A search plugin for multi-hop filtered search.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MultihopFilter;
+pub(crate) struct TopkMultihopFilter;
 
-impl MultihopFilter {
+impl TopkMultihopFilter {
     /// Returns [`SearchPhaseKind::TopkMultihopFilter`].
     pub(crate) fn kind() -> SearchPhaseKind {
         SearchPhaseKind::TopkMultihopFilter

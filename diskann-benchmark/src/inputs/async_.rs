@@ -429,15 +429,15 @@ impl SearchPhaseKind {
         match self {
             Self::Topk => "topk",
             Self::Range => "range",
-            Self::TopkBetaFilter => "beta-filter",
-            Self::TopkMultihopFilter => "multihop-filter",
+            Self::TopkBetaFilter => "topk-beta-filter",
+            Self::TopkMultihopFilter => "topk-multihop-filter",
         }
     }
 }
 
 impl std::fmt::Display for SearchPhaseKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        f.write_str(self.as_str())
     }
 }
 
