@@ -2616,38 +2616,57 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_debug_search_with_filters
     const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn)
 {
+    diskann::cout << "Index::_debug_search_with_filters: K=" << K << " L=" << L
+                  << " raw_labels=" << raw_labels.size()
+                  << " query.type=" << query.type().name()
+                  << " indices.type=" << indices.type().name() << std::endl;
+
     std::vector<LabelT> converted_labels;
     converted_labels.reserve(raw_labels.size());
     for (const auto &raw_label : raw_labels)
     {
         auto converted_label = this->get_converted_label(raw_label);
+        diskann::cout << "  label \"" << raw_label << "\" -> " << converted_label
+                      << (converted_label == std::numeric_limits<LabelT>::max() ? " (INVALID)" : " (valid)") << std::endl;
         if (converted_label != std::numeric_limits<LabelT>::max())
             converted_labels.push_back(converted_label);
     }
+
+    diskann::cout << "  converted_labels count: " << converted_labels.size() << std::endl;
 
     try
     {
         if (typeid(uint64_t *) == indices.type())
         {
+            diskann::cout << "  indices type: uint64_t*, casting query to const T*..." << std::endl;
             auto ptr = std::any_cast<uint64_t *>(indices);
-            return this->debug_search_with_filters(std::any_cast<const T *>(query), converted_labels,
+            auto typed_query = std::any_cast<const T *>(query);
+            diskann::cout << "  cast succeeded, calling debug_search_with_filters..." << std::endl;
+            return this->debug_search_with_filters(typed_query, converted_labels,
                                                    K, L, ptr, distances,
                                                    debug_info, maxLperSeller, std::move(rerank_fn));
         }
         else if (typeid(uint32_t *) == indices.type())
         {
+            diskann::cout << "  indices type: uint32_t*, casting query to const T*..." << std::endl;
             auto ptr = std::any_cast<uint32_t *>(indices);
-            return this->debug_search_with_filters(std::any_cast<const T *>(query), converted_labels,
+            auto typed_query = std::any_cast<const T *>(query);
+            diskann::cout << "  cast succeeded, calling debug_search_with_filters..." << std::endl;
+            return this->debug_search_with_filters(typed_query, converted_labels,
                                                    K, L, ptr, distances,
                                                    debug_info, maxLperSeller, std::move(rerank_fn));
         }
         else
         {
+            diskann::cerr << "  ERROR: unsupported indices type: " << indices.type().name() << std::endl;
             throw ANNException("Error: Id type can only be uint64_t or uint32_t.", -1);
         }
     }
     catch (const std::bad_any_cast &e)
     {
+        diskann::cerr << "  ERROR: bad_any_cast: " << e.what()
+                      << " query.type=" << query.type().name()
+                      << " indices.type=" << indices.type().name() << std::endl;
         throw ANNException("Error: bad any cast while debug searching with filters. " + std::string(e.what()), -1);
     }
 }
