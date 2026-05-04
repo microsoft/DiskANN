@@ -653,6 +653,7 @@ where
             query,
         })
     }
+
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
         if ids.is_empty() {
             return Ok(());
@@ -1384,7 +1385,7 @@ mod disk_provider_tests {
         queries
             .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let mut query_stats = QueryStatistics::default();
                 let mut indices = vec![0u32; 10];
                 let mut distances = vec![0f32; 10];
@@ -1444,7 +1445,7 @@ mod disk_provider_tests {
         queries
             .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
                     .search(query, params.k as u32, params.l as u32, beam_width, None, false)
