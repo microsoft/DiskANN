@@ -3,13 +3,6 @@
  * Licensed under the MIT license.
  */
 
-//! PQ quantizer query preprocessing.
-//!
-//! Prior to the introduction of the [`quantizer_preprocess`] method, the disk index was
-//! hard-coded to use L2 distance for comparisons.  We're keeping that behavior here -
-//! treating `Cosine` and `CosineNormalized` as L2 until a more thorough evaluation can
-//! be made.
-
 use diskann::ANNResult;
 use diskann_vector::distance::Metric;
 
@@ -40,7 +33,11 @@ pub fn quantizer_preprocess(
             .bridge_err()?;
 
             match metric {
-                // Cosine and CosineNormalized fall back to L2; see module docs.
+                // Prior to the introduction of the `quantizer_preprocess` method, the
+                // disk index was hard-coded to use L2 distance for comparisons.
+                //
+                // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
+                // as L2 until a more thorough evaluation can be made.
                 Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
                     table.process_into::<diskann_quantization::distances::SquaredL2>(
                         &pq_scratch.rotated_query[..dim],
@@ -57,7 +54,11 @@ pub fn quantizer_preprocess(
         }
         PQTable::Fixed(table) => {
             match metric {
-                // Cosine and CosineNormalized fall back to L2; see module docs.
+                // Prior to the introduction of the `quantizer_preprocess` method, the
+                // disk index was hard-coded to use L2 distance for comparisons.
+                //
+                // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
+                // as L2 until a more thorough evaluation can be made.
                 Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
                     // The scratch only stores the aligned dimension. However, preprocessing
                     // wants the actual dimension used, so we have to shrink the rotated query
