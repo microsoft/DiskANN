@@ -105,53 +105,48 @@ which will generate something like
 {
   "type": "graph-index-build",
   "content": {
-    "data_type": "float32",
-    "data": "path/to/data",
-    "distance": "squared_l2",
-    "max_degree": 32,
-    "l_build": 50,
-    "alpha": 1.2,
-    "backedge_ratio": 1.0,
-    "num_threads": 1,
-    "num_start_points": 10,
-    "num_insert_attempts": 2,
-    "saturate_inserts": true,
-    "multi_insert": {
-      "batch_size": 128,
-      "batch_parallelism": 32
-    },
     "search_phase": {
-      "search-type": "topk",
-      "queries": "path/to/queries",
       "groundtruth": "path/to/groundtruth",
-      "reps": 5,
       "num_threads": [
         1,
         2,
         4,
         8
       ],
+      "queries": "path/to/queries",
+      "reps": 5,
       "runs": [
         {
-          "enhanced_metrics": false,
-          "search_k": 10,
+          "recall_k": 10,
           "search_l": [
             10,
             20,
             30,
             40
           ],
-          "target_recall": [
-                {
-                  "target": [50, 90, 95, 98, 99],
-                  "percentile": [0.5, 0.75, 0.9, 0.95],
-                  "max_search_l": 1000,
-                  "calibration_size": 1000,
-                },
-          ],
-          "recall_n": 10
+          "search_n": 10
         }
-      ]
+      ],
+      "search-type": "topk"
+    },
+    "source": {
+      "alpha": 1.2000000476837158,
+      "backedge_ratio": 1.0,
+      "data": "path/to/data",
+      "data_type": "float32",
+      "distance": "squared_l2",
+      "index-source": "Build",
+      "insert_retry": null,
+      "l_build": 50,
+      "max_degree": 32,
+      "multi_insert": {
+        "batch_parallelism": 32,
+        "batch_size": 128,
+        "intra_batch_candidates": "none"
+      },
+      "num_threads": 1,
+      "save_path": null,
+      "start_point_strategy": "medoid"
     }
   }
 }
