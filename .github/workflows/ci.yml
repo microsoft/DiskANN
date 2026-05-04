@@ -367,16 +367,18 @@ jobs:
             --package diskann-quantization \
             -- --skip compile_tests
 
+  # macOS is opt-in: slow to provision, so only included when the workflow is
+  # manually dispatched with `run_macos: true`. On push/PR events,
+  # `inputs.run_macos` is null, so the condition evaluates to false and macOS
+  # is excluded from the matrix. macOS results are intentionally excluded from
+  # `ci-gate` so they never block merges.
   test-workspace:
     needs: basics
     name: test workspace
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - ubuntu-24.04-arm
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.run_macos && '["windows-latest","ubuntu-latest","ubuntu-24.04-arm","macos-latest"]' || '["windows-latest","ubuntu-latest","ubuntu-24.04-arm"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -405,75 +407,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: Install Rust
-        run: rustup show
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: test workspace with nextest
-        run: |
-          set -euxo pipefail
-          cargo nextest run --locked --workspace \
-            --cargo-profile ci \
-            --config "$RUST_CONFIG" \
-            --features ${{ env.DISKANN_FEATURES }}
-
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
-
-  # macOS CI jobs — opt-in via workflow_dispatch.
-  #
-  # macOS GitHub-hosted runners are slow to provision, so these jobs are not
-  # included in the default PR / push matrix. Run them on demand by triggering
-  # the workflow manually with `run_macos: true`.
-  #
-  # These jobs are intentionally excluded from the `ci-gate` required check so
-  # they never block merges.
-  test-workspace-macos:
-    needs: basics
-    name: test workspace (macOS)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - name: Install Rust
-        run: rustup show
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: test workspace with nextest
-        run: |
-          set -euxo pipefail
-          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
-
-  test-workspace-features-macos:
-    needs: basics
-    name: test workspace (all features, macOS)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}
-    runs-on: macos-latest
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.run_macos && '["windows-latest","ubuntu-latest","macos-latest"]' || '["windows-latest","ubuntu-latest"]') }}
 
     steps:
       - uses: actions/checkout@v4
