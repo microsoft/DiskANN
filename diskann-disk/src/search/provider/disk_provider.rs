@@ -31,10 +31,7 @@ use diskann::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
         NeighborAccessor, NoopGuard,
     },
-    utils::{
-        object_pool::{ObjectPool, PoolOption, TryAsPooled},
-        IntoUsize, VectorRepr,
-    },
+    utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
@@ -42,6 +39,7 @@ use diskann_providers::{
     model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
@@ -426,7 +424,6 @@ where
                 .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
-                .as_slice()
                 .to_vec(),
         })
     }
@@ -656,6 +653,7 @@ where
             query,
         })
     }
+
     fn ensure_loaded(&mut self, ids: &[u32]) -> Result<(), ANNError> {
         if ids.is_empty() {
             return Ok(());
@@ -1387,7 +1385,7 @@ mod disk_provider_tests {
         queries
             .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let mut query_stats = QueryStatistics::default();
                 let mut indices = vec![0u32; 10];
                 let mut distances = vec![0f32; 10];
@@ -1447,7 +1445,7 @@ mod disk_provider_tests {
         queries
             .par_row_iter()
             .enumerate()
-            .for_each_in_pool(&pool, |(i, query)| {
+            .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
                     .search(query, params.k as u32, params.l as u32, beam_width, None, false)

@@ -108,13 +108,16 @@ impl Benchmarks {
     }
 
     /// Register a new benchmark with the given name.
-    pub fn register<T>(&mut self, name: impl Into<String>)
+    pub fn register<T>(&mut self, name: impl Into<String>, benchmark: T)
     where
-        T: Benchmark + 'static,
+        T: Benchmark,
     {
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
-            benchmark: Box::new(benchmark::internal::Wrapper::<T>::new()),
+            benchmark: Box::new(benchmark::internal::Wrapper::<T, _>::new(
+                benchmark,
+                benchmark::internal::NoRegression,
+            )),
         });
     }
 
@@ -212,12 +215,13 @@ impl Benchmarks {
     ///
     /// Upon registration, the associated [`Regression::Tolerances`] input and the benchmark
     /// itself will be reachable via [`Check`](crate::app::Check).
-    pub fn register_regression<T>(&mut self, name: impl Into<String>)
+    pub fn register_regression<T>(&mut self, name: impl Into<String>, benchmark: T)
     where
-        T: Regression + 'static,
+        T: Regression,
     {
-        let registered = benchmark::internal::Wrapper::<T, _>::new_with(
-            benchmark::internal::WithRegression::<T>::new(),
+        let registered = benchmark::internal::Wrapper::<T, _>::new(
+            benchmark,
+            benchmark::internal::WithRegression,
         );
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),

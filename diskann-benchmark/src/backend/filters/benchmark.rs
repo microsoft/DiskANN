@@ -29,29 +29,23 @@ use crate::{
 };
 
 pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<MetadataIndexJob<'static>>("metadata-index-build");
+    benchmarks.register("metadata-index-build", MetadataIndexJob);
 }
 
-// Metadata-only index job wrapper
-pub(super) struct MetadataIndexJob<'a> {
-    input: &'a crate::inputs::filters::MetadataIndexBuild,
-}
+// Metadata-only index job.
+#[derive(Debug)]
+struct MetadataIndexJob;
 
-impl<'a> MetadataIndexJob<'a> {
-    fn new(input: &'a crate::inputs::filters::MetadataIndexBuild) -> Self {
-        Self { input }
-    }
-}
-
-impl Benchmark for MetadataIndexJob<'static> {
+impl Benchmark for MetadataIndexJob {
     type Input = MetadataIndexBuild;
     type Output = MetadataIndexBuildStats;
 
-    fn try_match(_input: &MetadataIndexBuild) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, _input: &MetadataIndexBuild) -> Result<MatchScore, FailureScore> {
         Ok(MatchScore(1))
     }
 
     fn description(
+        &self,
         f: &mut std::fmt::Formatter<'_>,
         _input: Option<&MetadataIndexBuild>,
     ) -> std::fmt::Result {
@@ -63,90 +57,89 @@ impl Benchmark for MetadataIndexJob<'static> {
     }
 
     fn run(
+        &self,
         input: &MetadataIndexBuild,
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<MetadataIndexBuildStats> {
-        MetadataIndexJob::new(input).run(checkpoint, output)
+        run(input, checkpoint, output)
     }
 }
 
-impl<'a> MetadataIndexJob<'a> {
-    fn run(
-        self,
-        checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> Result<MetadataIndexBuildStats, anyhow::Error> {
-        // Print the input description so the user sees the job configuration.
-        writeln!(output, "{}", self.input)?;
+fn run(
+    input: &crate::inputs::filters::MetadataIndexBuild,
+    checkpoint: Checkpoint<'_>,
+    mut output: &mut dyn Output,
+) -> Result<MetadataIndexBuildStats, anyhow::Error> {
+    // Print the input description so the user sees the job configuration.
+    writeln!(output, "{}", input)?;
 
-        // Use the supplied filter parameters (required for metadata-only build)
-        let filter_params = &self.input.filter_params;
+    // Use the supplied filter parameters (required for metadata-only build)
+    let filter_params = &input.filter_params;
 
-        // Reuse the helper: build index, parse predicates, produce BitmapFilters and telemetry
-        let (bitmap_filters_vec, filter_search_results, _label_count) =
-            prepare_bitmap_filters_from_paths_with_kind(
-                filter_params.data_labels.as_ref(),
-                filter_params.query_predicates.as_ref(),
-                self.input.inverted_index_type,
-                checkpoint,
-            )?;
+    // Reuse the helper: build index, parse predicates, produce BitmapFilters and telemetry
+    let (bitmap_filters_vec, filter_search_results, _label_count) =
+        prepare_bitmap_filters_from_paths_with_kind(
+            filter_params.data_labels.as_ref(),
+            filter_params.query_predicates.as_ref(),
+            input.inverted_index_type,
+            checkpoint,
+        )?;
 
-        // Collect per-query matching counts and compute aggregates
-        let counts: Vec<usize> = bitmap_filters_vec.iter().map(|bf| bf.count()).collect();
-        let query_count = counts.len();
-        let total_matching: usize = counts.iter().cloned().sum();
+    // Collect per-query matching counts and compute aggregates
+    let counts: Vec<usize> = bitmap_filters_vec.iter().map(|bf| bf.count()).collect();
+    let query_count = counts.len();
+    let total_matching: usize = counts.iter().cloned().sum();
 
-        // counts_avg will be computed below via the shared percentiles utility
-        let mut sorted = counts.clone();
-        // Use the shared percentiles utility when we have values.
-        let (
-            counts_p1,
-            counts_p5,
-            counts_p10,
-            counts_p50,
-            counts_p90,
-            counts_p95,
-            counts_p99,
-            counts_avg,
-        ) = if sorted.is_empty() {
-            (
-                0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0.0f64,
-            )
-        } else {
-            sorted.sort_unstable();
-            let p = percentiles::compute_percentiles(&mut sorted)?;
-            // p.median is f64; round to nearest usize for display/storage
-            let p50 = p.median.round() as usize;
-            let p90 = p.p90;
-            let p99 = p.p99;
-            let n = sorted.len();
-            let p1 = sorted[(n / 100).min(n - 1)];
-            let p5 = sorted[((5 * n) / 100).min(n - 1)];
-            let p10 = sorted[((10 * n) / 100).min(n - 1)];
-            let p95 = sorted[((95 * n) / 100).min(n - 1)];
-            (p1, p5, p10, p50, p90, p95, p99, p.mean)
-        };
+    // counts_avg will be computed below via the shared percentiles utility
+    let mut sorted = counts.clone();
+    // Use the shared percentiles utility when we have values.
+    let (
+        counts_p1,
+        counts_p5,
+        counts_p10,
+        counts_p50,
+        counts_p90,
+        counts_p95,
+        counts_p99,
+        counts_avg,
+    ) = if sorted.is_empty() {
+        (
+            0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0.0f64,
+        )
+    } else {
+        sorted.sort_unstable();
+        let p = percentiles::compute_percentiles(&mut sorted)?;
+        // p.median is f64; round to nearest usize for display/storage
+        let p50 = p.median.round() as usize;
+        let p90 = p.p90;
+        let p99 = p.p99;
+        let n = sorted.len();
+        let p1 = sorted[(n / 100).min(n - 1)];
+        let p5 = sorted[((5 * n) / 100).min(n - 1)];
+        let p10 = sorted[((10 * n) / 100).min(n - 1)];
+        let p95 = sorted[((95 * n) / 100).min(n - 1)];
+        (p1, p5, p10, p50, p90, p95, p99, p.mean)
+    };
 
-        let stats = MetadataIndexBuildStats {
-            label_count: _label_count,
-            query_count,
-            total_matching,
-            counts_avg,
-            counts_p1,
-            counts_p5,
-            counts_p10,
-            counts_p50,
-            counts_p90,
-            counts_p95,
-            counts_p99,
-            filter: filter_search_results,
-        };
+    let stats = MetadataIndexBuildStats {
+        label_count: _label_count,
+        query_count,
+        total_matching,
+        counts_avg,
+        counts_p1,
+        counts_p5,
+        counts_p10,
+        counts_p50,
+        counts_p90,
+        counts_p95,
+        counts_p99,
+        filter: filter_search_results,
+    };
 
-        // Print the human-readable summary for interactive runs.
-        writeln!(output, "\n\n{}", stats)?;
-        Ok(stats)
-    }
+    // Print the human-readable summary for interactive runs.
+    writeln!(output, "\n\n{}", stats)?;
+    Ok(stats)
 }
 
 #[derive(Debug, Serialize)]

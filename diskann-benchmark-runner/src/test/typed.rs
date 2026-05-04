@@ -129,6 +129,12 @@ impl CheckDeserialization for Tolerance {
 #[derive(Debug)]
 pub(super) struct TypeBench<T>(std::marker::PhantomData<T>);
 
+impl<T> TypeBench<T> {
+    pub(super) fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
 impl<T> Benchmark for TypeBench<T>
 where
     T: 'static,
@@ -137,17 +143,22 @@ where
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         // Try to match based on data type.
         // Add a small penalty so `ExactTypeBench` can be more specific if it hits.
         Type::<T>::try_match(&input.data_type).map(|m| MatchScore(m.0 + 10))
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&TypeInput>) -> std::fmt::Result {
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&TypeInput>,
+    ) -> std::fmt::Result {
         Type::<T>::description(f, input.map(|i| &i.data_type))
     }
 
     fn run(
+        &self,
         input: &TypeInput,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
@@ -169,6 +180,7 @@ where
     type Fail = DataType;
 
     fn check(
+        &self,
         _tolerance: &Tolerance,
         input: &TypeInput,
         before: &String,
@@ -189,6 +201,12 @@ where
 #[derive(Debug)]
 pub(super) struct ExactTypeBench<T, const N: usize>(std::marker::PhantomData<T>);
 
+impl<T, const N: usize> ExactTypeBench<T, N> {
+    pub(super) fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
 impl<T, const N: usize> Benchmark for ExactTypeBench<T, N>
 where
     T: 'static,
@@ -197,7 +215,7 @@ where
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         if input.dim == N {
             Type::<T>::try_match(&input.data_type)
         } else {
@@ -205,7 +223,11 @@ where
         }
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&TypeInput>) -> std::fmt::Result {
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&TypeInput>,
+    ) -> std::fmt::Result {
         match input {
             None => {
                 write!(f, "{}, dim={}", Description::<DataType, Type<T>>::new(), N)
@@ -232,6 +254,7 @@ where
     }
 
     fn run(
+        &self,
         input: &TypeInput,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
@@ -253,6 +276,7 @@ where
     type Fail = String;
 
     fn check(
+        &self,
         _tolerance: &Tolerance,
         input: &TypeInput,
         before: &String,

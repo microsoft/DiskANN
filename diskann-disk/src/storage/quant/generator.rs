@@ -10,9 +10,8 @@ use std::{
 
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann_providers::{
-    forward_threadpool,
-    utils::{load_metadata_from_file, AsThreadPool, BridgeErr, ParallelIteratorInPool, Timer},
+use diskann_providers::utils::{
+    load_metadata_from_file, BridgeErr, ParallelIteratorInPool, RayonThreadPoolRef, Timer,
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
@@ -99,15 +98,14 @@ where
     /// 4. Processes data in blocks of size given by chunking_config.data_compression_chunk_vector_count = 50_000
     /// 5. Compresses each block in small batch sizes in parallel to (potentially) take advantage of batch compression with quantizer
     /// 6. Writes compressed blocks to the output file.
-    pub fn generate_data<Storage, Pool>(
+    pub fn generate_data<Storage>(
         &self,
         storage_provider: &Storage, // Provider for reading source data and writing compressed results
-        pool: &Pool,                // Thread pool for parallel processing
+        pool: RayonThreadPoolRef<'_>, // Thread pool for parallel processing
         chunking_config: &ChunkingConfig, // Configuration for batching and checkpoint handling
     ) -> ANNResult<Progress>
     where
         Storage: StorageReadProvider + StorageWriteProvider,
-        Pool: AsThreadPool,
     {
         let timer = Timer::new();
 
@@ -157,7 +155,6 @@ where
 
         let mut compressed_buffer = vec![0_u8; block_size * compressed_size];
 
-        forward_threadpool!(pool = pool: Pool);
         //Every block has size exactly block_size, except for potentially the last one
         let action = |block_index| -> ANNResult<()> {
             let start_index: usize = offset + block_index * block_size;
@@ -431,7 +428,7 @@ mod generator_tests {
         )
         .unwrap();
         // Run generator
-        let result = generator.generate_data(storage_provider, &&pool, chunking_config);
+        let result = generator.generate_data(storage_provider, pool.as_ref(), chunking_config);
         (generator, result)
     }
 

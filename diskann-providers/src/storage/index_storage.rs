@@ -277,7 +277,7 @@ mod tests {
             train_data.as_view(),
             pq_bytes,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            2,
+            crate::utils::create_thread_pool(2).unwrap().as_ref(),
         )
         .unwrap();
 
