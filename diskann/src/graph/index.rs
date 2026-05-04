@@ -2529,6 +2529,17 @@ where
             }
 
             let total_f32 = total as f32;
+
+            // protecting against the divide by zero below.
+            if total_live_points == 0 {
+                return Ok(DegreeStats {
+                    max_degree: 0,
+                    avg_degree: 0.0,
+                    min_degree: 0,
+                    cnt_less_than_two: 0,
+                });
+            }
+
             Ok(DegreeStats {
                 max_degree: u32::try_from(max_degree_usize)?,
                 avg_degree: total_f32 / total_live_points as f32,

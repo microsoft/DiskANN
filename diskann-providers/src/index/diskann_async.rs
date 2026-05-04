@@ -3308,7 +3308,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
-        let res_unsat = index_sat
+        let res_unsat = index_unsat
             .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
