@@ -41,7 +41,7 @@ use diskann_utils::{
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
-use crate::inputs::async_::IndexBuild;
+use crate::inputs::graph_index::IndexBuild;
 
 /// Process peak resident-set size in GiB (high-water mark since start).
 /// Linux: `/proc/self/status` VmHWM. Windows: `PeakWorkingSetSize`. Returns
