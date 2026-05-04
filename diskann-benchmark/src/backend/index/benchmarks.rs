@@ -46,9 +46,9 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{
-        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase,
-        TopkPostProcessor,
+    inputs::{
+        async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+        post_processor::TopkPostProcessor,
     },
     utils::{
         self,

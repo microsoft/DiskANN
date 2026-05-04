@@ -23,6 +23,39 @@ impl DeterminantDiversity {
     }
 }
 
+pub(crate) fn rank_and_limit_by_distance(
+    distances: &[f32],
+    power: f32,
+    eta: f32,
+) -> (Vec<usize>, usize) {
+    let mut ranked: Vec<(usize, f32)> = distances
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, distance)| {
+            let transformed = distance.abs().powf(power) + (rank as f32) * eta;
+            (rank, -transformed)
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let ranked_indices: Vec<usize> = ranked.into_iter().map(|(rank, _)| rank).collect();
+    if ranked_indices.is_empty() {
+        return (ranked_indices, 0);
+    }
+
+    let keep_ratio = (1.0 / (1.0 + power * eta * 10.0)).clamp(0.1, 1.0);
+    let max_emit = ((ranked_indices.len() as f32) * keep_ratio)
+        .round()
+        .max(1.0) as usize;
+
+    (ranked_indices, max_emit)
+}
+
 impl<A, T> glue::SearchPostProcess<A, T, A::Id> for DeterminantDiversity
 where
     A: Accessor + diskann::provider::BuildQueryComputer<T> + Send,
@@ -42,28 +75,14 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
-        // Placeholder deterministic-diversity scoring that uses both parameters.
-        let mut reranked: Vec<(Neighbor<A::Id>, f32)> = candidates
-            .enumerate()
-            .map(|(rank, candidate)| {
-                let transformed = candidate.distance.abs().powf(self.power)
-                    + (rank as f32) * self.eta;
-                (candidate, -transformed)
-            })
-            .collect();
-
-        reranked.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Emit only part of the reranked list so power/eta impact recall,
-        // making this path easy to validate in benchmark outputs.
-        let keep_ratio = (1.0 / (1.0 + self.power * self.eta * 10.0)).clamp(0.1, 1.0);
-        let max_emit = ((reranked.len() as f32) * keep_ratio).round().max(1.0) as usize;
+        let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
+        let distances: Vec<f32> = candidates.iter().map(|c| c.distance).collect();
+        let (ranked_indices, max_emit) =
+            rank_and_limit_by_distance(&distances, self.power, self.eta);
 
         let mut count = 0;
-        for (candidate, _) in reranked.into_iter().take(max_emit) {
+        for rank in ranked_indices.into_iter().take(max_emit) {
+            let candidate = &candidates[rank];
             let state = output.push(candidate.id, candidate.distance);
             count += 1;
             if !state.is_available() {

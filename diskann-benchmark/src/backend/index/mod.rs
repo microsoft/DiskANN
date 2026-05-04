@@ -4,7 +4,7 @@
  */
 
 mod build;
-mod post_processor;
+pub(crate) mod post_processor;
 mod search;
 mod streaming;
 

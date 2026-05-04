@@ -273,10 +273,64 @@ pub struct RerankAndFilter<'a> {
     filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
 }
 
+#[derive(Clone, Copy)]
+pub struct DeterminantDiversityAndFilter<'a> {
+    filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    power: f32,
+    eta: f32,
+}
+
+#[derive(Clone, Copy)]
+pub enum SearchPostProcessorKind {
+    RerankAndFilter,
+    DeterminantDiversity { power: f32, eta: f32 },
+}
+
+#[derive(Clone, Copy)]
+pub enum DiskSearchPostProcessor<'a> {
+    RerankAndFilter(RerankAndFilter<'a>),
+    DeterminantDiversity(DeterminantDiversityAndFilter<'a>),
+}
+
 impl<'a> RerankAndFilter<'a> {
-    fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync)) -> Self {
+    pub fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync)) -> Self {
         Self { filter }
     }
+}
+
+impl<'a> DeterminantDiversityAndFilter<'a> {
+    pub fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync), power: f32, eta: f32) -> Self {
+        Self { filter, power, eta }
+    }
+}
+
+fn rank_and_limit_by_distance(distances: &[f32], power: f32, eta: f32) -> (Vec<usize>, usize) {
+    let mut ranked: Vec<(usize, f32)> = distances
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, distance)| {
+            let transformed = distance.abs().powf(power) + (rank as f32) * eta;
+            (rank, -transformed)
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let ranked_indices: Vec<usize> = ranked.into_iter().map(|(rank, _)| rank).collect();
+    if ranked_indices.is_empty() {
+        return (ranked_indices, 0);
+    }
+
+    let keep_ratio = (1.0 / (1.0 + power * eta * 10.0)).clamp(0.1, 1.0);
+    let max_emit = ((ranked_indices.len() as f32) * keep_ratio)
+        .round()
+        .max(1.0) as usize;
+
+    (ranked_indices, max_emit)
 }
 
 impl<Data, VP>
@@ -337,6 +391,115 @@ where
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
         Ok(output.extend(reranked))
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DeterminantDiversityAndFilter<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        _computer: &DiskQueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        let provider = accessor.provider;
+
+        let mut uncached_ids = Vec::new();
+        let mut reranked = candidates
+            .map(|n| n.id)
+            .filter(|id| (self.filter)(id))
+            .filter_map(|n| {
+                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                    Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
+                } else {
+                    uncached_ids.push(n);
+                    None
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if !uncached_ids.is_empty() {
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            for n in &uncached_ids {
+                let v = accessor.scratch.vertex_provider.get_vector(n)?;
+                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
+                reranked.push(((*n, *a), d));
+            }
+        }
+
+        reranked
+            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let distances: Vec<f32> = reranked.iter().map(|item| item.1).collect();
+        let (ranked_indices, max_emit) = rank_and_limit_by_distance(&distances, self.power, self.eta);
+        let selected: Vec<_> = ranked_indices
+            .into_iter()
+            .take(max_emit)
+            .map(|rank| reranked[rank])
+            .collect();
+
+        Ok(output.extend(selected))
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        &[Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchPostProcessor<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        computer: &DiskQueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        match self {
+            DiskSearchPostProcessor::RerankAndFilter(pp) => {
+                pp.post_process(accessor, query, computer, candidates, output)
+                    .await
+            }
+            DiskSearchPostProcessor::DeterminantDiversity(pp) => {
+                pp.post_process(accessor, query, computer, candidates, output)
+                    .await
+            }
+        }
     }
 }
 
@@ -917,6 +1080,7 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
@@ -924,6 +1088,7 @@ where
         search_list_size: u32,
         beam_width: Option<usize>,
         vector_filter: Option<VectorFilter<Data>>,
+        post_processor: Option<SearchPostProcessorKind>,
         is_flat_search: bool,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
@@ -931,6 +1096,18 @@ where
         let mut distances = vec![0f32; return_list_size as usize];
         let mut associated_data =
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
+
+        let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
+        let post_processor = post_processor.map(|processor| match processor {
+            SearchPostProcessorKind::RerankAndFilter => {
+                DiskSearchPostProcessor::RerankAndFilter(RerankAndFilter::new(vector_filter.as_ref()))
+            }
+            SearchPostProcessorKind::DeterminantDiversity { power, eta } => {
+                DiskSearchPostProcessor::DeterminantDiversity(
+                    DeterminantDiversityAndFilter::new(vector_filter.as_ref(), power, eta),
+                )
+            }
+        });
 
         let stats = self.search_internal(
             query,
@@ -941,7 +1118,8 @@ where
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &vector_filter.unwrap_or(default_vector_filter::<Data>()),
+            post_processor,
+            vector_filter.as_ref(),
             is_flat_search,
         )?;
 
@@ -968,7 +1146,7 @@ where
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn search_internal(
+    pub fn search_internal(
         &self,
         query: &[Data::VectorDataType],
         k_value: usize,
@@ -978,6 +1156,7 @@ where
         indices: &mut [u32],
         distances: &mut [f32],
         associated_data: &mut [Data::AssociatedDataType],
+        post_processor: Option<DiskSearchPostProcessor<'_>>,
         vector_filter: &(dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
         is_flat_search: bool,
     ) -> ANNResult<SearchResultStats> {
@@ -1000,10 +1179,18 @@ where
                 &Knn::new(k, l, beam_width)?,
                 &mut result_output_buffer,
             ))?
+        } else if let Some(processor) = post_processor {
+            self.runtime.block_on(self.index.search_with(
+                Knn::new(k, l, beam_width)?,
+                &strategy,
+                processor,
+                &DefaultContext,
+                strategy.query,
+                &mut result_output_buffer,
+            ))?
         } else {
-            let knn_search = Knn::new(k, l, beam_width)?;
             self.runtime.block_on(self.index.search(
-                knn_search,
+                Knn::new(k, l, beam_width)?,
                 &strategy,
                 &DefaultContext,
                 strategy.query,
@@ -1400,6 +1587,7 @@ mod disk_provider_tests {
                     &mut indices,
                     &mut distances,
                     &mut associated_data,
+                    None::<DiskSearchPostProcessor<'_>>,
                     &(|_| true),
                     false,
                 );
@@ -1448,7 +1636,15 @@ mod disk_provider_tests {
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, None, false)
+                    .search(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        beam_width,
+                        None,
+                        None,
+                        false,
+                    )
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1558,6 +1754,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
+            None::<DiskSearchPostProcessor<'_>>,
             &|_| true,
             false,
         );
@@ -1627,6 +1824,7 @@ mod disk_provider_tests {
             return_list_size,
             search_list_size,
             Some(4),
+            None,
             None,
             false,
         );
@@ -1966,6 +2164,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
+            None::<DiskSearchPostProcessor<'_>>,
             &vector_filter,
             is_flat_search,
         );
@@ -1988,6 +2187,7 @@ mod disk_provider_tests {
             10,
             None, // beam_width
             Some(Box::new(vector_filter)),
+            None,
             is_flat_search,
         );
 

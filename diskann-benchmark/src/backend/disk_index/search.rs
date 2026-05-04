@@ -14,7 +14,8 @@ use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
     search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+        disk_provider::{DiskIndexSearcher, SearchPostProcessorKind},
+        disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -32,7 +33,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::{
+        disk::{DiskIndexLoad, DiskSearchPhase},
+        post_processor::TopkPostProcessor,
+    },
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -264,6 +268,14 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+                let post_processor = search_params.post_processor.as_ref().map(
+                    |TopkPostProcessor::DeterminantDiversity { power, eta }| {
+                        SearchPostProcessorKind::DeterminantDiversity {
+                            power: *power,
+                            eta: *eta,
+                        }
+                    },
+                );
                 let vector_filter = if search_params.vector_filters_file.is_none() {
                     None
                 } else {
@@ -277,19 +289,23 @@ where
                     l,
                     Some(search_params.beam_width),
                     vector_filter,
+                    post_processor,
                     search_params.is_flat_search,
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
-                        *rc = search_result.results.len() as u32;
-                        let actual_results = search_result
-                            .results
-                            .len()
-                            .min(search_params.recall_at as usize);
+                        let base_count = (search_result.stats.result_count as usize)
+                            .min(search_params.recall_at as usize)
+                            .min(search_result.results.len());
+
+                        *rc = base_count as u32;
+                        id_chunk.fill(0);
+                        dist_chunk.fill(0.0);
+
                         for (i, result_item) in search_result
                             .results
                             .iter()
-                            .take(actual_results)
+                            .take(base_count)
                             .enumerate()
                         {
                             id_chunk[i] = result_item.vertex_id;

@@ -1092,6 +1092,7 @@ pub(crate) mod disk_index_builder_tests {
                 &mut indices,
                 &mut distances,
                 &mut associated_data,
+                None,
                 &|_| true,
                 false,
             );
