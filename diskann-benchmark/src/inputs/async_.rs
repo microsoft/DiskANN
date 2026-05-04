@@ -425,6 +425,14 @@ impl CheckDeserialization for SearchPhase {
     }
 }
 
+fn has_topk_determinant_diversity(phase: &SearchPhase) -> bool {
+    phase
+        .as_topk()
+        .ok()
+        .and_then(|topk| topk.post_processor.as_ref())
+        .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchPhaseKind {
     Topk,
@@ -778,6 +786,14 @@ impl CheckDeserialization for IndexOperation {
         self.source.check_deserialization(checker)?;
         self.search_phase.check_deserialization(checker)?;
 
+        if has_topk_determinant_diversity(&self.search_phase)
+            && !matches!(self.source.data_type(), DataType::Float32)
+        {
+            anyhow::bail!(
+                "topk determinant-diversity is supported only for full-precision f32 searches"
+            );
+        }
+
         Ok(())
     }
 }
@@ -856,7 +872,15 @@ impl IndexPQOperation {
 
 impl CheckDeserialization for IndexPQOperation {
     fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.check_deserialization(checker)
+        self.index_operation.check_deserialization(checker)?;
+
+        if has_topk_determinant_diversity(&self.index_operation.search_phase) {
+            anyhow::bail!(
+                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-pq"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -942,7 +966,15 @@ impl CheckDeserialization for IndexSQOperation {
             ));
         }
 
-        self.index_operation.check_deserialization(checker)
+        self.index_operation.check_deserialization(checker)?;
+
+        if has_topk_determinant_diversity(&self.index_operation.search_phase) {
+            anyhow::bail!(
+                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-sq"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -1020,6 +1052,12 @@ impl CheckDeserialization for SphericalQuantBuild {
     fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.build.check_deserialization(checker)?;
         self.search_phase.check_deserialization(checker)?;
+
+        if has_topk_determinant_diversity(&self.search_phase) {
+            anyhow::bail!(
+                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-spherical-quantization"
+            );
+        }
 
         if self.build.save_path.is_some() {
             return Err(anyhow::anyhow!(
@@ -1296,6 +1334,13 @@ impl CheckDeserialization for DynamicIndexRun {
         self.build.check_deserialization(checker)?;
         self.runbook_params.check_deserialization(checker)?;
         self.search_phase.check_deserialization(checker)?;
+
+        if has_topk_determinant_diversity(&self.search_phase) {
+            anyhow::bail!(
+                "topk determinant-diversity is supported only for async full-precision topk, not async-dynamic-index-run"
+            );
+        }
+
         Ok(())
     }
 }
