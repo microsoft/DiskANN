@@ -4,8 +4,6 @@
  */
 
 //! [`FlatIndex`] — the index wrapper for an on which we do flat search.
-
-use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
@@ -28,16 +26,12 @@ use crate::{
 pub struct FlatIndex<P: DataProvider> {
     /// The backing provider.
     provider: P,
-    _marker: PhantomData<fn() -> P>,
 }
 
 impl<P: DataProvider> FlatIndex<P> {
     /// Construct a new [`FlatIndex`] around `provider`.
     pub fn new(provider: P) -> Self {
-        Self {
-            provider,
-            _marker: PhantomData,
-        }
+        Self { provider }
     }
 
     /// Borrow the underlying provider.
@@ -72,11 +66,11 @@ impl<P: DataProvider> FlatIndex<P> {
         T: ?Sized + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> FlatPostProcess<S::Callback<'a>, T, O> + Send + Sync,
+        PP: for<'a> FlatPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
     {
         async move {
-            let mut callback = strategy
-                .create_callback(&self.provider, context)
+            let mut visitor = strategy
+                .create_visitor(&self.provider, context)
                 .into_ann_result()?;
 
             let computer = strategy.build_query_computer(query).into_ann_result()?;
@@ -85,7 +79,7 @@ impl<P: DataProvider> FlatIndex<P> {
             let mut queue = NeighborPriorityQueue::new(k);
             let mut cmps: u32 = 0;
 
-            callback
+            visitor
                 .distances_unordered(&computer, |id, dist| {
                     cmps += 1;
                     queue.insert(Neighbor::new(id, dist));
@@ -94,7 +88,7 @@ impl<P: DataProvider> FlatIndex<P> {
                 .into_ann_result()?;
 
             let result_count = processor
-                .post_process(&mut callback, query, queue.iter().take(k), output)
+                .post_process(&mut visitor, query, queue.iter().take(k), output)
                 .await
                 .into_ann_result()? as u32;
 

@@ -43,15 +43,21 @@ pub trait OnElementsUnordered: HasId + Send + Sync {
 /// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
 /// calling `computer.evaluate_similarity` on each element.
 pub trait DistancesUnordered: OnElementsUnordered {
+    /// The concrete type of the distance computer for a query, which should be applicable for
+    /// all elements in the underlying driver.
+    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
+        + Send
+        + Sync
+        + 'static;
+
     /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
     /// the resulting `(id, distance)` pair.
-    fn distances_unordered<C, F>(
+    fn distances_unordered<F>(
         &mut self,
-        computer: &C,
+        computer: &Self::QueryComputer,
         mut f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
-        C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32> + Send + Sync,
         F: Send + FnMut(Self::Id, f32),
     {
         self.on_elements_unordered(move |id, element| {
@@ -103,11 +109,11 @@ pub trait FlatIterator: HasId + Send + Sync {
 /// This is the default adapter for providers that implement element-at-a-time iteration.
 /// Providers that can do better (prefetching, SIMD batching, bulk I/O) should implement
 /// [`OnElementsUnordered`] directly.
-pub struct DefaultIteratedOperator<I> {
+pub struct Iterated<I> {
     inner: I,
 }
 
-impl<I> DefaultIteratedOperator<I> {
+impl<I> Iterated<I> {
     /// Wrap an iterator to produce an [`OnElementsUnordered`] implementation.
     pub fn new(inner: I) -> Self {
         Self { inner }
@@ -119,11 +125,11 @@ impl<I> DefaultIteratedOperator<I> {
     }
 }
 
-impl<I: HasId> HasId for DefaultIteratedOperator<I> {
+impl<I: HasId> HasId for Iterated<I> {
     type Id = I::Id;
 }
 
-impl<I> OnElementsUnordered for DefaultIteratedOperator<I>
+impl<I> OnElementsUnordered for Iterated<I>
 where
     I: FlatIterator + HasId + Send + Sync,
 {
@@ -142,6 +148,3 @@ where
         }
     }
 }
-
-impl<I> DistancesUnordered for DefaultIteratedOperator<I> where I: FlatIterator + HasId + Send + Sync
-{}

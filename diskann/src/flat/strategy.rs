@@ -22,10 +22,10 @@ use crate::{
 ///
 /// # Why two methods?
 ///
-/// - [`Self::create_callback`] is query-independent and may be called multiple times per
+/// - [`Self::create_visitor`] is query-independent and may be called multiple times per
 ///   request (e.g., once per parallel query in a batched search).
-/// - [`Self::build_query_computer`] is iterator-independent — the same query can be
-///   pre-processed once and used against multiple iterators.
+/// - [`Self::build_query_computer`] is visitor-independent — the same query can be
+///   pre-processed once and used against multiple visitors.
 ///
 /// Both methods may borrow from the strategy itself.
 ///
@@ -38,9 +38,9 @@ where
     P: DataProvider,
     T: ?Sized,
 {
-    /// The iterator type produced by [`Self::create_callback`]. Borrows from `self` and the
+    /// The visitor type produced by [`Self::create_visitor`]. Borrows from `self` and the
     /// provider.
-    type Callback<'a>: DistancesUnordered
+    type Visitor<'a>: DistancesUnordered<QueryComputer = Self::QueryComputer>
     where
         Self: 'a,
         P: 'a;
@@ -48,10 +48,10 @@ where
     /// The query computer produced by [`Self::build_query_computer`].
     ///
     /// The HRTB on `ElementRef` ensures the same computer can score every element yielded
-    /// by every lifetime of `Iter`. Two lifetimes are needed: `'a` for the iterator
+    /// by every lifetime of `Visitor`. Two lifetimes are needed: `'a` for the visitor
     /// instance and `'b` for the reborrowed element.
     type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::Callback<'a> as OnElementsUnordered>::ElementRef<'b>,
+            <Self::Visitor<'a> as OnElementsUnordered>::ElementRef<'b>,
             f32,
         > + Send
         + Sync
@@ -60,18 +60,18 @@ where
     /// The error type for both factory methods.
     type Error: StandardError;
 
-    /// Construct a fresh iterator over `provider` for the given request `context`.
+    /// Construct a fresh visitor over `provider` for the given request `context`.
     ///
     /// This is where lock acquisition, snapshot pinning, and any other per-query setup
-    /// should happen. The returned callback object owns whatever borrows / guards it needs to
+    /// should happen. The returned visitor owns whatever borrows / guards it needs to
     /// remain valid until it is dropped.
-    fn create_callback<'a>(
+    fn create_visitor<'a>(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
-    ) -> Result<Self::Callback<'a>, Self::Error>;
+    ) -> Result<Self::Visitor<'a>, Self::Error>;
 
     /// Pre-process a query into a [`Self::QueryComputer`] usable for distance computation
-    /// against any iterator produced by [`Self::create_callback`].
+    /// against any visitor produced by [`Self::create_visitor`].
     fn build_query_computer(&self, query: &T) -> Result<Self::QueryComputer, Self::Error>;
 }

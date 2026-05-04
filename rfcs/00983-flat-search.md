@@ -73,7 +73,7 @@ The query computer is a generic parameter rather than an associated type, so the
 callback type can be driven by different computers. The `FlatSearchStrategy` is the
 source of truth for which computer is used in any given search.
 
-### `FlatIterator` and `DefaultIteratedOperator` — convenience for element-at-a-time backends
+### `FlatIterator` and `Iterated` — convenience for element-at-a-time backends
 
 For backends that naturally expose element-at-a-time iteration, `FlatIterator` is a
 lending async iterator:
@@ -92,7 +92,7 @@ pub trait FlatIterator: HasId + Send + Sync {
 }
 ```
 
-`DefaultIteratedOperator<I>` wraps any `FlatIterator` and implements `OnElementsUnordered`
+`Iterated<I>` wraps any `FlatIterator` and implements `OnElementsUnordered`
 (and `DistancesUnordered` by inheritance) by looping over `next()` and reborrowing each
 element. 
 
@@ -101,9 +101,9 @@ element.
 
 While `OnElementsUnordered` is the primary handle the algorithm uses to walk the index,
 it is scoped to each query. We introduce a constructor — `FlatSearchStrategy` — similar
-to `SearchStrategy` for `Accessor`, to instantiate the per-query callback object.
+to `SearchStrategy` for `Accessor`, to instantiate the per-query visitor.
 A strategy is per-call configuration that is stateless, cheap to construct and scoped to one
-search. It produces both a per-query callback and a query computer.
+search. It produces both a per-query visitor and a query computer.
 
 ```rust
 pub trait FlatSearchStrategy<P, T>: Send + Sync
@@ -111,15 +111,15 @@ where
     P: DataProvider,
     T: ?Sized,
 {
-    /// The per-query callback type produced by [`Self::create_callback`]. Borrows from
+    /// The per-query visitor type produced by [`Self::create_visitor`]. Borrows from
     /// `self` and the provider.
-    type Callback<'a>: DistancesUnordered
+    type Visitor<'a>: DistancesUnordered
     where
         Self: 'a,
 
     /// The query computer produced by [`Self::build_query_computer`].
     type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::Callback<'a> as OnElementsUnordered>::ElementRef<'b>,
+            <Self::Visitor<'a> as OnElementsUnordered>::ElementRef<'b>,
             f32,
         > + Send
         + Sync
@@ -128,21 +128,21 @@ where
     /// The error type 
     type Error: StandardError;
 
-    /// Construct a fresh callback over `provider` for the given request `context`.
-    fn create_callback<'a>(
+    /// Construct a fresh visitor over `provider` for the given request `context`.
+    fn create_visitor<'a>(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
-    ) -> Result<Self::Callback<'a>, Self::Error>;
+    ) -> Result<Self::Visitor<'a>, Self::Error>;
 
     /// Pre-process a query into a [`Self::QueryComputer`] usable for distance computation
-    /// against any callback produced by [`Self::create_callback`].
+    /// against any visitor produced by [`Self::create_visitor`].
     fn build_query_computer(&self, query: &T) -> Result<Self::QueryComputer, Self::Error>;
 }
 ```
 
 The `ElementRef<'b>` that the `QueryComputer` acts on is tied to the
-`OnElementsUnordered::ElementRef` of the callback produced by `create_callback`.
+`OnElementsUnordered::ElementRef` of the visitor produced by `create_visitor`.
 
 ### `FlatIndex`
 
@@ -173,15 +173,15 @@ impl<P: DataProvider> FlatIndex<P> {
         T: ?Sized + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> FlatPostProcess<S::Callback<'a>, T, O> + Send + Sync,
+        PP: for<'a> FlatPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
 }
 ```
 
 The `knn_search` method is the canonical brute-force search algorithm:
 
-1. Construct the per-query callback via `strategy.create_callback`.
+1. Construct the per-query visitor via `strategy.create_visitor`.
 2. Build the query computer via `strategy.build_query_computer`.
-3. Drive the scan via `callback.distances_unordered(&computer, ...)`, inserting each
+3. Drive the scan via `visitor.distances_unordered(&computer, ...)`, inserting each
    `(id, distance)` pair into a `NeighborPriorityQueue<Id>` of capacity `k`.
 4. Hand the survivors (in distance order) to `processor.post_process`.
 5. Return search stats.
