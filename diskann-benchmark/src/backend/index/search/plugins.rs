@@ -145,6 +145,17 @@ impl Topk {
     }
 }
 
+/// A search plugin for determinant-diversity top-k post-processing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeterminantDiversity;
+
+impl DeterminantDiversity {
+    /// Returns [`SearchPhaseKind::Topk`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::Topk
+    }
+}
+
 /// A search plugin for range search.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Range;

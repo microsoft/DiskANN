@@ -41,11 +41,15 @@ use super::{
 };
 use crate::{
     backend::index::{
-        result::{AggregatedSearchResults, BuildResult},
+        post_processor,
+        result::{AggregatedSearchResults, BuildResult, SearchResults},
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::async_::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase,
+        TopkPostProcessor,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -73,6 +77,7 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     benchmarks.register(
         "async-full-precision-f32",
         FullPrecision::<f32>::new()
+            .search(plugins::DeterminantDiversity)
             .search(plugins::Topk)
             .search(plugins::Range)
             .search(plugins::BetaFilter)
@@ -448,13 +453,141 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
+impl<DP> search::Plugin<DP, SearchPhase, Strategy<common::FullPrecision>>
+    for plugins::DeterminantDiversity
+where
+    DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32> + QueryType,
+    common::FullPrecision: for<'a> glue::SearchStrategy<DP, &'a [DP::Element]>,
+    for<'a> post_processor::DeterminantDiversity: glue::SearchPostProcess<
+        <common::FullPrecision as glue::SearchStrategy<DP, &'a [DP::Element]>>::SearchAccessor<'a>,
+        &'a [DP::Element],
+        u32,
+    >,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        if Self::kind() != phase.kind() {
+            return false;
+        }
+
+        phase
+            .as_topk()
+            .ok()
+            .and_then(|topk| topk.post_processor.as_ref())
+            .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
+    }
+
+    fn kind(&self) -> &'static str {
+        "topk + determinant-diversity"
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        _strategy: &Strategy<common::FullPrecision>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let topk = phase.as_topk()?;
+        let (power, eta) = match topk.post_processor.as_ref() {
+            Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => (*power, *eta),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "determinant-diversity plugin selected for non determinant-diversity input",
+                ));
+            }
+        };
+
+        let strategy = common::FullPrecision;
+        let context = DefaultContext;
+        let det_div = post_processor::DeterminantDiversity::new(power, eta);
+
+        let queries: Arc<Matrix<DP::Element>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
+        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+
+        let mut all_results = Vec::new();
+
+        for threads in &topk.num_threads {
+            for run in &topk.runs {
+                for search_l in &run.search_l {
+                    let knn_params =
+                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+
+                    let mut all_recalls = Vec::new();
+
+                    for query_idx in 0..queries.nrows() {
+                        let query = queries.row(query_idx);
+                        let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
+                        utils::tokio::block_on(async {
+                            index
+                                .search_with(
+                                    knn_params,
+                                    &strategy,
+                                    det_div,
+                                    &context,
+                                    query,
+                                    &mut output,
+                                )
+                                .await
+                        })?;
+
+                        let gt = groundtruth.row(query_idx);
+                        let mut matches = 0;
+                        for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
+                            if i >= gt.len() {
+                                break;
+                            }
+                            if gt.contains(&neighbor.id) {
+                                matches += 1;
+                            }
+                        }
+                        all_recalls.push(matches);
+                    }
+
+                    let avg_recall =
+                        all_recalls.iter().sum::<usize>() as f32 / (queries.nrows() * run.recall_k) as f32;
+
+                    all_results.push(SearchResults {
+                        num_tasks: threads.get(),
+                        search_n: run.search_n,
+                        search_l: *search_l,
+                        qps: vec![],
+                        search_latencies: vec![],
+                        mean_latencies: vec![],
+                        p90_latencies: vec![],
+                        p99_latencies: vec![],
+                        recall: utils::recall::RecallMetrics {
+                            recall_k: run.recall_k,
+                            recall_n: run.search_n,
+                            num_queries: queries.nrows(),
+                            average: avg_recall as f64,
+                            minimum: *all_recalls.iter().min().unwrap_or(&0),
+                            maximum: *all_recalls.iter().max().unwrap_or(&0),
+                        },
+                        mean_cmps: 0.0,
+                        mean_hops: 0.0,
+                    });
+                }
+            }
+        }
+
+        Ok(AggregatedSearchResults::Topk(all_results))
+    }
+}
+
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        if Self::kind() != phase.kind() {
+            return false;
+        }
+
+        phase
+            .as_topk()
+            .ok()
+            .is_some_and(|topk| topk.post_processor.is_none())
     }
 
     fn kind(&self) -> &'static str {
