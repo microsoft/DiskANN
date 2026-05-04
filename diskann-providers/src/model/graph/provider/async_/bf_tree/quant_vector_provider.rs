@@ -361,8 +361,8 @@ mod tests {
         let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
-                &provider.get_vector_sync(0).unwrap(),
-                &provider.get_vector_sync(3).unwrap()
+                provider.get_vector_sync(0).unwrap().as_slice(),
+                provider.get_vector_sync(3).unwrap().as_slice(),
             ),
             2.0
         );

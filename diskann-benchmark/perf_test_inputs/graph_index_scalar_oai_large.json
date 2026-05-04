@@ -4,7 +4,7 @@
     ],
     "jobs": [
       {
-        "type": "async-index-build-sq",
+        "type": "graph-index-build-sq",
         "content": {
           "build": {
             "data_type": "float16",
@@ -40,7 +40,7 @@
         }
       },
       {
-        "type": "async-index-build-sq",
+        "type": "graph-index-build-sq",
         "content": {
           "build": {
             "data_type": "float16",
@@ -76,7 +76,7 @@
         }
       },
       {
-        "type": "async-index-build-sq",
+        "type": "graph-index-build-sq",
         "content": {
           "build": {
             "data_type": "float16",

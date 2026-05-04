@@ -93,65 +93,60 @@ cargo run --release --package diskann-benchmark -- inputs
 which will list something like
 ```
 Available input kinds are listed below:
-    async-index-build
-    async-index-build-pq
+    graph-index-build
+    graph-index-build-pq
 ```
 To obtain the JSON schema for an input, add its name to the query like
 ```sh
-cargo run --release --package diskann-benchmark -- inputs async-index-build
+cargo run --release --package diskann-benchmark -- inputs graph-index-build
 ```
 which will generate something like
 ```json
 {
-  "type": "async_index_build",
+  "type": "graph-index-build",
   "content": {
-    "data_type": "float32",
-    "data": "path/to/data",
-    "distance": "squared_l2",
-    "max_degree": 32,
-    "l_build": 50,
-    "alpha": 1.2,
-    "backedge_ratio": 1.0,
-    "num_threads": 1,
-    "num_start_points": 10,
-    "num_insert_attempts": 2,
-    "saturate_inserts": true,
-    "multi_insert": {
-      "batch_size": 128,
-      "batch_parallelism": 32
-    },
     "search_phase": {
-      "search-type": "topk",
-      "queries": "path/to/queries",
       "groundtruth": "path/to/groundtruth",
-      "reps": 5,
       "num_threads": [
         1,
         2,
         4,
         8
       ],
+      "queries": "path/to/queries",
+      "reps": 5,
       "runs": [
         {
-          "enhanced_metrics": false,
-          "search_k": 10,
+          "recall_k": 10,
           "search_l": [
             10,
             20,
             30,
             40
           ],
-          "target_recall": [
-                {
-                  "target": [50, 90, 95, 98, 99],
-                  "percentile": [0.5, 0.75, 0.9, 0.95],
-                  "max_search_l": 1000,
-                  "calibration_size": 1000,
-                },
-          ],
-          "recall_n": 10
+          "search_n": 10
         }
-      ]
+      ],
+      "search-type": "topk"
+    },
+    "source": {
+      "alpha": 1.2000000476837158,
+      "backedge_ratio": 1.0,
+      "data": "path/to/data",
+      "data_type": "float32",
+      "distance": "squared_l2",
+      "index-source": "Build",
+      "insert_retry": null,
+      "l_build": 50,
+      "max_degree": 32,
+      "multi_insert": {
+        "batch_parallelism": 32,
+        "batch_size": 128,
+        "intra_batch_candidates": "none"
+      },
+      "num_threads": 1,
+      "save_path": null,
+      "start_point_strategy": "medoid"
     }
   }
 }
@@ -186,16 +181,16 @@ cargo run --release --package diskann-benchmark -- benchmarks
 Example output is shown below:
 ```
 Registered Benchmarks:
-    async-full-precision-f32:
-        tag "async-index-build"
+    graph-index-full-precision-f32:
+        tag "graph-index-build"
         Data/Query Type: float32
         Search Kinds: "topk", "range", "topk-beta-filter", and "topk-multihop-filter"
-    async-full-precision-f16:
-        tag "async-index-build"
+    graph-index-full-precision-f16:
+        tag "graph-index-build"
         Data/Query Type: float16
         Search Kinds: "topk"
-    async-pq-f32:
-        tag "async-index-build-pq"
+    graph-index-pq-f32:
+        tag "graph-index-build-pq"
         Data/Query Type: float32
         Search Kinds: "topk" and "range"
     ...
@@ -233,7 +228,7 @@ matching.
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async.json --output-file output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index.json --output-file output.json
 ```
 
 A benchmark run happens in several phases.
@@ -274,10 +269,10 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index-dynamic.json --output-file dynamic-output.json
 ```
-Note in the example json that the benchmark is registered under `async-dynamic-index-run`,
-instead of `async-index-build` etc..
+Note in the example json that the benchmark is registered under `graph-index-dynamic-run`,
+instead of `graph-index-build` etc..
 
 A streaming run happens in several phases.
 First, the input file is parsed and data is checked for its validity. The check consists of
@@ -321,7 +316,7 @@ input, a `DispatchRule` from the `dispatcher` crate (via
 registered `diskann_benchmark_runner::Inputs`.
 
 The rule can be as simple as checking a down cast or as complicated such as lifting run-time
-information to the type/compile time realm, as is done for the async index tests for the data
+information to the type/compile time realm, as is done for the graph index tests for the data
 type.
 
 Once this is complete, the benchmark will be reachable by its input and can live peacefully

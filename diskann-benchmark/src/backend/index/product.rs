@@ -6,7 +6,10 @@
 use diskann_benchmark_runner::registry::Benchmarks;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!("product-quantization", inputs::async_::IndexPQOperation);
+crate::utils::stub_impl!(
+    "product-quantization",
+    inputs::graph_index::IndexPQOperation
+);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
@@ -19,20 +22,20 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         // Feel free to add search plugins, but be mindful of the monomorphization cost.
 
         benchmarks.register(
-            "async-pq-f32",
+            "graph-index-pq-f32",
             imp::ProductQuantized::<f32>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range),
         );
         benchmarks.register(
-            "async-pq-f16",
+            "graph-index-pq-f16",
             imp::ProductQuantized::<f16>::new().search(plugins::Topk),
         );
     }
 
     // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("async-pq", benchmarks);
+    imp::register("graph-index-pq", benchmarks);
 }
 
 #[cfg(feature = "product-quantization")]
@@ -63,7 +66,7 @@ mod imp {
             result::{BuildResult, QuantBuildResult},
             search::plugins,
         },
-        inputs::async_::{IndexPQOperation, IndexSource, SearchPhase},
+        inputs::graph_index::{IndexPQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 

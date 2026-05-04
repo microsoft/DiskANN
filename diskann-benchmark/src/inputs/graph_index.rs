@@ -316,7 +316,7 @@ impl Example for MultiInsert {
     }
 }
 
-// This constant is used to ensure that summaries of async-index related jobs properly have
+// This constant is used to ensure that summaries of graph-index related jobs properly have
 // their field descriptions aligned.
 const PRINT_WIDTH: usize = 18;
 
@@ -454,7 +454,7 @@ pub(crate) struct IndexLoad {
 
 impl IndexLoad {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-load"
+        "graph-index-load"
     }
 
     pub(crate) fn to_config(&self) -> Result<IndexConfiguration, anyhow::Error> {
@@ -516,7 +516,7 @@ impl CheckDeserialization for IndexLoad {
 
 impl std::fmt::Display for IndexLoad {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Load\n")?;
+        writeln!(f, "Graph Index Full-Precision Load\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -577,7 +577,7 @@ pub(crate) struct IndexBuild {
 
 impl IndexBuild {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-builder"
+        "graph-index-builder"
     }
 
     fn exact_max_degree(&self) -> usize {
@@ -709,7 +709,7 @@ impl Example for IndexBuild {
 
 impl std::fmt::Display for IndexBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Build\n")?;
+        writeln!(f, "Graph Index Full-Precision Build\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -759,7 +759,7 @@ pub(crate) struct IndexOperation {
 
 impl IndexOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build"
+        "graph-index-build"
     }
 }
 
@@ -784,7 +784,7 @@ impl Example for IndexOperation {
 
 impl std::fmt::Display for IndexOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Build\n")?;
+        writeln!(f, "Graph Index Full-Precision Build\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -792,9 +792,9 @@ impl std::fmt::Display for IndexOperation {
     }
 }
 
-////////////////////
-// Async Build PQ //
-////////////////////
+//////////////////////////////
+// Graph Index Build PQ //
+//////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexPQOperation {
@@ -807,7 +807,7 @@ pub(crate) struct IndexPQOperation {
 
 impl IndexPQOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-pq"
+        "graph-index-build-pq"
     }
 
     #[cfg(feature = "product-quantization")]
@@ -865,7 +865,7 @@ impl Example for IndexPQOperation {
 
 impl std::fmt::Display for IndexPQOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async PQ Index Build")?;
+        writeln!(f, "Graph Index PQ Build")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "PQ Chunks", self.num_pq_chunks)?;
         const MAX_FP_VECS: &str = "Max FP Vecs";
@@ -882,9 +882,9 @@ impl std::fmt::Display for IndexPQOperation {
     }
 }
 
-////////////////////
-// Async Build SQ //
-////////////////////
+//////////////////////////////
+// Graph Index Build SQ //
+//////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexSQOperation {
@@ -896,7 +896,7 @@ pub(crate) struct IndexSQOperation {
 
 impl IndexSQOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-sq"
+        "graph-index-build-sq"
     }
 
     #[cfg(feature = "scalar-quantization")]
@@ -958,7 +958,7 @@ impl Example for IndexSQOperation {
 
 impl std::fmt::Display for IndexSQOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async SQ Index Build")?;
+        writeln!(f, "Graph Index SQ Build")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "SQ bits", self.num_bits)?;
         write_field!(f, "StdDev", self.standard_deviations)?;
@@ -972,9 +972,9 @@ impl std::fmt::Display for IndexSQOperation {
     }
 }
 
-///////////////////////////
-// Async Build Spherical //
-///////////////////////////
+/////////////////////////////////////
+// Graph Index Build Spherical //
+/////////////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SphericalQuantBuild {
@@ -989,7 +989,7 @@ pub(crate) struct SphericalQuantBuild {
 
 impl SphericalQuantBuild {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-spherical-quantization"
+        "graph-index-build-spherical-quantization"
     }
 
     #[cfg(feature = "spherical-quantization")]
@@ -1066,7 +1066,7 @@ impl Example for SphericalQuantBuild {
 
 impl std::fmt::Display for SphericalQuantBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Spherically Quantized Index Build")?;
+        writeln!(f, "Graph Index Spherical Quantization Build")?;
         if cfg!(not(feature = "spherical-quantization")) {
             writeln!(f, "Requires the `spherical-quantization` feature")?;
         }
@@ -1251,9 +1251,9 @@ impl std::fmt::Display for DynamicRunbookParams {
     }
 }
 
-///////////////////
-// Async Dynamic //
-///////////////////
+///////////////////////////
+// Graph Index Dynamic //
+///////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct DynamicIndexRun {
@@ -1264,7 +1264,7 @@ pub(crate) struct DynamicIndexRun {
 
 impl DynamicIndexRun {
     pub(crate) const fn tag() -> &'static str {
-        "async-dynamic-index-run"
+        "graph-index-dynamic-run"
     }
 
     pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
@@ -1305,7 +1305,7 @@ impl Example for DynamicIndexRun {
 
 impl std::fmt::Display for DynamicIndexRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Dynamic Index Run")?;
+        writeln!(f, "Graph Index Dynamic Run")?;
         write_field!(f, "tag", Self::tag())?;
         writeln!(f, "Runbook Parameters:")?;
         write!(f, "{}", self.runbook_params)?;
