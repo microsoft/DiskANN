@@ -7,9 +7,13 @@
 //!
 //! - [`MaxSim`]: Per-query-vector maximum similarities.
 //! - [`Chamfer`]: Sum of MaxSim scores (asymmetric Chamfer distance).
+//! - [`QueryComputer`]: Architecture-dispatched query computer backed by
+//!   SIMD-accelerated block-transposed kernels.
 //!
-//! Both are currently implemented using a simple double-loop kernel over
-//! [`InnerProduct`](diskann_vector::distance::InnerProduct).
+//! The fallback path uses a double-loop kernel over
+//! [`InnerProduct`](diskann_vector::distance::InnerProduct). The optimised
+//! path (via [`QueryComputer`]) uses block-transposed layout with
+//! cache-tiled SIMD micro-kernels.
 //!
 //! # Example
 //!
@@ -41,12 +45,15 @@
 //! let mut scores = vec![0.0f32; 2];
 //! let mut max_sim = MaxSim::new(&mut scores).unwrap();
 //! max_sim.evaluate(query, doc);
-//! // scores[0] = -1.0 (query[0] matches doc[0])
-//! // scores[1] =  0.0 (query[1] has no good match)
+//! // scores[0] = -1.0 (query[0] matches doc[0]: negated max inner product)
+//! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
 //! ```
 
+mod fallback;
+mod kernels;
 mod max_sim;
-mod simple;
+mod query_computer;
 
+pub use fallback::QueryMatRef;
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use simple::QueryMatRef;
+pub use query_computer::QueryComputer;
