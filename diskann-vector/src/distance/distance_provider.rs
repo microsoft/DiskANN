@@ -84,7 +84,7 @@ where
     /// panic if provided with slices with a length not equal to this dimension.
     #[inline]
     pub fn call(&self, x: &[T], y: &[U]) -> f32 {
-        self.f.call(x.as_unaligned(), y.as_unaligned())
+        self.call_unaligned(x.as_unaligned(), y.as_unaligned())
     }
 
     /// Compute the distance between `x` and `y`.
