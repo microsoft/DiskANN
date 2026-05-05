@@ -4,14 +4,19 @@
  */
 
 //! [`OnElementsUnordered`] — the sequential access primitive for accessing a flat index.
+//! [`DistancesUnordered`] — sub-trait of [`OnElementsUnordered`] and [`BuildQueryComputer`]
+//! that computes distances over the elements in the flat index.
 //!
 //! [`FlatIterator`] — a lending async iterator that can be bridged into
-//! [`OnElementsUnordered`] via [`DefaultIteratedOperator`].
+//! [`OnElementsUnordered`] via [`Iterated`].
 
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::StandardError, provider::{HasElementRef, HasId}};
+use crate::{
+    error::StandardError,
+    provider::{BuildQueryComputer, HasElementRef, HasId},
+};
 
 /// Callback-driven sequential scan over the elements of a flat index.
 ///
@@ -30,31 +35,31 @@ pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
         F: Send + for<'a> FnMut(Self::Id, <Self as HasElementRef>::ElementRef<'a>);
 }
 
-/// Extension of [`OnElementsUnordered`] that drives the scan with a pre-built query
-/// computer, invoking a callback with `(id, distance)` pairs instead of raw elements.
+/// Extension of [`OnElementsUnordered`] that drives the scan with a query computer
+/// produced by the visitor's [`BuildQueryComputer<T>`] impl, invoking a callback with
+/// `(id, distance)` pairs.
 ///
-/// The concrete computer is insantiated and supplied externally
-/// by the [`FlatSearchStrategy`](crate::flat::FlatSearchStrategy).
+/// This fuses the scan with a pre-processed query computer and runs over a
+/// streaming visitor. It pulls the computer type from the implementor's own
+/// [`BuildQueryComputer<T>`] impl.
 ///
 /// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
 /// calling `computer.evaluate_similarity` on each element.
-pub trait DistancesUnordered: OnElementsUnordered {
-    /// The concrete type of the distance computer for a query, which should be applicable for
-    /// all elements in the underlying driver.
-    type QueryComputer: for<'a> PreprocessedDistanceFunction<<Self as HasElementRef>::ElementRef<'a>, f32>
-        + Send
-        + Sync
-        + 'static;
-
+///
+/// ## Note
+///
+/// This is the flat analog to [`crate::provider::DistancesUnordered`] which runs over
+/// a random-access [`crate::provider::Accessor`].
+pub trait DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T> {
     /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
     /// the resulting `(id, distance)` pair.
     fn distances_unordered<F>(
         &mut self,
-        computer: &Self::QueryComputer,
+        computer: &<Self as BuildQueryComputer<T>>::QueryComputer,
         mut f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
+    ) -> impl SendFuture<Result<(), <Self as OnElementsUnordered>::Error>>
     where
-        F: Send + FnMut(Self::Id, f32),
+        F: Send + FnMut(<Self as HasId>::Id, f32),
     {
         self.on_elements_unordered(move |id, element| {
             let dist = computer.evaluate_similarity(element);
@@ -74,7 +79,9 @@ pub trait DistancesUnordered: OnElementsUnordered {
 /// an [`OnElementsUnordered`] implementation automatically.
 pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
     /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
-    type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>> + Send + Sync
+    type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>>
+        + Send
+        + Sync
     where
         Self: 'a;
 
@@ -123,7 +130,7 @@ impl<I: HasId> HasId for Iterated<I> {
 
 impl<I: HasElementRef> HasElementRef for Iterated<I> {
     type ElementRef<'a> = I::ElementRef<'a>;
-} 
+}
 
 impl<I> OnElementsUnordered for Iterated<I>
 where

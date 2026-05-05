@@ -14,14 +14,14 @@
 //!
 //! The module mirrors the layering used by graph search:
 //!
-//! | Graph (random access)                     | Flat (sequential)                 |
-//! | :------------------------------------     | :-------------------------------- |
-//! | [`crate::provider::DataProvider`]         | [`crate::provider::DataProvider`] |
-//! | [`crate::graph::DiskANNIndex`]            | [`FlatIndex`]                     |
-//! | [`crate::provider::Accessor`]             | [`FlatIterator`]                  |
-//! | [`crate::graph::glue::SearchStrategy`]    | [`FlatSearchStrategy`]            |
-//! | [`crate::graph::glue::SearchPostProcess`] | [`FlatPostProcess`]               |
-//! | [`crate::graph::Search`]                  | [`FlatIndex::knn_search`]         |
+//! | Graph (random access)                     | Flat (sequential)                 |  Shared?  |
+//! | :------------------------------------     | :-------------------------------- |:--------- |
+//! | [`crate::provider::DataProvider`]         | [`crate::provider::DataProvider`] | Yes       |
+//! | [`crate::graph::DiskANNIndex`]            | [`FlatIndex`]                     | No        |
+//! | [`crate::provider::Accessor`]             | [`FlatIterator`]                  | No        |
+//! | [`crate::graph::glue::SearchStrategy`]    | [`SearchStrategy`]                | No        |
+//! | [`crate::graph::glue::SearchPostProcess`] | [`crate::graph::glue::SearchPostProcess`] | Yes |
+//! | [`crate::graph::Search`]                  | [`FlatIndex::knn_search`]         | No        |
 //!
 //! # Hot loop
 //!
@@ -34,10 +34,8 @@
 
 pub mod index;
 pub mod iterator;
-pub mod post_process;
 pub mod strategy;
 
 pub use index::FlatIndex;
 pub use iterator::{DistancesUnordered, FlatIterator, Iterated, OnElementsUnordered};
-pub use post_process::{CopyIds, FlatPostProcess};
-pub use strategy::FlatSearchStrategy;
+pub use strategy::SearchStrategy;

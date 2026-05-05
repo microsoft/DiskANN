@@ -16,8 +16,8 @@ use diskann::{
         workingset,
     },
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered, ExecutionContext,
-        HasElementRef, HasId,
+        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
+        ExecutionContext, HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -563,7 +563,8 @@ where
 {
 }
 
-impl<const NBITS: usize, V, D, Ctx, T> DistancesUnordered<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> DistancesUnordered<&[T]>
+    for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,

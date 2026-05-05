@@ -11,17 +11,17 @@ use diskann_utils::future::SendFuture;
 use crate::{
     ANNResult,
     error::IntoANNResult,
-    flat::{DistancesUnordered, FlatPostProcess, FlatSearchStrategy},
-    graph::{SearchOutputBuffer, index::SearchStats},
+    flat::{DistancesUnordered, SearchStrategy},
+    graph::{SearchOutputBuffer, glue::SearchPostProcess, index::SearchStats},
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::DataProvider,
+    provider::{BuildQueryComputer, DataProvider},
 };
 
 /// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
 ///
 /// The provider is owned by the index. The index is constructed once at process startup and
 /// shared across requests; per-query state lives in the [`crate::flat::OnElementsUnordered`]
-/// implementation that the [`crate::flat::FlatSearchStrategy`] produces.
+/// implementation that the [`SearchStrategy`] produces.
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {
     /// The backing provider.
@@ -47,7 +47,7 @@ impl<P: DataProvider> FlatIndex<P> {
     ///
     /// # Arguments
     /// - `k`: number of nearest neighbors to return.
-    /// - `strategy`: produces the per-query iterator and the query computer. See [`FlatSearchStrategy`]
+    /// - `strategy`: produces the per-query iterator and the query computer. See [`SearchStrategy`].
     /// - `processor`: post-processes the survivor candidates into the output type.
     /// - `context`: per-request context threaded through to the provider.
     /// - `query`: the query.
@@ -58,22 +58,23 @@ impl<P: DataProvider> FlatIndex<P> {
         strategy: &S,
         processor: &PP,
         context: &P::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
-        S: FlatSearchStrategy<P, T>,
-        T: ?Sized + Sync,
+        S: SearchStrategy<P, T>,
+        T: Copy + Send + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> FlatPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
+        PP: for<'a> SearchPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
     {
         async move {
             let mut visitor = strategy
                 .create_visitor(&self.provider, context)
                 .into_ann_result()?;
 
-            let computer = strategy.build_query_computer(query).into_ann_result()?;
+            let computer =
+                BuildQueryComputer::build_query_computer(&visitor, query).into_ann_result()?;
 
             let k = k.get();
             let mut queue = NeighborPriorityQueue::new(k);
@@ -88,7 +89,7 @@ impl<P: DataProvider> FlatIndex<P> {
                 .into_ann_result()?;
 
             let result_count = processor
-                .post_process(&mut visitor, query, queue.iter().take(k), output)
+                .post_process(&mut visitor, query, &computer, queue.iter().take(k), output)
                 .await
                 .into_ann_result()? as u32;
 

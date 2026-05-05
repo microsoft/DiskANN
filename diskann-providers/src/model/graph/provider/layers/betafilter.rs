@@ -310,7 +310,10 @@ impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where
 {
 }
 
-impl<Inner, T> DistancesUnordered<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + Accessor {}
+impl<Inner, T> DistancesUnordered<T> for BetaAccessor<Inner> where
+    Inner: BuildQueryComputer<T> + Accessor
+{
+}
 
 /// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
 pub struct BetaComputer<Inner, I: VectorId> {

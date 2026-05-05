@@ -385,15 +385,14 @@ where
     }
 }
 
-
 ///////////////////
 // HasElementRef //
-/////////////////// 
+///////////////////
 
-/// A catch-all super trait for traits that have an associated `ElementRef<'_>` 
+/// A catch-all super trait for traits that have an associated `ElementRef<'_>`
 /// type. Traits like [`Accessor`] are subtraits.
 pub trait HasElementRef {
-    type ElementRef<'a>; 
+    type ElementRef<'a>;
 }
 
 //////////////
@@ -439,7 +438,7 @@ pub trait Accessor: HasId + HasElementRef + Send + Sync {
     ///
     /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
     /// `Self::ElementRef`.
-    /// 
+    ///
     /// Note that the lifetime of `ElementRef` is unconstrained and thus using it in a
     /// [HRTB](https://doc.rust-lang.org/nomicon/hrtb.html) will not induce a `'static`
     /// requirement on `Self`.
@@ -541,10 +540,10 @@ pub trait BuildDistanceComputer: Accessor {
 /// computations.
 ///
 /// This trait only requires [`HasElementRef`] (so the query computer's element type can be
-/// named) so that it can be used with multiple access patterns - like [`Accessor`] and 
-/// [`crate::flat::FlastSearchStrategy`]. 
-/// 
-/// A fused iterate-and-compute primitive can be created as a sub-trait - 
+/// named) so that it can be used with multiple access patterns - like [`Accessor`] and
+/// [`crate::flat::FlastSearchStrategy`].
+///
+/// A fused iterate-and-compute primitive can be created as a sub-trait -
 /// e.g. [`DistancesUnordered`], which requires both [`Accessor`] and `BuildQueryComputer`.
 pub trait BuildQueryComputer<T>: HasElementRef {
     /// The error type (if any) associated with distance computer construction.

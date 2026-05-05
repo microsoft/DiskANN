@@ -31,7 +31,7 @@ stuffing the algorithm or the backend through the `Accessor` trait surface.
 
 ## Proposal
 
-The flat-search infrastructure is built on a small sequence of traits. The only required traits for the algorithm is `OnElementsUnordered` and its subtrait `DistancesUnordered`. A strategy - `FlatSearchStrategy` - instantiates these implementations for specific providers. An opt-in iterator trait `FlatIterator` and default implementations of the core traits - `DefaultIteratedOperator` - exist for convenience for backends that naturally expose element-at-a-time iteration.
+The flat-search infrastructure is built on a small sequence of traits. The only required traits for the algorithm is `OnElementsUnordered` and its subtrait `DistancesUnordered`. A strategy - `flat::SearchStrategy` - instantiates these implementations for specific providers. An opt-in iterator trait `FlatIterator` and default implementations of the core traits - `DefaultIteratedOperator` - exist for convenience for backends that naturally expose element-at-a-time iteration.
 
 ### `OnElementsUnordered` — the core scan
 
@@ -70,7 +70,7 @@ A subtrait that fuses scanning with scoring. The default implementation loops
 `on_elements_unordered` and calls `computer.evaluate_similarity` on each element.
 
 The query computer is a generic parameter rather than an associated type, so the same
-callback type can be driven by different computers. The `FlatSearchStrategy` is the
+callback type can be driven by different computers. The `flat::SearchStrategy` is the
 source of truth for which computer is used in any given search.
 
 ### `FlatIterator` and `Iterated` — convenience for element-at-a-time backends
@@ -97,16 +97,17 @@ pub trait FlatIterator: HasId + Send + Sync {
 element. 
 
 
-### The glue: `FlatSearchStrategy`
+### The glue: `flat::SearchStrategy`
 
 While `OnElementsUnordered` is the primary handle the algorithm uses to walk the index,
-it is scoped to each query. We introduce a constructor — `FlatSearchStrategy` — similar
-to `SearchStrategy` for `Accessor`, to instantiate the per-query visitor.
+it is scoped to each query. We introduce a constructor — `flat::SearchStrategy` — similar
+to the random-access `graph::glue::SearchStrategy` (the two share a name and live in
+distinct modules), to instantiate the per-query visitor.
 A strategy is per-call configuration that is stateless, cheap to construct and scoped to one
 search. It produces both a per-query visitor and a query computer.
 
 ```rust
-pub trait FlatSearchStrategy<P, T>: Send + Sync
+pub trait SearchStrategy<P, T>: Send + Sync
 where
     P: DataProvider,
     T: ?Sized,
@@ -169,7 +170,7 @@ impl<P: DataProvider> FlatIndex<P> {
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
-        S: FlatSearchStrategy<P, T>,
+        S: flat::SearchStrategy<P, T>,
         T: ?Sized + Sync,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
