@@ -35,6 +35,9 @@ use crate::{
 #[cfg(feature = "spherical-quantization")]
 const METRIC: diskann_vector::distance::Metric = diskann_vector::distance::Metric::InnerProduct;
 
+#[cfg(feature = "spherical-quantization")]
+const SPHERICAL_TRAINING_VECTOR_LIMIT: usize = 50000;
+
 ////////////////////////////
 // Benchmark Registration //
 ////////////////////////////
@@ -784,16 +787,33 @@ fn run_configurable(
             .ok_or_else(|| anyhow::anyhow!("spherical chamfer requires `spherical` config"))?;
 
         let dim = data.first().unwrap().vector_dim();
-        let mut training_rows: Vec<f32> = Vec::new();
+        let total_sub_vecs: usize = data.iter().map(|m| m.num_vectors()).sum();
+        let training_sub_vecs = total_sub_vecs.min(SPHERICAL_TRAINING_VECTOR_LIMIT);
+        let mut training_rows: Vec<f32> = Vec::with_capacity(training_sub_vecs * dim);
+
+        let mut sampling_rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
+        let mut sample_indices =
+            rand::seq::index::sample(&mut sampling_rng, total_sub_vecs, training_sub_vecs)
+                .into_vec();
+        sample_indices.sort_unstable();
+
+        let mut sample_indices = sample_indices.into_iter().peekable();
+        let mut sub_vec_idx = 0;
         for m in data {
             let view = m.as_view();
             for row in view.rows() {
-                training_rows.extend_from_slice(row);
+                if sample_indices.peek() == Some(&sub_vec_idx) {
+                    training_rows.extend_from_slice(row);
+                    sample_indices.next();
+                }
+                sub_vec_idx += 1;
+            }
+            if sample_indices.peek().is_none() {
+                break;
             }
         }
-        let total_sub_vecs = training_rows.len() / dim;
         let training_matrix =
-            diskann_utils::views::Matrix::try_from(training_rows.into(), total_sub_vecs, dim)?;
+            diskann_utils::views::Matrix::try_from(training_rows.into(), training_sub_vecs, dim)?;
 
         let metric: diskann_vector::distance::Metric = METRIC;
         let pre_scale = match cfg.pre_scale {
@@ -813,8 +833,10 @@ fn run_configurable(
         let training_time: MicroSeconds = start.elapsed().into();
         writeln!(
             output,
-            "Spherical quantizer training: {}s",
-            training_time.as_seconds()
+            "Spherical quantizer training: {}s ({} of {} sub-vectors)",
+            training_time.as_seconds(),
+            training_sub_vecs,
+            total_sub_vecs,
         )?;
 
         macro_rules! make_data {
