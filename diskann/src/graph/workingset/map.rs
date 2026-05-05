@@ -1769,7 +1769,10 @@ mod tests {
         let itr = std::iter::repeat_n((), 4)
             .map(|_| panic!("iterator should not be advanced when the map is empty"));
         map.prepare(itr);
-        assert_eq!(map.generation, 0, "no need to advance the generation if the map is empty");
+        assert_eq!(
+            map.generation, 0,
+            "no need to advance the generation if the map is empty"
+        );
 
         // The lack of panic from the iterator indicates success.
     }
