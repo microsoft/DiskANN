@@ -40,10 +40,11 @@ use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
 use crate::{
     backend::index::result::AggregatedSearchResults,
     inputs::{
-        async_::{SearchPhase, TopkSearchPhase},
+        graph_index::{SearchPhase, SearchPhaseKind, TopkSearchPhase},
         post_processor::TopkPostProcessor,
     },
 };
+
 /// A dyn-compatible search plugin for `DP`.
 ///
 /// `Kind` is the matching surface used for benchmark selection and diagnostics. `Params`
@@ -129,11 +130,15 @@ where
         index: Arc<DiskANNIndex<DP>>,
         kind: &Kind,
         parameters: &Params,
-    ) -> anyhow::Result<AggregatedSearchResults> {
+    ) -> anyhow::Result<AggregatedSearchResults>
+    where
+        Kind: std::fmt::Debug,
+    {
         match self.plugins.iter().find(|p| p.is_match(kind)) {
             Some(plugin) => plugin.run(index, kind, parameters),
             None => Err(anyhow::anyhow!(
-                "INTERNAL ERROR: Could not find a suitable search plugin",
+                "INTERNAL ERROR: Could not find a suitable search plugin for {:?}",
+                kind
             )),
         }
     }
@@ -144,6 +149,11 @@ where
 pub(crate) struct Topk;
 
 impl Topk {
+    /// Returns [`SearchPhaseKind::Topk`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::Topk
+    }
+
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase
             .as_topk()
@@ -183,6 +193,11 @@ impl DeterminantDiversity {
 pub(crate) struct Range;
 
 impl Range {
+    /// Returns [`SearchPhaseKind::Range`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::Range
+    }
+
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_range().is_ok()
     }
@@ -190,9 +205,14 @@ impl Range {
 
 /// A search plugin for beta-filtered search.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BetaFilter;
+pub(crate) struct TopkBetaFilter;
 
-impl BetaFilter {
+impl TopkBetaFilter {
+    /// Returns [`SearchPhaseKind::TopkBetaFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkBetaFilter
+    }
+
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_beta_filter().is_ok()
     }
@@ -200,9 +220,14 @@ impl BetaFilter {
 
 /// A search plugin for multi-hop filtered search.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MultihopFilter;
+pub(crate) struct TopkMultihopFilter;
 
-impl MultihopFilter {
+impl TopkMultihopFilter {
+    /// Returns [`SearchPhaseKind::TopkMultihopFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkMultihopFilter
+    }
+
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_multihop_filter().is_ok()
     }

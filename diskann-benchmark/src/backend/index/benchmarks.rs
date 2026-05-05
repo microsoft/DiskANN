@@ -46,7 +46,9 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind},
+    inputs::graph_index::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -72,43 +74,43 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
 
     // Full Precision
     benchmarks.register(
-        "async-full-precision-f32",
+        "graph-index-full-precision-f32",
         FullPrecision::<f32>::new()
             .search(plugins::DeterminantDiversity)
             .search(plugins::Topk)
             .search(plugins::Range)
-            .search(plugins::BetaFilter)
-            .search(plugins::MultihopFilter),
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter),
     );
 
     benchmarks.register(
-        "async-full-precision-f16",
+        "graph-index-full-precision-f16",
         FullPrecision::<f16>::new().search(plugins::Topk),
     );
     benchmarks.register(
-        "async-full-precision-u8",
+        "graph-index-full-precision-u8",
         FullPrecision::<u8>::new().search(plugins::Topk),
     );
     benchmarks.register(
-        "async-full-precision-i8",
+        "graph-index-full-precision-i8",
         FullPrecision::<i8>::new().search(plugins::Topk),
     );
 
     // Dynamic Full Precision
     benchmarks.register(
-        "async-dynamic-full-precision-f32",
+        "graph-index-dynamic-full-precision-f32",
         DynamicFullPrecision::<f32>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-f16",
+        "graph-index-dynamic-full-precision-f16",
         DynamicFullPrecision::<f16>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-u8",
+        "graph-index-dynamic-full-precision-u8",
         DynamicFullPrecision::<u8>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-i8",
+        "graph-index-dynamic-full-precision-i8",
         DynamicFullPrecision::<i8>::new(),
     );
 
@@ -198,15 +200,14 @@ where
 
         match input {
             Some(arg) => {
-                let data_type = match &arg.source {
-                    IndexSource::Load(load) => &load.data_type,
-                    IndexSource::Build(build) => &build.data_type,
-                };
-                writeln!(
-                    f,
-                    "Data/Query Type: {}",
-                    Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
-                )?;
+                let data_type = arg.source.data_type();
+                if datatype::Type::<T>::try_match(data_type).is_err() {
+                    writeln!(
+                        f,
+                        "Data/Query Type: {}",
+                        Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
+                    )?;
+                }
 
                 if !self.plugins.is_match(&arg.search_phase) {
                     writeln!(
@@ -293,7 +294,7 @@ where
     }
 }
 
-// Async Dynamic Run
+// Graph Index Dynamic Run
 pub(super) struct DynamicFullPrecision<T> {
     _type: std::marker::PhantomData<T>,
 }
@@ -524,8 +525,8 @@ where
                         all_recalls.push(matches);
                     }
 
-                    let avg_recall =
-                        all_recalls.iter().sum::<usize>() as f32 / (queries.nrows() * run.recall_k) as f32;
+                    let avg_recall = all_recalls.iter().sum::<usize>() as f32
+                        / (queries.nrows() * run.recall_k) as f32;
 
                     all_results.push(SearchResults {
                         num_tasks: threads.get(),
@@ -642,13 +643,13 @@ where
 // BetaFilter //
 //------------//
 
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::BetaFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        plugins::BetaFilter::is_match(phase)
+        plugins::TopkBetaFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
@@ -701,13 +702,13 @@ where
 // MultihopFilter //
 //----------------//
 
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::MultihopFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        plugins::MultihopFilter::is_match(phase)
+        plugins::TopkMultihopFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {

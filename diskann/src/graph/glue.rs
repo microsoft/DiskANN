@@ -613,13 +613,12 @@ where
     ///
     /// We could grab this type from the `PruneAccessor` associated type, but it's
     /// useful enough that we move it up here.
-    type DistanceComputer: for<'a, 'b, 'c, 'd> DistanceFunction<
+    type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
             <Self::PruneAccessor<'a> as Accessor>::ElementRef<'b>,
             <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
             f32,
         > + Send
-        + Sync
-        + 'static;
+        + Sync;
 
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
@@ -630,7 +629,7 @@ where
     /// Implementations are encouraged to have [`Accessor::get_element`] return the
     /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
-        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer>
+        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
         + AsNeighborMut
         + workingset::Fill<Self::WorkingSet>;
 

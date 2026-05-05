@@ -324,7 +324,7 @@ impl Example for MultiInsert {
     }
 }
 
-// This constant is used to ensure that summaries of async-index related jobs properly have
+// This constant is used to ensure that summaries of graph-index related jobs properly have
 // their field descriptions aligned.
 const PRINT_WIDTH: usize = 18;
 
@@ -445,15 +445,15 @@ impl SearchPhaseKind {
         match self {
             Self::Topk => "topk",
             Self::Range => "range",
-            Self::TopkBetaFilter => "beta-filter",
-            Self::TopkMultihopFilter => "multihop-filter",
+            Self::TopkBetaFilter => "topk-beta-filter",
+            Self::TopkMultihopFilter => "topk-multihop-filter",
         }
     }
 }
 
 impl std::fmt::Display for SearchPhaseKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        f.write_str(self.as_str())
     }
 }
 
@@ -470,7 +470,7 @@ pub(crate) struct IndexLoad {
 
 impl IndexLoad {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-load"
+        "graph-index-load"
     }
 
     pub(crate) fn to_config(&self) -> Result<IndexConfiguration, anyhow::Error> {
@@ -532,7 +532,7 @@ impl CheckDeserialization for IndexLoad {
 
 impl std::fmt::Display for IndexLoad {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Load\n")?;
+        writeln!(f, "Graph Index Full-Precision Load\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -593,7 +593,7 @@ pub(crate) struct IndexBuild {
 
 impl IndexBuild {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-builder"
+        "graph-index-builder"
     }
 
     fn exact_max_degree(&self) -> usize {
@@ -725,7 +725,7 @@ impl Example for IndexBuild {
 
 impl std::fmt::Display for IndexBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Build\n")?;
+        writeln!(f, "Graph Index Full-Precision Build\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -775,7 +775,7 @@ pub(crate) struct IndexOperation {
 
 impl IndexOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build"
+        "graph-index-build"
     }
 }
 
@@ -786,10 +786,10 @@ impl CheckDeserialization for IndexOperation {
         self.search_phase.check_deserialization(checker)?;
 
         if has_topk_determinant_diversity(&self.search_phase)
-            && !matches!(self.source.data_type(), DataType::Float32)
+            && *self.source.data_type() != DataType::Float32
         {
             anyhow::bail!(
-                "topk determinant-diversity is supported only for full-precision f32 searches"
+                "determinant-diversity post-processor requires graph-index full precision float32 input"
             );
         }
 
@@ -808,7 +808,7 @@ impl Example for IndexOperation {
 
 impl std::fmt::Display for IndexOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Full-Precision Index Build\n")?;
+        writeln!(f, "Graph Index Full-Precision Build\n")?;
 
         write_field!(f, "tag", Self::tag())?;
 
@@ -816,9 +816,9 @@ impl std::fmt::Display for IndexOperation {
     }
 }
 
-////////////////////
-// Async Build PQ //
-////////////////////
+//////////////////////////////
+// Graph Index Build PQ //
+//////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexPQOperation {
@@ -831,7 +831,7 @@ pub(crate) struct IndexPQOperation {
 
 impl IndexPQOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-pq"
+        "graph-index-build-pq"
     }
 
     #[cfg(feature = "product-quantization")]
@@ -875,7 +875,7 @@ impl CheckDeserialization for IndexPQOperation {
 
         if has_topk_determinant_diversity(&self.index_operation.search_phase) {
             anyhow::bail!(
-                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-pq"
+                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
             );
         }
 
@@ -897,7 +897,7 @@ impl Example for IndexPQOperation {
 
 impl std::fmt::Display for IndexPQOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async PQ Index Build")?;
+        writeln!(f, "Graph Index PQ Build")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "PQ Chunks", self.num_pq_chunks)?;
         const MAX_FP_VECS: &str = "Max FP Vecs";
@@ -914,9 +914,9 @@ impl std::fmt::Display for IndexPQOperation {
     }
 }
 
-////////////////////
-// Async Build SQ //
-////////////////////
+//////////////////////////////
+// Graph Index Build SQ //
+//////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexSQOperation {
@@ -928,7 +928,7 @@ pub(crate) struct IndexSQOperation {
 
 impl IndexSQOperation {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-sq"
+        "graph-index-build-sq"
     }
 
     #[cfg(feature = "scalar-quantization")]
@@ -969,7 +969,7 @@ impl CheckDeserialization for IndexSQOperation {
 
         if has_topk_determinant_diversity(&self.index_operation.search_phase) {
             anyhow::bail!(
-                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-sq"
+                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
             );
         }
 
@@ -998,7 +998,7 @@ impl Example for IndexSQOperation {
 
 impl std::fmt::Display for IndexSQOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async SQ Index Build")?;
+        writeln!(f, "Graph Index SQ Build")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "SQ bits", self.num_bits)?;
         write_field!(f, "StdDev", self.standard_deviations)?;
@@ -1012,9 +1012,9 @@ impl std::fmt::Display for IndexSQOperation {
     }
 }
 
-///////////////////////////
-// Async Build Spherical //
-///////////////////////////
+/////////////////////////////////////
+// Graph Index Build Spherical //
+/////////////////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SphericalQuantBuild {
@@ -1029,7 +1029,7 @@ pub(crate) struct SphericalQuantBuild {
 
 impl SphericalQuantBuild {
     pub(crate) const fn tag() -> &'static str {
-        "async-index-build-spherical-quantization"
+        "graph-index-build-spherical-quantization"
     }
 
     #[cfg(feature = "spherical-quantization")]
@@ -1054,7 +1054,7 @@ impl CheckDeserialization for SphericalQuantBuild {
 
         if has_topk_determinant_diversity(&self.search_phase) {
             anyhow::bail!(
-                "topk determinant-diversity is supported only for async full-precision topk, not async-index-build-spherical-quantization"
+                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
             );
         }
 
@@ -1112,7 +1112,7 @@ impl Example for SphericalQuantBuild {
 
 impl std::fmt::Display for SphericalQuantBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Spherically Quantized Index Build")?;
+        writeln!(f, "Graph Index Spherical Quantization Build")?;
         if cfg!(not(feature = "spherical-quantization")) {
             writeln!(f, "Requires the `spherical-quantization` feature")?;
         }
@@ -1297,9 +1297,9 @@ impl std::fmt::Display for DynamicRunbookParams {
     }
 }
 
-///////////////////
-// Async Dynamic //
-///////////////////
+///////////////////////////
+// Graph Index Dynamic //
+///////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct DynamicIndexRun {
@@ -1310,7 +1310,7 @@ pub(crate) struct DynamicIndexRun {
 
 impl DynamicIndexRun {
     pub(crate) const fn tag() -> &'static str {
-        "async-dynamic-index-run"
+        "graph-index-dynamic-run"
     }
 
     pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
@@ -1336,7 +1336,7 @@ impl CheckDeserialization for DynamicIndexRun {
 
         if has_topk_determinant_diversity(&self.search_phase) {
             anyhow::bail!(
-                "topk determinant-diversity is supported only for async full-precision topk, not async-dynamic-index-run"
+                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
             );
         }
 
@@ -1358,7 +1358,7 @@ impl Example for DynamicIndexRun {
 
 impl std::fmt::Display for DynamicIndexRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Async Dynamic Index Run")?;
+        writeln!(f, "Graph Index Dynamic Run")?;
         write_field!(f, "tag", Self::tag())?;
         writeln!(f, "Runbook Parameters:")?;
         write!(f, "{}", self.runbook_params)?;

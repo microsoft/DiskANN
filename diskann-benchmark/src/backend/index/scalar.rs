@@ -6,7 +6,7 @@
 use diskann_benchmark_runner::registry::Benchmarks;
 
 // Create a stub-module if the "scalar-quantization" feature is disabled.
-crate::utils::stub_impl!("scalar-quantization", inputs::async_::IndexSQOperation);
+crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOperation);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "scalar-quantization")]
@@ -20,48 +20,48 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 
         // f32
         benchmarks.register(
-            "async-sq-8-bit-f32",
+            "graph-index-sq-8-bit-f32",
             imp::ScalarQuantized::<8, f32>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-4-bit-f32",
+            "graph-index-sq-4-bit-f32",
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-2-bit-f32",
+            "graph-index-sq-2-bit-f32",
             imp::ScalarQuantized::<2, f32>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-1-bit-f32",
+            "graph-index-sq-1-bit-f32",
             imp::ScalarQuantized::<1, f32>::new().search(Topk),
         );
         // f16                                  ,
         benchmarks.register(
-            "async-sq-8-bit-f16",
+            "graph-index-sq-8-bit-f16",
             imp::ScalarQuantized::<8, f16>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-4-bit-f16",
+            "graph-index-sq-4-bit-f16",
             imp::ScalarQuantized::<4, f16>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-2-bit-f16",
+            "graph-index-sq-2-bit-f16",
             imp::ScalarQuantized::<2, f16>::new().search(Topk),
         );
         benchmarks.register(
-            "async-sq-1-bit-f16",
+            "graph-index-sq-1-bit-f16",
             imp::ScalarQuantized::<1, f16>::new().search(Topk),
         );
         // i8
         benchmarks.register(
-            "async-sq-1-bit-i8",
+            "graph-index-sq-1-bit-i8",
             imp::ScalarQuantized::<1, i8>::new().search(Topk),
         );
     }
 
     // Stub implementation
     #[cfg(not(feature = "scalar-quantization"))]
-    imp::register("async-pq", benchmarks);
+    imp::register("graph-index-sq", benchmarks);
 }
 
 #[cfg(feature = "scalar-quantization")]
@@ -92,7 +92,7 @@ mod imp {
             result::{BuildResult, QuantBuildResult},
             search::plugins,
         },
-        inputs::async_::{IndexSQOperation, IndexSource, SearchPhase},
+        inputs::graph_index::{IndexSQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 

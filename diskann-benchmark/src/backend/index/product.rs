@@ -6,7 +6,10 @@
 use diskann_benchmark_runner::registry::Benchmarks;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!("product-quantization", inputs::async_::IndexPQOperation);
+crate::utils::stub_impl!(
+    "product-quantization",
+    inputs::graph_index::IndexPQOperation
+);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
@@ -19,20 +22,20 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         // Feel free to add search plugins, but be mindful of the monomorphization cost.
 
         benchmarks.register(
-            "async-pq-f32",
+            "graph-index-pq-f32",
             imp::ProductQuantized::<f32>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range),
         );
         benchmarks.register(
-            "async-pq-f16",
+            "graph-index-pq-f16",
             imp::ProductQuantized::<f16>::new().search(plugins::Topk),
         );
     }
 
     // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("async-pq", benchmarks);
+    imp::register("graph-index-pq", benchmarks);
 }
 
 #[cfg(feature = "product-quantization")]
@@ -63,7 +66,7 @@ mod imp {
             result::{BuildResult, QuantBuildResult},
             search::plugins,
         },
-        inputs::async_::{IndexPQOperation, IndexSource, SearchPhase},
+        inputs::graph_index::{IndexPQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 
@@ -152,13 +155,14 @@ mod imp {
 
             match input {
                 Some(arg) => {
-                    writeln!(
-                        f,
-                        "{}",
-                        Why::<datatype::DataType, datatype::Type<T>>::new(
-                            arg.index_operation.source.data_type()
-                        )
-                    )?;
+                    let data_type = arg.index_operation.source.data_type();
+                    if datatype::Type::<T>::try_match(data_type).is_err() {
+                        writeln!(
+                            f,
+                            "Data/Query Type: {}",
+                            Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
+                        )?;
+                    }
 
                     if !self
                         .quant_search
@@ -262,18 +266,13 @@ mod imp {
             // Save construction stats before running queries.
             checkpoint.checkpoint(&build_stats)?;
 
+            let search_phase = &input.index_operation.search_phase;
             let search = if input.use_fp_for_search {
-                self.full_search.run(
-                    index,
-                    &input.index_operation.search_phase,
-                    &Strategy::new(common::FullPrecision),
-                )?
+                self.full_search
+                    .run(index, search_phase, &Strategy::new(common::FullPrecision))?
             } else {
-                self.quant_search.run(
-                    index,
-                    &input.index_operation.search_phase,
-                    &Strategy::new(hybrid),
-                )?
+                self.quant_search
+                    .run(index, search_phase, &Strategy::new(hybrid))?
             };
 
             let result = QuantBuildResult {

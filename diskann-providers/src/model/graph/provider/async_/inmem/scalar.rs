@@ -674,7 +674,7 @@ where
     Unsigned: Representation<NBITS>,
     DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
 {
-    type DistanceComputer = DistanceComputer;
+    type DistanceComputer<'a> = DistanceComputer;
     type PruneAccessor<'a> = QuantAccessor<'a, NBITS, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;

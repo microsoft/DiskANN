@@ -8,11 +8,11 @@ use diskann_benchmark_runner::registry::Benchmarks;
 // Create a stub-module if the "spherical-quantization" feature is disabled.
 crate::utils::stub_impl!(
     "spherical-quantization",
-    inputs::async_::SphericalQuantBuild
+    inputs::graph_index::SphericalQuantBuild
 );
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    const NAME: &str = "async-spherical-quantization";
+    const NAME: &str = "graph-index-spherical-quantization";
 
     #[cfg(feature = "spherical-quantization")]
     {
@@ -26,8 +26,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
             imp::SphericalQ::<1>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
-                .search(plugins::BetaFilter)
-                .search(plugins::MultihopFilter),
+                .search(plugins::TopkBetaFilter)
+                .search(plugins::TopkMultihopFilter),
         );
 
         benchmarks.register(
@@ -35,8 +35,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
             imp::SphericalQ::<2>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
-                .search(plugins::BetaFilter)
-                .search(plugins::MultihopFilter),
+                .search(plugins::TopkBetaFilter)
+                .search(plugins::TopkMultihopFilter),
         );
 
         benchmarks.register(
@@ -44,8 +44,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
-                .search(plugins::BetaFilter)
-                .search(plugins::MultihopFilter),
+                .search(plugins::TopkBetaFilter)
+                .search(plugins::TopkMultihopFilter),
         );
     }
 
@@ -85,8 +85,8 @@ mod imp {
             search,
         },
         inputs::{
-            async_::{SearchPhase, SphericalQuantBuild},
             exhaustive,
+            graph_index::{SearchPhase, SphericalQuantBuild},
         },
         utils::{
             self, datafiles,
@@ -341,6 +341,7 @@ mod imp {
                         let search = self
                             .search
                             .run(index.clone(), &input.search_phase, layout)?;
+
                         result.append(SearchRun {
                             layout: *layout,
                             results: search,
@@ -440,7 +441,7 @@ mod imp {
     }
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
-        for search::plugins::BetaFilter
+        for search::plugins::TopkBetaFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
             Self::kind() == phase.kind()
@@ -494,7 +495,7 @@ mod imp {
     }
 
     impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
-        for search::plugins::MultihopFilter
+        for search::plugins::TopkMultihopFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
             Self::kind() == phase.kind()
