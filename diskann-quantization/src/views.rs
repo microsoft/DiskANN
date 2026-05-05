@@ -212,10 +212,7 @@ impl ChunkOffsets {
     ///
     /// Returns an error if the requested partition is not valid (e.g.
     /// `num_chunks.get() > dim.get()`).
-    pub fn from_dim(
-        dim: NonZeroUsize,
-        num_chunks: NonZeroUsize,
-    ) -> Result<Self, ChunkOffsetError> {
+    pub fn from_dim(dim: NonZeroUsize, num_chunks: NonZeroUsize) -> Result<Self, ChunkOffsetError> {
         let mut offsets = vec![0usize; num_chunks.get() + 1].into_boxed_slice();
         fill_chunk_offsets(dim, &mut offsets);
         Self::new(offsets)
