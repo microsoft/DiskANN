@@ -3,13 +3,14 @@
  * Licensed under the MIT license.
  */
 
+use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::{
     error::ANNError,
     graph::glue,
     neighbor::Neighbor,
     provider::Accessor,
 };
-use diskann::graph::search_output_buffer::SearchOutputBuffer;
+use diskann_providers::model::graph::provider::async_::determinant_diversity_post_process;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
@@ -21,39 +22,6 @@ impl DeterminantDiversity {
     pub(crate) const fn new(power: f32, eta: f32) -> Self {
         Self { power, eta }
     }
-}
-
-pub(crate) fn rank_and_limit_by_distance(
-    distances: &[f32],
-    power: f32,
-    eta: f32,
-) -> (Vec<usize>, usize) {
-    let mut ranked: Vec<(usize, f32)> = distances
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(rank, distance)| {
-            let transformed = distance.abs().powf(power) + (rank as f32) * eta;
-            (rank, -transformed)
-        })
-        .collect();
-
-    ranked.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let ranked_indices: Vec<usize> = ranked.into_iter().map(|(rank, _)| rank).collect();
-    if ranked_indices.is_empty() {
-        return (ranked_indices, 0);
-    }
-
-    let keep_ratio = (1.0 / (1.0 + power * eta * 10.0)).clamp(0.1, 1.0);
-    let max_emit = ((ranked_indices.len() as f32) * keep_ratio)
-        .round()
-        .max(1.0) as usize;
-
-    (ranked_indices, max_emit)
 }
 
 impl<A, T> glue::SearchPostProcess<A, T, A::Id> for DeterminantDiversity
@@ -76,20 +44,19 @@ where
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
-        let distances: Vec<f32> = candidates.iter().map(|c| c.distance).collect();
-        let (ranked_indices, max_emit) =
-            rank_and_limit_by_distance(&distances, self.power, self.eta);
+        let embedded: Vec<_> = candidates
+            .iter()
+            .map(|c| (c.id, c.distance, vec![c.distance]))
+            .collect();
 
-        let mut count = 0;
-        for rank in ranked_indices.into_iter().take(max_emit) {
-            let candidate = &candidates[rank];
-            let state = output.push(candidate.id, candidate.distance);
-            count += 1;
-            if !state.is_available() {
-                break;
-            }
-        }
+        let reranked = determinant_diversity_post_process(
+            embedded,
+            &[0.0],
+            candidates.len(),
+            self.eta,
+            self.power,
+        );
 
-        Ok(count)
+        Ok(output.extend(reranked))
     }
 }

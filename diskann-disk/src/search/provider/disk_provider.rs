@@ -36,7 +36,10 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
+    model::{
+        compute_pq_distance, compute_pq_distance_for_pq_coordinates,
+        graph::provider::async_::determinant_diversity_post_process,
+    },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
@@ -304,35 +307,6 @@ impl<'a> DeterminantDiversityAndFilter<'a> {
     }
 }
 
-fn rank_and_limit_by_distance(distances: &[f32], power: f32, eta: f32) -> (Vec<usize>, usize) {
-    let mut ranked: Vec<(usize, f32)> = distances
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(rank, distance)| {
-            let transformed = distance.abs().powf(power) + (rank as f32) * eta;
-            (rank, -transformed)
-        })
-        .collect();
-
-    ranked.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let ranked_indices: Vec<usize> = ranked.into_iter().map(|(rank, _)| rank).collect();
-    if ranked_indices.is_empty() {
-        return (ranked_indices, 0);
-    }
-
-    let keep_ratio = (1.0 / (1.0 + power * eta * 10.0)).clamp(0.1, 1.0);
-    let max_emit = ((ranked_indices.len() as f32) * keep_ratio)
-        .round()
-        .max(1.0) as usize;
-
-    (ranked_indices, max_emit)
-}
-
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
@@ -423,42 +397,46 @@ where
             + ?Sized,
     {
         let provider = accessor.provider;
+        let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
 
-        let mut uncached_ids = Vec::new();
-        let mut reranked = candidates
-            .map(|n| n.id)
+        let candidate_ids: Vec<u32> = candidates
+            .map(|candidate| candidate.id)
             .filter(|id| (self.filter)(id))
-            .filter_map(|n| {
-                if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
-                    Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
-                } else {
-                    uncached_ids.push(n);
-                    None
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if !uncached_ids.is_empty() {
-            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
-            for n in &uncached_ids {
-                let v = accessor.scratch.vertex_provider.get_vector(n)?;
-                let d = provider.distance_comparer.evaluate_similarity(query, v);
-                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
-                reranked.push(((*n, *a), d));
-            }
-        }
-
-        reranked
-            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let distances: Vec<f32> = reranked.iter().map(|item| item.1).collect();
-        let (ranked_indices, max_emit) = rank_and_limit_by_distance(&distances, self.power, self.eta);
-        let selected: Vec<_> = ranked_indices
-            .into_iter()
-            .take(max_emit)
-            .map(|rank| reranked[rank])
             .collect();
 
-        Ok(output.extend(selected))
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+
+        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
+
+        let mut candidate_vectors = Vec::with_capacity(candidate_ids.len());
+        let mut associated_data = HashMap::with_capacity(candidate_ids.len());
+
+        for id in candidate_ids {
+            let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
+            let distance = provider.distance_comparer.evaluate_similarity(query, vector);
+            let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
+            let data = accessor.scratch.vertex_provider.get_associated_data(&id)?;
+
+            candidate_vectors.push((id, distance, vector_f32.to_vec()));
+            associated_data.insert(id, *data);
+        }
+
+        let reranked = determinant_diversity_post_process(
+            candidate_vectors,
+            &query_f32,
+            usize::MAX,
+            self.eta,
+            self.power,
+        );
+
+        Ok(output.extend(reranked.into_iter().filter_map(|(id, distance)| {
+            associated_data
+                .get(&id)
+                .copied()
+                .map(|data| ((id, data), distance))
+        })))
     }
 }
 
