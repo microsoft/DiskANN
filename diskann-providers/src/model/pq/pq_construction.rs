@@ -356,9 +356,20 @@ where
     let mut full_pivot_data_mat =
         MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
-    full_pivot_data_mat
-        .broadcast_rows_mut(centroid.as_slice(), |a, b| *a += *b)
-        .bridge_err()?;
+
+    if full_pivot_data_mat.ncols() != centroid.len() {
+        return Err(ANNError::log_pq_error(format_args!(
+            "pivot data ncols {} does not match centroid length {}",
+            full_pivot_data_mat.ncols(),
+            centroid.len(),
+        )));
+    }
+
+    for row in full_pivot_data_mat.row_iter_mut() {
+        for (a, b) in std::iter::zip(row.iter_mut(), centroid.iter()) {
+            *a += *b;
+        }
+    }
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,

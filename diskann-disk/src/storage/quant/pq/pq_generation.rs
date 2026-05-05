@@ -133,9 +133,19 @@ where
         )
         .bridge_err()?;
 
-        full_pivot_data_mat
-            .broadcast_rows_mut(centroid.as_slice(), |a, b| *a += *b)
-            .bridge_err()?;
+        if full_pivot_data_mat.ncols() != centroid.len() {
+            return Err(ANNError::log_pq_error(format_args!(
+                "pivot data ncols {} does not match centroid length {}",
+                full_pivot_data_mat.ncols(),
+                centroid.len(),
+            )));
+        }
+
+        for row in full_pivot_data_mat.row_iter_mut() {
+            for (a, b) in std::iter::zip(row.iter_mut(), centroid.iter()) {
+                *a += *b;
+            }
+        }
 
         let table = TransposedTable::from_parts(
             full_pivot_data_mat.as_view(),

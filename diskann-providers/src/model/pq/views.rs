@@ -32,14 +32,6 @@ impl<T: views::DenseData> From<Bridge<views::TryFromError<T>>> for ANNError {
     }
 }
 
-// Compatibility with ANNError.
-impl From<Bridge<views::BroadcastLenMismatch>> for ANNError {
-    #[track_caller]
-    fn from(value: Bridge<views::BroadcastLenMismatch>) -> Self {
-        ANNError::log_pq_error(value.into_inner())
-    }
-}
-
 ///////////
 // Tests //
 ///////////
