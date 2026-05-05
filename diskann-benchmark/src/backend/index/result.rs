@@ -22,22 +22,8 @@ pub(super) struct BuildResult {
 }
 
 impl BuildResult {
-    pub(super) fn new_topk(build: Option<BuildStats>) -> Self {
-        Self {
-            build,
-            search: AggregatedSearchResults::Topk(Vec::new()),
-        }
-    }
-
-    pub(super) fn new_range(build: Option<BuildStats>) -> Self {
-        Self {
-            build,
-            search: AggregatedSearchResults::Range(Vec::new()),
-        }
-    }
-
-    pub(super) fn append(&mut self, search: AggregatedSearchResults) {
-        self.search.append(search);
+    pub(super) fn new(build: Option<BuildStats>, search: AggregatedSearchResults) -> Self {
+        Self { build, search }
     }
 }
 
@@ -84,16 +70,6 @@ impl std::fmt::Display for QuantBuildResult {
 pub(super) enum AggregatedSearchResults {
     Topk(Vec<SearchResults>),
     Range(Vec<RangeSearchResults>),
-}
-
-impl AggregatedSearchResults {
-    pub(super) fn append(&mut self, search: AggregatedSearchResults) {
-        match (self, search) {
-            (Self::Topk(v), AggregatedSearchResults::Topk(s)) => v.extend(s),
-            (Self::Range(v), AggregatedSearchResults::Range(s)) => v.extend(s),
-            _ => panic!("Mismatched search result types"),
-        }
-    }
 }
 
 impl std::fmt::Display for AggregatedSearchResults {

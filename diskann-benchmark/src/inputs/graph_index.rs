@@ -3,8 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZero;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZero, NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
@@ -23,6 +22,7 @@ use diskann_providers::{
     utils::load_metadata_from_file,
 };
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
     inputs::{self, as_input, save_and_load, Example},
@@ -335,6 +335,76 @@ pub(crate) enum SearchPhase {
     TopkMultihopFilter(MultiHopSearchPhase),
 }
 
+#[derive(Debug, Error)]
+#[error(
+    "INTERNAL ERROR: expected search phase kind \"{}\" - instead got \"{}\"",
+    self.expected,
+    self.got
+)]
+pub(crate) struct WrongSearchPhaseKind {
+    expected: SearchPhaseKind,
+    got: SearchPhaseKind,
+}
+
+impl WrongSearchPhaseKind {
+    fn new(expected: SearchPhaseKind, got: SearchPhaseKind) -> Self {
+        Self { expected, got }
+    }
+}
+
+impl SearchPhase {
+    pub(crate) fn kind(&self) -> SearchPhaseKind {
+        match self {
+            Self::Topk(_) => SearchPhaseKind::Topk,
+            Self::Range(_) => SearchPhaseKind::Range,
+            Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
+            Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+        }
+    }
+
+    pub(crate) fn as_topk(&self) -> Result<&TopkSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::Topk(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::Topk,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_range(&self) -> Result<&RangeSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::Range(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::Range,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_beta_filter(&self) -> Result<&BetaSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkBetaFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkBetaFilter,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_multihop_filter(
+        &self,
+    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkMultihopFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkMultihopFilter,
+                self.kind(),
+            )),
+        }
+    }
+}
+
 impl CheckDeserialization for SearchPhase {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
@@ -343,6 +413,31 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchPhaseKind {
+    Topk,
+    Range,
+    TopkBetaFilter,
+    TopkMultihopFilter,
+}
+
+impl SearchPhaseKind {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Topk => "topk",
+            Self::Range => "range",
+            Self::TopkBetaFilter => "topk-beta-filter",
+            Self::TopkMultihopFilter => "topk-multihop-filter",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchPhaseKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -627,6 +722,15 @@ impl std::fmt::Display for IndexBuild {
 pub enum IndexSource {
     Load(IndexLoad),
     Build(IndexBuild),
+}
+
+impl IndexSource {
+    pub(crate) fn data_type(&self) -> &DataType {
+        match self {
+            IndexSource::Load(load) => &load.data_type,
+            IndexSource::Build(build) => &build.data_type,
+        }
+    }
 }
 
 impl CheckDeserialization for IndexSource {

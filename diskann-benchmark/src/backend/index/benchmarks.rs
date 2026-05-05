@@ -3,7 +3,6 @@
  * Licensed under the MIT license.
  */
 
-use core::option::Option::None;
 use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
@@ -24,7 +23,10 @@ use diskann_benchmark_runner::{
 };
 use diskann_providers::{
     index::diskann_async,
-    model::{configuration::IndexConfiguration, graph::provider::async_::common},
+    model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::{common, inmem},
+    },
 };
 use diskann_utils::{
     future::AsyncFriendly,
@@ -40,6 +42,7 @@ use super::{
 use crate::{
     backend::index::{
         result::{AggregatedSearchResults, BuildResult},
+        search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
     inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
@@ -55,17 +58,39 @@ use crate::{
 ////////////////////////////
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
+    // Notes on registration:
+    //
+    // We register all supported search types for `f32`, but intentionally limit the number
+    // of search types for the other data types mainly to help reduce compilation time.
+    //
+    // Feel free to add additional search plugins as needed during exploration and add them
+    // permanently if demand is sufficient.
+    //
+    // Note that each plugin registration will trigger an new monomorphization, so use with
+    // care.
+
     // Full Precision
     benchmarks.register(
         "graph-index-full-precision-f32",
-        FullPrecision::<f32>::new(),
+        FullPrecision::<f32>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range)
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter),
     );
+
     benchmarks.register(
         "graph-index-full-precision-f16",
-        FullPrecision::<f16>::new(),
+        FullPrecision::<f16>::new().search(plugins::Topk),
     );
-    benchmarks.register("graph-index-full-precision-u8", FullPrecision::<u8>::new());
-    benchmarks.register("graph-index-full-precision-i8", FullPrecision::<i8>::new());
+    benchmarks.register(
+        "graph-index-full-precision-u8",
+        FullPrecision::<u8>::new().search(plugins::Topk),
+    );
+    benchmarks.register(
+        "graph-index-full-precision-i8",
+        FullPrecision::<i8>::new().search(plugins::Topk),
+    );
 
     // Dynamic Full Precision
     benchmarks.register(
@@ -90,16 +115,53 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     spherical::register_benchmarks(benchmarks);
 }
 
-// Full Precision
-pub(super) struct FullPrecision<T> {
-    _type: std::marker::PhantomData<T>,
+type FullPrecisionProvider<T> = inmem::DefaultProvider<
+    inmem::FullPrecisionStore<T>,
+    common::NoStore,
+    common::NoDeletes,
+    DefaultContext,
+>;
+
+/// Associate a type (usually a [`diskann::provider::DataProvider`]) with a full-precision
+/// element type. This is used in implementations of [`plugins::Plugin`] to derive the
+/// correct query types to load.
+pub(super) trait QueryType {
+    type Element: VectorRepr;
 }
 
-impl<T> FullPrecision<T> {
-    pub(super) fn new() -> Self {
+impl<T> QueryType for FullPrecisionProvider<T>
+where
+    T: VectorRepr,
+{
+    type Element = T;
+}
+
+/// A [`Benchmark`] for full-precision searches containing a dynamic list of search types.
+struct FullPrecision<T>
+where
+    T: VectorRepr,
+{
+    plugins:
+        plugins::Plugins<FullPrecisionProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
+}
+
+impl<T> FullPrecision<T>
+where
+    T: VectorRepr,
+{
+    fn new() -> Self {
         Self {
-            _type: std::marker::PhantomData,
+            plugins: plugins::Plugins::new(),
         }
+    }
+
+    fn search<P>(mut self, plugin: P) -> Self
+    where
+        P: plugins::Plugin<FullPrecisionProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
+            + 'static,
+    {
+        self.plugins.register(plugin);
+        self
     }
 }
 
@@ -114,9 +176,14 @@ where
     type Output = BuildResult;
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        match &input.source {
-            IndexSource::Load(load) => datatype::Type::<T>::try_match(&load.data_type),
-            IndexSource::Build(build) => datatype::Type::<T>::try_match(&build.data_type),
+        let score = datatype::Type::<T>::try_match(input.source.data_type());
+        if self.plugins.is_match(&input.search_phase) {
+            score
+        } else {
+            match score {
+                Ok(_) => Err(FailureScore(0)),
+                Err(score) => Err(score),
+            }
         }
     }
 
@@ -125,16 +192,38 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&IndexOperation>,
     ) -> std::fmt::Result {
+        use diskann_benchmark_runner::dispatcher::{Description, Why};
+
         match input {
-            Some(arg) => match &arg.source {
-                IndexSource::Load(load) => {
-                    datatype::Type::<T>::description(f, Some(&load.data_type))
+            Some(arg) => {
+                let data_type = arg.source.data_type();
+                if datatype::Type::<T>::try_match(data_type).is_err() {
+                    writeln!(
+                        f,
+                        "Data/Query Type: {}",
+                        Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
+                    )?;
                 }
-                IndexSource::Build(build) => {
-                    datatype::Type::<T>::description(f, Some(&build.data_type))
+
+                if !self.plugins.is_match(&arg.search_phase) {
+                    writeln!(
+                        f,
+                        "Unsupported search phase: \"{}\" - expected one of {}",
+                        arg.search_phase.kind(),
+                        self.plugins.format_kinds(),
+                    )?;
                 }
-            },
-            None => datatype::Type::<T>::description(f, None::<&datatype::DataType>),
+                Ok(())
+            }
+            None => {
+                writeln!(
+                    f,
+                    "Data/Query Type: {}",
+                    Description::<datatype::DataType, datatype::Type<T>>::new()
+                )?;
+
+                writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
+            }
         }
     }
 
@@ -185,13 +274,16 @@ where
             }
         };
 
-        let result = run_search_outer(
-            &input.search_phase,
-            common::FullPrecision,
+        // Save construction stats before running queries.
+        checkpoint.checkpoint(&build_stats)?;
+
+        let search_results = self.plugins.run(
             index,
-            build_stats,
-            checkpoint,
+            &input.search_phase,
+            &Strategy::new(common::FullPrecision),
         )?;
+
+        let result = BuildResult::new(build_stats, search_results);
 
         writeln!(output, "\n\n{}", result)?;
         Ok(result)
@@ -331,158 +423,221 @@ where
     Ok((index, build_stats))
 }
 
-pub(super) fn run_search_outer<T, S, DP>(
-    input: &SearchPhase,
-    search_strategy: S,
-    index: Index<DP>,
-    build_stats: Option<BuildStats>,
-    checkpoint: Checkpoint<'_>,
-) -> anyhow::Result<BuildResult>
+/// A new-type wrapper for [`glue::SearchStrategy`].
+///
+/// This exists so we can implement [`search::Plugin`] for a raw generic `DP` without
+/// forming a blanket implementation for all `DP`/parameter `P` pairs.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Strategy<S>(S);
+
+impl<S> Strategy<S> {
+    pub(super) fn new(strategy: S) -> Self {
+        Self(strategy)
+    }
+
+    pub(super) fn inner(&self) -> S
+    where
+        S: Clone,
+    {
+        self.0.clone()
+    }
+}
+
+//------//
+// Topk //
+//------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
-    DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + for<'a> provider::SetElement<&'a [T]>,
-    T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T]> + Clone + AsyncFriendly,
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
-    match &input {
-        SearchPhase::Topk(search_phase) => {
-            // Handle Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
 
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let topk = phase.as_topk()?;
 
-            let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+        let queries: Arc<Matrix<DP::Element>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
+        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
 
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
+        let knn = benchmark_core::search::graph::KNN::new(
+            index.clone(),
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+        )?;
 
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
-        SearchPhase::Range(search_phase) => {
-            // Handle Range search phase
-            let mut result = BuildResult::new_range(build_stats);
+        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
+        let results = search::knn::run(&knn, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(results))
+    }
+}
 
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
+//-------//
+// Range //
+//-------//
 
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
 
-            let steps = search::range::RangeSearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
 
-            let range = benchmark_core::search::graph::Range::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let range = phase.as_range()?;
+        let queries: Arc<Matrix<DP::Element>> =
+            Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
-            let search_results = search::range::run(&range, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Range(search_results));
-            Ok(result)
-        }
-        SearchPhase::TopkBetaFilter(search_phase) => {
-            // Handle Beta Filtered Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&range.groundtruth))?;
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
+        let steps =
+            search::range::RangeSearchSteps::new(range.reps, &range.num_threads, &range.runs);
 
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
+        let range = benchmark_core::search::graph::Range::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+        )?;
 
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+        let result = search::range::run(&range, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Range(result))
+    }
+}
 
-            let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+//------------//
+// BetaFilter //
+//------------//
 
-            let search_strategies = setup_filter_strategies(
-                search_phase.beta,
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider),
-                search_strategy.clone(),
-            );
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
 
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::collection(search_strategies),
-            )?;
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
 
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let beta_filter = phase.as_topk_beta_filter()?;
 
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
-        SearchPhase::TopkMultihopFilter(search_phase) => {
-            // Handle MultiHop Topk search phase
-            let mut result = BuildResult::new_topk(build_stats);
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&beta_filter.queries),
+        )?);
 
-            // Save construction stats before running queries.
-            checkpoint.checkpoint(&result)?;
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&beta_filter.groundtruth))?;
 
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
+        let bit_maps = generate_bitmaps(&beta_filter.query_predicates, &beta_filter.data_labels)?;
 
-            let groundtruth =
-                datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+        let search_strategies = setup_filter_strategies(
+            beta_filter.beta,
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider),
+            strategy.inner(),
+        );
 
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
+        let knn = benchmark_core::search::graph::KNN::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::collection(search_strategies),
+        )?;
 
-            let bit_maps =
-                generate_bitmaps(&search_phase.query_predicates, &search_phase.data_labels)?;
+        let steps = search::knn::SearchSteps::new(
+            beta_filter.reps,
+            &beta_filter.num_threads,
+            &beta_filter.runs,
+        );
 
-            let multihop = benchmark_core::search::graph::MultiHop::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-                bit_maps
-                    .into_iter()
-                    .map(utils::filters::as_query_label_provider)
-                    .collect(),
-            )?;
+        let result = search::knn::run(&knn, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
 
-            let search_results = search::knn::run(&multihop, &groundtruth, steps)?;
-            result.append(AggregatedSearchResults::Topk(search_results));
-            Ok(result)
-        }
+//----------------//
+// MultihopFilter //
+//----------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let multihop = phase.as_topk_multihop_filter()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&multihop.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+
+        let steps =
+            search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);
+
+        let bit_maps = generate_bitmaps(&multihop.query_predicates, &multihop.data_labels)?;
+
+        let multihop = benchmark_core::search::graph::MultiHop::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect(),
+        )?;
+
+        let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
     }
 }
 

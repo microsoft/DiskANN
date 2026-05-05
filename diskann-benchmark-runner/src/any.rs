@@ -255,18 +255,6 @@ impl Any {
     }
 }
 
-/// Used in `DispatchRule::description(f, _)` to ensure that additional description
-/// lines are properly aligned.
-#[macro_export]
-macro_rules! describeln {
-    ($writer:ident, $fmt:literal) => {
-        writeln!($writer, concat!("        ", $fmt))
-    };
-    ($writer:ident, $fmt:literal, $($args:expr),* $(,)?) => {
-        writeln!($writer, concat!("        ", $fmt), $($args,)*)
-    };
-}
-
 trait SerializableAny: std::fmt::Debug {
     fn as_any(&self) -> &dyn std::any::Any;
     fn dump(&self) -> Result<serde_json::Value, serde_json::Error>;
