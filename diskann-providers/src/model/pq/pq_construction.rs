@@ -100,6 +100,7 @@ where
         .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
     let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
         .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+
     let chunk_offsets = ChunkOffsets::from_dim(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
