@@ -18,7 +18,7 @@ use diskann::{ANNError, ANNResult};
 #[cfg(test)]
 use diskann_quantization::CompressInto;
 use diskann_utils::object_pool::ObjectPool;
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
+use diskann_vector::distance::Metric;
 
 use super::{VectorGuard, common::TestCallCount};
 #[cfg(test)]
@@ -283,37 +283,6 @@ impl storage::bin::GetData for MemoryQuantVectorProviderAsync {
     }
 }
 
-/// Overload `DistanceFunction` for `Guard<Arc<Vec<u8>>>` by dereferencing the
-/// guard to a slice.
-impl DistanceFunction<&[f32], &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer {
-    #[inline(always)]
-    fn evaluate_similarity(&self, left: &[f32], right: &Guard<Arc<Vec<u8>>>) -> f32 {
-        let right: &[u8] = right;
-        self.evaluate_similarity(left, right)
-    }
-}
-
-/// Overload `DistanceFunction` for `Guard<Arc<Vec<u8>>>` by dereferencing the
-/// guard to a slice.
-impl DistanceFunction<&Guard<Arc<Vec<u8>>>, &Guard<Arc<Vec<u8>>>, f32> for DistanceComputer {
-    #[inline(always)]
-    fn evaluate_similarity(&self, left: &Guard<Arc<Vec<u8>>>, right: &Guard<Arc<Vec<u8>>>) -> f32 {
-        let left: &[u8] = left;
-        let right: &[u8] = right;
-        self.evaluate_similarity(left, right)
-    }
-}
-
-/// Overload `PreprocessedDistanceFunction` for `Guard<Arc<Vec<u8>>>` by dereferencing the
-/// guard to a slice.
-impl PreprocessedDistanceFunction<&Guard<Arc<Vec<u8>>>, f32> for QueryComputer {
-    #[inline(always)]
-    fn evaluate_similarity(&self, changing: &Guard<Arc<Vec<u8>>>) -> f32 {
-        let changing: &[u8] = changing;
-        self.evaluate_similarity(changing)
-    }
-}
-
 ///////////
 // Tests //
 ///////////
@@ -321,6 +290,8 @@ impl PreprocessedDistanceFunction<&Guard<Arc<Vec<u8>>>, f32> for QueryComputer {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+
+    use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 
     use crate::storage::VirtualStorageProvider;
 
@@ -372,7 +343,7 @@ mod tests {
         let c = provider.query_computer(&[-0.5, -0.5]).unwrap();
         let expected: f32 = 1.5 * 1.5 * 2.0;
         assert_eq!(
-            c.evaluate_similarity(&provider.get_vector_sync(3).unwrap()),
+            c.evaluate_similarity(provider.get_vector_sync(3).unwrap().as_slice()),
             expected
         );
 
@@ -380,15 +351,15 @@ mod tests {
         let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
-                &provider.get_vector_sync(0).unwrap(),
-                &provider.get_vector_sync(3).unwrap()
+                provider.get_vector_sync(0).unwrap().as_slice(),
+                provider.get_vector_sync(3).unwrap().as_slice(),
             ),
             2.0
         );
 
         let slice: &[f32] = &[-0.5, -0.5];
         assert_eq!(
-            d.evaluate_similarity(slice, &provider.get_vector_sync(3).unwrap()),
+            d.evaluate_similarity(slice, provider.get_vector_sync(3).unwrap().as_slice()),
             expected,
         );
     }

@@ -10,7 +10,7 @@ use diskann_providers::storage::StorageReadProvider;
 use tracing::info;
 
 use super::traits::AlignedFileReader;
-use crate::utils::aligned_file_reader::AlignedRead;
+use crate::utils::aligned_file_reader::{AlignedRead, A1};
 
 pub struct StorageProviderAlignedFileReader {
     data: Vec<u8>,
@@ -34,7 +34,9 @@ impl StorageProviderAlignedFileReader {
 }
 
 impl AlignedFileReader for StorageProviderAlignedFileReader {
-    fn read(&mut self, read_requests: &mut [AlignedRead<u8>]) -> ANNResult<()> {
+    type Alignment = A1;
+
+    fn read(&mut self, read_requests: &mut [AlignedRead<u8, A1>]) -> ANNResult<()> {
         for read in read_requests {
             let offset = read.offset();
             let len = read.aligned_buf().len();

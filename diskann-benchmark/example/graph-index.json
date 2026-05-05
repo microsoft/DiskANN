@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Build",
@@ -43,7 +43,7 @@
       }
     },
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Load",
@@ -74,7 +74,7 @@
       }
     },
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Build",
@@ -118,7 +118,7 @@
       }
     },
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Build",
@@ -160,7 +160,7 @@
       }
     },
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Build",
@@ -204,7 +204,7 @@
       }
     },
     {
-      "type": "async-index-build",
+      "type": "graph-index-build",
       "content": {
         "source": {
           "index-source": "Build",

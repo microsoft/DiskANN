@@ -5,7 +5,7 @@
 
 use criterion::Criterion;
 use diskann_disk::utils::{compute_vecs_l2sq, k_means_clustering};
-use diskann_providers::utils::{create_thread_pool_for_bench, RayonThreadPool};
+use diskann_providers::utils::{create_thread_pool_for_bench, RayonThreadPoolRef};
 use rand::Rng;
 
 const NUM_POINTS: usize = 100000;
@@ -37,7 +37,7 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
                 MAX_KMEANS_REPS,
                 rng,
                 &mut false,
-                &pool,
+                pool.as_ref(),
             )
         })
     });
@@ -45,13 +45,13 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
     group.bench_function("Snrm2 Rust Run", |f| {
         f.iter(|| {
             let data_copy = data.clone();
-            snrm2_benchmark_rust(&data_copy, NUM_POINTS, DIM, &pool);
+            snrm2_benchmark_rust(&data_copy, NUM_POINTS, DIM, pool.as_ref());
         })
     });
 }
 
 /// compute_vecs_l2sq benchmark
-fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize, pool: &RayonThreadPool) {
+fn snrm2_benchmark_rust(data: &[f32], num_points: usize, dim: usize, pool: RayonThreadPoolRef<'_>) {
     let mut docs_l2sq = vec![0.0; num_points];
     compute_vecs_l2sq(&mut docs_l2sq, data, dim, pool).unwrap();
 }

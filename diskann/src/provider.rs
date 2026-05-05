@@ -511,8 +511,7 @@ pub trait BuildDistanceComputer: Accessor {
     /// of elements yielded by the [`Accessor`].
     type DistanceComputer: for<'a, 'b> DistanceFunction<Self::ElementRef<'a>, Self::ElementRef<'b>>
         + Send
-        + Sync
-        + 'static;
+        + Sync;
 
     /// Build the random-access distance computer for this accessor.
     ///
