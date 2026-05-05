@@ -90,7 +90,10 @@ check needed in the macro path.
 - Version tagging in manifest (`$version` alongside fields)
 - Custom serde for `Value`, `Number`, `Handle` (plain JSON output)
 - Primitive `bool` support via `Value::Bool`, including nested `Vec<bool>` round-trips
+- Tempfile isolation in tests (`tempfile::tempdir()`) to ensure cleanup of artifacts and manifest
 - Light/heavy error split on load path
+- `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush
+  errors via `save::Result<Handle>`
 
 ## Remaining Work
 
@@ -106,12 +109,6 @@ Several places still use `unwrap()` or `panic!()` instead of proper error propag
 - `load::mod.rs` — `load_number!` macro uses `.unwrap()` on `TryFrom` — should return a
   precision/overflow error
 - `save::value.rs` — `Record::insert` panics on reserved keys instead of returning an error
-
-### Writer Flush
-
-`Writer::finish()` now explicitly flushes the inner `BufWriter`, but still calls
-`.unwrap()` rather than propagating I/O errors. `finish()` should return a `Result<Handle>`
-and call `self.io.into_inner()` or `self.io.flush()` with proper error propagation.
 
 ### Value::Bytes Wiring
 
@@ -142,12 +139,6 @@ in the dependencies.
 ### Missing Primitive Impls
 
 - `Option<T>` — no support yet. Needs a convention (omitted field? explicit null variant?)
-
-### Test Infrastructure
-
-The round-trip test in `lib.rs` now uses `tempfile::tempdir()` for isolation, keeping the
-temporary directory guard alive until after save and load complete so the manifest and
-auxiliary artifact are cleaned up automatically.
 
 ### Platform-Dependent Types
 

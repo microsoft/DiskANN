@@ -3,15 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    collections::HashSet,
-    fs::File,
-    io::{BufWriter, Write},
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{collections::HashSet, fs::File, io::BufWriter, path::PathBuf, sync::Mutex};
 
-use crate::save::{Error, Handle, Value};
+use crate::save::{Error, Handle, Result, Value};
 
 #[derive(Debug)]
 pub(super) struct ContextInner {
@@ -56,7 +50,7 @@ impl ContextInner {
         }
     }
 
-    pub fn finish(self, value: Value<'_>) -> Result<(), Error> {
+    pub fn finish(self, value: Value<'_>) -> Result<()> {
         let temp = format!("{}.temp", self.metadata.display());
         if std::path::Path::new(&temp).exists() {
             return Err(Error::message(format!(
@@ -97,9 +91,12 @@ pub struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    pub fn finish(mut self) -> Handle {
-        self.flush().unwrap();
-        Handle::new(self.name)
+    pub fn finish(self) -> Result<Handle> {
+        // NOTE: self.io.into_inner() will flush the buffer and close the file.
+        self.io
+            .into_inner()
+            .map_err(|err| Error::new(err.into_error()))?;
+        Ok(Handle::new(self.name))
     }
 }
 

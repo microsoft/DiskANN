@@ -65,10 +65,10 @@ mod tests {
             // The raw vector data we instead store in an auxiliary file.
 
             let mut io = context.write("auxiliary.bin");
-            io.write_all(&self.vector).unwrap();
+            io.write_all(&self.vector).map_err(save::Error::new)?;
 
             let mut record = save_fields!(self, context, [x, y, enabled, inner]);
-            record.insert("vector", io.finish());
+            record.insert("vector", io.finish()?);
             Ok(record)
         }
     }
