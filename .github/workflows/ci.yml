@@ -367,11 +367,8 @@ jobs:
             --package diskann-quantization \
             -- --skip compile_tests
 
-  # macOS is opt-in: slow to provision, so only included when the workflow is
-  # manually dispatched with `run_macos: true`. On push/PR events,
-  # `inputs.run_macos` is null, so the condition evaluates to false and macOS
-  # is excluded from the matrix. macOS results are intentionally excluded from
-  # `ci-gate` so they never block merges.
+  # macOS is opt-in since it is slow to provision.
+  # macOS is included when the workflow is manually dispatched with `run_macos: true`. 
   test-workspace:
     needs: basics
     name: test workspace
