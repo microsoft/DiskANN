@@ -46,10 +46,7 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::{
-        async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
-        post_processor::TopkPostProcessor,
-    },
+    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
         self,
         datafiles::{self},
@@ -465,15 +462,7 @@ where
     >,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        if Self::kind() != phase.kind() {
-            return false;
-        }
-
-        phase
-            .as_topk()
-            .ok()
-            .and_then(|topk| topk.post_processor.as_ref())
-            .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
+        plugins::DeterminantDiversity::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
@@ -486,15 +475,7 @@ where
         phase: &SearchPhase,
         _strategy: &Strategy<common::FullPrecision>,
     ) -> anyhow::Result<AggregatedSearchResults> {
-        let topk = phase.as_topk()?;
-        let (power, eta) = match topk.post_processor.as_ref() {
-            Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => (*power, *eta),
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "determinant-diversity plugin selected for non determinant-diversity input",
-                ));
-            }
-        };
+        let (topk, power, eta) = plugins::DeterminantDiversity::get(phase)?;
 
         let strategy = common::FullPrecision;
         let context = DefaultContext;
@@ -580,18 +561,11 @@ where
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        if Self::kind() != phase.kind() {
-            return false;
-        }
-
-        phase
-            .as_topk()
-            .ok()
-            .is_some_and(|topk| topk.post_processor.is_none())
+        plugins::Topk::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        "topk"
     }
 
     fn run(
@@ -630,11 +604,11 @@ where
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::Range::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        "range"
     }
 
     fn run(
@@ -674,11 +648,11 @@ where
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::BetaFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        "topk-beta-filter"
     }
 
     fn run(
@@ -733,11 +707,11 @@ where
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::MultihopFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        "topk-multihop-filter"
     }
 
     fn run(
