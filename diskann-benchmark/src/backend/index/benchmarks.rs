@@ -46,7 +46,7 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind},
     utils::{
         self,
         datafiles::{self},
@@ -565,7 +565,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        "topk"
+        SearchPhaseKind::Topk.as_str()
     }
 
     fn run(
@@ -608,7 +608,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        "range"
+        SearchPhaseKind::Range.as_str()
     }
 
     fn run(
@@ -652,7 +652,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        "topk-beta-filter"
+        SearchPhaseKind::TopkBetaFilter.as_str()
     }
 
     fn run(
@@ -711,7 +711,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        "topk-multihop-filter"
+        SearchPhaseKind::TopkMultihopFilter.as_str()
     }
 
     fn run(
