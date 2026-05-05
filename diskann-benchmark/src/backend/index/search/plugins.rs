@@ -40,7 +40,7 @@ use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
 use crate::{
     backend::index::result::AggregatedSearchResults,
     inputs::{
-        graph_index::{SearchPhase, SearchPhaseKind, TopkSearchPhase},
+        graph_index::{SearchPhase, TopkSearchPhase},
         post_processor::TopkPostProcessor,
     },
 };
@@ -149,11 +149,6 @@ where
 pub(crate) struct Topk;
 
 impl Topk {
-    /// Returns [`SearchPhaseKind::Topk`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::Topk
-    }
-
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase
             .as_topk()
@@ -193,11 +188,6 @@ impl DeterminantDiversity {
 pub(crate) struct Range;
 
 impl Range {
-    /// Returns [`SearchPhaseKind::Range`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::Range
-    }
-
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_range().is_ok()
     }
@@ -208,11 +198,6 @@ impl Range {
 pub(crate) struct TopkBetaFilter;
 
 impl TopkBetaFilter {
-    /// Returns [`SearchPhaseKind::TopkBetaFilter`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkBetaFilter
-    }
-
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_beta_filter().is_ok()
     }
@@ -223,11 +208,6 @@ impl TopkBetaFilter {
 pub(crate) struct TopkMultihopFilter;
 
 impl TopkMultihopFilter {
-    /// Returns [`SearchPhaseKind::TopkMultihopFilter`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkMultihopFilter
-    }
-
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_multihop_filter().is_ok()
     }
