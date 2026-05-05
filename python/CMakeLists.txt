@@ -40,16 +40,29 @@ if (MSVC)
     target_compile_options(_diskannpy PRIVATE /U_WINDLL)
 endif()
 
-target_link_libraries(
-        _diskannpy
-        PRIVATE
-        pybind11::module
-        pybind11::lto
-        pybind11::windows_extras
-        ${PROJECT_NAME}
-        ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
-        ${DISKANN_ASYNC_LIB}
-)
+if (IOURING)
+    target_link_libraries(
+            _diskannpy
+            PRIVATE
+            pybind11::module
+            pybind11::lto
+            pybind11::windows_extras
+            ${PROJECT_NAME}
+            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
+            ${DISKANN_ASYNC_LIB_URING}
+    )
+else
+    target_link_libraries(
+            _diskannpy
+            PRIVATE
+            pybind11::module
+            pybind11::lto
+            pybind11::windows_extras
+            ${PROJECT_NAME}
+            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
+            ${DISKANN_ASYNC_LIB}
+    )
+endif()
 
 pybind11_extension(_diskannpy)
 if(NOT MSVC AND NOT ${CMAKE_BUILD_TYPE} MATCHES Debug|RelWithDebInfo)

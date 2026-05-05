@@ -48,6 +48,13 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
 ```
 
+Optional: to build with io\_uring instead of aio, run the following commands:
+
+```bash
+sudo apt install liburing-dev
+mkdir build && cd build && cmake -DIOURING=True -DCMAKE_BUILD_TYPE=Release .. && make -j
+```
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 
