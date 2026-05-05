@@ -368,7 +368,8 @@ jobs:
             -- --skip compile_tests
 
   # macOS is opt-in since it is slow to provision.
-  # macOS is included when the workflow is manually dispatched with `run_macos: true`. 
+  # It is excluded from the default push/PR matrix, and only included for manually
+  # dispatched runs when `run_macos: true` is set.
   test-workspace:
     needs: basics
     name: test workspace
