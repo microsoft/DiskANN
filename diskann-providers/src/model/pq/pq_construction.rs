@@ -6,6 +6,7 @@
 use std::{
     io::{Seek, SeekFrom, Write},
     mem::size_of,
+    num::NonZeroUsize,
     sync::atomic::AtomicBool,
     vec,
 };
@@ -95,8 +96,11 @@ where
         );
     }
 
-    let chunk_offsets =
-        ChunkOffsets::from_dimensions(parameters.dim(), parameters.num_pq_chunks()).bridge_err()?;
+    let dim = NonZeroUsize::new(parameters.dim())
+        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+    let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
+        .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+    let chunk_offsets = ChunkOffsets::from_dim(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -199,12 +203,9 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     }
 
     // Calculate the chunk offsets, filling the caller-owned buffer.
-    let chunk_offsets_view = ChunkOffsetsView::from_dimensions_into(
-        parameters.dim(),
-        parameters.num_pq_chunks(),
-        offsets,
-    )
-    .bridge_err()?;
+    let dim = NonZeroUsize::new(parameters.dim())
+        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+    let chunk_offsets_view = ChunkOffsetsView::from_dim_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -1028,7 +1029,11 @@ mod pq_test {
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
-        let chunk_offsets = ChunkOffsets::from_dimensions(train_dim, num_pq_chunks).unwrap();
+        let chunk_offsets = ChunkOffsets::from_dim(
+            NonZeroUsize::new(train_dim).unwrap(),
+            NonZeroUsize::new(num_pq_chunks).unwrap(),
+        )
+        .unwrap();
         let offset_view = chunk_offsets.as_view();
         let full_data =
             MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();

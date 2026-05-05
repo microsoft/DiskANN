@@ -85,9 +85,11 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_quantization::views::ChunkOffsets::from_dimensions(
-                data.ncols(),
-                input.num_pq_chunks.get(),
+            let dim = std::num::NonZeroUsize::new(data.ncols())
+                .ok_or_else(|| anyhow::anyhow!("data has zero columns"))?;
+            let offsets = diskann_quantization::views::ChunkOffsets::from_dim(
+                dim,
+                input.num_pq_chunks,
             )?;
 
             let base = {
