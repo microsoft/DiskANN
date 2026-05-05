@@ -10,19 +10,9 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub(crate) enum TopkPostProcessor {
     DeterminantDiversity {
-        #[serde(default = "default_det_div_power")]
         power: f32,
-        #[serde(default = "default_det_div_eta")]
         eta: f32,
     },
-}
-
-const fn default_det_div_power() -> f32 {
-    2.0
-}
-
-const fn default_det_div_eta() -> f32 {
-    0.01
 }
 
 impl CheckDeserialization for TopkPostProcessor {

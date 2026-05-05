@@ -85,7 +85,6 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
-    #[serde(default)]
     pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 

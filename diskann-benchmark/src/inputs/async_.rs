@@ -126,7 +126,6 @@ pub(crate) struct TopkSearchPhase {
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
-    #[serde(default)]
     pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
