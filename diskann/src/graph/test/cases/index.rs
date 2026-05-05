@@ -7,7 +7,7 @@ use super::helpers::{generate_2d_square_adjacency_list, setup_2d_square};
 use crate::{
     graph::{self, AdjacencyList, index::DegreeStats, test::provider as test_provider},
     provider::{Delete, NeighborAccessor},
-    test::cmp::VerboseEq,
+    test::cmp::assert_eq_verbose,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -81,7 +81,7 @@ async fn test_get_degree_stats() {
         min_degree: 2,
         cnt_less_than_two: 0,
     };
-    assert!(stats.verbose_eq(&expected).is_ok());
+    assert_eq_verbose!(expected, stats);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -174,7 +174,7 @@ async fn test_get_degree_stats_mixed() {
         min_degree: 0,
         cnt_less_than_two: 2,
     };
-    assert!(stats.verbose_eq(&expected).is_ok());
+    assert_eq_verbose!(expected, stats);
 }
 
 #[tokio::test(flavor = "current_thread")]
