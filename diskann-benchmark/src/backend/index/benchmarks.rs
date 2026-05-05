@@ -451,16 +451,14 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
-impl<DP> search::Plugin<DP, SearchPhase, Strategy<common::FullPrecision>>
+impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DeterminantDiversity
 where
-    DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32> + QueryType,
-    common::FullPrecision: for<'a> glue::SearchStrategy<DP, &'a [DP::Element]>,
-    for<'a> post_processor::DeterminantDiversity: glue::SearchPostProcess<
-        <common::FullPrecision as glue::SearchStrategy<DP, &'a [DP::Element]>>::SearchAccessor<'a>,
-        &'a [DP::Element],
-        u32,
-    >,
+    common::FullPrecision: for<'a> glue::SearchStrategy<FullPrecisionProvider<f32>, &'a [f32]>,
+    for<'a> <common::FullPrecision as glue::SearchStrategy<
+        FullPrecisionProvider<f32>,
+        &'a [f32],
+    >>::SearchAccessor<'a>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::DeterminantDiversity::is_match(phase)
@@ -472,7 +470,7 @@ where
 
     fn run(
         &self,
-        index: Arc<DiskANNIndex<DP>>,
+        index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
         phase: &SearchPhase,
         _strategy: &Strategy<common::FullPrecision>,
     ) -> anyhow::Result<AggregatedSearchResults> {
@@ -482,7 +480,7 @@ where
         let context = DefaultContext;
         let det_div = post_processor::DeterminantDiversity::new(power, eta);
 
-        let queries: Arc<Matrix<DP::Element>> =
+        let queries: Arc<Matrix<f32>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
         let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
 

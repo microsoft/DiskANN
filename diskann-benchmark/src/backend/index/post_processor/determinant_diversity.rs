@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::future::Future;
+
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::{
     error::ANNError,
@@ -10,7 +12,37 @@ use diskann::{
     neighbor::Neighbor,
     provider::Accessor,
 };
-use diskann_providers::model::graph::provider::async_::determinant_diversity_post_process;
+use diskann_providers::model::graph::provider::async_::{
+    determinant_diversity_post_process,
+    inmem,
+};
+use diskann_utils::future::AsyncFriendly;
+
+pub(crate) trait FullPrecisionVectorAccessor: Accessor + Send {
+    fn get_full_precision_vector(
+        &mut self,
+        id: Self::Id,
+    ) -> impl Future<Output = Result<Vec<f32>, ANNError>> + Send;
+}
+
+impl<Q, D, Ctx> FullPrecisionVectorAccessor for inmem::FullAccessor<'_, f32, Q, D, Ctx>
+where
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: diskann::provider::ExecutionContext,
+{
+    fn get_full_precision_vector(
+        &mut self,
+        id: Self::Id,
+    ) -> impl Future<Output = Result<Vec<f32>, ANNError>> + Send {
+        async move {
+            self.get_element(id)
+                .await
+                .map(|vector| vector.to_vec())
+                .map_err(Into::into)
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
@@ -26,15 +58,15 @@ impl DeterminantDiversity {
 
 impl<A, T> glue::SearchPostProcess<A, T, A::Id> for DeterminantDiversity
 where
-    A: Accessor + diskann::provider::BuildQueryComputer<T> + Send,
-    T: Send + Sync,
+    A: FullPrecisionVectorAccessor + diskann::provider::BuildQueryComputer<T> + Send,
+    T: AsRef<[f32]> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
-        _accessor: &mut A,
-        _query: T,
+        accessor: &mut A,
+        query: T,
         _computer: &<A as diskann::provider::BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -44,14 +76,19 @@ where
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
-        let embedded: Vec<_> = candidates
-            .iter()
-            .map(|c| (c.id, c.distance, vec![c.distance]))
-            .collect();
+        let mut embedded = Vec::with_capacity(candidates.len());
+
+        for candidate in &candidates {
+            embedded.push((
+                candidate.id,
+                candidate.distance,
+                accessor.get_full_precision_vector(candidate.id).await?,
+            ));
+        }
 
         let reranked = determinant_diversity_post_process(
             embedded,
-            &[0.0],
+            query.as_ref(),
             candidates.len(),
             self.eta,
             self.power,
