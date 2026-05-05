@@ -1,17 +1,46 @@
 # DiskANN Repository - Agent Onboarding Guide
 
-**Last Updated**: 2026-02-11 (based on v0.45.0, Rust 1.92)
+**Last Updated**: 2026-05-04 (based on v0.50.1, Rust 1.92)
 
 This guide helps coding agents understand how to work efficiently with the DiskANN repository.
+
+> **Relationship with `.github/copilot-instructions.md`**: This file (`agents.md`) is the operational manual — project structure, commands, workflows, and detailed conventions. The [`.github/copilot-instructions.md`](.github/copilot-instructions.md) file contains concise review-time rules that are automatically injected into Copilot code review context. Keep both in sync when conventions change.
+
+---
+
+## Quick Reference
+
+```bash
+# Build
+cargo build --workspace
+
+# Test
+cargo test                                     # all tests
+cargo test -p diskann                          # single crate
+cargo test -p diskann -- --exact test_name     # single test
+cargo test --profile ci                        # CI profile (faster)
+
+# Lint & Format
+cargo fmt --all --check                        # check formatting
+cargo fmt --all                                # apply formatting
+cargo clippy --workspace --all-targets -- -Dwarnings  # lint (matches CI)
+
+# Regenerate test baselines
+DISKANN_TEST=overwrite cargo test -p diskann
+```
+
+**Note**: `rustfmt` and `clippy` are not installed by default. Run `rustup component add rustfmt clippy` if needed.
 
 ---
 
 ## Table of Contents
 
-1. [Repository Overview](#repository-overview)
-2. [Repository Structure](#repository-structure)
-3. [Testing](#testing)
-4. [Code Quality & Linting](#code-quality--linting)
+1. [Quick Reference](#quick-reference)
+2. [Repository Overview](#repository-overview)
+3. [Repository Structure](#repository-structure)
+4. [Boundaries](#boundaries)
+5. [Testing](#testing)
+6. [Code Quality & Linting](#code-quality--linting)
 
 ---
 
@@ -22,7 +51,7 @@ This guide helps coding agents understand how to work efficiently with the DiskA
 - **Language**: Rust (Edition 2021), toolchain version in [`rust-toolchain.toml`](rust-toolchain.toml)
 - **License**: MIT (see [`LICENSE.txt`](LICENSE.txt))
 - **Version**: See [`Cargo.toml`](Cargo.toml)
-- **Architecture**: Cargo workspace with 15+ crates
+- **Architecture**: Cargo workspace with 17 crates (resolver = "3")
 - **Legacy Code**: Older C++ code is on the `cpp_main` branch (not maintained)
 
 ### Key Resources
@@ -56,6 +85,7 @@ The repository uses a Cargo workspace with crates organized into functional tier
 - `diskann-providers/` - Storage abstraction layer
 - `diskann-disk/` - Disk-based indexing with io_uring support
 - `diskann-label-filter/` - Inverted index for filtered search
+- `diskann-garnet/` - Garnet (Redis-compatible) DataProvider and FFI endpoints for vector sets
 
 **Tier 4: Infrastructure & Tools**
 - `diskann-benchmark-runner/` - Test runner infrastructure
@@ -63,6 +93,7 @@ The repository uses a Cargo workspace with crates organized into functional tier
 - `diskann-benchmark-simd/` - SIMD-specific benchmarks
 - `diskann-benchmark/` - Benchmark definitions and runners
 - `diskann-tools/` - CLI utilities (autotuner, etc.)
+- `vectorset/` - Garnet client for benchmarking vector set workloads
 
 ---
 
@@ -76,6 +107,34 @@ The repository uses a Cargo workspace with crates organized into functional tier
   - `diskann-benchmark-runner`
   - `diskann-benchmark-core` (`diskann` is allowed)
   - `diskann-benchmark-simd`
+
+---
+
+## Boundaries
+
+### 🚫 Never
+
+- Modify files in `diskann/tests/generated/` by hand — these are auto-generated baselines. Regenerate with `DISKANN_TEST=overwrite`.
+- Modify `rust-toolchain.toml`, `.github/workflows/`, or `.codecov.yml` without explicit approval.
+- Use the global Rayon thread pool — use `RayonThreadPool`/`RayonThreadPoolRef` (enforced by `clippy.toml` disallowed methods).
+- Use `rand::thread_rng` — use the project's `random.rs` utilities instead (enforced by `clippy.toml`).
+- Use `vfs::PhysicalFS::new` or `VirtualStorageProvider::new_physical()` in tests — use `VirtualStorageProvider::new_overlay()`.
+- Remove or weaken existing tests without a strong, documented reason.
+- Commit secrets, credentials, or API keys.
+
+### ⚠️ Ask First
+
+- Adding new workspace dependencies to `Cargo.toml` — justify the addition.
+- Changing public API signatures in any `diskann-*` crate — requires SemVer analysis (may need a major version bump).
+- Modifying tier dependency rules (e.g., adding a Tier 3 dependency to a Tier 4 benchmark crate).
+- Changing `clippy.toml` or `rustfmt.toml` lint/formatting configuration.
+
+### ✅ Always
+
+- Include the MIT license header in every new source file.
+- Run `cargo fmt --all` and `cargo clippy --workspace --all-targets -- -Dwarnings` before committing.
+- Update doc comments when changing function signatures or removing parameters.
+- Add a `// SAFETY:` comment above every `unsafe` block with specific, verifiable preconditions.
 
 ---
 
@@ -104,9 +163,17 @@ cargo test --doc
 
 ### Test Baseline Caching System
 
-DiskANN uses a baseline caching system for regression detection. See [`diskann/README.md`](diskann/README.md) for a high-level overview of how the baseline system works. For implementation and API details, refer directly to:
-- [`diskann/src/test/cache.rs`](diskann/src/test/cache.rs) — core baseline caching APIs
-- [`diskann/src/test/cmp.rs`](diskann/src/test/cmp.rs) — `VerboseEq` and related helpers for better test error messages
+DiskANN uses a baseline caching system for regression detection. Test results are serialized as JSON into `diskann/tests/generated/` and compared against on subsequent runs. Any difference is flagged as a test failure.
+
+- To regenerate baselines: run tests with `DISKANN_TEST=overwrite`
+- Before checking in: delete `diskann/tests/generated/` first, then regenerate to prune unused baselines
+- Regenerated JSON files should be inspected via `git diff` during review
+
+The APIs are **`pub(crate)`** (internal to the `diskann` crate only):
+- [`diskann/src/test/cache.rs`](diskann/src/test/cache.rs) — `get_or_save_test_results`, `TestRoot`, `TestPath`
+- [`diskann/src/test/cmp.rs`](diskann/src/test/cmp.rs) — `VerboseEq` trait, `verbose_eq!` macro, `assert_eq_verbose!`
+
+See [`diskann/README.md`](diskann/README.md) for additional details.
 
 ### AVX-512, Aarch64, and multi-platform
 
@@ -130,23 +197,62 @@ Low-level crates should use bespoke, precise, non-allocating error types. Use `t
 
 `diskann::ANNError` is not a suitable low-level error type.
 
+```rust
+// ✅ Good — bespoke error type with thiserror, uses #[from] for source chaining
+#[derive(Debug, thiserror::Error)]
+pub enum SgemmError {
+    #[error("dimension overflow: {expected_rows}×{expected_cols} exceeds usize")]
+    DimensionOverflow { expected_rows: usize, expected_cols: usize },
+
+    #[error(transparent)]
+    Allocation(#[from] AllocatorError),
+}
+
+// ❌ Bad — single crate-level enum, formats inner error in display string
+#[derive(Debug, thiserror::Error)]
+pub enum MyLibError {
+    #[error("sgemm failed: {0}")]  // Don't format the inner error here
+    Sgemm(#[source] SgemmError),
+    #[error("io failed: {0}")]
+    Io(#[from] std::io::Error),
+    // ... 20 more variants — too broad
+}
+```
+
 #### Mid-Level (diskann algorithms)
 
 Use `diskann::ANNError` and its context machinery. This type:
 
-- Has a small size and `Drop` implementation, so is efficient in function ABIs.
-- Records stack trace of its first creation under `RUST_BACKTRACE=1`.
-- Precisely records line numbers of creation.
-- Has a context layering machinery to add additional information as an error is passed up the stack.
+- Is 16 bytes with niche optimization for `Option<ANNError>`, allowing return in registers.
+- Records stack trace of its first construction under `RUST_BACKTRACE=1`.
+- Precisely records file and line of creation via `#[track_caller]`.
+- Has context layering machinery to add additional information as an error is passed up the stack.
+- Is backed internally by `anyhow::Error`.
 
 When converting to `ANNError`, use `#[track_caller]` for better source reporting.
+Prefer `ANNError::new(ANNErrorKind::…, e)` over the old `log_*`-style constructors, which force eager string formatting and double-log errors.
+
+```rust
+// ✅ Good — deferred formatting, precise kind, track_caller
+#[track_caller]
+fn process_vectors(data: &[f32]) -> Result<(), ANNError> {
+    validate(data).map_err(|e| ANNError::new(ANNErrorKind::IndexError, e))?;
+    Ok(())
+}
+
+// ❌ Bad — eager string formatting, double-logs on creation
+fn process_vectors(data: &[f32]) -> Result<(), ANNError> {
+    validate(data).map_err(|e| ANNError::log_index_error(format!("validation failed: {e}")))?;
+    Ok(())
+}
+```
 
 Traits with associated error types should consider constraining with `diskann::error::ToRanked` instead of `Into<ANNError>` if non-critical errors should be supported.
-`diskann::ANNError` should be used only for unrecoverable errors.
+`ANNError` is the mid-level propagated error type; use `ToRanked` and `RankedError` to distinguish transient/recoverable failures from fatal ones.
 
 #### High Level (tooling)
 
-At this level `anyhow::Error` is an appropriate type to use.
+At this level `anyhow::Error` is appropriate for binaries and CLI entry points. Note that some tooling helpers still use `ANNError` for compatibility.
 
 #### Do Not
 
@@ -159,36 +265,35 @@ Do not use a single crate-level error enum. Problems:
 
 ### Formatting
 
-**Note**: `rustfmt` is not installed by default. Run `rustup component add rustfmt` if needed.
-
-```bash
-# Check formatting (matches CI)
-cargo fmt --all --check
-
-# Apply formatting to all crates
-cargo fmt --all
-```
-
-See [`rustfmt.toml`](rustfmt.toml) for formatting configuration.
+See [`rustfmt.toml`](rustfmt.toml) for formatting configuration. Commands are in [Quick Reference](#quick-reference).
 
 ### Clippy (Linting)
 
-**Note**: `clippy` is not installed by default. Run `rustup component add clippy` if needed.
-
 ```bash
-# Basic clippy check
-cargo clippy --workspace --all-targets
-
-# CI-style check (warnings as errors)
-cargo clippy --workspace --all-targets --config 'build.rustflags=["-Dwarnings"]'
-
 # Check with no default features (for specific crates)
 cargo clippy -p diskann --no-default-features
 ```
 
 See [`clippy.toml`](clippy.toml) for linting rules, including:
 - Disallowed methods (rayon global thread pool, rand::thread_rng, etc.)
-- Required documentation for unsafe blocks
+
+The workspace-level lint in [`Cargo.toml`](Cargo.toml) enforces documentation for unsafe blocks:
+- `undocumented_unsafe_blocks = "warn"`
+
+```rust
+// ✅ Good — specific, verifiable precondition
+// SAFETY: `i + width <= len` ensures this read is in-bounds.
+let val = unsafe { ptr.add(i).read() };
+
+// ✅ Good — FFI with listed preconditions
+// SAFETY: `a` and `b` are non-null, properly aligned, and do not alias.
+// `m`, `n`, `k` match the actual matrix dimensions.
+unsafe { ffi::sgemm(m, n, k, a.as_ptr(), b.as_ptr(), c.as_mut_ptr()) };
+
+// ❌ Bad — vague, unverifiable
+// SAFETY: this is safe
+let val = unsafe { ptr.add(i).read() };
+```
 
 ### Code Coverage
 
@@ -216,15 +321,13 @@ CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
 ## Pre-commit Checklist
 
-Before committing changes, always run:
+Before committing changes, always run the format and clippy commands from [Quick Reference](#quick-reference).
 
-```bash
-# Format all code
-cargo fmt --all
-
-# Run clippy with warnings as errors
-cargo clippy --workspace --all-targets -- -D warnings
-```
+### Points to Add
+how to create a new runtime
+how to write error handling
+how to configure providers
+how to write a new benchmark
 
 ---
 

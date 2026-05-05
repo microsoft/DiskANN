@@ -20,7 +20,7 @@ When performing a code review, check that:
 
 - Do not introduce `panic!` paths for recoverable errors — propagate with `Result` instead.
 - Keep error types small. Avoid large enums/structs that blow up the stack; look for ways to reduce field sizes (e.g., compute derivable fields, use enums instead of `&'static str`).
-- Prefer `ANNError::new(ANNErrorKind::…, e)` over the old `log`-style constructors, which force eager string formatting.
+- Prefer `ANNError::new(ANNErrorKind::…, e)` over the old `log_*`-style constructors, which force eager string formatting and double-log errors.
 - When using `thiserror`, rely on `#[from]` for automatic `Error::source` chaining — do not format the inner error in the `#[error("…")]` display string.
 - Include relevant context values (e.g., the kind, key, or dimension) in error messages for debuggability.
 
