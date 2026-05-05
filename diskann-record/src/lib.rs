@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn this_test_writes() {
+    fn round_trip_uses_isolated_temp_dir() -> anyhow::Result<()> {
         let inner = Inner {
             z: 10,
             w: vec![-1, -2, -3],
@@ -124,12 +124,16 @@ mod tests {
             vector: vec![0, 1, 2, 3, 4, 5],
         };
 
-        let dir = ".";
-        let metadata = "metadata.json";
+        // Keep the TempDir guard alive for the full round trip; Drop removes the
+        // manifest and auxiliary artifact after the assertion completes.
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = dir.join("metadata.json");
 
-        save::save_to_disk(&t, dir, metadata).unwrap();
-        let we_are_back: Test = load::load_from_disk(metadata.as_ref(), dir.as_ref()).unwrap();
+        save::save_to_disk(&t, dir, &metadata)?;
+        let we_are_back: Test = load::load_from_disk(&metadata, dir)?;
 
         assert_eq!(t, we_are_back);
+        Ok(())
     }
 }

@@ -145,10 +145,9 @@ in the dependencies.
 
 ### Test Infrastructure
 
-The current test in `lib.rs`:
-- Writes to `"."` (cwd), leaving `metadata.json` and `auxiliary.bin` behind
-- Asserts round-trip equality (`t == we_are_back`), including scalar `bool` and `Vec<bool>`
-- Should use `tempfile::tempdir()` for isolation
+The round-trip test in `lib.rs` now uses `tempfile::tempdir()` for isolation, keeping the
+temporary directory guard alive until after save and load complete so the manifest and
+auxiliary artifact are cleaned up automatically.
 
 ### Platform-Dependent Types
 
