@@ -247,12 +247,13 @@ where
     where
         Itr: ExactSizeIterator<Item = K>,
     {
+        // Always bump the generation to keep the behavior predictable.
+        self.new_generation();
+
         // If the underlying hash-map is empty, there's nothing to do.
         if self.map.is_empty() {
             return;
         }
-
-        self.new_generation();
 
         // Only bother if a capacity was specified. Otherwise, we don't need to bother at
         // all with generations.
@@ -1770,8 +1771,8 @@ mod tests {
             .map(|_| panic!("iterator should not be advanced when the map is empty"));
         map.prepare(itr);
         assert_eq!(
-            map.generation, 0,
-            "no need to advance the generation if the map is empty"
+            map.generation, 1,
+            "still bump the generation to keep the behavior predictable"
         );
 
         // The lack of panic from the iterator indicates success.
