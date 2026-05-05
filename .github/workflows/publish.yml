@@ -120,7 +120,7 @@ jobs:
             fi
           done
           if [ ${#bad_crates[@]} -gt 0 ]; then
-            echo "::error::The following crates do not use version.workspace = true: ${bad_crates[*]}"
+            echo "::error::The following publishable crates do not use version.workspace = true: ${bad_crates[*]}"
             exit 1
           fi
 
