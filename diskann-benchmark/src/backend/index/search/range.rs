@@ -7,7 +7,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
-use crate::{backend::index::result::RangeSearchResults, inputs::async_::GraphRangeSearch};
+use crate::{backend::index::result::RangeSearchResults, inputs::graph_index::GraphRangeSearch};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RangeSearchSteps<'a> {

@@ -42,7 +42,7 @@ use crate::{
         result::{AggregatedSearchResults, BuildResult},
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
         self,
         datafiles::{self},
@@ -56,26 +56,32 @@ use crate::{
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
     // Full Precision
-    benchmarks.register("async-full-precision-f32", FullPrecision::<f32>::new());
-    benchmarks.register("async-full-precision-f16", FullPrecision::<f16>::new());
-    benchmarks.register("async-full-precision-u8", FullPrecision::<u8>::new());
-    benchmarks.register("async-full-precision-i8", FullPrecision::<i8>::new());
+    benchmarks.register(
+        "graph-index-full-precision-f32",
+        FullPrecision::<f32>::new(),
+    );
+    benchmarks.register(
+        "graph-index-full-precision-f16",
+        FullPrecision::<f16>::new(),
+    );
+    benchmarks.register("graph-index-full-precision-u8", FullPrecision::<u8>::new());
+    benchmarks.register("graph-index-full-precision-i8", FullPrecision::<i8>::new());
 
     // Dynamic Full Precision
     benchmarks.register(
-        "async-dynamic-full-precision-f32",
+        "graph-index-dynamic-full-precision-f32",
         DynamicFullPrecision::<f32>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-f16",
+        "graph-index-dynamic-full-precision-f16",
         DynamicFullPrecision::<f16>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-u8",
+        "graph-index-dynamic-full-precision-u8",
         DynamicFullPrecision::<u8>::new(),
     );
     benchmarks.register(
-        "async-dynamic-full-precision-i8",
+        "graph-index-dynamic-full-precision-i8",
         DynamicFullPrecision::<i8>::new(),
     );
 
@@ -192,7 +198,7 @@ where
     }
 }
 
-// Async Dynamic Run
+// Graph Index Dynamic Run
 pub(super) struct DynamicFullPrecision<T> {
     _type: std::marker::PhantomData<T>,
 }

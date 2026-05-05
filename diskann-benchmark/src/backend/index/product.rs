@@ -6,20 +6,23 @@
 use diskann_benchmark_runner::registry::Benchmarks;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!("product-quantization", inputs::async_::IndexPQOperation);
+crate::utils::stub_impl!(
+    "product-quantization",
+    inputs::graph_index::IndexPQOperation
+);
 
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "product-quantization")]
     {
         use half::f16;
 
-        benchmarks.register("async-pq-f32", imp::ProductQuantized::<f32>::new());
-        benchmarks.register("async-pq-f16", imp::ProductQuantized::<f16>::new());
+        benchmarks.register("graph-index-pq-f32", imp::ProductQuantized::<f32>::new());
+        benchmarks.register("graph-index-pq-f16", imp::ProductQuantized::<f16>::new());
     }
 
     // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("async-pq", benchmarks);
+    imp::register("graph-index-pq", benchmarks);
 }
 
 #[cfg(feature = "product-quantization")]
@@ -46,7 +49,7 @@ mod imp {
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
             result::QuantBuildResult,
         },
-        inputs::async_::{IndexPQOperation, IndexSource},
+        inputs::graph_index::{IndexPQOperation, IndexSource},
         utils::{self, datafiles},
     };
 
