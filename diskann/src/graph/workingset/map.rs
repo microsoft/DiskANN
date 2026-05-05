@@ -240,10 +240,18 @@ where
     /// Pins entries whose keys appear in `itr` and evicts unpinned entries as needed
     /// to stay within the configured [`Capacity`]. Called automatically by [`fill`](Self::fill);
     /// only call directly if using [`fill_with`](Self::fill_with).
+    ///
+    /// Note: When semantically correct, `itr` may not be consumed. Callers must not rely
+    /// on `itr` being advanced to completion.
     pub fn prepare<Itr>(&mut self, itr: Itr)
     where
         Itr: ExactSizeIterator<Item = K>,
     {
+        // If the underlying hash-map is empty, there's nothing to do.
+        if self.map.is_empty() {
+            return;
+        }
+
         self.new_generation();
 
         // Only bother if a capacity was specified. Otherwise, we don't need to bother at
@@ -1747,6 +1755,23 @@ mod tests {
         map.prepare([20, 21, 22, 23, 24].into_iter());
         assert_eq!(map.generation, 7);
         assert!(map.map.is_empty());
+    }
+
+    // Ensure that if the map is empty, then `prepare` takes a fast path and does not use
+    // the iterator at all.
+    //
+    // This makes the API faster to call following an explicit `clear`.
+    #[test]
+    fn empty_map_prepare_fastpath() {
+        let mut map: TestMap = Builder::new(Capacity::Default).build(4);
+        assert_eq!(map.generation, 0);
+
+        let itr = std::iter::repeat_n((), 4)
+            .map(|_| panic!("iterator should not be advanced when the map is empty"));
+        map.prepare(itr);
+        assert_eq!(map.generation, 0, "no need to advance the generation if the map is empty");
+
+        // The lack of panic from the iterator indicates success.
     }
 
     //---------------------//
