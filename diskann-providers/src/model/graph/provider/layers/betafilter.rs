@@ -24,7 +24,10 @@ use diskann::{
         index::QueryLabelProvider,
     },
     neighbor::Neighbor,
-    provider::{Accessor, AsNeighbor, BuildQueryComputer, DataProvider, DelegateNeighbor, HasId},
+    provider::{
+        Accessor, AsNeighbor, BuildQueryComputer, DataProvider, DelegateNeighbor,
+        DistancesUnordered, HasElementRef, HasId,
+    },
     utils::VectorId,
 };
 use diskann_utils::Reborrow;
@@ -70,7 +73,7 @@ pub struct Unwrap;
 /// Delegate post-processing to the inner strategy's post-processing routine.
 impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
 where
-    A: BuildQueryComputer<T>,
+    A: BuildQueryComputer<T> + Accessor,
 {
     type Error<NextError>
         = NextError
@@ -227,6 +230,13 @@ where
     type Id = Inner::Id;
 }
 
+impl<Inner> HasElementRef for BetaAccessor<Inner>
+where
+    Inner: Accessor,
+{
+    type ElementRef<'a> = Pair<Inner::Id, Inner::ElementRef<'a>>;
+}
+
 impl<Inner> Accessor for BetaAccessor<Inner>
 where
     Inner: Accessor,
@@ -236,7 +246,6 @@ where
         = Pair<Self::Id, Inner::Element<'a>>
     where
         Self: 'a;
-    type ElementRef<'a> = Pair<Self::Id, Inner::ElementRef<'a>>;
 
     /// Use the same error type as `Inner`.
     type GetError = Inner::GetError;
@@ -279,10 +288,10 @@ where
 
 impl<Inner, T> BuildQueryComputer<T> for BetaAccessor<Inner>
 where
-    Inner: BuildQueryComputer<T>,
+    Inner: BuildQueryComputer<T> + Accessor,
 {
     /// Use a [`BetaComputer`] to apply filtering.
-    type QueryComputer = BetaComputer<Inner::QueryComputer, Self::Id>;
+    type QueryComputer = BetaComputer<Inner::QueryComputer, Inner::Id>;
     /// Use the same error as `Inner`.
     type QueryComputerError = Inner::QueryComputerError;
 
@@ -296,7 +305,12 @@ where
     }
 }
 
-impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + AsNeighbor {}
+impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where
+    Inner: BuildQueryComputer<T> + AsNeighbor + Accessor
+{
+}
+
+impl<Inner, T> DistancesUnordered<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + Accessor {}
 
 /// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
 pub struct BetaComputer<Inner, I: VectorId> {
@@ -432,12 +446,15 @@ mod tests {
 
     always_escalate!(NotAllowed);
 
+    impl HasElementRef for Doubler {
+        type ElementRef<'a> = u64;
+    }
+
     impl Accessor for Doubler {
         type Element<'a>
             = u64
         where
             Self: 'a;
-        type ElementRef<'a> = u64;
 
         type GetError = NotAllowed;
 
@@ -497,6 +514,8 @@ mod tests {
     }
 
     impl ExpandBeam<u64> for Doubler {}
+
+    impl DistancesUnordered<u64> for Doubler {}
 
     #[derive(Debug)]
     struct SimpleStrategy;

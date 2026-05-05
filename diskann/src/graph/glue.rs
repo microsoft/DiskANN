@@ -89,7 +89,7 @@ use crate::{
     neighbor::Neighbor,
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
-        DataProvider, HasId, NeighborAccessor,
+        DataProvider, DistancesUnordered, HasElementRef, HasId, NeighborAccessor,
     },
     utils::VectorId,
 };
@@ -242,7 +242,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 ///
 /// The provided implementation works on each element of `ids` sequentially, pre-filters
 /// the resulting candidate list using `pred.eval()` before invoking
-/// [`BuildQueryComputer::distances_unordered`].
+/// [`DistancesUnordered::distances_unordered`].
 ///
 /// The callback `on_neighbors` is decorated to the uses `pred.eval_mut()`.
 ///
@@ -252,7 +252,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 /// ## Error Handling
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
+pub trait ExpandBeam<T>: DistancesUnordered<T> + AsNeighbor + Sized {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -299,7 +299,7 @@ where
     /// We could grab this type from the `SearchAccessor` associated type, but it's
     /// useful enough that we move it up here.
     type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::SearchAccessor<'a> as Accessor>::ElementRef<'b>,
+            <Self::SearchAccessor<'a> as HasElementRef>::ElementRef<'b>,
             f32,
         > + Send
         + Sync
@@ -386,7 +386,7 @@ macro_rules! default_post_processor {
 /// directly into the output buffer.
 pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: BuildQueryComputer<T> + HasId,
 {
     type Error: StandardError;
 
@@ -412,7 +412,7 @@ pub struct CopyIds;
 
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
-    A: BuildQueryComputer<T>,
+    A: BuildQueryComputer<T> + HasId,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
@@ -437,7 +437,7 @@ where
 /// using a [`Pipeline`].
 pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: BuildQueryComputer<T> + HasId,
 {
     /// A potentially modified version of the error yielded by the next state in the
     /// processing pipeline.
@@ -446,7 +446,7 @@ where
         NextError: StandardError;
 
     /// The accessor that will be passed to the next processing stage.
-    type NextAccessor: BuildQueryComputer<T, Id = A::Id>;
+    type NextAccessor: BuildQueryComputer<T> + HasId<Id = A::Id>;
 
     /// Perform any modification the `input`, `output`, `accessor`, or `computer` objects
     /// and invoke the [`SearchPostProcess`] routine `next` on stage.
@@ -471,7 +471,7 @@ pub struct FilterStartPoints;
 
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
-    A: BuildQueryComputer<T> + SearchExt,
+    A: BuildQueryComputer<T> + SearchExt + HasId,
     T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
@@ -540,7 +540,7 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
-    A: BuildQueryComputer<T>,
+    A: BuildQueryComputer<T> + HasId,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -614,8 +614,8 @@ where
     /// We could grab this type from the `PruneAccessor` associated type, but it's
     /// useful enough that we move it up here.
     type DistanceComputer: for<'a, 'b, 'c, 'd> DistanceFunction<
-            <Self::PruneAccessor<'a> as Accessor>::ElementRef<'b>,
-            <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
+            <Self::PruneAccessor<'a> as HasElementRef>::ElementRef<'b>,
+            <Self::PruneAccessor<'c> as HasElementRef>::ElementRef<'d>,
             f32,
         > + Send
         + Sync
@@ -855,7 +855,7 @@ mod tests {
     use super::*;
     use crate::{
         ANNResult, neighbor,
-        provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
+        provider::{DelegateNeighbor, ExecutionContext, HasElementRef, HasId, NeighborAccessor},
     };
 
     // A really simple provider that just holds floats and uses the absolute value for its
@@ -928,12 +928,15 @@ mod tests {
         type Id = u32;
     }
 
+    impl HasElementRef for Retriever<'_> {
+        type ElementRef<'a> = f32;
+    }
+
     impl Accessor for Retriever<'_> {
         type Element<'a>
             = f32
         where
             Self: 'a;
-        type ElementRef<'a> = f32;
 
         type GetError = ANNError;
         fn get_element(
@@ -979,6 +982,8 @@ mod tests {
     }
 
     impl ExpandBeam<f32> for Retriever<'_> {}
+
+    impl DistancesUnordered<f32> for Retriever<'_> {}
 
     // This strategy explicitly does not define `post_process` so we can test the provided
     // implementation.

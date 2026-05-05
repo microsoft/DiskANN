@@ -18,7 +18,8 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
-        Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        Delete, DistancesUnordered, ElementStatus, HasElementRef, HasId, NeighborAccessor,
+        NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::VectorRepr,
 };
@@ -519,12 +520,15 @@ impl<T: VectorRepr> ExpandBeam<&[T]> for FullAccessor<'_, T> {
     }
 }
 
+impl<T: VectorRepr> HasElementRef for FullAccessor<'_, T> {
+    type ElementRef<'a> = &'a [T];
+}
+
 impl<T: VectorRepr> Accessor for FullAccessor<'_, T> {
     type Element<'a>
         = Vec<T>
     where
         Self: 'a;
-    type ElementRef<'a> = &'a [T];
     type GetError = GarnetProviderError;
 
     fn get_element(
@@ -580,6 +584,8 @@ impl<T: VectorRepr> BuildQueryComputer<&[T]> for FullAccessor<'_, T> {
         Ok(T::query_distance(from, self.provider.metric_type))
     }
 }
+
+impl<T: VectorRepr> DistancesUnordered<&[T]> for FullAccessor<'_, T> {}
 
 /// An escape hatch for the blanket implementation of [`workingset::Fill`].
 ///

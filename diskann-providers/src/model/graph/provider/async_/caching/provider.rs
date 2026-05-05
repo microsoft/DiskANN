@@ -74,8 +74,8 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, AsNeighbor, BuildDistanceComputer, BuildQueryComputer, CacheableAccessor,
-        DataProvider, DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor,
-        NeighborAccessorMut, SetElement,
+        DataProvider, DelegateNeighbor, Delete, DistancesUnordered, ElementStatus, HasElementRef,
+        HasId, NeighborAccessor, NeighborAccessorMut, SetElement,
     },
 };
 use diskann_utils::{
@@ -739,6 +739,14 @@ where
     }
 }
 
+impl<A, C> HasElementRef for CachingAccessor<A, C>
+where
+    A: CacheableAccessor,
+    C: ElementCache<A::Id, A::Map>,
+{
+    type ElementRef<'a> = A::ElementRef<'a>;
+}
+
 impl<A, C> Accessor for CachingAccessor<A, C>
 where
     A: CacheableAccessor,
@@ -748,7 +756,6 @@ where
         = A::Element<'a>
     where
         Self: 'a;
-    type ElementRef<'a> = A::ElementRef<'a>;
 
     type GetError = CachingError<A::GetError, C::Error>;
 
@@ -819,6 +826,13 @@ where
 }
 
 impl<A, C, T> ExpandBeam<T> for CachingAccessor<A, C>
+where
+    A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
+    C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,
+{
+}
+
+impl<A, C, T> DistancesUnordered<T> for CachingAccessor<A, C>
 where
     A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
     C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,

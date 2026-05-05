@@ -8,7 +8,10 @@ use std::sync::{Arc, RwLock};
 use diskann::{
     error::{ErrorExt, IntoANNResult},
     graph::glue::{ExpandBeam, SearchExt},
-    provider::{Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, HasId},
+    provider::{
+        Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
+        HasElementRef, HasId,
+    },
     ANNError, ANNErrorKind,
 };
 use diskann_utils::Reborrow;
@@ -68,6 +71,13 @@ where
     type Id = <IA as HasId>::Id;
 }
 
+impl<IA> HasElementRef for EncodedDocumentAccessor<IA>
+where
+    IA: Accessor,
+{
+    type ElementRef<'a> = EncodedDocument<IA::ElementRef<'a>, &'a RoaringTreemap>;
+}
+
 impl<IA> Accessor for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
@@ -76,7 +86,6 @@ where
         = EncodedDocument<IA::Element<'a>, RoaringTreemap>
     where
         Self: 'a;
-    type ElementRef<'a> = EncodedDocument<IA::ElementRef<'a>, &'a RoaringTreemap>;
     type GetError = ANNError;
 
     async fn get_element(&mut self, id: Self::Id) -> Result<Self::Element<'_>, Self::GetError> {
@@ -164,7 +173,7 @@ where
 
 impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
 where
-    IA: BuildQueryComputer<&'q Q>,
+    IA: BuildQueryComputer<&'q Q> + Accessor,
 {
     type QueryComputerError = ANNError;
     type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
@@ -191,6 +200,14 @@ impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
     EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
+    Q: Clone,
+{
+}
+
+impl<IA, Q> DistancesUnordered<Q> for EncodedDocumentAccessor<IA>
+where
+    IA: Accessor,
+    EncodedDocumentAccessor<IA>: BuildQueryComputer<Q>,
     Q: Clone,
 {
 }

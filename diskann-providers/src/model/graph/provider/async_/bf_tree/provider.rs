@@ -28,8 +28,8 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
-        DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
-        NoopGuard, SetElement,
+        DelegateNeighbor, Delete, DistancesUnordered, ElementStatus, HasElementRef, HasId,
+        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -974,6 +974,15 @@ where
     }
 }
 
+impl<T, Q, D> HasElementRef for FullAccessor<'_, T, Q, D>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
 impl<T, Q, D> Accessor for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
@@ -985,9 +994,6 @@ where
         = &'a [T]
     where
         Self: 'a;
-
-    /// The reference version of `Element` is the same as `Element`.
-    type ElementRef<'a> = &'a [T];
 
     // Choose to panic on an out-of-bounds access rather than propagate an error.
     //
@@ -1051,6 +1057,14 @@ where
     }
 }
 impl<T, Q, D> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+{
+}
+
+impl<T, Q, D> DistancesUnordered<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1134,6 +1148,14 @@ where
     }
 }
 
+impl<T, D> HasElementRef for QuantAccessor<'_, T, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+    type ElementRef<'a> = &'a [u8];
+}
+
 impl<T, D> Accessor for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
@@ -1144,9 +1166,6 @@ where
         = &'a [u8]
     where
         Self: 'a;
-
-    /// The reference version of `Element` is simply `Element`.
-    type ElementRef<'a> = &'a [u8];
 
     // ANNError on access failures in bf-tree
     //
@@ -1220,6 +1239,13 @@ where
 {
 }
 
+impl<T, D> DistancesUnordered<&[T]> for QuantAccessor<'_, T, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+}
+
 impl<'a, T, D> AsDeletionCheck for QuantAccessor<'a, T, D>
 where
     T: VectorRepr,
@@ -1282,6 +1308,14 @@ where
     }
 }
 
+impl<T, D> HasElementRef for HybridAccessor<'_, T, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
+}
+
 impl<T, D> Accessor for HybridAccessor<'_, T, D>
 where
     T: VectorRepr,
@@ -1295,9 +1329,6 @@ where
         = distances::pq::Hybrid<Vec<T>, Vec<u8>>
     where
         Self: 'a;
-
-    /// The generalized reference form of `Element`.
-    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
 
     // Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;

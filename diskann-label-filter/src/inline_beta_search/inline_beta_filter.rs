@@ -143,7 +143,7 @@ pub struct FilterResults<IPP> {
 impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<&'q Q>,
+    IA: BuildQueryComputer<&'q Q> + Accessor,
     Q: Send + Sync,
     IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {

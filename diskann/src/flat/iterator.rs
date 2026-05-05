@@ -11,7 +11,7 @@
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::StandardError, provider::HasId};
+use crate::{error::StandardError, provider::{HasElementRef, HasId}};
 
 /// Callback-driven sequential scan over the elements of a flat index.
 ///
@@ -20,18 +20,14 @@ use crate::{error::StandardError, provider::HasId};
 /// walk that invokes a caller-supplied closure for every element.
 ///
 /// Algorithms see only `(Id, ElementRef)` pairs and treat the stream as opaque.
-pub trait OnElementsUnordered: HasId + Send + Sync {
-    /// A reference to a yielded element with an unconstrained lifetime, suitable for
-    /// distance-function HRTB bounds.
-    type ElementRef<'a>;
-
+pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
     /// The error type yielded by [`Self::on_elements_unordered`].
     type Error: StandardError;
 
     /// Drive the entire scan, invoking `f` for each yielded element.
     fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
     where
-        F: Send + for<'a> FnMut(Self::Id, Self::ElementRef<'a>);
+        F: Send + for<'a> FnMut(Self::Id, <Self as HasElementRef>::ElementRef<'a>);
 }
 
 /// Extension of [`OnElementsUnordered`] that drives the scan with a pre-built query
@@ -45,7 +41,7 @@ pub trait OnElementsUnordered: HasId + Send + Sync {
 pub trait DistancesUnordered: OnElementsUnordered {
     /// The concrete type of the distance computer for a query, which should be applicable for
     /// all elements in the underlying driver.
-    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
+    type QueryComputer: for<'a> PreprocessedDistanceFunction<<Self as HasElementRef>::ElementRef<'a>, f32>
         + Send
         + Sync
         + 'static;
@@ -76,13 +72,9 @@ pub trait DistancesUnordered: OnElementsUnordered {
 /// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
 /// only implement `FlatIterator` can be wrapped in [`DefaultIteratedOperator`] to obtain
 /// an [`OnElementsUnordered`] implementation automatically.
-pub trait FlatIterator: HasId + Send + Sync {
-    /// A reference to a yielded element with an unconstrained lifetime, suitable for
-    /// distance-function HRTB bounds.
-    type ElementRef<'a>;
-
+pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
     /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
+    type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
 
@@ -129,11 +121,14 @@ impl<I: HasId> HasId for Iterated<I> {
     type Id = I::Id;
 }
 
+impl<I: HasElementRef> HasElementRef for Iterated<I> {
+    type ElementRef<'a> = I::ElementRef<'a>;
+} 
+
 impl<I> OnElementsUnordered for Iterated<I>
 where
     I: FlatIterator + HasId + Send + Sync,
 {
-    type ElementRef<'a> = I::ElementRef<'a>;
     type Error = I::Error;
 
     fn on_elements_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>

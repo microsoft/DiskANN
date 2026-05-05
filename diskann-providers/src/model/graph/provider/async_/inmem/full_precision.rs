@@ -20,7 +20,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        ExecutionContext, HasId,
+        DistancesUnordered, ExecutionContext, HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -185,6 +185,16 @@ where
     }
 }
 
+impl<T, Q, D, Ctx> HasElementRef for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
 impl<T, Q, D, Ctx> Accessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -198,9 +208,6 @@ where
         = &'a [T]
     where
         Self: 'a;
-
-    /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'a> = &'a [T];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
@@ -316,6 +323,15 @@ where
 {
 }
 
+impl<T, Q, D, Ctx> DistancesUnordered<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+}
+
 //-------------------//
 // In-mem Extensions //
 //-------------------//
@@ -353,7 +369,7 @@ pub struct Rerank;
 impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<&'a [T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: BuildQueryComputer<&'a [T]> + HasId<Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 

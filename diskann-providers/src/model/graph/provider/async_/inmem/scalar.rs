@@ -16,8 +16,8 @@ use diskann::{
         workingset,
     },
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
-        HasId,
+        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered, ExecutionContext,
+        HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -420,6 +420,16 @@ where
     }
 }
 
+impl<const NBITS: usize, V, D, Ctx> HasElementRef for QuantAccessor<'_, NBITS, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+{
+    type ElementRef<'a> = CVRef<'a, NBITS>;
+}
+
 impl<const NBITS: usize, V, D, Ctx> Accessor for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     V: AsyncFriendly,
@@ -433,9 +443,6 @@ where
         = CVRef<'a, NBITS>
     where
         Self: 'a;
-
-    /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'a> = CVRef<'a, NBITS>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
@@ -546,6 +553,17 @@ where
 }
 
 impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
+where
+    T: VectorRepr,
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+{
+}
+
+impl<const NBITS: usize, V, D, Ctx, T> DistancesUnordered<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,

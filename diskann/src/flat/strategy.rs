@@ -9,8 +9,8 @@ use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
     error::StandardError,
-    flat::{DistancesUnordered, OnElementsUnordered},
-    provider::DataProvider,
+    flat::{DistancesUnordered},
+    provider::{DataProvider, HasElementRef},
 };
 
 /// Per-call configuration that knows how to construct a [`DistancesUnordered`] for a provider
@@ -51,7 +51,7 @@ where
     /// by every lifetime of `Visitor`. Two lifetimes are needed: `'a` for the visitor
     /// instance and `'b` for the reborrowed element.
     type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::Visitor<'a> as OnElementsUnordered>::ElementRef<'b>,
+            <Self::Visitor<'a> as HasElementRef>::ElementRef<'b>,
             f32,
         > + Send
         + Sync

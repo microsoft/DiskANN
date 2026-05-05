@@ -71,9 +71,13 @@
 //! * [`BuildDistanceComputer`]: A sub-trait of [`Accessor`] that allows for random-access
 //!   distance computations on the retrieved elements.
 //!
-//! * [`BuildQueryComputer`]: A sub-trait of [`Accessor`] that allows for specialized query
-//!   based computations. This allows a query to be pre-processed in a way that allows
+//! * [`BuildQueryComputer`]: A sub-trait of [`HasElementRef`] that allows for specialized
+//!   query based computations. This allows a query to be pre-processed in a way that allows
 //!   faster computations.
+//!
+//! * [`DistancesUnordered`]: A sub-trait of [`Accessor`] and [`BuildQueryComputer`] that
+//!   provides a fused iterate-and-compute primitive over a set of element ids using a
+//!   pre-built query computer.
 //!
 //! # Neighbor Delegation
 //!
@@ -381,6 +385,17 @@ where
     }
 }
 
+
+///////////////////
+// HasElementRef //
+/////////////////// 
+
+/// A catch-all super trait for traits that have an associated `ElementRef<'_>` 
+/// type. Traits like [`Accessor`] are subtraits.
+pub trait HasElementRef {
+    type ElementRef<'a>; 
+}
+
 //////////////
 // Accessor //
 //////////////
@@ -419,18 +434,15 @@ where
 /// The need for `ElementRef` arises to allow HRTB bounds to distance computers without
 /// inducing a `'static` bound on `Self`. In traits like [`BuildQueryComputer`], attempting
 /// to use `Element` directly will result in such a requirement on the implementing Accessor.
-pub trait Accessor: HasId + Send + Sync {
-    /// A generalized reference type used for distance computations.
-    ///
-    /// Note that the lifetime of `ElementRef` is unconstrained and thus using it in a
-    /// [HRTB](https://doc.rust-lang.org/nomicon/hrtb.html) will not induce a `'static`
-    /// requirement on `Self`.
-    type ElementRef<'a>;
-
+pub trait Accessor: HasId + HasElementRef + Send + Sync {
     /// The concrete type of the data element associated with this accessor.
     ///
     /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
     /// `Self::ElementRef`.
+    /// 
+    /// Note that the lifetime of `ElementRef` is unconstrained and thus using it in a
+    /// [HRTB](https://doc.rust-lang.org/nomicon/hrtb.html) will not induce a `'static`
+    /// requirement on `Self`.
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
@@ -523,11 +535,18 @@ pub trait BuildDistanceComputer: Accessor {
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError>;
 }
 
-/// A specialized [`Accessor`] that provides query computations for a query type `T`.
+/// A trait that provides query computations for a query type `T`.
 ///
 /// Query computers are allowed to preprocess the query to enable more efficient distance
 /// computations.
-pub trait BuildQueryComputer<T>: Accessor {
+///
+/// This trait only requires [`HasElementRef`] (so the query computer's element type can be
+/// named) so that it can be used with multiple access patterns - like [`Accessor`] and 
+/// [`crate::flat::FlastSearchStrategy`]. 
+/// 
+/// A fused iterate-and-compute primitive can be created as a sub-trait - 
+/// e.g. [`DistancesUnordered`], which requires both [`Accessor`] and `BuildQueryComputer`.
+pub trait BuildQueryComputer<T>: HasElementRef {
     /// The error type (if any) associated with distance computer construction.
     type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
@@ -546,11 +565,16 @@ pub trait BuildQueryComputer<T>: Accessor {
         &self,
         from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
+}
 
-    /// Compute the distances for the elements in the iterator `itr` using the
-    /// `computer` and apply the closure `f` to each distance and ID. The default
-    /// implementation uses on_elements_unordered to iterate over the elements
-    /// and compute the distances using `computer` parameter.
+/// A sub-trait of [`Accessor`] and [`BuildQueryComputer`] that exposes the fused
+/// iterate-and-compute primitive `distances_unordered`.
+///
+/// The default implementation uses [`Accessor::on_elements_unordered`] to iterate over the
+/// elements and computes their distances using the provided `computer`.
+pub trait DistancesUnordered<T>: Accessor + BuildQueryComputer<T> {
+    /// Compute the distances for the elements in the iterator `vec_id_itr` using the
+    /// `computer` and apply the closure `f` to each distance and ID.
     fn distances_unordered<Itr, F>(
         &mut self,
         vec_id_itr: Itr,
@@ -1073,12 +1097,14 @@ mod tests {
     impl HasId for FloatAccessor<'_> {
         type Id = u32;
     }
+    impl HasElementRef for FloatAccessor<'_> {
+        type ElementRef<'a> = f32;
+    }
     impl Accessor for FloatAccessor<'_> {
         type Element<'a>
             = f32
         where
             Self: 'a;
-        type ElementRef<'a> = f32;
 
         type GetError = Missing;
 
@@ -1139,12 +1165,14 @@ mod tests {
     impl HasId for StringAccessor<'_> {
         type Id = u32;
     }
+    impl HasElementRef for StringAccessor<'_> {
+        type ElementRef<'a> = &'a str;
+    }
     impl Accessor for StringAccessor<'_> {
         type Element<'a>
             = &'a str
         where
             Self: 'a;
-        type ElementRef<'a> = &'a str;
 
         type GetError = Missing;
 
@@ -1298,12 +1326,15 @@ mod tests {
 
     common_test_accessor!(Allocating<'_>);
 
+    impl HasElementRef for Allocating<'_> {
+        type ElementRef<'a> = &'a [u8];
+    }
+
     impl Accessor for Allocating<'_> {
         type Element<'a>
             = Box<[u8]>
         where
             Self: 'a;
-        type ElementRef<'a> = &'a [u8];
         type GetError = Infallible;
 
         async fn get_element(&mut self, _: u32) -> Result<Box<[u8]>, Infallible> {
@@ -1325,6 +1356,10 @@ mod tests {
 
     common_test_accessor!(Forwarding<'_>);
 
+    impl HasElementRef for Forwarding<'_> {
+        type ElementRef<'a> = &'a [u8];
+    }
+
     impl<'provider> Accessor for Forwarding<'provider> {
         // NOTE: The lifetime of `Element` is `'provider` - not `'a`. This is what makes
         // it a forwarding accessor.
@@ -1332,7 +1367,6 @@ mod tests {
             = &'provider [u8]
         where
             Self: 'a;
-        type ElementRef<'a> = &'a [u8];
         type GetError = Infallible;
 
         async fn get_element(&mut self, _: u32) -> Result<&'provider [u8], Infallible> {
@@ -1369,12 +1403,15 @@ mod tests {
 
     common_test_accessor!(Wrapping<'_>);
 
+    impl HasElementRef for Wrapping<'_> {
+        type ElementRef<'a> = &'a [u8];
+    }
+
     impl Accessor for Wrapping<'_> {
         type Element<'a>
             = Wrapped<'a>
         where
             Self: 'a;
-        type ElementRef<'a> = &'a [u8];
         type GetError = Infallible;
 
         async fn get_element(&mut self, _: u32) -> Result<Wrapped<'_>, Infallible> {
@@ -1400,12 +1437,15 @@ mod tests {
 
     common_test_accessor!(Sharing<'_>);
 
+    impl HasElementRef for Sharing<'_> {
+        type ElementRef<'a> = &'a [u8];
+    }
+
     impl Accessor for Sharing<'_> {
         type Element<'a>
             = &'a [u8]
         where
             Self: 'a;
-        type ElementRef<'a> = &'a [u8];
         type GetError = Infallible;
 
         async fn get_element(&mut self, _: u32) -> Result<&[u8], Infallible> {
