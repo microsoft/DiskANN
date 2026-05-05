@@ -102,18 +102,25 @@ jobs:
             exit 1
           fi
 
-      - name: Verify all crates use workspace version
+      - name: Verify all publishable crates use workspace version
         run: |
           bad_crates=()
           for manifest in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path'); do
             dir=$(dirname "$manifest")
             name=$(basename "$dir")
-            if [ "$manifest" != "$(pwd)/Cargo.toml" ] && ! grep -qE 'version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version\.workspace\s*=\s*true' "$manifest"; then
+            # Skip the root manifest and crates with publish = false
+            if [ "$manifest" = "$(pwd)/Cargo.toml" ]; then
+              continue
+            fi
+            if grep -qE '^\s*publish\s*=\s*false' "$manifest"; then
+              continue
+            fi
+            if ! grep -qE 'version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version\.workspace\s*=\s*true' "$manifest"; then
               bad_crates+=("$name")
             fi
           done
           if [ ${#bad_crates[@]} -gt 0 ]; then
-            echo "::error::The following crates do not use version.workspace = true: ${bad_crates[*]}"
+            echo "::error::The following publishable crates do not use version.workspace = true: ${bad_crates[*]}"
             exit 1
           fi
 
