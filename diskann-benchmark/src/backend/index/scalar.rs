@@ -11,46 +11,51 @@ crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOper
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "scalar-quantization")]
     {
+        use crate::backend::index::search::plugins::Topk;
         use half::f16;
+
+        // NOTE: We just register `Topk` for now to reduce compilation cost.
+        //
+        // Feel free to add search plugins, but be mindful of the monomorphization cost.
 
         // f32
         benchmarks.register(
             "graph-index-sq-8-bit-f32",
-            imp::ScalarQuantized::<8, f32>::new(),
+            imp::ScalarQuantized::<8, f32>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-4-bit-f32",
-            imp::ScalarQuantized::<4, f32>::new(),
+            imp::ScalarQuantized::<4, f32>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-2-bit-f32",
-            imp::ScalarQuantized::<2, f32>::new(),
+            imp::ScalarQuantized::<2, f32>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-1-bit-f32",
-            imp::ScalarQuantized::<1, f32>::new(),
+            imp::ScalarQuantized::<1, f32>::new().search(Topk),
         );
-        // f16
+        // f16                                  ,
         benchmarks.register(
             "graph-index-sq-8-bit-f16",
-            imp::ScalarQuantized::<8, f16>::new(),
+            imp::ScalarQuantized::<8, f16>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-4-bit-f16",
-            imp::ScalarQuantized::<4, f16>::new(),
+            imp::ScalarQuantized::<4, f16>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-2-bit-f16",
-            imp::ScalarQuantized::<2, f16>::new(),
+            imp::ScalarQuantized::<2, f16>::new().search(Topk),
         );
         benchmarks.register(
             "graph-index-sq-1-bit-f16",
-            imp::ScalarQuantized::<1, f16>::new(),
+            imp::ScalarQuantized::<1, f16>::new().search(Topk),
         );
         // i8
         benchmarks.register(
             "graph-index-sq-1-bit-i8",
-            imp::ScalarQuantized::<1, i8>::new(),
+            imp::ScalarQuantized::<1, i8>::new().search(Topk),
         );
     }
 
@@ -64,8 +69,8 @@ mod imp {
     use std::{io::Write, sync::Arc};
 
     use anyhow::Context;
+    use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        describeln,
         dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
         utils::{datatype, MicroSeconds},
         Benchmark, Checkpoint, Output,
@@ -82,24 +87,64 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, FullPrecision},
+            benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
-            result::QuantBuildResult,
+            result::{BuildResult, QuantBuildResult},
+            search::plugins,
         },
-        inputs::graph_index::{IndexSQOperation, IndexSource},
+        inputs::graph_index::{IndexSQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 
-    // Scalar Quantized
-    pub(super) struct ScalarQuantized<const NBITS: usize, T> {
-        _type: std::marker::PhantomData<T>,
+    type SQProvider<const NBITS: usize, T> = inmem::DefaultProvider<
+        inmem::FullPrecisionStore<T>,
+        inmem::SQStore<NBITS>,
+        common::NoDeletes,
+        diskann::provider::DefaultContext,
+    >;
+
+    impl<const NBITS: usize, T> QueryType for SQProvider<NBITS, T>
+    where
+        T: VectorRepr,
+    {
+        type Element = T;
     }
 
-    impl<const NBITS: usize, T> ScalarQuantized<NBITS, T> {
+    /// A [`Benchmark`] for scalar-quantized searches containing a dynamic list of search
+    /// types.
+    ///
+    /// The kinds of quantized and full-precision searches are kept in-sync.
+    pub(super) struct ScalarQuantized<const NBITS: usize, T>
+    where
+        T: VectorRepr,
+    {
+        quant_search:
+            plugins::Plugins<SQProvider<NBITS, T>, SearchPhase, Strategy<common::Quantized>>,
+        full_search:
+            plugins::Plugins<SQProvider<NBITS, T>, SearchPhase, Strategy<common::FullPrecision>>,
+    }
+
+    impl<const NBITS: usize, T> ScalarQuantized<NBITS, T>
+    where
+        T: VectorRepr,
+    {
         pub(super) fn new() -> Self {
             Self {
-                _type: std::marker::PhantomData,
+                quant_search: plugins::Plugins::new(),
+                full_search: plugins::Plugins::new(),
             }
+        }
+
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
+        where
+            P: plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::Quantized>>
+                + plugins::Plugin<SQProvider<NBITS, T>, SearchPhase, Strategy<common::FullPrecision>>
+                + Clone
+                + 'static,
+        {
+            self.quant_search.register(plugin.clone());
+            self.full_search.register(plugin);
+            self
         }
     }
 
@@ -120,9 +165,13 @@ mod imp {
                         }
                     }
 
-                    if FullPrecision::<$T>::new().try_match(&input.index_operation)
+                    if datatype::Type::<$T>::try_match(input.index_operation.source.data_type())
                         .is_err()
                     {
+                        *failure_score.get_or_insert(0) += 1;
+                    }
+
+                    if !self.quant_search.is_match(&input.index_operation.search_phase) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -143,22 +192,23 @@ mod imp {
                 ) -> std::fmt::Result {
                     match input {
                         None => {
-                            describeln!(
+                            writeln!(
                                 f,
                                 "- Index Build and Search using {} scalar quantized bits",
                                 $N
                             )?;
-                            describeln!(
+                            writeln!(
                                 f,
                                 "- Requires `{}` data",
                                 Description::<datatype::DataType, datatype::Type<$T>>::new(),
                             )?;
-                            describeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
-                            describeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
+                            writeln!(f, "- Does not support multi-insert")?;
+                            writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
                         }
                         Some(input) => {
                             if input.num_bits != $N {
-                                describeln!(
+                                writeln!(
                                     f,
                                     "- Expected {} bits, instead got {}",
                                     $N,
@@ -166,31 +216,32 @@ mod imp {
                                 )?;
                             }
 
-                            let mut check_match = |data_type: &datatype::DataType| {
-                                if datatype::Type::<$T>::try_match(data_type).is_err() {
-                                    describeln!(
+                            let data_type = input.index_operation.source.data_type();
+                            if datatype::Type::<$T>::try_match(data_type).is_err() {
+                                writeln!(
+                                    f,
+                                    "- Only `{}` data type is supported. Instead, got {}",
+                                    Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                    data_type
+                                )?;
+                            }
+
+                            if let IndexSource::Build(ref build) = input.index_operation.source {
+                                if build.multi_insert.is_some() {
+                                    writeln!(
                                         f,
-                                        "- Only `{}` data type is supported. Instead, got {}",
-                                        Description::<datatype::DataType, datatype::Type<$T>>::new(),
-                                        data_type
-                                    ).unwrap();
+                                        "- Scalar Quantization does not support multi-insert"
+                                    )?;
                                 }
-                            };
+                            }
 
-                            match &input.index_operation.source {
-                                IndexSource::Load(load) => {
-                                    check_match(&load.data_type);
-                                }
-                                IndexSource::Build(build) => {
-                                    check_match(&build.data_type);
-
-                                    if build.multi_insert.is_some() {
-                                        describeln!(
-                                            f,
-                                            "- Scalar Quantization does not support multi-insert"
-                                        )?;
-                                    }
-                                }
+                            if !self.quant_search.is_match(&input.index_operation.search_phase) {
+                                writeln!(
+                                    f,
+                                    "- Unsupported search phase: \"{}\" - expected one of {}",
+                                    input.index_operation.search_phase.kind(),
+                                    self.quant_search.format_kinds(),
+                                )?;
                             }
                         }
                     }
@@ -267,27 +318,26 @@ mod imp {
                     };
 
 
-                    let build = if input.use_fp_for_search {
-                        run_search_outer(
-                            &input.index_operation.search_phase,
-                            common::FullPrecision,
+                    // Save construction stats before running queries.
+                    checkpoint.checkpoint(&build_stats)?;
+
+                    let search = if input.use_fp_for_search {
+                        self.full_search.run(
                             index,
-                            build_stats,
-                            checkpoint,
+                            &input.index_operation.search_phase,
+                            &Strategy::new(common::FullPrecision),
                         )?
                     } else {
-                        run_search_outer(
-                            &input.index_operation.search_phase,
-                            common::Quantized,
+                        self.quant_search.run(
                             index,
-                            build_stats,
-                            checkpoint,
+                            &input.index_operation.search_phase,
+                            &Strategy::new(common::Quantized),
                         )?
                     };
 
                     let result = QuantBuildResult {
                         quant_training_time,
-                        build,
+                        build: BuildResult::new(build_stats, search),
                     };
 
                     writeln!(output, "\n\n{}", result)?;

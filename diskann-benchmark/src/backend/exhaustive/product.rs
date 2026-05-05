@@ -26,7 +26,6 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        describeln,
         dispatcher::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
@@ -205,8 +204,8 @@ mod imp {
             input: Option<&inputs::exhaustive::Product>,
         ) -> std::fmt::Result {
             if input.is_none() {
-                describeln!(f, "- Exhaustive search for product quantization",)?;
-                describeln!(f, "- Requires `float32` data")?;
+                writeln!(f, "- Exhaustive search for product quantization",)?;
+                writeln!(f, "- Requires `float32` data")?;
             }
             Ok(())
         }

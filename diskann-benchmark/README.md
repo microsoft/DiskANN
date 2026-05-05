@@ -181,11 +181,48 @@ cargo run --release --package diskann-benchmark -- benchmarks
 Example output is shown below:
 ```
 Registered Benchmarks:
-    graph-index-full-precision-f32: tag: "graph-index-build", float32
-    graph-index-full-precision-f16: tag: "graph-index-build", float16
-    graph-index-pq-f32: tag: "graph-index-build-pq", float32
+    graph-index-full-precision-f32:
+        tag "graph-index-build"
+        Data/Query Type: float32
+        Search Kinds: "topk", "range", "topk-beta-filter", and "topk-multihop-filter"
+    graph-index-full-precision-f16:
+        tag "graph-index-build"
+        Data/Query Type: float16
+        Search Kinds: "topk"
+    graph-index-pq-f32:
+        tag "graph-index-build-pq"
+        Data/Query Type: float32
+        Search Kinds: "topk" and "range"
+    ...
 ```
 The keyword after "tag" corresponds to the type of input that the benchmark accepts.
+
+#### Adding Search Kinds
+
+Be aware that by default, not all benchmark types support all flavors of search.
+This is a deliberate choice to keep the compile time for `diskann-benchmark` mostly reasonable.
+If you are doing experiments and need (in the example above) range search for the `f16` index,
+this is usually easily done with a small code change.
+
+With the example of adding Range search to the `f16` index, the registration site:
+```rust
+benchmarks.register(
+    "async-full-precision-f16",
+    FullPrecision::<f16>::new()
+        .search(plugins::Topk),
+);
+```
+Can be updated to:
+```rust
+benchmarks.register(
+    "async-full-precision-f16",
+    FullPrecision::<f16>::new()
+        .search(plugins::Topk)
+        .search(plugins::Range),
+);
+```
+This will both compile the range search implementation and make it available for benchmark
+matching.
 
 ### Running Benchmarks
 
