@@ -57,7 +57,7 @@ impl<T> Saveable for [T]
 where
     T: Saveable,
 {
-    fn save(&self, mut context: Context<'_>) -> Result<Value<'_>> {
+    fn save(&self, context: Context<'_>) -> Result<Value<'_>> {
         let values: Result<Vec<_>> = self.iter().map(|t| t.save(context.clone())).collect();
         values.map(Value::Array)
     }
@@ -87,6 +87,12 @@ impl Saveable for String {
 impl Saveable for Handle {
     fn save(&self, _: Context<'_>) -> Result<Value<'_>> {
         Ok(Value::Handle(self.clone()))
+    }
+}
+
+impl Saveable for bool {
+    fn save(&self, _: Context<'_>) -> Result<Value<'_>> {
+        Ok(Value::Bool(*self))
     }
 }
 

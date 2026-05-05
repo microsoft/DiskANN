@@ -13,10 +13,7 @@ use std::path::Path;
 
 use crate::{Version, save};
 
-pub fn load_from_disk<T>(
-    metadata: &Path,
-    dir: &Path,
-) -> Result<T>
+pub fn load_from_disk<T>(metadata: &Path, dir: &Path) -> Result<T>
 where
     T: for<'a> Loadable<'a>,
 {
@@ -94,6 +91,14 @@ impl Loadable<'_> for save::Handle {
         context
             .as_handle()
             .cloned()
+            .ok_or_else(|| error::Kind::TypeMismatch.into())
+    }
+}
+
+impl Loadable<'_> for bool {
+    fn load(context: Context<'_>) -> Result<Self> {
+        context
+            .as_bool()
             .ok_or_else(|| error::Kind::TypeMismatch.into())
     }
 }

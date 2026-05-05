@@ -89,6 +89,7 @@ check needed in the macro path.
 - Binary file artifacts (write bytes, get Handle, store in manifest, read back on load)
 - Version tagging in manifest (`$version` alongside fields)
 - Custom serde for `Value`, `Number`, `Handle` (plain JSON output)
+- Primitive `bool` support via `Value::Bool`, including nested `Vec<bool>` round-trips
 - Light/heavy error split on load path
 
 ## Remaining Work
@@ -108,9 +109,9 @@ Several places still use `unwrap()` or `panic!()` instead of proper error propag
 
 ### Writer Flush
 
-`Writer::finish()` consumes the `Writer` but doesn't explicitly flush the inner
-`BufWriter`. `BufWriter::drop` attempts to flush but **silently swallows I/O errors**.
-`finish()` should call `self.io.into_inner()` or `self.io.flush()` and propagate the error.
+`Writer::finish()` now explicitly flushes the inner `BufWriter`, but still calls
+`.unwrap()` rather than propagating I/O errors. `finish()` should return a `Result<Handle>`
+and call `self.io.into_inner()` or `self.io.flush()` with proper error propagation.
 
 ### Value::Bytes Wiring
 
@@ -140,14 +141,13 @@ in the dependencies.
 
 ### Missing Primitive Impls
 
-- `bool` — `Value::Bool` exists but no `Saveable`/`Loadable` impls
 - `Option<T>` — no support yet. Needs a convention (omitted field? explicit null variant?)
 
 ### Test Infrastructure
 
 The current test in `lib.rs`:
 - Writes to `"."` (cwd), leaving `metadata.json` and `auxiliary.bin` behind
-- Doesn't assert round-trip equality (`t == we_are_back`)
+- Asserts round-trip equality (`t == we_are_back`), including scalar `bool` and `Vec<bool>`
 - Should use `tempfile::tempdir()` for isolation
 
 ### Platform-Dependent Types

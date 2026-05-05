@@ -171,6 +171,13 @@ impl<'a> Context<'a> {
         }
     }
 
+    pub fn as_bool(&self) -> Option<bool> {
+        match self.value {
+            save::Value::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_handle(&self) -> Option<&save::Handle> {
         match self.value {
             save::Value::Handle(handle) => Some(handle),

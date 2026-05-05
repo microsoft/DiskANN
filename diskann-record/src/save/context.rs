@@ -3,7 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashSet, fs::File, io::BufWriter, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashSet,
+    fs::File,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    sync::Mutex,
+};
 
 use crate::save::{Error, Handle, Value};
 
@@ -91,7 +97,7 @@ pub struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    pub fn finish(self) -> Handle {
+    pub fn finish(mut self) -> Handle {
         self.flush().unwrap();
         Handle::new(self.name)
     }
