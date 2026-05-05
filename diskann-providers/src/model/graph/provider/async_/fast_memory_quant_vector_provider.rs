@@ -452,13 +452,13 @@ mod tests {
             // Distance Computer.
             let d = provider.distance_computer();
             assert_eq!(
-                d.evaluate_similarity(&provider.get_vector_sync(0), &provider.get_vector_sync(3)),
+                d.evaluate_similarity(provider.get_vector_sync(0), provider.get_vector_sync(3),),
                 2.0
             );
 
             let slice: &[f32] = &[-0.5, -0.5];
             assert_eq!(
-                d.evaluate_similarity(slice, &provider.get_vector_sync(3)),
+                d.evaluate_similarity(slice, provider.get_vector_sync(3)),
                 expected,
             );
         }

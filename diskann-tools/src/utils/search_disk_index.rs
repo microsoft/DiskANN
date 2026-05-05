@@ -241,7 +241,7 @@ where
 
         let test_start = Instant::now();
         zipped.for_each_in_pool(
-            &pool,
+            pool.as_ref(),
             |(
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,

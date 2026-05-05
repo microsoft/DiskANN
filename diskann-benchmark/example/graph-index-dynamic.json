@@ -5,7 +5,7 @@
   ],
   "jobs": [
     {
-      "type": "async-dynamic-index-run",
+      "type": "graph-index-dynamic-run",
       "content": {
         "build": {
           "data_type": "float32",

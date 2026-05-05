@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "async-index-build-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
         "build": {
           "data_type": "float32",
@@ -64,7 +64,7 @@
       }
     },
     {
-      "type": "async-index-build-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
         "build": {
           "data_type": "float32",
@@ -124,7 +124,7 @@
       }
     },
     {
-      "type": "async-index-build-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
         "build": {
           "data_type": "float32",
@@ -186,7 +186,7 @@
       }
     },
     {
-      "type": "async-index-build-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
         "build": {
           "data_type": "float32",
@@ -246,7 +246,7 @@
       }
     },
     {
-      "type": "async-index-build-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
         "build": {
           "data_type": "float32",
