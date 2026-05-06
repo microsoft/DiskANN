@@ -19,6 +19,7 @@ use diskann_providers::model::graph::provider::async_::{
 use diskann_utils::future::AsyncFriendly;
 
 pub(crate) trait FullPrecisionVectorAccessor: Accessor + Send {
+    #[allow(clippy::manual_async_fn)]
     fn get_full_precision_vector(
         &mut self,
         id: Self::Id,
@@ -31,6 +32,7 @@ where
     D: AsyncFriendly,
     Ctx: diskann::provider::ExecutionContext,
 {
+    #[allow(clippy::manual_async_fn)]
     fn get_full_precision_vector(
         &mut self,
         id: Self::Id,
