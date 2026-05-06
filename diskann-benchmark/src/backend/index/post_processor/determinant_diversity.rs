@@ -6,15 +6,9 @@
 use std::future::Future;
 
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
-use diskann::{
-    error::ANNError,
-    graph::glue,
-    neighbor::Neighbor,
-    provider::Accessor,
-};
+use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::Accessor};
 use diskann_providers::model::graph::provider::async_::{
-    determinant_diversity_post_process,
-    inmem,
+    determinant_diversity_post_process, inmem,
 };
 use diskann_utils::future::AsyncFriendly;
 

@@ -415,7 +415,9 @@ where
 
         for id in candidate_ids {
             let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
-            let distance = provider.distance_comparer.evaluate_similarity(query, vector);
+            let distance = provider
+                .distance_comparer
+                .evaluate_similarity(query, vector);
             let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
             let data = accessor.scratch.vertex_provider.get_associated_data(&id)?;
 
@@ -431,12 +433,14 @@ where
             self.power,
         );
 
-        Ok(output.extend(reranked.into_iter().filter_map(|(id, distance)| {
-            associated_data
-                .get(&id)
-                .copied()
-                .map(|data| ((id, data), distance))
-        })))
+        Ok(
+            output.extend(reranked.into_iter().filter_map(|(id, distance)| {
+                associated_data
+                    .get(&id)
+                    .copied()
+                    .map(|data| ((id, data), distance))
+            })),
+        )
     }
 }
 
@@ -1077,13 +1081,15 @@ where
 
         let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
         let post_processor = post_processor.map(|processor| match processor {
-            SearchPostProcessorKind::RerankAndFilter => {
-                DiskSearchPostProcessor::RerankAndFilter(RerankAndFilter::new(vector_filter.as_ref()))
-            }
+            SearchPostProcessorKind::RerankAndFilter => DiskSearchPostProcessor::RerankAndFilter(
+                RerankAndFilter::new(vector_filter.as_ref()),
+            ),
             SearchPostProcessorKind::DeterminantDiversity { power, eta } => {
-                DiskSearchPostProcessor::DeterminantDiversity(
-                    DeterminantDiversityAndFilter::new(vector_filter.as_ref(), power, eta),
-                )
+                DiskSearchPostProcessor::DeterminantDiversity(DeterminantDiversityAndFilter::new(
+                    vector_filter.as_ref(),
+                    power,
+                    eta,
+                ))
             }
         });
 

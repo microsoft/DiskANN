@@ -3,10 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_vector::{
-    MathematicalValue, PureDistanceFunction,
-    distance::InnerProduct,
-};
+use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 pub fn determinant_diversity_post_process<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
@@ -85,8 +82,8 @@ fn post_process_with_eta_f32<Id: Copy>(
     let mut norms_sq = Vec::with_capacity(n);
 
     for (_, distance_to_query, v) in &candidates {
-        let scale = distance_to_similarity(*distance_to_query, distance_range).powf(power)
-            * inv_sqrt_eta;
+        let scale =
+            distance_to_similarity(*distance_to_query, distance_range).powf(power) * inv_sqrt_eta;
         let residual: Vec<f32> = v.iter().map(|&x| x * scale).collect();
         let norm_sq = dot_product(&residual, &residual);
         residuals.push(residual);

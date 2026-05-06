@@ -597,7 +597,9 @@ where
         let context = DefaultContext;
         let det_div = post_processor::DeterminantDiversity::new(power, eta);
 
-        let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(&topk.queries))?);
+        let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
+            &topk.queries,
+        ))?);
         let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
 
         let results = run_topk_timed(topk, &queries, &groundtruth, |params, query, output| {

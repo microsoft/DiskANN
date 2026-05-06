@@ -302,11 +302,8 @@ where
                         id_chunk.fill(0);
                         dist_chunk.fill(0.0);
 
-                        for (i, result_item) in search_result
-                            .results
-                            .iter()
-                            .take(base_count)
-                            .enumerate()
+                        for (i, result_item) in
+                            search_result.results.iter().take(base_count).enumerate()
                         {
                             id_chunk[i] = result_item.vertex_id;
                             dist_chunk[i] = result_item.distance;
