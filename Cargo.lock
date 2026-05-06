@@ -698,6 +698,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-benchmark-multi-vector"
+version = "0.50.1"
+dependencies = [
+ "anyhow",
+ "diskann-benchmark-runner",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "half",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "diskann-benchmark-runner"
 version = "0.50.1"
 dependencies = [

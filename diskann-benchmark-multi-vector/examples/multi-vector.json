@@ -1,0 +1,70 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float32",
+        "implementation": "optimized",
+        "runs": [
+          { "operation": "chamfer", "num_query_vectors": 8,  "num_doc_vectors": 32,   "dim": 128, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 16, "num_doc_vectors": 64,   "dim": 256, "loops_per_measurement": 100, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 128,  "dim": 384, "loops_per_measurement": 20,  "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 16,   "dim": 256, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 64, "num_doc_vectors": 32,   "dim": 264, "loops_per_measurement": 50,  "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10,  "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 64, "num_doc_vectors": 1250, "dim": 512, "loops_per_measurement": 2,   "num_measurements": 20 },
+          { "operation": "chamfer", "num_query_vectors": 64, "num_doc_vectors": 32,   "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 32,   "dim": 512, "loops_per_measurement": 50,  "num_measurements": 50 },
+
+          { "operation": "max_sim", "num_query_vectors": 8,  "num_doc_vectors": 32,   "dim": 128, "loops_per_measurement": 500, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 16, "num_doc_vectors": 64,   "dim": 256, "loops_per_measurement": 100, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 128,  "dim": 384, "loops_per_measurement": 20,  "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 16,   "dim": 256, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 64, "num_doc_vectors": 32,   "dim": 264, "loops_per_measurement": 50,  "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10,  "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 64, "num_doc_vectors": 1250, "dim": 512, "loops_per_measurement": 2,   "num_measurements": 20 },
+          { "operation": "max_sim", "num_query_vectors": 64, "num_doc_vectors": 32,   "dim": 128, "loops_per_measurement": 200, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 32,   "dim": 512, "loops_per_measurement": 50,  "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float16",
+        "implementation": "optimized",
+        "runs": [
+          { "operation": "chamfer", "num_query_vectors": 16, "num_doc_vectors": 64,   "dim": 256, "loops_per_measurement": 100, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10,  "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 16, "num_doc_vectors": 64,   "dim": 256, "loops_per_measurement": 100, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 1250, "dim": 128, "loops_per_measurement": 10,  "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float32",
+        "implementation": "reference",
+        "runs": [
+          { "operation": "chamfer", "num_query_vectors": 8,  "num_doc_vectors": 32,  "dim": 128, "loops_per_measurement": 50, "num_measurements": 50 },
+          { "operation": "chamfer", "num_query_vectors": 32, "num_doc_vectors": 128, "dim": 384, "loops_per_measurement": 2,  "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 8,  "num_doc_vectors": 32,  "dim": 128, "loops_per_measurement": 50, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 128, "dim": 384, "loops_per_measurement": 2,  "num_measurements": 50 }
+        ]
+      }
+    },
+    {
+      "type": "multi-vector-op",
+      "content": {
+        "element_type": "float16",
+        "implementation": "reference",
+        "runs": [
+          { "operation": "chamfer", "num_query_vectors": 8,  "num_doc_vectors": 32,  "dim": 128, "loops_per_measurement": 50, "num_measurements": 50 },
+          { "operation": "max_sim", "num_query_vectors": 32, "num_doc_vectors": 128, "dim": 384, "loops_per_measurement": 2,  "num_measurements": 50 }
+        ]
+      }
+    }
+  ]
+}
