@@ -7,8 +7,8 @@ pub mod experimental;
 pub mod common;
 pub use common::{PrefetchCacheLineLevel, StartPoints, VectorGuard};
 
-pub(crate) mod postprocess;
 mod determinant_diversity_post_process;
+pub(crate) mod postprocess;
 pub use determinant_diversity_post_process::determinant_diversity_post_process;
 
 pub mod distances;
