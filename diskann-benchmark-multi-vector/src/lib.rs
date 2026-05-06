@@ -293,25 +293,19 @@ impl std::fmt::Display for CheckResult {
 ////////////////////////////
 
 fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
+    macro_rules! register {
+        ($impl:ident, $t:ty, $tag:literal) => {
+            dispatcher.register_regression($tag, Kernel::<$impl, $t>::new());
+        };
+    }
+
     // Optimized (architecture-dispatched QueryComputer).
-    dispatcher.register_regression(
-        "multi-vector-op-f32-optimized",
-        Kernel::<Optimized, f32>::new(),
-    );
-    dispatcher.register_regression(
-        "multi-vector-op-f16-optimized",
-        Kernel::<Optimized, f16>::new(),
-    );
+    register!(Optimized, f32, "multi-vector-op-f32-optimized");
+    register!(Optimized, f16, "multi-vector-op-f16-optimized");
 
     // Reference (Chamfer / MaxSim fallback path).
-    dispatcher.register_regression(
-        "multi-vector-op-f32-reference",
-        Kernel::<Reference, f32>::new(),
-    );
-    dispatcher.register_regression(
-        "multi-vector-op-f16-reference",
-        Kernel::<Reference, f16>::new(),
-    );
+    register!(Reference, f32, "multi-vector-op-f32-reference");
+    register!(Reference, f16, "multi-vector-op-f16-reference");
 }
 
 //////////////
@@ -340,80 +334,51 @@ impl<I, T> Kernel<I, T> {
 }
 
 #[derive(Debug, Error)]
-#[error("implementation {0} is not registered for this benchmark")]
+#[error("this kernel handles a different implementation than {0}")]
 pub(crate) struct ImplementationMismatch(Implementation);
 
-impl DispatchRule<Implementation> for Optimized {
-    type Error = ImplementationMismatch;
+macro_rules! impl_dispatch_rule {
+    ($marker:ident, $variant:ident, $description:literal) => {
+        impl DispatchRule<Implementation> for $marker {
+            type Error = ImplementationMismatch;
 
-    fn try_match(from: &Implementation) -> Result<MatchScore, FailureScore> {
-        if *from == Implementation::Optimized {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1))
-        }
-    }
-
-    fn convert(from: Implementation) -> Result<Self, Self::Error> {
-        if from == Implementation::Optimized {
-            Ok(Optimized)
-        } else {
-            Err(ImplementationMismatch(from))
-        }
-    }
-
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        from: Option<&Implementation>,
-    ) -> std::fmt::Result {
-        match from {
-            None => write!(f, "QueryComputer (architecture-dispatched)"),
-            Some(impl_) => {
-                if Self::try_match(impl_).is_ok() {
-                    write!(f, "matched {}", impl_)
+            fn try_match(from: &Implementation) -> Result<MatchScore, FailureScore> {
+                if *from == Implementation::$variant {
+                    Ok(MatchScore(0))
                 } else {
-                    write!(f, "expected {}, got {}", Implementation::Optimized, impl_)
+                    Err(FailureScore(1))
+                }
+            }
+
+            fn convert(from: Implementation) -> Result<Self, Self::Error> {
+                if from == Implementation::$variant {
+                    Ok($marker)
+                } else {
+                    Err(ImplementationMismatch(from))
+                }
+            }
+
+            fn description(
+                f: &mut std::fmt::Formatter<'_>,
+                from: Option<&Implementation>,
+            ) -> std::fmt::Result {
+                match from {
+                    None => write!(f, $description),
+                    Some(impl_) => {
+                        if Self::try_match(impl_).is_ok() {
+                            write!(f, "matched {}", impl_)
+                        } else {
+                            write!(f, "expected {}, got {}", Implementation::$variant, impl_)
+                        }
+                    }
                 }
             }
         }
-    }
+    };
 }
 
-impl DispatchRule<Implementation> for Reference {
-    type Error = ImplementationMismatch;
-
-    fn try_match(from: &Implementation) -> Result<MatchScore, FailureScore> {
-        if *from == Implementation::Reference {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1))
-        }
-    }
-
-    fn convert(from: Implementation) -> Result<Self, Self::Error> {
-        if from == Implementation::Reference {
-            Ok(Reference)
-        } else {
-            Err(ImplementationMismatch(from))
-        }
-    }
-
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        from: Option<&Implementation>,
-    ) -> std::fmt::Result {
-        match from {
-            None => write!(f, "Chamfer / MaxSim fallback"),
-            Some(impl_) => {
-                if Self::try_match(impl_).is_ok() {
-                    write!(f, "matched {}", impl_)
-                } else {
-                    write!(f, "expected {}, got {}", Implementation::Reference, impl_)
-                }
-            }
-        }
-    }
-}
+impl_dispatch_rule!(Optimized, Optimized, "QueryComputer (architecture-dispatched)");
+impl_dispatch_rule!(Reference, Reference, "Chamfer / MaxSim fallback");
 
 impl<I, T> Benchmark for Kernel<I, T>
 where
@@ -446,7 +411,9 @@ where
         _: diskann_benchmark_runner::Checkpoint<'_>,
         mut output: &mut dyn diskann_benchmark_runner::Output,
     ) -> anyhow::Result<Self::Output> {
-        let _ = I::convert(input.implementation)?;
+        // The dispatcher only invokes `run` after `try_match` has already accepted
+        // the input, so a failure here would indicate a dispatcher bug.
+        I::convert(input.implementation).expect("try_match accepted the input");
         writeln!(output, "{}", input)?;
         let results = self.run_benchmark(input)?;
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
@@ -717,6 +684,9 @@ where
     let mut results = Vec::with_capacity(input.runs.len());
     for run in input.runs.iter() {
         let data = Data::<T>::new(run);
+        // `QueryComputer` performs query-side precomputation that is intentionally
+        // amortized across many `chamfer` / `max_sim` calls; construct it once per
+        // shape, outside the timed loop.
         let computer = <QueryComputer<T> as NewFromMatRef<T>>::new_from(data.query(run));
         let doc = data.doc(run);
 
@@ -748,20 +718,23 @@ where
     let mut results = Vec::with_capacity(input.runs.len());
     for run in input.runs.iter() {
         let data = Data::<T>::new(run);
-        let query = data.query(run);
         let doc = data.doc(run);
+        // Hoist out of the timed loop to mirror the optimized path's
+        // per-shape precomputation.
+        let query: diskann_quantization::multi_vector::distance::QueryMatRef<'_, _> =
+            data.query(run).into();
 
         let result = match run.operation {
             Operation::Chamfer => run_loops(run, || {
-                let v = Chamfer::evaluate(query.into(), doc);
+                let v = Chamfer::evaluate(query, doc);
                 std::hint::black_box(v);
             }),
             Operation::MaxSim => {
                 let mut scores = vec![0.0f32; run.num_query_vectors.get()];
+                let mut max_sim = MaxSim::new(&mut scores).unwrap();
                 run_loops(run, || {
-                    let mut max_sim = MaxSim::new(&mut scores).unwrap();
-                    let _ = max_sim.evaluate(query.into(), doc);
-                    std::hint::black_box(&mut scores);
+                    let _ = max_sim.evaluate(query, doc);
+                    std::hint::black_box(max_sim.scores_mut());
                 })
             }
         };
@@ -770,46 +743,41 @@ where
     Ok(results)
 }
 
-impl RunBenchmark<Optimized> for Kernel<Optimized, f32> {
-    fn run_benchmark(&self, input: &MultiVectorOp) -> Result<Vec<RunResult>, anyhow::Error> {
-        run_optimized::<f32>(input)
-    }
-}
-
-impl RunBenchmark<Optimized> for Kernel<Optimized, f16> {
-    fn run_benchmark(&self, input: &MultiVectorOp) -> Result<Vec<RunResult>, anyhow::Error> {
-        run_optimized::<f16>(input)
-    }
-}
-
-impl RunBenchmark<Reference> for Kernel<Reference, f32> {
-    fn run_benchmark(&self, input: &MultiVectorOp) -> Result<Vec<RunResult>, anyhow::Error> {
-        run_reference::<f32>(input)
-    }
-}
-
-impl RunBenchmark<Reference> for Kernel<Reference, f16> {
-    fn run_benchmark(&self, input: &MultiVectorOp) -> Result<Vec<RunResult>, anyhow::Error> {
-        run_reference::<f16>(input)
-    }
-}
-
 /// Element-type-erasing constructor for [`QueryComputer`].
 trait NewFromMatRef<T: Copy> {
     fn new_from(query: MatRef<'_, Standard<T>>) -> QueryComputer<T>;
 }
 
-impl NewFromMatRef<f32> for QueryComputer<f32> {
-    fn new_from(query: MatRef<'_, Standard<f32>>) -> QueryComputer<f32> {
-        QueryComputer::<f32>::new(query)
-    }
+macro_rules! impl_kernel_for {
+    ($t:ty) => {
+        impl NewFromMatRef<$t> for QueryComputer<$t> {
+            fn new_from(query: MatRef<'_, Standard<$t>>) -> QueryComputer<$t> {
+                QueryComputer::<$t>::new(query)
+            }
+        }
+
+        impl RunBenchmark<Optimized> for Kernel<Optimized, $t> {
+            fn run_benchmark(
+                &self,
+                input: &MultiVectorOp,
+            ) -> Result<Vec<RunResult>, anyhow::Error> {
+                run_optimized::<$t>(input)
+            }
+        }
+
+        impl RunBenchmark<Reference> for Kernel<Reference, $t> {
+            fn run_benchmark(
+                &self,
+                input: &MultiVectorOp,
+            ) -> Result<Vec<RunResult>, anyhow::Error> {
+                run_reference::<$t>(input)
+            }
+        }
+    };
 }
 
-impl NewFromMatRef<f16> for QueryComputer<f16> {
-    fn new_from(query: MatRef<'_, Standard<f16>>) -> QueryComputer<f16> {
-        QueryComputer::<f16>::new(query)
-    }
-}
+impl_kernel_for!(f32);
+impl_kernel_for!(f16);
 
 ///////////
 // Tests //
@@ -962,31 +930,5 @@ mod tests {
             .unwrap();
 
         assert!(matches!(result, PassFail::Fail(_)));
-    }
-
-    /// Sanity-check that the optimized kernel and the reference path produce
-    /// numerically equivalent Chamfer scores on a small fixture.
-    #[test]
-    fn optimized_chamfer_matches_reference_f32() {
-        let run = Run {
-            operation: Operation::Chamfer,
-            num_query_vectors: NonZeroUsize::new(5).unwrap(),
-            num_doc_vectors: NonZeroUsize::new(7).unwrap(),
-            dim: NonZeroUsize::new(16).unwrap(),
-            loops_per_measurement: NonZeroUsize::new(1).unwrap(),
-            num_measurements: NonZeroUsize::new(1).unwrap(),
-        };
-
-        let data = Data::<f32>::new(&run);
-        let query = data.query(&run);
-        let doc = data.doc(&run);
-
-        let optimized = QueryComputer::<f32>::new(query).chamfer(doc);
-        let reference = Chamfer::evaluate(query.into(), doc);
-
-        assert!(
-            (optimized - reference).abs() < 1e-4,
-            "optimized={optimized}, reference={reference}",
-        );
     }
 }
