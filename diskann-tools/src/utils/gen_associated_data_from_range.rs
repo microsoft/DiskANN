@@ -125,13 +125,9 @@ mod tests {
         let result = gen_associated_data_from_range(&storage_provider, path, 10, 5);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(
-            err.details.contains("end") && err.details.contains("start"),
-            "error message should mention end and start: {err}"
-        );
-        assert!(
-            err.details.contains("5") && err.details.contains("10"),
-            "error message should include the specific values 5 and 10: {err}"
+        assert_eq!(
+            err.details,
+            "invalid range: end (5) must be greater than or equal to start (10)"
         );
     }
 
@@ -144,9 +140,9 @@ mod tests {
         let result = gen_associated_data_from_range(&storage_provider, path, 0, u32::MAX);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(
-            err.details.contains("overflow") || err.details.contains("too large"),
-            "error message should mention overflow or too large: {err}"
+        assert_eq!(
+            err.details,
+            format!("range [0, {}] is too large: count overflows u32", u32::MAX)
         );
     }
 }
