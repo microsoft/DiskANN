@@ -36,6 +36,6 @@ pub mod index;
 pub mod iterator;
 pub mod strategy;
 
-pub use index::FlatIndex;
+pub use index::{FlatIndex, SearchStats};
 pub use iterator::{DistancesUnordered, FlatIterator, Iterated, OnElementsUnordered};
 pub use strategy::SearchStrategy;

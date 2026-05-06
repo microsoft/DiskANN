@@ -10,12 +10,22 @@ use diskann_utils::future::SendFuture;
 
 use crate::{
     ANNResult,
-    error::IntoANNResult,
+    error::{ErrorExt, IntoANNResult},
     flat::{DistancesUnordered, SearchStrategy},
-    graph::{SearchOutputBuffer, glue::SearchPostProcess, index::SearchStats},
+    graph::{SearchOutputBuffer, glue::SearchPostProcess},
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::{BuildQueryComputer, DataProvider},
 };
+
+/// Statistics collected during a flat search.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchStats {
+    /// The total number of distance computations performed during the scan.
+    pub cmps: u32,
+
+    /// The total number of results written to the output buffer.
+    pub result_count: u32,
+}
 
 /// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
 ///
@@ -73,8 +83,7 @@ impl<P: DataProvider> FlatIndex<P> {
                 .create_visitor(&self.provider, context)
                 .into_ann_result()?;
 
-            let computer =
-                BuildQueryComputer::build_query_computer(&visitor, query).into_ann_result()?;
+            let computer = visitor.build_query_computer(query).into_ann_result()?;
 
             let k = k.get();
             let mut queue = NeighborPriorityQueue::new(k);
@@ -86,19 +95,14 @@ impl<P: DataProvider> FlatIndex<P> {
                     queue.insert(Neighbor::new(id, dist));
                 })
                 .await
-                .into_ann_result()?;
+                .escalate("flat scan must complete to produce correct k-NN results")?;
 
             let result_count = processor
                 .post_process(&mut visitor, query, &computer, queue.iter().take(k), output)
                 .await
                 .into_ann_result()? as u32;
 
-            Ok(SearchStats {
-                cmps,
-                hops: 0,
-                result_count,
-                range_search_second_round: false,
-            })
+            Ok(SearchStats { cmps, result_count })
         }
     }
 }

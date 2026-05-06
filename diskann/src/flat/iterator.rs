@@ -10,11 +10,13 @@
 //! [`FlatIterator`] — a lending async iterator that can be bridged into
 //! [`OnElementsUnordered`] via [`Iterated`].
 
+use std::fmt::Debug;
+
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
-    error::StandardError,
+    error::ToRanked,
     provider::{BuildQueryComputer, HasElementRef, HasId},
 };
 
@@ -27,7 +29,7 @@ use crate::{
 /// Algorithms see only `(Id, ElementRef)` pairs and treat the stream as opaque.
 pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
     /// The error type yielded by [`Self::on_elements_unordered`].
-    type Error: StandardError;
+    type Error: ToRanked + Debug + Send + Sync + 'static;
 
     /// Drive the entire scan, invoking `f` for each yielded element.
     fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
@@ -86,7 +88,7 @@ pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
         Self: 'a;
 
     /// The error type yielded by [`Self::next`].
-    type Error: StandardError;
+    type Error: ToRanked + Debug + Send + Sync + 'static;
 
     /// Advance the iterator and asynchronously yield the next `(id, element)` pair.
     ///
