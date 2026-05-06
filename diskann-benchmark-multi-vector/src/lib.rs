@@ -377,7 +377,11 @@ macro_rules! impl_dispatch_rule {
     };
 }
 
-impl_dispatch_rule!(Optimized, Optimized, "QueryComputer (architecture-dispatched)");
+impl_dispatch_rule!(
+    Optimized,
+    Optimized,
+    "QueryComputer (architecture-dispatched)"
+);
 impl_dispatch_rule!(Reference, Reference, "Chamfer / MaxSim fallback");
 
 impl<I, T> Benchmark for Kernel<I, T>
