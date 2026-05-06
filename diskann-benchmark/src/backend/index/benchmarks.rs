@@ -451,6 +451,123 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
+/// Execute a topk search with a custom per-query search function, collecting timing and recall.
+///
+/// Encapsulates the outer thread/run/L loops, the per-rep timing harness, per-query latency
+/// collection, and [`SearchResults`] construction. The caller supplies only the actual
+/// per-query search as a closure `search_fn(knn_params, query, output) -> Result<()>`.
+fn run_topk_timed(
+    topk: &crate::inputs::graph_index::TopkSearchPhase,
+    queries: &Matrix<f32>,
+    groundtruth: &Matrix<u32>,
+    mut search_fn: impl FnMut(
+        diskann::graph::search::Knn,
+        &[f32],
+        &mut Vec<diskann::neighbor::Neighbor<u32>>,
+    ) -> anyhow::Result<()>,
+) -> anyhow::Result<Vec<SearchResults>> {
+    let mut all_results = Vec::new();
+
+    for threads in &topk.num_threads {
+        for run in &topk.runs {
+            for search_l in &run.search_l {
+                let knn_params =
+                    diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+
+                let mut all_recalls = Vec::new();
+                let mut qps = Vec::with_capacity(topk.reps.get());
+                let mut search_latencies = Vec::with_capacity(topk.reps.get());
+                let mut mean_latencies = Vec::with_capacity(topk.reps.get());
+                let mut p90_latencies = Vec::with_capacity(topk.reps.get());
+                let mut p99_latencies = Vec::with_capacity(topk.reps.get());
+
+                for _ in 0..topk.reps.get() {
+                    let search_start = Instant::now();
+                    let mut per_query_latencies = Vec::with_capacity(queries.nrows());
+
+                    for query_idx in 0..queries.nrows() {
+                        let query = queries.row(query_idx);
+                        let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
+
+                        let query_start = Instant::now();
+                        search_fn(knn_params, query, &mut output)?;
+                        per_query_latencies.push(query_start.elapsed().as_micros() as u64);
+
+                        let gt = groundtruth.row(query_idx);
+                        let mut matches = 0;
+                        for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
+                            if i >= gt.len() {
+                                break;
+                            }
+                            if gt.contains(&neighbor.id) {
+                                matches += 1;
+                            }
+                        }
+                        all_recalls.push(matches);
+                    }
+
+                    let elapsed: MicroSeconds = search_start.elapsed().into();
+                    let elapsed_secs = elapsed.as_seconds();
+                    qps.push(if elapsed_secs > 0.0 {
+                        queries.nrows() as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    });
+
+                    per_query_latencies.sort_unstable();
+                    let len = per_query_latencies.len();
+                    let p90_idx = ((len as f64 * 0.90).ceil() as usize)
+                        .saturating_sub(1)
+                        .min(len.saturating_sub(1));
+                    let p99_idx = ((len as f64 * 0.99).ceil() as usize)
+                        .saturating_sub(1)
+                        .min(len.saturating_sub(1));
+                    let mean = if len > 0 {
+                        per_query_latencies.iter().sum::<u64>() as f64 / len as f64
+                    } else {
+                        0.0
+                    };
+
+                    search_latencies.push(elapsed);
+                    mean_latencies.push(mean);
+                    p90_latencies.push(MicroSeconds::new(
+                        *per_query_latencies.get(p90_idx).unwrap_or(&0),
+                    ));
+                    p99_latencies.push(MicroSeconds::new(
+                        *per_query_latencies.get(p99_idx).unwrap_or(&0),
+                    ));
+                }
+
+                let avg_recall = all_recalls.iter().sum::<usize>() as f32
+                    / (queries.nrows() * run.recall_k * topk.reps.get()) as f32;
+
+                all_results.push(SearchResults {
+                    num_tasks: threads.get(),
+                    search_n: run.search_n,
+                    search_l: *search_l,
+                    qps,
+                    search_latencies,
+                    mean_latencies,
+                    p90_latencies,
+                    p99_latencies,
+                    recall: utils::recall::RecallMetrics {
+                        recall_k: run.recall_k,
+                        recall_n: run.search_n,
+                        num_queries: queries.nrows(),
+                        average: avg_recall as f64,
+                        minimum: *all_recalls.iter().min().unwrap_or(&0),
+                        maximum: *all_recalls.iter().max().unwrap_or(&0),
+                    },
+                    mean_cmps: 0.0,
+                    mean_hops: 0.0,
+                });
+            }
+        }
+    }
+
+    Ok(all_results)
+}
+
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DeterminantDiversity
 where
@@ -480,119 +597,20 @@ where
         let context = DefaultContext;
         let det_div = post_processor::DeterminantDiversity::new(power, eta);
 
-        let queries: Arc<Matrix<f32>> =
-            Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
+        let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(&topk.queries))?);
         let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
 
-        let mut all_results = Vec::new();
+        let results = run_topk_timed(topk, &queries, &groundtruth, |params, query, output| {
+            utils::tokio::block_on(async {
+                index
+                    .search_with(params, &strategy, det_div, &context, query, output)
+                    .await
+            })
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })?;
 
-        for threads in &topk.num_threads {
-            for run in &topk.runs {
-                for search_l in &run.search_l {
-                    let knn_params =
-                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
-
-                    let mut all_recalls = Vec::new();
-
-                    let mut qps = Vec::with_capacity(topk.reps.get());
-                    let mut search_latencies = Vec::with_capacity(topk.reps.get());
-                    let mut mean_latencies = Vec::with_capacity(topk.reps.get());
-                    let mut p90_latencies = Vec::with_capacity(topk.reps.get());
-                    let mut p99_latencies = Vec::with_capacity(topk.reps.get());
-
-                    for _ in 0..topk.reps.get() {
-                        let search_start = Instant::now();
-                        let mut per_query_latencies = Vec::with_capacity(queries.nrows());
-
-                        for query_idx in 0..queries.nrows() {
-                            let query = queries.row(query_idx);
-                            let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
-
-                            let query_start = Instant::now();
-                            utils::tokio::block_on(async {
-                                index
-                                    .search_with(
-                                        knn_params,
-                                        &strategy,
-                                        det_div,
-                                        &context,
-                                        query,
-                                        &mut output,
-                                    )
-                                    .await
-                            })?;
-                            per_query_latencies.push(query_start.elapsed().as_micros() as u64);
-
-                            let gt = groundtruth.row(query_idx);
-                            let mut matches = 0;
-                            for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
-                                if i >= gt.len() {
-                                    break;
-                                }
-                                if gt.contains(&neighbor.id) {
-                                    matches += 1;
-                                }
-                            }
-                            all_recalls.push(matches);
-                        }
-
-                        let elapsed: MicroSeconds = search_start.elapsed().into();
-                        let elapsed_secs = elapsed.as_seconds();
-                        if elapsed_secs > 0.0 {
-                            qps.push(queries.nrows() as f64 / elapsed_secs);
-                        } else {
-                            qps.push(0.0);
-                        }
-
-                        per_query_latencies.sort_unstable();
-                        let len = per_query_latencies.len();
-                        let p90_idx = ((len as f64 * 0.90).ceil() as usize)
-                            .saturating_sub(1)
-                            .min(len.saturating_sub(1));
-                        let p99_idx = ((len as f64 * 0.99).ceil() as usize)
-                            .saturating_sub(1)
-                            .min(len.saturating_sub(1));
-
-                        let mean = if len > 0 {
-                            per_query_latencies.iter().sum::<u64>() as f64 / len as f64
-                        } else {
-                            0.0
-                        };
-
-                        search_latencies.push(elapsed);
-                        mean_latencies.push(mean);
-                        p90_latencies.push(MicroSeconds::new(*per_query_latencies.get(p90_idx).unwrap_or(&0)));
-                        p99_latencies.push(MicroSeconds::new(*per_query_latencies.get(p99_idx).unwrap_or(&0)));
-                    }
-
-                    let avg_recall = all_recalls.iter().sum::<usize>() as f32
-                        / (queries.nrows() * run.recall_k * topk.reps.get()) as f32;
-
-                    all_results.push(SearchResults {
-                        num_tasks: threads.get(),
-                        search_n: run.search_n,
-                        search_l: *search_l,
-                        qps,
-                        search_latencies,
-                        mean_latencies,
-                        p90_latencies,
-                        p99_latencies,
-                        recall: utils::recall::RecallMetrics {
-                            recall_k: run.recall_k,
-                            recall_n: run.search_n,
-                            num_queries: queries.nrows(),
-                            average: avg_recall as f64,
-                            minimum: *all_recalls.iter().min().unwrap_or(&0),
-                            maximum: *all_recalls.iter().max().unwrap_or(&0),
-                        },
-                        mean_cmps: 0.0,
-                        mean_hops: 0.0,
-                    });
-                }
-            }
-        }
-
-        Ok(AggregatedSearchResults::Topk(all_results))
+        Ok(AggregatedSearchResults::Topk(results))
     }
 }
 
