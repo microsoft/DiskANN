@@ -264,7 +264,8 @@ mod tests {
 
     #[test]
     fn test_empty_candidates() {
-        let result = determinant_diversity_post_process::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, 1.0);
+        let result =
+            determinant_diversity_post_process::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, 1.0);
         assert_eq!(result.len(), 0);
     }
 
@@ -297,10 +298,7 @@ mod tests {
 
     #[test]
     fn test_k_larger_than_candidates() {
-        let candidates = vec![
-            (0u32, 0.5, vec![1.0, 0.0]),
-            (1u32, 0.3, vec![0.0, 1.0]),
-        ];
+        let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
         let result = determinant_diversity_post_process(candidates, query, 10, 0.5, 1.0);
         assert_eq!(result.len(), 2); // Should return min(k, candidates.len())
@@ -315,7 +313,7 @@ mod tests {
         ];
         let query = &[1.0, 1.0];
         let result = determinant_diversity_post_process(candidates, query, 2, 1.0, 1.0);
-        
+
         assert_eq!(result.len(), 2);
         // Should select based on diversity metric with eta > 0
         assert!(result.iter().all(|(id, _)| *id < 3));
@@ -330,7 +328,7 @@ mod tests {
         ];
         let query = &[1.0, 1.0];
         let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
-        
+
         assert_eq!(result.len(), 2);
         // Should select based on greedy orthogonalization (eta == 0)
         assert!(result.iter().all(|(id, _)| *id < 3));
@@ -338,41 +336,23 @@ mod tests {
 
     #[test]
     fn test_power_parameter() {
-        let candidates = vec![
-            (0u32, 0.1, vec![1.0, 0.0]),
-            (1u32, 0.2, vec![0.0, 1.0]),
-        ];
+        let candidates = vec![(0u32, 0.1, vec![1.0, 0.0]), (1u32, 0.2, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        
+
         // Test with different power values - should still work without panicking
-        let result1 = determinant_diversity_post_process(
-            candidates.clone(),
-            query,
-            2,
-            0.0,
-            1.0,
-        );
-        let result2 = determinant_diversity_post_process(
-            candidates,
-            query,
-            2,
-            0.0,
-            2.0,
-        );
-        
+        let result1 = determinant_diversity_post_process(candidates.clone(), query, 2, 0.0, 1.0);
+        let result2 = determinant_diversity_post_process(candidates, query, 2, 0.0, 2.0);
+
         assert_eq!(result1.len(), 2);
         assert_eq!(result2.len(), 2);
     }
 
     #[test]
     fn test_distances_preserved() {
-        let candidates = vec![
-            (0u32, 0.5, vec![1.0, 0.0]),
-            (1u32, 0.3, vec![0.0, 1.0]),
-        ];
+        let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
         let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
-        
+
         // Verify that distances are preserved from input
         assert!(result.iter().all(|(_, dist)| *dist == 0.5 || *dist == 0.3));
     }
