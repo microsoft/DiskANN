@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Setup: one-time environment bootstrap
+rustup component add rustfmt clippy

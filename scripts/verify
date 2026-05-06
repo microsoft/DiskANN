@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Verify: repeatable health check (assumes rustfmt + clippy installed)
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --config 'build.rustflags=["-Dwarnings"]'
+cargo test

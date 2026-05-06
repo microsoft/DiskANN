@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [{
+      "type": "command",
+      "bash": "./scripts/security-check.sh",
+      "powershell": "pwsh -File scripts/security-check.ps1"
+    }]
+  }
+}
