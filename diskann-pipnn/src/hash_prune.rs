@@ -248,17 +248,13 @@ impl HashPruneReservoir {
     #[inline]
     fn find_hash(&self, hash: u16) -> Option<usize> {
         let n = self.entries.len();
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
         {
             use std::arch::x86_64::*;
             if n >= 8 {
                 unsafe {
-                    // Each entry is 8 bytes. Cast to &[u64] to load pairs.
-                    // The hash field is at bytes 4-5 (bits 32-47 of the u64).
                     let ptr = self.entries.as_ptr() as *const u64;
-                    // Target: broadcast hash into the correct position (bits 32-47).
                     let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
-                    // Mask to isolate hash field (bits 32-47): 0x0000FFFF00000000
                     let mask = _mm512_set1_epi64(0x0000FFFF00000000u64 as i64);
                     let chunks = n / 8;
                     for chunk in 0..chunks {
@@ -270,7 +266,6 @@ impl HashPruneReservoir {
                             return Some(base + cmp.trailing_zeros() as usize);
                         }
                     }
-                    // Remainder
                     for i in (chunks * 8)..n {
                         if self.entries.get_unchecked(i).hash == hash {
                             return Some(i);
@@ -280,7 +275,36 @@ impl HashPruneReservoir {
                 return None;
             }
         }
-        // Fallback scalar scan
+        // AVX2 fallback: 4 entries per comparison (256-bit / 64-bit).
+        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+        {
+            use std::arch::x86_64::*;
+            if n >= 4 {
+                unsafe {
+                    let ptr = self.entries.as_ptr() as *const u64;
+                    let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
+                    let mask = _mm256_set1_epi64x(0x0000FFFF00000000u64 as i64);
+                    let chunks = n / 4;
+                    for chunk in 0..chunks {
+                        let base = chunk * 4;
+                        let data = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
+                        let masked = _mm256_and_si256(data, mask);
+                        let cmp = _mm256_cmpeq_epi64(masked, target);
+                        let bits = _mm256_movemask_epi8(cmp);
+                        if bits != 0 {
+                            return Some(base + (bits.trailing_zeros() as usize / 8));
+                        }
+                    }
+                    for i in (chunks * 4)..n {
+                        if self.entries.get_unchecked(i).hash == hash {
+                            return Some(i);
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+        // Scalar fallback
         for (i, e) in self.entries.iter().enumerate() {
             if e.hash == hash {
                 return Some(i);

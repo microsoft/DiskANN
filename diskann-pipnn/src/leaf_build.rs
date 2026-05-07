@@ -149,7 +149,7 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
         let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
         let threshold_idx = k - 1;
 
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
         {
             use std::arch::x86_64::*;
             let chunks = n / 16;
@@ -186,6 +186,55 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
                 }
                 // Remainder
                 for j in (chunks * 16)..n {
+                    if j == i { continue; }
+                    let d = *row.get_unchecked(j);
+                    if d < top[threshold_idx].1 {
+                        top[threshold_idx] = (j as u32, d);
+                        for t in (1..k).rev() {
+                            if top[t].1 < top[t - 1].1 {
+                                top.swap(t, t - 1);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+        {
+            use std::arch::x86_64::*;
+            let chunks = n / 8;
+            unsafe {
+                for chunk in 0..chunks {
+                    let base = chunk * 8;
+                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                    let dists = _mm256_loadu_ps(row.as_ptr().add(base));
+                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(dists, thresh));
+                    if mask != 0 {
+                        let mut d_arr = [0.0f32; 8];
+                        _mm256_storeu_ps(d_arr.as_mut_ptr(), dists);
+                        let mut m = mask as u32;
+                        while m != 0 {
+                            let lane = m.trailing_zeros() as usize;
+                            m &= m - 1;
+                            let j = base + lane;
+                            if j == i { continue; }
+                            let d = d_arr[lane];
+                            if d < top[threshold_idx].1 {
+                                top[threshold_idx] = (j as u32, d);
+                                for t in (1..k).rev() {
+                                    if top[t].1 < top[t - 1].1 {
+                                        top.swap(t, t - 1);
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for j in (chunks * 8)..n {
                     if j == i { continue; }
                     let d = *row.get_unchecked(j);
                     if d < top[threshold_idx].1 {

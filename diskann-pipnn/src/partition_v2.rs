@@ -369,7 +369,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
 
                 match metric {
                     Metric::CosineNormalized => {
-                        #[cfg(target_arch = "x86_64")]
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
                         {
                             use std::arch::x86_64::*;
                             let chunks = nl / 16;
@@ -402,6 +402,51 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
                                     }
                                 }
                                 for j in (chunks * 16)..nl {
+                                    let d = 1.0 - *dot_row.get_unchecked(j);
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 8;
+                            unsafe {
+                                let one = _mm256_set1_ps(1.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 8;
+                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                    let d = _mm256_sub_ps(one, dots);
+                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
+                                    if mask != 0 {
+                                        let mut d_arr = [0.0f32; 8];
+                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask as u32;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1;
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for j in (chunks * 8)..nl {
                                     let d = 1.0 - *dot_row.get_unchecked(j);
                                     if d < top[threshold_idx].1 {
                                         top[threshold_idx] = (j as u32, d);
@@ -458,7 +503,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
                         // Process 16 leaders at a time using AVX-512: compute
                         // distances in SIMD, only drop to scalar for the rare
                         // lanes that beat the current threshold.
-                        #[cfg(target_arch = "x86_64")]
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
                         {
                             use std::arch::x86_64::*;
                             let chunks = nl / 16;
@@ -499,6 +544,56 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
                                 }
                                 // Handle remainder with scalar loop.
                                 for j in (chunks * 16)..nl {
+                                    let dot = *dot_row.get_unchecked(j);
+                                    let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 8;
+                            unsafe {
+                                let pi_v = _mm256_set1_ps(pi);
+                                let two = _mm256_set1_ps(2.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 8;
+                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                    let norms = _mm256_loadu_ps(l_norms.as_ptr().add(base));
+                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                    // d = pi + norms - 2*dots
+                                    let two_dots = _mm256_mul_ps(two, dots);
+                                    let d = _mm256_add_ps(pi_v, _mm256_sub_ps(norms, two_dots));
+                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
+                                    if mask != 0 {
+                                        let mut d_arr = [0.0f32; 8];
+                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask as u32;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1;
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for j in (chunks * 8)..nl {
                                     let dot = *dot_row.get_unchecked(j);
                                     let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
                                     if d < top[threshold_idx].1 {
