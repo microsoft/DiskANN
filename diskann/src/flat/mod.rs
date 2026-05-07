@@ -14,20 +14,15 @@
 //!
 //! The module mirrors the layering used by graph search:
 //!
-//! | Graph (random access)                     | Flat (sequential)                 |  Shared?  |
-//! | :------------------------------------     | :-------------------------------- |:--------- |
-//! | [`crate::provider::DataProvider`]         | [`crate::provider::DataProvider`] | Yes       |
-//! | [`crate::graph::DiskANNIndex`]            | [`FlatIndex`]                     | No        |
-//! | [`crate::provider::Accessor`]             | [`FlatIterator`]                  | No        |
-//! | [`crate::graph::glue::SearchStrategy`]    | [`SearchStrategy`]                | No        |
-//! | [`crate::graph::glue::SearchPostProcess`] | [`crate::graph::glue::SearchPostProcess`] | Yes |
-//! | [`crate::graph::Search`]                  | [`FlatIndex::knn_search`]         | No        |
-//!
-//! # Hot loop
-//!
-//! Algorithms drive the scan via [`FlatIterator::next`] (lending iterator) or override
-//! [`FlatIterator::on_elements_unordered`] when batching/prefetching wins. The default
-//! implementation of `on_elements_unordered` simply loops over `next`.
+//! | Graph (random access)                       | Flat (sequential)                          |  Shared?  |
+//! | :------------------------------------       | :----------------------------------------- |:--------- |
+//! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
+//! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
+//! | [`crate::provider::Accessor`]               | [`OnElementsUnordered`] (and [`Iterated`] for an element-at-a-time bridge from [`FlatIterator`]) | No        |
+//! | [`crate::provider::DistancesUnordered`]     | [`DistancesUnordered`]                     | No        |
+//! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
+//! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |
+//! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
 //!
 //! See [`FlatIndex::knn_search`] for the canonical brute-force k-NN algorithm built on these
 //! primitives.

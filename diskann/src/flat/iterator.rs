@@ -5,7 +5,8 @@
 
 //! [`OnElementsUnordered`] — the sequential access primitive for accessing a flat index.
 //! [`DistancesUnordered`] — sub-trait of [`OnElementsUnordered`] and [`BuildQueryComputer`]
-//! that computes distances over the elements in the flat index.
+//! that fuses a pre-built query computer with a sequential scan and yields
+//! `(id, distance)` pairs to its callback.
 //!
 //! [`FlatIterator`] — a lending async iterator that can be bridged into
 //! [`OnElementsUnordered`] via [`Iterated`].
@@ -77,8 +78,8 @@ pub trait DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T> {
 /// A lending, asynchronous iterator over the elements of a flat index.
 ///
 /// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
-/// only implement `FlatIterator` can be wrapped in [`DefaultIteratedOperator`] to obtain
-/// an [`OnElementsUnordered`] implementation automatically.
+/// only implement `FlatIterator` can be wrapped in [`Iterated`] to obtain an
+/// [`OnElementsUnordered`] implementation automatically.
 pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
     /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
     type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>>

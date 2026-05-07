@@ -3,7 +3,8 @@
  * Licensed under the MIT license.
  */
 
-//! [`FlatIndex`] — the index wrapper for an on which we do flat search.
+//! [`FlatIndex`] — the index wrapper for a [`DataProvider`](crate::provider::DataProvider)
+//! over which we do flat search.
 use std::num::NonZeroUsize;
 
 use diskann_utils::future::SendFuture;
@@ -51,7 +52,7 @@ impl<P: DataProvider> FlatIndex<P> {
 
     /// Brute-force k-nearest-neighbor flat search.
     ///
-    /// Streams every element produced by the strategy's iterator through the query
+    /// Streams every element produced by the strategy's visitor through the query
     /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], and hands
     /// the survivors to the post-processor.
     ///
