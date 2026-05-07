@@ -373,10 +373,15 @@ jobs:
   test-workspace:
     needs: basics
     name: test workspace
+    if: ${{ matrix.os != 'macos-latest' || (github.event_name == 'workflow_dispatch' && inputs.run_macos) }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.run_macos && '["windows-latest","ubuntu-latest","ubuntu-24.04-arm","macos-latest"]' || '["windows-latest","ubuntu-latest","ubuntu-24.04-arm"]') }}
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest # skipped unless manually triggered
 
     steps:
       - uses: actions/checkout@v4
@@ -402,10 +407,14 @@ jobs:
   test-workspace-features:
     needs: basics
     name: test workspace (all features)
+    if: ${{ matrix.os != 'macos-latest' || (github.event_name == 'workflow_dispatch' && inputs.run_macos) }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.run_macos && '["windows-latest","ubuntu-latest","macos-latest"]' || '["windows-latest","ubuntu-latest"]') }}
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest # skipped unless manually triggered
 
     steps:
       - uses: actions/checkout@v4
