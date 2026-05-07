@@ -1,0 +1,395 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Aggregates release build statistics from the last 30 days of
+# `build-release.yml` runs and produces an HTML dashboard with trend charts.
+#
+# Intended for weekly scrum review.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+name: Produce Build Stats Report
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  report:
+    name: generate report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect artifacts from recent runs
+        run: |
+          set -euo pipefail
+          mkdir -p collected
+
+          # List successful runs of build-release.yml from the last 30 days
+          SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+
+          echo "Fetching runs since $SINCE ..."
+
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/workflows/build-release.yml/runs?status=success&created=>=$SINCE&per_page=100" \
+            --jq '.workflow_runs[] | [.id, .created_at, .head_sha] | @tsv' \
+            > runs.tsv || true
+
+          if [ ! -s runs.tsv ]; then
+            echo "::warning::No successful build-release runs found in the last 30 days"
+            echo '[]' > collected/all_runs.json
+            exit 0
+          fi
+
+          echo "Found $(wc -l < runs.tsv) runs"
+
+          # For each run, download the build-stats artifact and build metadata
+          echo '[]' > collected/all_runs.json
+
+          while IFS=$'\t' read -r run_id created_at head_sha; do
+            echo "Processing run $run_id ($created_at) ..."
+            ARTIFACT_DIR="collected/$run_id"
+            mkdir -p "$ARTIFACT_DIR"
+
+            # Download build-stats artifact
+            if ! gh run download "$run_id" \
+                --repo "${{ github.repository }}" \
+                --name build-stats \
+                --dir "$ARTIFACT_DIR/build-stats" 2>/dev/null; then
+              echo "  ::warning::Could not download build-stats for run $run_id (artifact may have expired)"
+              rm -rf "$ARTIFACT_DIR"
+              continue
+            fi
+            echo "  Downloaded build-stats for run $run_id"
+
+            # Build a metadata record and append to collected data
+            python3 -c "
+          import json, sys
+          from pathlib import Path
+
+          base = Path(sys.argv[1]) / 'build-stats'
+          record = {
+              'run_id': int(sys.argv[2]),
+              'created_at': sys.argv[3],
+              'head_sha': sys.argv[4],
+          }
+
+          bt = base / 'build-times.json'
+          if bt.exists():
+              record['build_times'] = json.loads(bt.read_text())
+
+          bs = base / 'binary-sizes.json'
+          if bs.exists():
+              record['binary_sizes'] = json.loads(bs.read_text())
+
+          cb = base / 'cargo-bloat.txt'
+          if cb.exists():
+              record['cargo_bloat'] = cb.read_text()
+
+          all_file = Path('collected/all_runs.json')
+          data = json.loads(all_file.read_text())
+          data.append(record)
+          all_file.write_text(json.dumps(data))
+          " "$ARTIFACT_DIR" "$run_id" "$created_at" "$head_sha"
+
+          done < runs.tsv
+
+          COUNT=$(python3 -c "import json; print(len(json.loads(open('collected/all_runs.json').read())))")
+          echo "Collected data for $COUNT runs"
+
+      - name: Generate HTML report
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+
+          data = json.loads(Path("collected/all_runs.json").read_text())
+
+          # Sort by date ascending
+          data.sort(key=lambda r: r.get("created_at", ""))
+
+          # --- Prepare chart data ---
+
+          dates = []
+          total_build_times = []
+          # crate_times: { crate_name: [time_per_run...] }
+          crate_times = {}
+          total_binary_sizes = []
+          # per_binary: { binary_name: [size_per_run...] }
+          per_binary = {}
+
+          for run in data:
+              dt_str = run.get("created_at", "")
+              dates.append(dt_str[:10] if dt_str else "?")
+
+              bt = run.get("build_times", {})
+              total_build_times.append(bt.get("total_wall_time_s", 0))
+
+              # Per-crate build times
+              units = bt.get("units", [])
+              seen_crates = set()
+              for u in units:
+                  name = u.get("name", "")
+                  if name not in crate_times:
+                      crate_times[name] = [None] * (len(dates) - 1)
+                  crate_times[name].append(u.get("duration", 0))
+                  seen_crates.add(name)
+              for name in crate_times:
+                  if name not in seen_crates:
+                      crate_times[name].append(None)
+
+              # Binary sizes
+              bs = run.get("binary_sizes", [])
+              run_total_size = sum(b.get("bytes", 0) for b in bs)
+              total_binary_sizes.append(run_total_size)
+
+              seen_bins = set()
+              for b in bs:
+                  bname = b.get("name", "")
+                  if bname not in per_binary:
+                      per_binary[bname] = [None] * (len(dates) - 1)
+                  per_binary[bname].append(b.get("bytes", 0))
+                  seen_bins.add(bname)
+              for bname in per_binary:
+                  if bname not in seen_bins:
+                      per_binary[bname].append(None)
+
+          # Filter to top 15 crates by average duration
+          def avg_non_none(lst):
+              vals = [v for v in lst if v is not None]
+              return sum(vals) / len(vals) if vals else 0
+
+          top_crates = sorted(crate_times.keys(), key=lambda c: avg_non_none(crate_times[c]), reverse=True)[:15]
+
+          # Latest cargo bloat
+          latest_bloat = ""
+          for run in reversed(data):
+              if run.get("cargo_bloat"):
+                  latest_bloat = run["cargo_bloat"]
+                  break
+
+          # --- Color palette ---
+          COLORS = [
+              "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+              "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
+              "#86bcb6", "#8cd17d", "#b6992d", "#499894", "#d37295",
+          ]
+
+          def js_array(lst):
+              return json.dumps(lst)
+
+          def js_datasets_crates():
+              datasets = []
+              for i, name in enumerate(top_crates):
+                  color = COLORS[i % len(COLORS)]
+                  datasets.append({
+                      "label": name,
+                      "data": crate_times[name],
+                      "borderColor": color,
+                      "backgroundColor": color + "33",
+                      "tension": 0.3,
+                      "spanGaps": True,
+                  })
+              return json.dumps(datasets)
+
+          def js_datasets_binaries():
+              datasets = []
+              for i, name in enumerate(sorted(per_binary.keys())):
+                  color = COLORS[i % len(COLORS)]
+                  datasets.append({
+                      "label": name,
+                      "data": [b / 1048576 if b is not None else None for b in per_binary[name]],
+                      "borderColor": color,
+                      "backgroundColor": color + "33",
+                      "tension": 0.3,
+                      "spanGaps": True,
+                  })
+              return json.dumps(datasets)
+
+          # --- Generate HTML ---
+          now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+          html = f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>DiskANN Release Build Stats</title>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+            <style>
+              body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                     max-width: 1400px; margin: 0 auto; padding: 20px; background: #fafafa; }}
+              h1 {{ color: #1b1e24; border-bottom: 2px solid #4e79a7; padding-bottom: 8px; }}
+              h2 {{ color: #333; margin-top: 40px; }}
+              .chart-container {{ background: white; border-radius: 8px; padding: 20px;
+                                  box-shadow: 0 1px 3px rgba(0,0,0,0.12); margin-bottom: 30px; }}
+              canvas {{ max-height: 400px; }}
+              pre {{ background: #1b1e24; color: #d5dde5; padding: 16px; border-radius: 8px;
+                     overflow-x: auto; font-size: 13px; line-height: 1.4; }}
+              .meta {{ color: #666; font-size: 14px; }}
+              table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+              th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
+              th {{ background: #1b1e24; color: #d5dde5; }}
+              tr:nth-child(even) {{ background: #f2f2f2; }}
+            </style>
+          </head>
+          <body>
+            <h1>DiskANN Release Build Statistics</h1>
+            <p class="meta">Generated: {now} &mdash; Last 30 days ({len(data)} runs)</p>
+
+            <h2>Total Build Time Trend</h2>
+            <div class="chart-container">
+              <canvas id="totalBuildTime"></canvas>
+            </div>
+
+            <h2>Build Time by Crate (Top 15)</h2>
+            <div class="chart-container">
+              <canvas id="crateBuildTime"></canvas>
+            </div>
+
+            <h2>Total Binary Size Trend</h2>
+            <div class="chart-container">
+              <canvas id="totalBinarySize"></canvas>
+            </div>
+
+            <h2>Binary Size per Binary</h2>
+            <div class="chart-container">
+              <canvas id="perBinarySize"></canvas>
+            </div>
+
+            <h2>Latest Cargo Bloat (diskann-benchmark)</h2>
+            <pre>{latest_bloat if latest_bloat else "No cargo bloat data available."}</pre>
+
+            <h2>Latest Build Details</h2>
+          """
+
+          # Add latest run details table
+          if data:
+              latest = data[-1]
+              bt = latest.get("build_times", {})
+              units = bt.get("units", [])
+              html += f"""
+              <p class="meta">Run: {latest.get('created_at', '?')} &mdash;
+              Commit: <code>{latest.get('head_sha', '?')[:12]}</code> &mdash;
+              Total wall time: {bt.get('total_time_display', '?')}</p>
+              <table>
+                <thead><tr><th>#</th><th>Crate</th><th>Version</th><th>Duration</th></tr></thead>
+                <tbody>
+              """
+              for i, u in enumerate(units, 1):
+                  html += f"<tr><td>{i}</td><td>{u.get('name','?')}</td><td>{u.get('version','?')}</td><td>{u.get('duration',0):.1f}s</td></tr>\n"
+              html += "</tbody></table>\n"
+
+              bs = latest.get("binary_sizes", [])
+              if bs:
+                  html += """
+                  <h3>Binary Sizes</h3>
+                  <table>
+                    <thead><tr><th>Binary</th><th>Size (bytes)</th><th>Size</th></tr></thead>
+                    <tbody>
+                  """
+                  for b in bs:
+                      size = b.get("bytes", 0)
+                      human = f"{size / 1048576:.1f} MiB" if size > 1048576 else f"{size / 1024:.1f} KiB"
+                      html += f"<tr><td>{b.get('name','?')}</td><td>{size:,}</td><td>{human}</td></tr>\n"
+                  html += "</tbody></table>\n"
+
+          html += f"""
+            <script>
+              const dates = {js_array(dates)};
+
+              // Total Build Time
+              new Chart(document.getElementById('totalBuildTime'), {{
+                type: 'line',
+                data: {{
+                  labels: dates,
+                  datasets: [{{
+                    label: 'Total Wall Time (s)',
+                    data: {js_array(total_build_times)},
+                    borderColor: '#4e79a7',
+                    backgroundColor: '#4e79a733',
+                    fill: true,
+                    tension: 0.3,
+                  }}]
+                }},
+                options: {{
+                  responsive: true,
+                  plugins: {{ title: {{ display: true, text: 'Total Release Build Time' }} }},
+                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'Seconds' }} }} }}
+                }}
+              }});
+
+              // Per-Crate Build Time
+              new Chart(document.getElementById('crateBuildTime'), {{
+                type: 'line',
+                data: {{
+                  labels: dates,
+                  datasets: {js_datasets_crates()}
+                }},
+                options: {{
+                  responsive: true,
+                  plugins: {{ title: {{ display: true, text: 'Build Time by Crate (Top 15)' }} }},
+                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'Seconds' }} }} }}
+                }}
+              }});
+
+              // Total Binary Size
+              new Chart(document.getElementById('totalBinarySize'), {{
+                type: 'line',
+                data: {{
+                  labels: dates,
+                  datasets: [{{
+                    label: 'Total Binary Size (MiB)',
+                    data: {js_array([s / 1048576 for s in total_binary_sizes])},
+                    borderColor: '#e15759',
+                    backgroundColor: '#e1575933',
+                    fill: true,
+                    tension: 0.3,
+                  }}]
+                }},
+                options: {{
+                  responsive: true,
+                  plugins: {{ title: {{ display: true, text: 'Total Binary Size' }} }},
+                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'MiB' }} }} }}
+                }}
+              }});
+
+              // Per-Binary Size
+              new Chart(document.getElementById('perBinarySize'), {{
+                type: 'line',
+                data: {{
+                  labels: dates,
+                  datasets: {js_datasets_binaries()}
+                }},
+                options: {{
+                  responsive: true,
+                  plugins: {{ title: {{ display: true, text: 'Binary Size per Binary' }} }},
+                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'MiB' }} }} }}
+                }}
+              }});
+            </script>
+          </body>
+          </html>
+          """
+
+          Path("build-stats-report.html").write_text(html)
+          print(f"Report generated: build-stats-report.html ({len(data)} runs)")
+          PYEOF
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-stats-report
+          path: build-stats-report.html
+          retention-days: 90
