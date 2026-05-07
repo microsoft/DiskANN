@@ -17,7 +17,7 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         // generates a full `Benchmark` impl via the `impl_sq_build!` macro in `mod imp`,
         // which materially impacts compile time. We intentionally keep the registered
         // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
-        // `example/scalar.json` and `perf_test_inputs/`.
+        // `example/scalar.json`.
         //
         // To add a new variant (e.g. another bit-width or element type):
         //   1. Add a `benchmarks.register("graph-index-sq-<N>-bit-<T>",
