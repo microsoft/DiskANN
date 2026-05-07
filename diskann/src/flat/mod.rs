@@ -18,7 +18,7 @@
 //! | :------------------------------------       | :----------------------------------------- |:--------- |
 //! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
 //! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
-//! | [`crate::provider::Accessor`]               | [`OnElementsUnordered`] (and [`Iterated`] for an element-at-a-time bridge from [`FlatIterator`]) | No        |
+//! | [`crate::provider::Accessor`]               | [`OnElementsUnordered`]                    | No        |
 //! | [`crate::provider::DistancesUnordered`]     | [`DistancesUnordered`]                     | No        |
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
 //! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |

@@ -3,13 +3,28 @@
  * Licensed under the MIT license.
  */
 
-//! [`OnElementsUnordered`] — the sequential access primitive for accessing a flat index.
-//! [`DistancesUnordered`] — sub-trait of [`OnElementsUnordered`] and [`BuildQueryComputer`]
-//! that fuses a pre-built query computer with a sequential scan and yields
-//! `(id, distance)` pairs to its callback.
+//! Sequential ("flat") access primitives.
 //!
-//! [`FlatIterator`] — a lending async iterator that can be bridged into
-//! [`OnElementsUnordered`] via [`Iterated`].
+//! This module defines the traits that flat-search algorithms use to walk every element
+//! of a [`DataProvider`](crate::provider::DataProvider) once.
+//!
+//! * [`OnElementsUnordered`]: the lowest-level entry point and the only required trait
+//!   to implement. It is a single-method trait that applies a caller-supplied closure
+//!   to every `(id, element ref)` pair in the provider. The super-traits [`HasId`] and
+//!   [`HasElementRef`] define the concrete id and element reference types.
+//!
+//! * [`DistancesUnordered`]: a sub-trait of [`OnElementsUnordered`] that takes a query
+//!   computer and a closure (typically to filter results through a priority queue) and
+//!   applies the closure to the `(id, distance)` pair for every element, with each
+//!   distance computed using the supplied computer.
+//!
+//! * [`FlatIterator`]: a convenient entry point for backends whose natural shape is
+//!   element-at-a-time iteration. The trait exposes a single `next` method and an
+//!   associated `Element<'_>` type that must be [`Reborrow`]able to the `ElementRef<'_>`
+//!   exposed via the [`HasElementRef`] super-trait.
+//!
+//! * [`Iterated`]: bridges any [`FlatIterator`] implementation into an
+//!   [`OnElementsUnordered`] by looping over [`FlatIterator::next`].
 
 use std::fmt::Debug;
 
@@ -38,9 +53,10 @@ pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
         F: Send + for<'a> FnMut(Self::Id, <Self as HasElementRef>::ElementRef<'a>);
 }
 
-/// Extension of [`OnElementsUnordered`] that drives the scan with a query computer
-/// produced by the visitor's [`BuildQueryComputer<T>`] impl, invoking a callback with
-/// `(id, distance)` pairs.
+/// Extension of [`OnElementsUnordered`] that drives the scan with a query computer.
+///
+/// The computer is produced by the visitor's [`BuildQueryComputer<T>`] impl,
+/// and invokes a callback with `(id, distance)` pairs.
 ///
 /// This fuses the scan with a pre-processed query computer and runs over a
 /// streaming visitor. It pulls the computer type from the implementor's own
@@ -48,11 +64,6 @@ pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
 ///
 /// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
 /// calling `computer.evaluate_similarity` on each element.
-///
-/// ## Note
-///
-/// This is the flat analog to [`crate::provider::DistancesUnordered`] which runs over
-/// a random-access [`crate::provider::Accessor`].
 pub trait DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T> {
     /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
     /// the resulting `(id, distance)` pair.
