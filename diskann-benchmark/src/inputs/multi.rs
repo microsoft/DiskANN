@@ -297,7 +297,7 @@ impl std::fmt::Display for SphericalConfig {
 }
 
 /// Reranking method configuration for multi-vector search.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub(crate) enum RerankMethod {
     /// Full-precision Chamfer distance using the index's stored multi-vectors.
@@ -324,6 +324,67 @@ pub(crate) enum RerankMethod {
     },
     /// No reranking — pass through first-stage candidate ordering.
     None,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RerankMethodKind {
+    Chamfer,
+    SideloadedChamfer,
+    SphericalChamfer,
+    None,
+}
+
+#[derive(Debug, Deserialize)]
+struct RerankMethodDef {
+    #[serde(default)]
+    method: Option<RerankMethodKind>,
+    #[serde(default)]
+    data: Option<InputFile>,
+    #[serde(default)]
+    query_data: Option<InputFile>,
+    #[serde(default)]
+    query_layouts: Option<Vec<exhaustive::SphericalQuery>>,
+}
+
+impl<'de> Deserialize<'de> for RerankMethod {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let def = RerankMethodDef::deserialize(deserializer)?;
+
+        match def.method {
+            Some(RerankMethodKind::Chamfer) => Ok(Self::Chamfer),
+            Some(RerankMethodKind::SideloadedChamfer) => {
+                let data = def.data.ok_or_else(|| {
+                    serde::de::Error::missing_field("data")
+                })?;
+                Ok(Self::SideloadedChamfer {
+                    data,
+                    query_data: def.query_data,
+                })
+            }
+            Some(RerankMethodKind::SphericalChamfer) => {
+                let query_layouts = def.query_layouts.ok_or_else(|| {
+                    serde::de::Error::missing_field("query_layouts")
+                })?;
+                Ok(Self::SphericalChamfer {
+                    data: def.data,
+                    query_data: def.query_data,
+                    query_layouts,
+                })
+            }
+            Some(RerankMethodKind::None) => Ok(Self::None),
+            None => match def.data {
+                Some(data) => Ok(Self::SideloadedChamfer {
+                    data,
+                    query_data: def.query_data,
+                }),
+                None => Ok(Self::Chamfer),
+            },
+        }
+    }
 }
 
 /// Inner-loop (first-stage graph search) method configuration.
@@ -590,5 +651,69 @@ impl std::fmt::Display for SphericalRerankBuildAndSearch {
             write!(f, "{}", spherical)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_rerank_method_with_data_defaults_to_sideloaded_chamfer() {
+        let rerank: RerankMethod = serde_json::from_value(serde_json::json!({
+            "data": "path/to/full_precision.mbin",
+            "query_data": "path/to/rerank_queries.mbin"
+        }))
+        .unwrap();
+
+        match rerank {
+            RerankMethod::SideloadedChamfer { data, query_data } => {
+                assert_eq!(data.to_str(), Some("path/to/full_precision.mbin"));
+                assert_eq!(
+                    query_data.as_deref().and_then(std::path::Path::to_str),
+                    Some("path/to/rerank_queries.mbin")
+                );
+            }
+            other => panic!("expected side-loaded Chamfer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_rerank_method_without_data_defaults_to_chamfer() {
+        let rerank: RerankMethod = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert!(matches!(rerank, RerankMethod::Chamfer));
+    }
+
+    #[test]
+    fn explicit_spherical_chamfer_rerank_still_deserializes() {
+        let rerank: RerankMethod = serde_json::from_value(serde_json::json!({
+            "method": "spherical_chamfer",
+            "data": "path/to/quantized_source.mbin",
+            "query_layouts": ["same_as_data"]
+        }))
+        .unwrap();
+
+        match rerank {
+            RerankMethod::SphericalChamfer {
+                data: Some(data),
+                query_layouts,
+                ..
+            } => {
+                assert_eq!(data.to_str(), Some("path/to/quantized_source.mbin"));
+                assert_eq!(query_layouts, vec![exhaustive::SphericalQuery::SameAsData]);
+            }
+            other => panic!("expected spherical Chamfer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_sideloaded_chamfer_requires_data() {
+        let error = serde_json::from_value::<RerankMethod>(serde_json::json!({
+            "method": "sideloaded_chamfer"
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("missing field `data`"));
     }
 }
