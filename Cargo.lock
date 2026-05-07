@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-multi-vector"
-version = "0.50.1"
+version = "0.51.0"
 dependencies = [
  "anyhow",
  "diskann-benchmark-runner",
