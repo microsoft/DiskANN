@@ -12,16 +12,23 @@ use diskann::{
     provider,
     utils::{IntoUsize, VectorRepr},
 };
-use diskann_quantization::multi_vector::{Chamfer, Mat, MatRef, Standard};
-use diskann_quantization::spherical;
+use diskann_quantization::{
+    alloc::{GlobalAllocator, ScopedAllocator},
+    multi_vector::{Chamfer, Mat, MatRef, Standard},
+    spherical,
+};
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{
     DistanceFunction, PreprocessedDistanceFunction, PureDistanceFunction, distance::Metric,
 };
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-use crate::model::graph::provider::async_::{
-    SimpleNeighborProviderAsync, common, inmem,
-    postprocess::{self, DeletionCheck},
+use crate::{
+    common::AlignedBoxWithSlice,
+    model::graph::provider::async_::{
+        SimpleNeighborProviderAsync, common, inmem,
+        postprocess::{self, DeletionCheck},
+    },
 };
 
 type MultiVec<T> = Mat<Standard<T>>;
@@ -508,15 +515,16 @@ where
 
 /// Pre-built data for spherical-quantized chamfer distance computation.
 ///
-/// Stores all sub-vectors from a multi-vector dataset in a flat
-/// [`inmem::spherical::SphericalStore`], with per-document offset/count metadata
-/// for efficient retrieval during reranking.
+/// Stores all compressed sub-vectors in one aligned byte buffer, with per-document
+/// byte-offset/count metadata for efficient retrieval during reranking.
 pub struct SphericalChamferData {
-    store: inmem::spherical::SphericalStore,
-    /// `offsets[doc_id]` = starting index in the flat store for this document's sub-vectors.
-    offsets: Vec<u32>,
+    data: AlignedBoxWithSlice<u8>,
+    quantizer: Box<dyn spherical::iface::Quantizer + Send + Sync>,
+    bytes_per_vector: usize,
+    /// `offsets[doc_id]` = starting byte offset for this document's sub-vectors.
+    offsets: Vec<usize>,
     /// `counts[doc_id]` = number of sub-vectors for this document.
-    counts: Vec<u16>,
+    counts: Vec<usize>,
 }
 
 impl SphericalChamferData {
@@ -531,31 +539,102 @@ impl SphericalChamferData {
         P: spherical::iface::Quantizer + AsyncFriendly,
     {
         let total: usize = multi_vecs.iter().map(|m| m.num_vectors()).sum();
+        let bytes_per_vector = quantizer.bytes();
+        let total_bytes = total
+            .checked_mul(bytes_per_vector)
+            .expect("spherical chamfer data byte length overflow");
+        let mut data = AlignedBoxWithSlice::new(total_bytes, 64)
+            .expect("failed to allocate spherical chamfer data buffer");
 
         let mut offsets = Vec::with_capacity(multi_vecs.len());
         let mut counts = Vec::with_capacity(multi_vecs.len());
-        let mut offset = 0u32;
+        let mut offset = 0usize;
         for m in multi_vecs {
             offsets.push(offset);
-            counts.push(m.num_vectors() as u16);
-            offset += m.num_vectors() as u32;
+            counts.push(m.num_vectors());
+            offset += m
+                .num_vectors()
+                .checked_mul(bytes_per_vector)
+                .expect("spherical chamfer document byte length overflow");
         }
 
-        let store = inmem::spherical::SphericalStore::new(quantizer, total, None);
-
-        let mut idx = 0;
-        for m in multi_vecs {
-            for row in m.as_view().rows() {
-                store.set_vector(idx, row).unwrap();
-                idx += 1;
-            }
+        let mut doc_slices = Vec::with_capacity(multi_vecs.len());
+        let mut remaining = data.as_mut_slice();
+        for &count in &counts {
+            let doc_bytes = count
+                .checked_mul(bytes_per_vector)
+                .expect("spherical chamfer document byte length overflow");
+            let (doc, rest) = remaining.split_at_mut(doc_bytes);
+            doc_slices.push(doc);
+            remaining = rest;
         }
+        assert!(remaining.is_empty());
+
+        doc_slices
+            .into_par_iter()
+            .zip(multi_vecs)
+            .for_each(|(doc_data, m)| {
+                let mut offset = 0;
+                for row in m.as_view().rows() {
+                    let next_offset = offset + bytes_per_vector;
+                    quantizer
+                        .compress(
+                            row,
+                            spherical::iface::OpaqueMut::new(&mut doc_data[offset..next_offset]),
+                            ScopedAllocator::global(),
+                        )
+                        .unwrap();
+                    offset = next_offset;
+                }
+            });
 
         Self {
-            store,
+            data,
+            quantizer: Box::new(quantizer),
+            bytes_per_vector,
             offsets,
             counts,
         }
+    }
+
+    fn get_vector(&self, offset: usize) -> spherical::iface::Opaque<'_> {
+        let end = offset
+            .checked_add(self.bytes_per_vector)
+            .expect("byte buffer offset overflow");
+        spherical::iface::Opaque::new(&self.data[offset..end])
+    }
+
+    fn doc_range(&self, doc_id: u32) -> Option<(usize, usize)> {
+        let id = doc_id as usize;
+        Some((*self.offsets.get(id)?, *self.counts.get(id)?))
+    }
+
+    fn distance_computer(
+        &self,
+    ) -> Result<spherical::iface::DistanceComputer, inmem::spherical::AllocatorError> {
+        Ok(self.quantizer.distance_computer(GlobalAllocator)?)
+    }
+
+    fn query_computer<T>(
+        &self,
+        query: &[T],
+        layout: spherical::iface::QueryLayout,
+        allow_rescale: bool,
+    ) -> Result<spherical::iface::QueryComputer, inmem::spherical::QueryComputerError>
+    where
+        T: VectorRepr,
+    {
+        let qf32 = T::as_f32(query).map_err(|e| {
+            inmem::spherical::QueryComputerError::FullPrecisionConversionErr(Box::new(e))
+        })?;
+
+        Ok(self.quantizer.fused_query_computer(
+            qf32.as_ref(),
+            layout,
+            allow_rescale,
+            GlobalAllocator,
+            ScopedAllocator::global(),
+        )?)
     }
 
     /// Compute approximate Chamfer distance using pre-built query computers.
@@ -567,19 +646,16 @@ impl SphericalChamferData {
         query_computers: &[spherical::iface::QueryComputer],
         doc_id: u32,
     ) -> f32 {
-        let id = doc_id as usize;
-        if id >= self.offsets.len() {
-            // Unknown ID (e.g., frozen start point) — return worst-case distance.
+        let Some((offset, count)) = self.doc_range(doc_id) else {
+            // Unknown ID (e.g., frozen start point) - return worst-case distance.
             return f32::MAX;
-        }
-        let offset = self.offsets[id] as usize;
-        let count = self.counts[id] as usize;
+        };
 
         let mut sum = 0.0f32;
         for computer in query_computers {
             let mut min_dist = f32::MAX;
             for j in 0..count {
-                let doc_vec = self.store.get_vector(offset + j).unwrap();
+                let doc_vec = self.get_vector(offset + j * self.bytes_per_vector);
                 let dist = computer.evaluate_similarity(doc_vec).unwrap();
                 min_dist = min_dist.min(dist);
             }
@@ -593,13 +669,12 @@ impl std::fmt::Debug for SphericalChamferData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SphericalChamferData")
             .field("num_docs", &self.offsets.len())
+            .field("bytes_per_vector", &self.bytes_per_vector)
             .field(
                 "total_sub_vectors",
-                &self
-                    .offsets
-                    .last()
-                    .map_or(0u32, |&o| o + *self.counts.last().unwrap_or(&0) as u32),
+                &self.counts.iter().copied().sum::<usize>(),
             )
+            .field("data_bytes", &self.data.len())
             .finish()
     }
 }
@@ -628,8 +703,7 @@ impl QuantizedChamferRerank {
         let query_computers: Vec<_> = rerank_query
             .rows()
             .map(|q_vec| {
-                data.store
-                    .query_computer(q_vec, layout, true)
+                data.query_computer(q_vec, layout, true)
                     .expect("failed to build query computer for sub-vector")
             })
             .collect();
@@ -882,21 +956,23 @@ pub struct ChamferDistanceComputer {
 
 impl DistanceFunction<u32, u32, f32> for ChamferDistanceComputer {
     fn evaluate_similarity(&self, a: u32, b: u32) -> f32 {
-        let num_docs = self.data.offsets.len();
-        if (a as usize) >= num_docs || (b as usize) >= num_docs {
+        let Some((a_offset, a_count)) = self.data.doc_range(a) else {
             return f32::MAX;
-        }
-        let a_offset = self.data.offsets[a as usize] as usize;
-        let a_count = self.data.counts[a as usize] as usize;
-        let b_offset = self.data.offsets[b as usize] as usize;
-        let b_count = self.data.counts[b as usize] as usize;
+        };
+        let Some((b_offset, b_count)) = self.data.doc_range(b) else {
+            return f32::MAX;
+        };
 
         let mut sum = 0.0f32;
         for i in 0..a_count {
-            let a_vec = self.data.store.get_vector(a_offset + i).unwrap();
+            let a_vec = self
+                .data
+                .get_vector(a_offset + i * self.data.bytes_per_vector);
             let mut min_dist = f32::MAX;
             for j in 0..b_count {
-                let b_vec = self.data.store.get_vector(b_offset + j).unwrap();
+                let b_vec = self
+                    .data
+                    .get_vector(b_offset + j * self.data.bytes_per_vector);
                 let dist = self
                     .distance_computer
                     .evaluate_similarity(a_vec, b_vec)
@@ -935,7 +1011,6 @@ where
                     )
                 })?;
                 self.data
-                    .store
                     .query_computer(qf32.as_ref(), self.layout, true)
                     .map_err(|e| {
                         ANNError::new(diskann::ANNErrorKind::SQError, crate::utils::Bridge(e))
@@ -963,7 +1038,7 @@ where
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
         Ok(ChamferDistanceComputer {
             data: Arc::clone(&self.data),
-            distance_computer: self.data.store.distance_computer()?,
+            distance_computer: self.data.distance_computer()?,
         })
     }
 }
