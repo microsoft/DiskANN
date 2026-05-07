@@ -1,20 +1,14 @@
 When performing a code review, check that:
-- No unit tests were eliminated without a strong reason.
-- Additional dependencies introduced have a strong justification.
-- Changes are not likely to increase build times.
-- Each file has a license header.
-```
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT license.
- */
-```
 
 ## SemVer and API Compatibility
 
 - The workspace obeys SemVer. Removing or changing public API signatures (functions, types, re-exports) is a breaking change and requires a major version bump or a deprecated compatibility shim.
 - Re-exports are part of the public API surface — removing them is also a breaking change.
 - If changing public behavior, explain migration impact in the PR description.
+
+## Dependency and Build Hygiene
+- Check for changes that introduce new dependencies or increase build times. If a dependency is added, it must be justified in the PR description.
+
 
 ## Error Handling
 
@@ -42,7 +36,7 @@ When performing a code review, check that:
 - When touching architecture-specific intrinsics, verify cross-platform behavior per `diskann-wide/README.md`.
 
 ## Testing
-
+- Do not drop existing unit tests without a strong reason. 
 - Keep test helpers close to the code they exercise, typically in a `mod tests` at the bottom of the file or in an adjacent test module, guarded with `#[cfg(test)]`.
 - Do not add tests for derived traits (`Clone`, `Debug`, `PartialEq`) or enums unless they have explicit behavior beyond the derive.
 - Test edge cases like empty inputs (e.g., empty iterators) to lock in defined behavior and prevent divide-by-zero or NaN results.
@@ -61,7 +55,11 @@ When performing a code review, check that:
 - For pointer arithmetic, prefer `offset_from` to express bounds rather than `wrapping_add` unless wrapping behavior is intentionally needed — and document why.
 - When calling SIMD intrinsics or FFI, list the specific preconditions being satisfied (alignment, length, non-null, valid initialization).
 
-## Naming
-
-- Use names that reflect the current architecture, not historical ones. Rename outdated terms when refactoring.
-- Struct and type names should map clearly to their domain concepts for easier mental mapping.
+## License Headers
+- Each file has a license header.
+```
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+```

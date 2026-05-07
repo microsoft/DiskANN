@@ -2,63 +2,6 @@
 
 **Last Updated**: 2026-05-04 (based on v0.50.1, Rust 1.92)
 
-This guide helps coding agents understand how to work efficiently with the DiskANN repository.
-
-> **Relationship with `.github/copilot-instructions.md`**: This file (`agents.md`) is the operational manual — project structure, commands, workflows, and detailed conventions. The [`.github/copilot-instructions.md`](.github/copilot-instructions.md) file contains concise review-time rules that are automatically injected into Copilot code review context. Keep both in sync when conventions change.
-
----
-
-## Quick Reference
-
-```bash
-# Build
-cargo build --workspace
-
-# Test
-cargo test                                     # all tests
-cargo test -p diskann                          # single crate
-cargo test -p diskann -- --exact test_name     # single test
-cargo test --profile ci                        # CI profile (faster)
-
-# Lint & Format
-cargo fmt --all --check                        # check formatting
-cargo fmt --all                                # apply formatting
-cargo clippy --workspace --all-targets -- -Dwarnings  # lint (matches CI)
-
-# Regenerate test baselines
-DISKANN_TEST=overwrite cargo test -p diskann
-```
-
-**Note**: `rustfmt` and `clippy` are not installed by default. Run `rustup component add rustfmt clippy` if needed.
-
----
-
-## Table of Contents
-
-1. [Quick Reference](#quick-reference)
-2. [Repository Overview](#repository-overview)
-3. [Repository Structure](#repository-structure)
-4. [Boundaries](#boundaries)
-5. [Testing](#testing)
-6. [Code Quality & Linting](#code-quality--linting)
-
----
-
-## Repository Overview
-
-**DiskANN** is a Rust implementation of scalable approximate nearest neighbor (ANN) search algorithms. The project is a rewrite from C++ to Rust.
-
-- **Language**: Rust (Edition 2021), toolchain version in [`rust-toolchain.toml`](rust-toolchain.toml)
-- **License**: MIT (see [`LICENSE.txt`](LICENSE.txt))
-- **Version**: See [`Cargo.toml`](Cargo.toml)
-- **Architecture**: Cargo workspace with 17 crates (resolver = "3")
-- **Legacy Code**: Older C++ code is on the `cpp_main` branch (not maintained)
-
-### Key Resources
-- **Contributing**: See [`CONTRIBUTING.md`](CONTRIBUTING.md) (requires CLA)
-- **Code of Conduct**: See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
-
----
 
 ## Repository Structure
 
@@ -78,14 +21,14 @@ The repository uses a Cargo workspace with crates organized into functional tier
 **Tier 2: Core Libraries**
 - `diskann-linalg/` - Linear algebra operations
 - `diskann-utils/` - Shared utilities (Reborrow, MatrixView traits)
-- `diskann-quantization/` - Vector quantization (PQ, SQ)
+- `diskann-quantization/` - Vector quantization 
 
-**Tier 3: Algorithm & Storage**
-- `diskann/` - Core ANN graph algorithm and in-memory indexing (CENTRAL crate)
-- `diskann-providers/` - Storage abstraction layer
-- `diskann-disk/` - Disk-based indexing with io_uring support
+**Tier 3: Algorithm & Proivders**
+- `diskann/` - Core indexing logic
+- `diskann-providers/` - Hodge-podge of stuff, will be dismantled
+- `diskann-disk/` - Disk-based provider for the index with io_uring support
 - `diskann-label-filter/` - Inverted index for filtered search
-- `diskann-garnet/` - Garnet (Redis-compatible) DataProvider and FFI endpoints for vector sets
+- `diskann-garnet/` - Garnet (Redis-compatible) Provider and FFI endpoints for vector sets
 
 **Tier 4: Infrastructure & Tools**
 - `diskann-benchmark-runner/` - Test runner infrastructure
