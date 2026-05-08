@@ -548,4 +548,34 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn query_computer_new_rejects_undersized_query() {
+        let config = test_utils::TableConfig {
+            dim: 16,
+            pq_chunks: 4,
+            num_pivots: 8,
+            start_value: 0.0,
+        };
+        let table = test_utils::seed_pivot_table(config);
+        let short_query = vec![0.0f32; config.dim - 1];
+        let err = QueryComputer::new(&table, Metric::L2, &short_query, None).unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+    }
+
+    #[test]
+    #[should_panic(expected = "DistanceComputer: full-precision query length")]
+    fn distance_computer_panics_on_undersized_fp_query() {
+        let config = test_utils::TableConfig {
+            dim: 16,
+            pq_chunks: 4,
+            num_pivots: 8,
+            start_value: 0.0,
+        };
+        let table = test_utils::seed_pivot_table(config);
+        let computer = DistanceComputer::new(&table, Metric::L2);
+        let short_fp = vec![0.0f32; config.dim - 1];
+        let code = vec![0u8; config.pq_chunks];
+        let _ = computer.evaluate_similarity(short_fp.as_slice(), code.as_slice());
+    }
 }
