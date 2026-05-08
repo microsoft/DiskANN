@@ -1,4 +1,11 @@
-"""Aggregate build-stats artifacts into a JS data file for the HTML report."""
+"""Aggregate build-stats artifacts into a JS data file for the HTML report.
+
+Reads from:
+  collected/runs.tsv        — tab-separated: run_id, created_at, head_sha
+  collected/<run_id>/       — contains build-times.json, binary-sizes.json, cargo-bloat.txt
+
+Usage: python generate-stats-data.py <collected_dir> <output_dir>
+"""
 import json
 import sys
 from datetime import datetime, timezone
@@ -10,8 +17,34 @@ def main():
     output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("report")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    data = json.loads((collected_dir / "all_runs.json").read_text())
-    data.sort(key=lambda r: r.get("created_at", ""))
+    runs_tsv = collected_dir / "runs.tsv"
+
+    # Parse runs.tsv and load per-run artifacts
+    runs = []
+    for line in runs_tsv.read_text().strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        run_id, created_at, head_sha = parts[0], parts[1], parts[2]
+        run_dir = collected_dir / run_id
+
+        bt_path = run_dir / "build-times.json"
+        bs_path = run_dir / "binary-sizes.json"
+        cb_path = run_dir / "cargo-bloat.txt"
+
+        if not bt_path.exists():
+            continue  # skip runs without data
+
+        runs.append({
+            "run_id": run_id,
+            "created_at": created_at,
+            "head_sha": head_sha,
+            "build_times": json.loads(bt_path.read_text()) if bt_path.exists() else {},
+            "binary_sizes": json.loads(bs_path.read_text()) if bs_path.exists() else [],
+            "cargo_bloat": cb_path.read_text() if cb_path.exists() else "",
+        })
+
+    runs.sort(key=lambda r: r["created_at"])
 
     dates = []
     total_build_times = []
@@ -19,7 +52,7 @@ def main():
     total_binary_sizes = []
     per_binary: dict[str, list] = {}
 
-    for run in data:
+    for run in runs:
         dt_str = run.get("created_at", "")
         dates.append(dt_str[:10] if dt_str else "?")
 
@@ -62,12 +95,12 @@ def main():
     top_crates = sorted(crate_times.keys(), key=lambda c: avg(crate_times[c]), reverse=True)[:15]
 
     # Latest cargo bloat
-    latest_bloat = next((r["cargo_bloat"] for r in reversed(data) if r.get("cargo_bloat")), "")
+    latest_bloat = next((r["cargo_bloat"] for r in reversed(runs) if r.get("cargo_bloat")), "")
 
     # Latest run details
     latest_run = None
-    if data:
-        last = data[-1]
+    if runs:
+        last = runs[-1]
         bt = last.get("build_times", {})
         latest_run = {
             "created_at": last.get("created_at", "?"),
@@ -93,7 +126,7 @@ def main():
 
     js_path = output_dir / "build-stats-data.js"
     js_path.write_text(f"const BUILD_DATA = {json.dumps(build_data, indent=2)};\n")
-    print(f"Generated {js_path} ({len(data)} runs)")
+    print(f"Generated {js_path} ({len(runs)} runs)")
 
 
 if __name__ == "__main__":

@@ -47,34 +47,16 @@ jobs:
 
           if [ ! -s runs.tsv ]; then
             echo "::warning::No successful build-release runs found in the last 30 days"
-            echo '[]' > collected/all_runs.json
             exit 0
           fi
 
           echo "Found $(wc -l < runs.tsv) runs"
-          echo '[]' > collected/all_runs.json
+          cp runs.tsv collected/runs.tsv
 
           while IFS=$'\t' read -r run_id created_at head_sha; do
-            dir="collected/$run_id/build-stats"
-            if ! gh run download "$run_id" --repo "${{ github.repository }}" \
-                --name build-stats --dir "$dir" 2>/dev/null; then
-              echo "::warning::Skipping run $run_id (artifact expired)"
-              continue
-            fi
-            python3 -c "
-          import json, sys
-          from pathlib import Path
-          base = Path(sys.argv[1])
-          record = {'run_id': int(sys.argv[2]), 'created_at': sys.argv[3], 'head_sha': sys.argv[4]}
-          for name, key in [('build-times.json','build_times'),('binary-sizes.json','binary_sizes'),('cargo-bloat.txt','cargo_bloat')]:
-              p = base / name
-              if p.exists():
-                  record[key] = json.loads(p.read_text()) if name.endswith('.json') else p.read_text()
-          all_f = Path('collected/all_runs.json')
-          data = json.loads(all_f.read_text())
-          data.append(record)
-          all_f.write_text(json.dumps(data))
-          " "$dir" "$run_id" "$created_at" "$head_sha"
+            gh run download "$run_id" --repo "${{ github.repository }}" \
+              --name build-stats --dir "collected/$run_id" 2>/dev/null \
+              || echo "::warning::Skipping run $run_id (artifact expired)"
           done < runs.tsv
 
       - name: Generate report
