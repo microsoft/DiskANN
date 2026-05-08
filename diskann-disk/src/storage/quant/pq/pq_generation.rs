@@ -8,7 +8,10 @@ use std::marker::PhantomData;
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    model::{pq::generate_pq_pivots, GeneratePivotArguments},
+    model::{
+        pq::{accum_row_inplace, generate_pq_pivots},
+        GeneratePivotArguments,
+    },
     storage::PQStorage,
     utils::{BridgeErr, RayonThreadPoolRef, Timer},
 };
@@ -133,19 +136,7 @@ where
         )
         .bridge_err()?;
 
-        if full_pivot_data_mat.ncols() != centroid.len() {
-            return Err(ANNError::log_pq_error(format_args!(
-                "pivot data ncols {} does not match centroid length {}",
-                full_pivot_data_mat.ncols(),
-                centroid.len(),
-            )));
-        }
-
-        for row in full_pivot_data_mat.row_iter_mut() {
-            for (a, b) in std::iter::zip(row.iter_mut(), centroid.iter()) {
-                *a += *b;
-            }
-        }
+        accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
 
         let table = TransposedTable::from_parts(
             full_pivot_data_mat.as_view(),

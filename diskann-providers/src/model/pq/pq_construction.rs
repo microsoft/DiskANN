@@ -100,7 +100,6 @@ where
         .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
     let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
         .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
-
     let chunk_offsets = ChunkOffsets::from_dim(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
@@ -298,6 +297,23 @@ pub fn move_train_data_by_centroid(
     }
 }
 
+/// Add `y` to every row of `x`.
+///
+/// # Panics
+///
+/// Panics if `y.len() != x.ncols()`.
+pub fn accum_row_inplace<T>(mut x: MutMatrixView<T>, y: &[T])
+where
+    T: Copy + std::ops::AddAssign,
+{
+    assert_eq!(x.ncols(), y.len());
+    x.row_iter_mut().for_each(|row| {
+        std::iter::zip(row.iter_mut(), y.iter()).for_each(|(a, b)| {
+            *a += *b;
+        });
+    });
+}
+
 /// streams the base file (data_file), and computes the closest centers in each
 /// chunk to generate the compressed data_file and stores it in
 /// pq_compressed_vectors_path.
@@ -357,20 +373,7 @@ where
     let mut full_pivot_data_mat =
         MutMatrixView::try_from(full_pivot_data.as_mut_slice(), num_centers, full_dim)
             .bridge_err()?;
-
-    if full_pivot_data_mat.ncols() != centroid.len() {
-        return Err(ANNError::log_pq_error(format_args!(
-            "pivot data ncols {} does not match centroid length {}",
-            full_pivot_data_mat.ncols(),
-            centroid.len(),
-        )));
-    }
-
-    for row in full_pivot_data_mat.row_iter_mut() {
-        for (a, b) in std::iter::zip(row.iter_mut(), centroid.iter()) {
-            *a += *b;
-        }
-    }
+    accum_row_inplace(full_pivot_data_mat.as_mut_view(), centroid.as_slice());
 
     pq_storage.write_compressed_pivot_metadata::<Storage>(
         num_points,
