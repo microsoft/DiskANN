@@ -14,10 +14,6 @@ on:
 
 name: Release Build Stats
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
 
