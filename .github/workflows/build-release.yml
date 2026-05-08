@@ -59,7 +59,7 @@ jobs:
         run: cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
 
       - name: Run cargo llvm-lines
-        run: cargo llvm-lines --package diskann-benchmark -n 20 | tee cargo-llvm-lines.txt
+        run: cargo llvm-lines --release --package diskann-benchmark | head -100 | tee cargo-llvm-lines.txt
 
       - name: Upload build stats
         uses: actions/upload-artifact@v4
