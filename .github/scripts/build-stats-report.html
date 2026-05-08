@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>DiskANN Release Build Stats</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <script src="build-stats-data.js"></script>
   <style>
@@ -29,148 +30,164 @@
   </style>
 </head>
 <body>
+<div id="app">
   <h1>DiskANN Release Build Statistics</h1>
-  <p class="meta" id="report-meta"></p>
+  <p class="meta">Generated: {{ data.generated }} — Last 30 days ({{ data.dates.length }} runs)</p>
 
   <h2>Total Build Time Trend</h2>
-  <div class="chart-container"><canvas id="totalBuildTime"></canvas></div>
+  <div class="chart-container"><canvas ref="totalBuildTime"></canvas></div>
 
   <h2>Build Time by Crate (Top 15)</h2>
-  <div class="chart-container"><canvas id="crateBuildTime"></canvas></div>
+  <div class="chart-container"><canvas ref="crateBuildTime"></canvas></div>
 
   <h2>Total Binary Size Trend</h2>
-  <div class="chart-container"><canvas id="totalBinarySize"></canvas></div>
+  <div class="chart-container"><canvas ref="totalBinarySize"></canvas></div>
 
   <h2>Binary Size per Binary</h2>
-  <div class="chart-container"><canvas id="perBinarySize"></canvas></div>
+  <div class="chart-container"><canvas ref="perBinarySize"></canvas></div>
 
   <h2>Latest Cargo Bloat (diskann-benchmark)</h2>
-  <pre id="cargo-bloat"></pre>
+  <pre>{{ data.latest_cargo_bloat || 'No cargo bloat data available.' }}</pre>
 
-  <h2>Latest Build Details</h2>
-  <div id="latest-details"></div>
+  <template v-if="data.latest_run">
+    <h2>Latest Build Details</h2>
+    <p class="meta">
+      Run: {{ data.latest_run.created_at }} —
+      Commit: <code>{{ data.latest_run.head_sha }}</code> —
+      Total wall time: {{ data.latest_run.total_time_display }}
+    </p>
 
-  <script>
-    const COLORS = [
-      "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
-      "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
-      "#86bcb6", "#8cd17d", "#b6992d", "#499894", "#d37295",
-    ];
+    <table v-if="data.latest_run.units.length">
+      <thead><tr><th>#</th><th>Crate</th><th>Version</th><th>Duration</th></tr></thead>
+      <tbody>
+        <tr v-for="(u, i) in data.latest_run.units" :key="i">
+          <td>{{ i + 1 }}</td>
+          <td>{{ u.name }}</td>
+          <td>{{ u.version }}</td>
+          <td>{{ u.duration.toFixed(1) }}s</td>
+        </tr>
+      </tbody>
+    </table>
 
-    // Populate metadata
-    document.getElementById('report-meta').textContent =
-      `Generated: ${BUILD_DATA.generated} — Last 30 days (${BUILD_DATA.dates.length} runs)`;
+    <template v-if="data.latest_run.binary_sizes.length">
+      <h3>Binary Sizes</h3>
+      <table>
+        <thead><tr><th>Binary</th><th>Size (bytes)</th><th>Size</th></tr></thead>
+        <tbody>
+          <tr v-for="b in data.latest_run.binary_sizes" :key="b.name">
+            <td>{{ b.name }}</td>
+            <td>{{ b.bytes.toLocaleString() }}</td>
+            <td>{{ formatSize(b.bytes) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
+  </template>
+</div>
 
-    // Total Build Time chart
-    new Chart(document.getElementById('totalBuildTime'), {
-      type: 'line',
-      data: {
-        labels: BUILD_DATA.dates,
-        datasets: [{
-          label: 'Total Wall Time (s)',
-          data: BUILD_DATA.total_build_times,
-          borderColor: '#4e79a7',
-          backgroundColor: '#4e79a733',
-          fill: true,
-          tension: 0.3,
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { title: { display: true, text: 'Total Release Build Time' } },
-        scales: { y: { beginAtZero: true, title: { display: true, text: 'Seconds' } } }
-      }
-    });
+<script>
+const COLORS = [
+  '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+  '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
+  '#86bcb6', '#8cd17d', '#b6992d', '#499894', '#d37295',
+];
 
-    // Per-Crate Build Time chart
-    new Chart(document.getElementById('crateBuildTime'), {
-      type: 'line',
-      data: {
-        labels: BUILD_DATA.dates,
-        datasets: BUILD_DATA.crate_datasets.map((ds, i) => ({
-          ...ds,
-          borderColor: COLORS[i % COLORS.length],
-          backgroundColor: COLORS[i % COLORS.length] + '33',
-          tension: 0.3,
-          spanGaps: true,
-        }))
-      },
-      options: {
-        responsive: true,
-        plugins: { title: { display: true, text: 'Build Time by Crate (Top 15)' } },
-        scales: { y: { beginAtZero: true, title: { display: true, text: 'Seconds' } } }
-      }
-    });
+const { createApp, ref, onMounted } = Vue;
 
-    // Total Binary Size chart
-    new Chart(document.getElementById('totalBinarySize'), {
-      type: 'line',
-      data: {
-        labels: BUILD_DATA.dates,
-        datasets: [{
-          label: 'Total Binary Size (MiB)',
-          data: BUILD_DATA.total_binary_sizes_mib,
-          borderColor: '#e15759',
-          backgroundColor: '#e1575933',
-          fill: true,
-          tension: 0.3,
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { title: { display: true, text: 'Total Binary Size' } },
-        scales: { y: { beginAtZero: true, title: { display: true, text: 'MiB' } } }
-      }
-    });
+createApp({
+  setup() {
+    const data = BUILD_DATA;
+    const totalBuildTime = ref(null);
+    const crateBuildTime = ref(null);
+    const totalBinarySize = ref(null);
+    const perBinarySize = ref(null);
 
-    // Per-Binary Size chart
-    new Chart(document.getElementById('perBinarySize'), {
-      type: 'line',
-      data: {
-        labels: BUILD_DATA.dates,
-        datasets: BUILD_DATA.binary_datasets.map((ds, i) => ({
-          ...ds,
-          borderColor: COLORS[i % COLORS.length],
-          backgroundColor: COLORS[i % COLORS.length] + '33',
-          tension: 0.3,
-          spanGaps: true,
-        }))
-      },
-      options: {
-        responsive: true,
-        plugins: { title: { display: true, text: 'Binary Size per Binary' } },
-        scales: { y: { beginAtZero: true, title: { display: true, text: 'MiB' } } }
-      }
-    });
-
-    // Cargo bloat
-    document.getElementById('cargo-bloat').textContent =
-      BUILD_DATA.latest_cargo_bloat || 'No cargo bloat data available.';
-
-    // Latest build details table
-    const latest = BUILD_DATA.latest_run;
-    if (latest) {
-      let html = `<p class="meta">Run: ${latest.created_at} — Commit: <code>${latest.head_sha}</code> — Total wall time: ${latest.total_time_display}</p>`;
-
-      if (latest.units && latest.units.length) {
-        html += '<table><thead><tr><th>#</th><th>Crate</th><th>Version</th><th>Duration</th></tr></thead><tbody>';
-        latest.units.forEach((u, i) => {
-          html += `<tr><td>${i+1}</td><td>${u.name}</td><td>${u.version}</td><td>${u.duration.toFixed(1)}s</td></tr>`;
-        });
-        html += '</tbody></table>';
-      }
-
-      if (latest.binary_sizes && latest.binary_sizes.length) {
-        html += '<h3>Binary Sizes</h3><table><thead><tr><th>Binary</th><th>Size (bytes)</th><th>Size</th></tr></thead><tbody>';
-        latest.binary_sizes.forEach(b => {
-          const human = b.bytes > 1048576 ? (b.bytes / 1048576).toFixed(1) + ' MiB' : (b.bytes / 1024).toFixed(1) + ' KiB';
-          html += `<tr><td>${b.name}</td><td>${b.bytes.toLocaleString()}</td><td>${human}</td></tr>`;
-        });
-        html += '</tbody></table>';
-      }
-
-      document.getElementById('latest-details').innerHTML = html;
+    function formatSize(bytes) {
+      return bytes > 1048576
+        ? (bytes / 1048576).toFixed(1) + ' MiB'
+        : (bytes / 1024).toFixed(1) + ' KiB';
     }
-  </script>
+
+    onMounted(() => {
+      new Chart(totalBuildTime.value, {
+        type: 'line',
+        data: {
+          labels: data.dates,
+          datasets: [{
+            label: 'Total Wall Time (s)',
+            data: data.total_build_times,
+            borderColor: '#4e79a7',
+            backgroundColor: '#4e79a733',
+            fill: true, tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { title: { display: true, text: 'Total Release Build Time' } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Seconds' } } }
+        }
+      });
+
+      new Chart(crateBuildTime.value, {
+        type: 'line',
+        data: {
+          labels: data.dates,
+          datasets: data.crate_datasets.map((ds, i) => ({
+            ...ds,
+            borderColor: COLORS[i % COLORS.length],
+            backgroundColor: COLORS[i % COLORS.length] + '33',
+            tension: 0.3, spanGaps: true,
+          }))
+        },
+        options: {
+          responsive: true,
+          plugins: { title: { display: true, text: 'Build Time by Crate (Top 15)' } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Seconds' } } }
+        }
+      });
+
+      new Chart(totalBinarySize.value, {
+        type: 'line',
+        data: {
+          labels: data.dates,
+          datasets: [{
+            label: 'Total Binary Size (MiB)',
+            data: data.total_binary_sizes_mib,
+            borderColor: '#e15759',
+            backgroundColor: '#e1575933',
+            fill: true, tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { title: { display: true, text: 'Total Binary Size' } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'MiB' } } }
+        }
+      });
+
+      new Chart(perBinarySize.value, {
+        type: 'line',
+        data: {
+          labels: data.dates,
+          datasets: data.binary_datasets.map((ds, i) => ({
+            ...ds,
+            borderColor: COLORS[i % COLORS.length],
+            backgroundColor: COLORS[i % COLORS.length] + '33',
+            tension: 0.3, spanGaps: true,
+          }))
+        },
+        options: {
+          responsive: true,
+          plugins: { title: { display: true, text: 'Binary Size per Binary' } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'MiB' } } }
+        }
+      });
+    });
+
+    return { data, formatSize, totalBuildTime, crateBuildTime, totalBinarySize, perBinarySize };
+  }
+}).mount('#app');
+</script>
 </body>
 </html>
+
