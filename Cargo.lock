@@ -972,6 +972,7 @@ name = "diskann-vector"
 version = "0.51.0"
 dependencies = [
  "approx",
+ "bytemuck",
  "cfg-if",
  "criterion",
  "diskann-wide",

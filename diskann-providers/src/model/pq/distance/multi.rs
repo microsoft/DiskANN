@@ -580,7 +580,7 @@ mod tests {
                 config.start_value,
             );
 
-            let expected = reference.evaluate_similarity(&expected0, &expected1);
+            let expected = reference.evaluate_similarity(&*expected0, &*expected1);
 
             // Test full-precision/quant.
             let got = computer
@@ -699,9 +699,9 @@ mod tests {
             );
 
             // Generate reference results.
-            let oo = reference.evaluate_similarity(&old_expected, &old_expected);
-            let nn = reference.evaluate_similarity(&new_expected, &new_expected);
-            let on = reference.evaluate_similarity(&old_expected, &new_expected);
+            let oo = reference.evaluate_similarity(&*old_expected, &*old_expected);
+            let nn = reference.evaluate_similarity(&*new_expected, &*new_expected);
+            let on = reference.evaluate_similarity(&*old_expected, &*new_expected);
 
             // Quant + Quant
             {

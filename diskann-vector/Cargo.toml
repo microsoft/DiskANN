@@ -24,8 +24,11 @@ rayon.workspace = true
 [dev-dependencies]
 approx.workspace = true
 iai-callgrind.workspace = true
+rand.workspace = true
 criterion.workspace = true
-half = { workspace = true, features = ["rand_distr", "num-traits"] }
+rand_distr.workspace = true
+half = { workspace = true, features = ["rand_distr", "num-traits", "bytemuck"] }
+bytemuck = { workspace = true, features = ["must_cast"] }
 
 [[bench]]
 name = "bench_main"
@@ -39,4 +42,3 @@ harness = false
 # Commenting out for now. It would give warnings.
 # clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
-
