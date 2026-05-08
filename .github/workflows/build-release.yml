@@ -42,10 +42,10 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Install cargo-bloat
+      - name: Install tools
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-bloat
+          tool: cargo-bloat,cargo-llvm-lines
 
       - name: Build release with timings
         run: cargo clean && cargo build --workspace --release --locked --timings
@@ -56,6 +56,9 @@ jobs:
       - name: Run cargo bloat
         run: cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
 
+      - name: Run cargo llvm-lines
+        run: cargo llvm-lines --package diskann-benchmark -n 20 | tee cargo-llvm-lines.txt
+
       - name: Upload build stats
         uses: actions/upload-artifact@v4
         with:
@@ -65,4 +68,5 @@ jobs:
             build-times.json
             binary-sizes.json
             cargo-bloat.txt
+            cargo-llvm-lines.txt
           retention-days: 90

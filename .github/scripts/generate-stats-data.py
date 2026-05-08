@@ -32,6 +32,8 @@ def main():
         bs_path = run_dir / "binary-sizes.json"
         cb_path = run_dir / "cargo-bloat.txt"
 
+        ll_path = run_dir / "cargo-llvm-lines.txt"
+
         if not bt_path.exists():
             continue  # skip runs without data
 
@@ -42,6 +44,7 @@ def main():
             "build_times": json.loads(bt_path.read_text()) if bt_path.exists() else {},
             "binary_sizes": json.loads(bs_path.read_text()) if bs_path.exists() else [],
             "cargo_bloat": cb_path.read_text() if cb_path.exists() else "",
+            "cargo_llvm_lines": ll_path.read_text() if ll_path.exists() else "",
         })
 
     runs.sort(key=lambda r: r["created_at"])
@@ -94,8 +97,9 @@ def main():
 
     top_crates = sorted(crate_times.keys(), key=lambda c: avg(crate_times[c]), reverse=True)[:15]
 
-    # Latest cargo bloat
+    # Latest cargo bloat and llvm-lines
     latest_bloat = next((r["cargo_bloat"] for r in reversed(runs) if r.get("cargo_bloat")), "")
+    latest_llvm_lines = next((r["cargo_llvm_lines"] for r in reversed(runs) if r.get("cargo_llvm_lines")), "")
 
     # Latest run details
     latest_run = None
@@ -121,6 +125,7 @@ def main():
             for name in sorted(per_binary.keys())
         ],
         "latest_cargo_bloat": latest_bloat,
+        "latest_cargo_llvm_lines": latest_llvm_lines,
         "latest_run": latest_run,
     }
 

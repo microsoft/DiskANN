@@ -49,6 +49,9 @@
   <h2>Latest Cargo Bloat (diskann-benchmark)</h2>
   <pre>{{ data.latest_cargo_bloat || 'No cargo bloat data available.' }}</pre>
 
+  <h2>Latest LLVM Lines (diskann-benchmark, top 20)</h2>
+  <pre>{{ data.latest_cargo_llvm_lines || 'No cargo llvm-lines data available.' }}</pre>
+
   <template v-if="data.latest_run">
     <h2>Latest Build Details (Top 20 Crates)</h2>
     <p class="meta">
