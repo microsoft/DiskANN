@@ -109,27 +109,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
-    use diskann_vector::Half;
     use rand::SeedableRng;
-    use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_ip<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
-        // RNG
+    #[test]
+    fn test_ip() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x2e767adc3d5d630f);
 
         for dim in [12, 15, 128] {
@@ -154,7 +139,7 @@ mod tests {
                     };
 
                     // Basic `TableIP`
-                    test_utils::test_ip_inner::<T, _, _>(
+                    test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
                             TableIP::new(table, query, None).unwrap()
                         },

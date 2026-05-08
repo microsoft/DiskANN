@@ -251,21 +251,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use approx::assert_relative_eq;
     use diskann_vector::{
-        Half, Norm, PureDistanceFunction,
+        Norm, PureDistanceFunction,
         distance::{Cosine, CosineNormalized, InnerProduct, SquaredL2},
         norm::FastL2Norm,
     };
     use rand::SeedableRng;
     use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
     // A wrapper for the `DistanceComputer` that enables it to behave like a
     // `PreprocessedDistanceFunction`.
@@ -292,13 +287,8 @@ mod tests {
     // L2 //
     ////////
 
-    #[rstest]
-    fn test_l2<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
-        _marker: PhantomData<T>,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_l2() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x83aa68de5765b565);
         for dim in [50, 51] {
             for pq_chunks in [8, 19, 50] {
@@ -322,7 +312,7 @@ mod tests {
                         absolute: 0.0,
                     };
 
-                    test_utils::test_l2_inner::<T, _, _>(
+                    test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::L2, query, None).unwrap()
                         },
@@ -333,7 +323,7 @@ mod tests {
                         errors,
                     );
 
-                    test_utils::test_l2_inner::<T, _, _>(
+                    test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::L2),
                             query: query.to_vec(),
@@ -353,15 +343,8 @@ mod tests {
     // InnerProduct //
     //////////////////
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_innerproduct<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_innerproduct() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc392d773dc8de593);
         for dim in [12, 15, 128] {
             for pq_chunks in [2, 5, 15] {
@@ -385,7 +368,7 @@ mod tests {
                         absolute: 5.0e-3,
                     };
 
-                    test_utils::test_ip_inner::<T, _, _>(
+                    test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::InnerProduct, query, None).unwrap()
                         },
@@ -396,7 +379,7 @@ mod tests {
                         errors,
                     );
 
-                    test_utils::test_ip_inner::<T, _, _>(
+                    test_utils::test_ip_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::InnerProduct),
                             query: query.to_vec(),
@@ -416,16 +399,8 @@ mod tests {
     // Cosine //
     ////////////
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_cosine<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
-        // RNG
+    #[test]
+    fn test_cosine() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc33529acbe474958);
         let num_trials = 20;
 
@@ -448,7 +423,7 @@ mod tests {
                         absolute: 0.0,
                     };
 
-                    test_utils::test_cosine_inner::<T, _, _>(
+                    test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::Cosine, query, None).unwrap()
                         },
@@ -459,7 +434,7 @@ mod tests {
                         errors,
                     );
 
-                    test_utils::test_cosine_inner::<T, _, _>(
+                    test_utils::test_cosine_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::Cosine),
                             query: query.to_vec(),

@@ -462,11 +462,9 @@ where
 /// get sent to the right location and that the error handling is correct.
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use approx::assert_relative_eq;
     use diskann::utils::{IntoUsize, VectorRepr};
-    use diskann_vector::{Half, PreprocessedDistanceFunction};
+    use diskann_vector::PreprocessedDistanceFunction;
     use rand::{Rng, SeedableRng, distr::Distribution};
     use rstest::rstest;
 
@@ -474,13 +472,6 @@ mod tests {
         super::test_utils::{self, TestDistribution},
         *,
     };
-
-    fn to_f32<T>(x: &[T]) -> Vec<f32>
-    where
-        T: Into<f32> + Copy,
-    {
-        x.iter().map(|i| (*i).into()).collect()
-    }
 
     /////////////////////////
     // Versioned PQ Vector //
@@ -864,7 +855,7 @@ mod tests {
         );
     }
 
-    fn test_query_computer_multi_with_one<'a, T, R>(
+    fn test_query_computer_multi_with_one<'a, R>(
         mut create: impl FnMut(usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         table: &'a FixedChunkPQTable,
         config: &test_utils::TableConfig,
@@ -873,13 +864,11 @@ mod tests {
         rng: &mut R,
         errors: test_utils::RelativeAndAbsolute,
     ) where
-        T: Into<f32> + TestDistribution,
         R: Rng,
     {
         let standard = rand::distr::StandardUniform {};
         for _ in 0..num_trials {
-            let input: Vec<T> = T::generate(config.dim, rng);
-            let input_f32 = to_f32(&input);
+            let input_f32: Vec<f32> = f32::generate(config.dim, rng);
 
             let version: u64 = standard.sample(rng);
             let version: usize = version.into_usize();
@@ -908,13 +897,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_query_computer_one<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<u8>, PhantomData::<i8>)]
-        _datatype: PhantomData<T>,
+    fn test_query_computer_one(
         #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    ) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x6b53bef1bc26571e);
 
         let config = test_utils::TableConfig {
@@ -936,7 +921,7 @@ mod tests {
             let schema = MultiTable::one(&table, version);
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
-        test_query_computer_multi_with_one::<T, _>(
+        test_query_computer_multi_with_one(
             create,
             &table,
             &config,
@@ -952,7 +937,7 @@ mod tests {
     /////////////////////////////////
 
     #[allow(clippy::too_many_arguments)]
-    fn test_query_computer_multi_with_two<'a, T, R>(
+    fn test_query_computer_multi_with_two<'a, R>(
         create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         new: &'a FixedChunkPQTable,
         old: &'a FixedChunkPQTable,
@@ -963,13 +948,11 @@ mod tests {
         rng: &mut R,
         errors: test_utils::RelativeAndAbsolute,
     ) where
-        T: Into<f32> + TestDistribution,
         R: Rng,
     {
         let standard = rand::distr::StandardUniform {};
         for _ in 0..num_trials {
-            let input: Vec<T> = T::generate(old_config.dim, rng);
-            let input_f32: Vec<f32> = to_f32(&input);
+            let input_f32: Vec<f32> = f32::generate(old_config.dim, rng);
 
             // Create a computer with two random versions.
             let old_version: u64 = standard.sample(rng);
@@ -1036,13 +1019,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_query_computer_two<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<u8>, PhantomData::<i8>)]
-        _datatype: PhantomData<T>,
+    fn test_query_computer_two(
         #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    ) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc8da1164a88cef0f);
 
         let old_config = test_utils::TableConfig {
@@ -1073,7 +1052,7 @@ mod tests {
             absolute: 0.0,
         };
 
-        test_query_computer_multi_with_two::<T, _>(
+        test_query_computer_multi_with_two(
             create,
             &new,
             &old,

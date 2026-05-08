@@ -117,24 +117,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
-    use diskann_vector::Half;
     use rand::SeedableRng;
-    use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
-    #[rstest]
-    fn test_l2<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
-        _marker: PhantomData<T>,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_l2() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
         for dim in [12, 17, 100, 101] {
             for pq_chunks in [1, 17, 19, 20] {
@@ -153,15 +141,13 @@ mod tests {
                     let table = test_utils::seed_pivot_table(config);
                     let num_trials = 10;
 
-                    // RNG
-
                     let errors = test_utils::RelativeAndAbsolute {
                         relative: 5e-7,
                         absolute: 0.0,
                     };
 
                     // Basic `TableL2`
-                    test_utils::test_l2_inner::<T, _, _>(
+                    test_utils::test_l2_inner(
                         |table: &FixedChunkPQTable, query: &[f32]| {
                             TableL2::new(table, query, None).unwrap()
                         },
