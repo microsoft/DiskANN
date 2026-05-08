@@ -38,11 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p collected
-
-          # List successful runs of build-release.yml from the last 30 days
           SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
-
-          echo "Fetching runs since $SINCE ..."
 
           gh api --paginate \
             "repos/${{ github.repository }}/actions/workflows/build-release.yml/runs?status=success&created=>=$SINCE&per_page=100" \
@@ -56,165 +52,36 @@ jobs:
           fi
 
           echo "Found $(wc -l < runs.tsv) runs"
-
-          # For each run, download the build-stats artifact and build metadata
           echo '[]' > collected/all_runs.json
 
           while IFS=$'\t' read -r run_id created_at head_sha; do
-            echo "Processing run $run_id ($created_at) ..."
-            ARTIFACT_DIR="collected/$run_id"
-            mkdir -p "$ARTIFACT_DIR"
-
-            # Download build-stats artifact
-            if ! gh run download "$run_id" \
-                --repo "${{ github.repository }}" \
-                --name build-stats \
-                --dir "$ARTIFACT_DIR/build-stats" 2>/dev/null; then
-              echo "  ::warning::Could not download build-stats for run $run_id (artifact may have expired)"
-              rm -rf "$ARTIFACT_DIR"
+            dir="collected/$run_id/build-stats"
+            if ! gh run download "$run_id" --repo "${{ github.repository }}" \
+                --name build-stats --dir "$dir" 2>/dev/null; then
+              echo "::warning::Skipping run $run_id (artifact expired)"
               continue
             fi
-            echo "  Downloaded build-stats for run $run_id"
-
-            # Build a metadata record and append to collected data
             python3 -c "
           import json, sys
           from pathlib import Path
-
-          base = Path(sys.argv[1]) / 'build-stats'
-          record = {
-              'run_id': int(sys.argv[2]),
-              'created_at': sys.argv[3],
-              'head_sha': sys.argv[4],
-          }
-
-          bt = base / 'build-times.json'
-          if bt.exists():
-              record['build_times'] = json.loads(bt.read_text())
-
-          bs = base / 'binary-sizes.json'
-          if bs.exists():
-              record['binary_sizes'] = json.loads(bs.read_text())
-
-          cb = base / 'cargo-bloat.txt'
-          if cb.exists():
-              record['cargo_bloat'] = cb.read_text()
-
-          all_file = Path('collected/all_runs.json')
-          data = json.loads(all_file.read_text())
+          base = Path(sys.argv[1])
+          record = {'run_id': int(sys.argv[2]), 'created_at': sys.argv[3], 'head_sha': sys.argv[4]}
+          for name, key in [('build-times.json','build_times'),('binary-sizes.json','binary_sizes'),('cargo-bloat.txt','cargo_bloat')]:
+              p = base / name
+              if p.exists():
+                  record[key] = json.loads(p.read_text()) if name.endswith('.json') else p.read_text()
+          all_f = Path('collected/all_runs.json')
+          data = json.loads(all_f.read_text())
           data.append(record)
-          all_file.write_text(json.dumps(data))
-          " "$ARTIFACT_DIR" "$run_id" "$created_at" "$head_sha"
-
+          all_f.write_text(json.dumps(data))
+          " "$dir" "$run_id" "$created_at" "$head_sha"
           done < runs.tsv
 
-          COUNT=$(python3 -c "import json; print(len(json.loads(open('collected/all_runs.json').read())))")
-          echo "Collected data for $COUNT runs"
-
-      - name: Generate data file for report
+      - name: Generate report
         run: |
           mkdir -p report
-          python3 - <<'PYEOF'
-          import json
-          from pathlib import Path
-          from datetime import datetime
-
-          data = json.loads(Path("collected/all_runs.json").read_text())
-          data.sort(key=lambda r: r.get("created_at", ""))
-
-          dates = []
-          total_build_times = []
-          crate_times = {}
-          total_binary_sizes = []
-          per_binary = {}
-
-          for run in data:
-              dt_str = run.get("created_at", "")
-              dates.append(dt_str[:10] if dt_str else "?")
-
-              bt = run.get("build_times", {})
-              total_build_times.append(bt.get("total_wall_time_s", 0))
-
-              units = bt.get("units", [])
-              seen_crates = set()
-              for u in units:
-                  name = u.get("name", "")
-                  if name not in crate_times:
-                      crate_times[name] = [None] * (len(dates) - 1)
-                  crate_times[name].append(u.get("duration", 0))
-                  seen_crates.add(name)
-              for name in crate_times:
-                  if name not in seen_crates:
-                      crate_times[name].append(None)
-
-              bs = run.get("binary_sizes", [])
-              total_binary_sizes.append(sum(b.get("bytes", 0) for b in bs))
-
-              seen_bins = set()
-              for b in bs:
-                  bname = b.get("name", "")
-                  if bname not in per_binary:
-                      per_binary[bname] = [None] * (len(dates) - 1)
-                  per_binary[bname].append(b.get("bytes", 0))
-                  seen_bins.add(bname)
-              for bname in per_binary:
-                  if bname not in seen_bins:
-                      per_binary[bname].append(None)
-
-          # Top 15 crates by average duration
-          def avg(lst):
-              vals = [v for v in lst if v is not None]
-              return sum(vals) / len(vals) if vals else 0
-
-          top_crates = sorted(crate_times.keys(), key=lambda c: avg(crate_times[c]), reverse=True)[:15]
-
-          # Latest cargo bloat
-          latest_bloat = ""
-          for run in reversed(data):
-              if run.get("cargo_bloat"):
-                  latest_bloat = run["cargo_bloat"]
-                  break
-
-          # Latest run details
-          latest_run = None
-          if data:
-              last = data[-1]
-              bt = last.get("build_times", {})
-              latest_run = {
-                  "created_at": last.get("created_at", "?"),
-                  "head_sha": last.get("head_sha", "?")[:12],
-                  "total_time_display": bt.get("total_time_display", "?"),
-                  "units": bt.get("units", []),
-                  "binary_sizes": last.get("binary_sizes", []),
-              }
-
-          # Assemble the data object
-          build_data = {
-              "generated": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-              "dates": dates,
-              "total_build_times": total_build_times,
-              "total_binary_sizes_mib": [s / 1048576 for s in total_binary_sizes],
-              "crate_datasets": [
-                  {"label": name, "data": crate_times[name]}
-                  for name in top_crates
-              ],
-              "binary_datasets": [
-                  {"label": name, "data": [b / 1048576 if b is not None else None for b in per_binary[name]]}
-                  for name in sorted(per_binary.keys())
-              ],
-              "latest_cargo_bloat": latest_bloat,
-              "latest_run": latest_run,
-          }
-
-          # Write as a JS file that assigns to a global constant
-          js_content = f"const BUILD_DATA = {json.dumps(build_data, indent=2)};\n"
-          Path("report/build-stats-data.js").write_text(js_content)
-          print(f"Generated build-stats-data.js ({len(data)} runs)")
-          PYEOF
-
-      - name: Assemble report
-        run: |
-          cp .github/scripts/build-stats-report.html report/build-stats-report.html
+          python3 .github/scripts/generate-stats-data.py collected report
+          cp .github/scripts/build-stats-report.html report/
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -222,3 +89,4 @@ jobs:
           name: build-stats-report
           path: report/
           retention-days: 90
+

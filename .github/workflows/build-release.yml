@@ -42,7 +42,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # Only cache registry/git — we cargo clean for cold build timings.
           cache-targets: false
 
       - name: Install cargo-bloat
@@ -51,124 +50,20 @@ jobs:
           tool: cargo-bloat
 
       - name: Build release with timings
-        run: |
-          set -euxo pipefail
-          cargo clean
-          cargo build --workspace --release --locked --timings
+        run: cargo clean && cargo build --workspace --release --locked --timings
 
-      - name: Upload cargo-timing report
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-timing
-          path: |
-            target/cargo-timings/cargo-timing.html
-          retention-days: 90
-
-      - name: Parse and display build times
-        run: |
-          python3 - <<'PYEOF'
-          import re, json, sys
-          from pathlib import Path
-
-          html_path = Path("target/cargo-timings/cargo-timing.html")
-          if not html_path.exists():
-              print("::warning::cargo-timing.html not found")
-              sys.exit(0)
-
-          html = html_path.read_text()
-
-          # Extract wall-clock duration (seconds)
-          m = re.search(r'DURATION\s*=\s*(\d+(?:\.\d+)?)', html)
-          total_s = float(m.group(1)) if m else 0
-
-          # Extract human-readable total time from summary table
-          m2 = re.search(r'Total time:</td><td>([^<]+)</td>', html)
-          total_display = m2.group(1).strip() if m2 else f"{total_s:.1f}s"
-
-          # Extract per-unit data from the embedded JSON
-          m = re.search(r'const UNIT_DATA\s*=\s*(\[.*?\]);', html, re.DOTALL)
-          if not m:
-              print("::warning::Could not parse UNIT_DATA from timing report")
-              sys.exit(0)
-
-          units = json.loads(m.group(1))
-
-          # Sort by duration descending
-          units_sorted = sorted(units, key=lambda u: u.get("duration", 0), reverse=True)
-
-          # Print markdown table to console
-          print(f"\n### Release Build Times (Total wall time: {total_display})\n")
-          print("| # | Crate | Version | Duration |")
-          print("|---|-------|---------|----------|")
-          for i, u in enumerate(units_sorted, 1):
-              name = u.get("name", "?")
-              version = u.get("version", "?")
-              duration = u.get("duration", 0)
-              print(f"| {i} | {name} | {version} | {duration:.1f}s |")
-
-          # Write structured JSON artifact
-          stats = {
-              "total_wall_time_s": total_s,
-              "total_time_display": total_display,
-              "units": [
-                  {
-                      "name": u["name"],
-                      "version": u.get("version", ""),
-                      "duration": u.get("duration", 0),
-                  }
-                  for u in units_sorted
-              ],
-          }
-          Path("build-times.json").write_text(json.dumps(stats, indent=2))
-          PYEOF
-
-      - name: Log binary sizes
-        run: |
-          set +x
-          echo ""
-          echo "### Release Binary Sizes"
-          echo ""
-          echo "| Binary | Size (bytes) | Size |"
-          echo "|--------|-------------|------|"
-
-          python3 - <<'PYEOF'
-          import json, os
-          from pathlib import Path
-
-          binaries = []
-          release_dir = Path("target/release")
-          for p in sorted(release_dir.iterdir()):
-              if not p.is_file():
-                  continue
-              # On Linux, check executable bit and skip non-ELF extensions
-              if p.suffix in (".d", ".rlib", ".rmeta", ".o", ".dwp"):
-                  continue
-              if not os.access(p, os.X_OK):
-                  continue
-              size = p.stat().st_size
-              if size < 1024:
-                  continue  # skip tiny files (build scripts, etc.)
-              if size > 1048576:
-                  human = f"{size / 1048576:.1f} MiB"
-              elif size > 1024:
-                  human = f"{size / 1024:.1f} KiB"
-              else:
-                  human = f"{size} B"
-              print(f"| {p.name} | {size} | {human} |")
-              binaries.append({"name": p.name, "bytes": size})
-
-          Path("binary-sizes.json").write_text(json.dumps(binaries, indent=2))
-          PYEOF
+      - name: Parse and display build stats
+        run: python3 .github/scripts/parse-build-stats.py
 
       - name: Run cargo bloat
-        run: |
-          cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
+        run: cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
 
       - name: Upload build stats
         uses: actions/upload-artifact@v4
         with:
           name: build-stats
           path: |
+            target/cargo-timings/cargo-timing.html
             build-times.json
             binary-sizes.json
             cargo-bloat.txt

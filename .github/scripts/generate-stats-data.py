@@ -1,0 +1,100 @@
+"""Aggregate build-stats artifacts into a JS data file for the HTML report."""
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def main():
+    collected_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("collected")
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("report")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    data = json.loads((collected_dir / "all_runs.json").read_text())
+    data.sort(key=lambda r: r.get("created_at", ""))
+
+    dates = []
+    total_build_times = []
+    crate_times: dict[str, list] = {}
+    total_binary_sizes = []
+    per_binary: dict[str, list] = {}
+
+    for run in data:
+        dt_str = run.get("created_at", "")
+        dates.append(dt_str[:10] if dt_str else "?")
+
+        bt = run.get("build_times", {})
+        total_build_times.append(bt.get("total_wall_time_s", 0))
+
+        # Per-crate build times
+        units = bt.get("units", [])
+        seen = set()
+        for u in units:
+            name = u.get("name", "")
+            if name not in crate_times:
+                crate_times[name] = [None] * (len(dates) - 1)
+            crate_times[name].append(u.get("duration", 0))
+            seen.add(name)
+        for name in crate_times:
+            if name not in seen:
+                crate_times[name].append(None)
+
+        # Binary sizes
+        bs = run.get("binary_sizes", [])
+        total_binary_sizes.append(sum(b.get("bytes", 0) for b in bs))
+
+        seen_bins = set()
+        for b in bs:
+            bname = b.get("name", "")
+            if bname not in per_binary:
+                per_binary[bname] = [None] * (len(dates) - 1)
+            per_binary[bname].append(b.get("bytes", 0))
+            seen_bins.add(bname)
+        for bname in per_binary:
+            if bname not in seen_bins:
+                per_binary[bname].append(None)
+
+    # Top 15 crates by average duration
+    def avg(lst):
+        vals = [v for v in lst if v is not None]
+        return sum(vals) / len(vals) if vals else 0
+
+    top_crates = sorted(crate_times.keys(), key=lambda c: avg(crate_times[c]), reverse=True)[:15]
+
+    # Latest cargo bloat
+    latest_bloat = next((r["cargo_bloat"] for r in reversed(data) if r.get("cargo_bloat")), "")
+
+    # Latest run details
+    latest_run = None
+    if data:
+        last = data[-1]
+        bt = last.get("build_times", {})
+        latest_run = {
+            "created_at": last.get("created_at", "?"),
+            "head_sha": last.get("head_sha", "?")[:12],
+            "total_time_display": bt.get("total_time_display", "?"),
+            "units": bt.get("units", []),
+            "binary_sizes": last.get("binary_sizes", []),
+        }
+
+    build_data = {
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "dates": dates,
+        "total_build_times": total_build_times,
+        "total_binary_sizes_mib": [s / 1048576 for s in total_binary_sizes],
+        "crate_datasets": [{"label": name, "data": crate_times[name]} for name in top_crates],
+        "binary_datasets": [
+            {"label": name, "data": [b / 1048576 if b is not None else None for b in per_binary[name]]}
+            for name in sorted(per_binary.keys())
+        ],
+        "latest_cargo_bloat": latest_bloat,
+        "latest_run": latest_run,
+    }
+
+    js_path = output_dir / "build-stats-data.js"
+    js_path.write_text(f"const BUILD_DATA = {json.dumps(build_data, indent=2)};\n")
+    print(f"Generated {js_path} ({len(data)} runs)")
+
+
+if __name__ == "__main__":
+    main()
