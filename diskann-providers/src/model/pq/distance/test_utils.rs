@@ -185,7 +185,7 @@ where
 /// Next, if OPQ is used, we need to ensure that the matrix multiplication is applied
 /// to the query vector before we can obtain expected results.
 pub(super) fn test_l2_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
@@ -198,11 +198,12 @@ pub(super) fn test_l2_inner<'a, T, F, R>(
 {
     for _ in 0..num_trials {
         let input: Vec<T> = T::generate(config.dim, rng);
-        let mut input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
+        let input_query: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
+        let mut input_f32 = input_query.clone();
 
         table.preprocess_query(&mut input_f32);
 
-        let computer = create(table, &input);
+        let computer = create(table, &input_query);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =
@@ -223,7 +224,7 @@ pub(super) fn test_l2_inner<'a, T, F, R>(
 }
 
 pub(super) fn test_ip_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
@@ -238,7 +239,7 @@ pub(super) fn test_ip_inner<'a, T, F, R>(
         let input: Vec<T> = T::generate(config.dim, rng);
         let input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
 
-        let computer = create(table, &input);
+        let computer = create(table, &input_f32);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =
@@ -259,7 +260,7 @@ pub(super) fn test_ip_inner<'a, T, F, R>(
 }
 
 pub(super) fn test_cosine_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
@@ -274,7 +275,7 @@ pub(super) fn test_cosine_inner<'a, T, F, R>(
         let input: Vec<T> = T::generate(config.dim, rng);
         let input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
 
-        let computer = create(table, &input);
+        let computer = create(table, &input_f32);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =

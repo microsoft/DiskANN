@@ -5,7 +5,7 @@
 mod fixed_chunk_pq_table;
 pub use fixed_chunk_pq_table::{
     FixedChunkPQTable, compute_pq_distance, compute_pq_distance_for_pq_coordinates,
-    direct_distance_impl, pq_dist_lookup_single,
+    pq_dist_lookup_single,
 };
 
 mod pq_construction;

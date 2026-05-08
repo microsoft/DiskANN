@@ -48,14 +48,12 @@ impl<T> TableIP<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
 {
-    pub(crate) fn new<U>(
+    /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
+    pub(crate) fn new(
         parent: T,
-        query: &[U],
+        query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
-    ) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    ) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent, pool);
         object.populate(query)?;
         Ok(object)
@@ -73,17 +71,10 @@ where
         }
     }
 
-    fn populate<U: Into<f32> + Copy>(&mut self, query: &[U]) -> ANNResult<()> {
-        // Ensure that the query has the expected length.
-        //
-        // Alignment means that the size of `query` gets increased ...
-        // This makes is VERY hard to do error checking on dimension propagation.
-        assert!(self.parent.get_dim() <= query.len());
-        let local_query: Vec<f32> = query.iter().map(|x| (*x).into()).collect();
-
+    fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
         // Compute the partial distances into the lookup-table.
         self.parent
-            .populate_chunk_inner_products(&local_query, &mut self.lookup_table)
+            .populate_chunk_inner_products(query, &mut self.lookup_table)
     }
 
     /// Compute the distance between a PQ code that the query provided to the most recent
@@ -163,8 +154,8 @@ mod tests {
                     };
 
                     // Basic `TableIP`
-                    test_utils::test_ip_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                    test_utils::test_ip_inner::<T, _, _>(
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             TableIP::new(table, query, None).unwrap()
                         },
                         &table,

@@ -31,10 +31,8 @@ impl<T> DirectCosine<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
 {
-    pub(crate) fn new<U>(parent: T, query: &[U]) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
+    pub(crate) fn new(parent: T, query: &[f32]) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent);
         object.populate(query)?;
         Ok(object)
@@ -47,24 +45,10 @@ where
         }
     }
 
-    fn populate<U>(&mut self, query: &[U]) -> ANNResult<()>
-    where
-        U: Into<f32> + Copy,
-    {
-        // Make sure the query we are getting is the expected length.
-        //
-        // Alignment means that the size of `query` gets increased ...
-        // This makes is VERY hard to do error checking on dimension propagation.
-        assert!(self.query.len() <= query.len());
-
-        // Preprocessing currently just converts the query to f32 so we don't have
-        // to do that every time we want to compute a distance.
-        //
-        // If the query is *already* f32, then we can skip this memcpy and use the original
-        // query for distance computations.
-        std::iter::zip(self.query.iter_mut(), query.iter()).for_each(|(dst, src)| {
-            *dst = (*src).into();
-        });
+    fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
+        // Stash a copy of the query so subsequent `evaluate` calls can reuse it
+        // without converting on every call.
+        self.query.copy_from_slice(query);
         Ok(())
     }
 
@@ -142,8 +126,8 @@ mod tests {
                     };
 
                     // DirectCosine
-                    test_utils::test_cosine_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                    test_utils::test_cosine_inner::<T, _, _>(
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             DirectCosine::new(table, query).unwrap()
                         },
                         &table,

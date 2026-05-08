@@ -370,10 +370,7 @@ where
     I: PQVersion,
 {
     /// Construct a new `MultiQueryComputer` with the requested metric and query.
-    pub fn new<U>(table: MultiTable<T, I>, metric: Metric, query: &[U]) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    pub fn new(table: MultiTable<T, I>, metric: Metric, query: &[f32]) -> ANNResult<Self> {
         let s = match table {
             MultiTable::One { table, version } => Self::One {
                 computer: { QueryComputer::new(table, metric, query, None)? },
@@ -868,7 +865,7 @@ mod tests {
     }
 
     fn test_query_computer_multi_with_one<'a, T, R>(
-        mut create: impl FnMut(usize, &[T]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+        mut create: impl FnMut(usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         table: &'a FixedChunkPQTable,
         config: &test_utils::TableConfig,
         reference: &<f32 as VectorRepr>::Distance,
@@ -888,7 +885,7 @@ mod tests {
             let version: usize = version.into_usize();
             let invalid_version = version.wrapping_add(1);
 
-            let computer = create(version, &input);
+            let computer = create(version, &input_f32);
 
             assert_eq!(
                 computer.versions(),
@@ -935,11 +932,11 @@ mod tests {
             absolute: 0.0,
         };
 
-        let create = |version: usize, query: &[T]| {
+        let create = |version: usize, query: &[f32]| {
             let schema = MultiTable::one(&table, version);
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
-        test_query_computer_multi_with_one(
+        test_query_computer_multi_with_one::<T, _>(
             create,
             &table,
             &config,
@@ -956,7 +953,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn test_query_computer_multi_with_two<'a, T, R>(
-        create: impl Fn(usize, usize, &[T]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+        create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         new: &'a FixedChunkPQTable,
         old: &'a FixedChunkPQTable,
         new_config: &test_utils::TableConfig,
@@ -990,7 +987,7 @@ mod tests {
             let new_version = new_version.into_usize();
             let invalid_version = invalid_version.into_usize();
 
-            let computer = create(new_version, old_version, &input);
+            let computer = create(new_version, old_version, &input_f32);
 
             assert_eq!(
                 computer.versions(),
@@ -1066,7 +1063,7 @@ mod tests {
         let new = test_utils::seed_pivot_table(new_config);
         let num_trials = 20;
 
-        let create = |new_version: usize, old_version: usize, query: &[T]| {
+        let create = |new_version: usize, old_version: usize, query: &[f32]| {
             let schema = MultiTable::two(&new, &old, new_version, old_version).unwrap();
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
@@ -1076,7 +1073,7 @@ mod tests {
             absolute: 0.0,
         };
 
-        test_query_computer_multi_with_two(
+        test_query_computer_multi_with_two::<T, _>(
             create,
             &new,
             &old,

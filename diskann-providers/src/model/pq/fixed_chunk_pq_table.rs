@@ -32,7 +32,7 @@ pub struct FixedChunkPQTable {
 // These free functions use internals of the `FixedChunkPQTable`.
 //
 // We should clean up the API in the FFI.
-pub fn direct_distance_impl<T>(
+fn direct_distance_impl<T>(
     pq_table: &[f32],
     chunk_offsets: &[usize],
     dim: usize,
@@ -42,6 +42,7 @@ pub fn direct_distance_impl<T>(
 where
     T: distance::simd::ResumableSIMDSchema<f32, f32, FinalReturn = f32>,
 {
+    debug_assert_eq!(query_vec.len(), dim);
     let mut accumulator = distance::simd::Resumable::new(T::init(ARCH));
     let mut start = chunk_offsets[0];
     let num_pq_chunks = chunk_offsets.len() - 1;
@@ -167,12 +168,13 @@ impl FixedChunkPQTable {
     /// Shifting the query according to mean or the whole corpus. The output is a rotated query vector,
     /// which is later used to calculate the distance between each query chunk and each centroid using populate_chunk_distances.
     pub fn preprocess_query(&self, rotated_query_vec: &mut [f32]) {
+        debug_assert_eq!(rotated_query_vec.len(), self.centroids.len());
         for (query, &centroid) in rotated_query_vec.iter_mut().zip(self.centroids.iter()) {
             *query -= centroid;
         }
     }
 
-    pub fn populate_chunk_distances_impl<T>(
+    fn populate_chunk_distances_impl<T>(
         &self,
         rotated_query_vec: &[f32],
         aligned_pq_table_dist_scratch: &mut [f32],
@@ -182,6 +184,8 @@ impl FixedChunkPQTable {
     {
         let num_centers = self.get_num_centers();
         let num_chunks = self.get_num_chunks();
+        let dim = self.get_dim();
+        debug_assert_eq!(rotated_query_vec.len(), dim);
         if aligned_pq_table_dist_scratch.len() < num_chunks * num_centers {
             return Err(ANNError::log_pq_error(
                 "aligned_pq_table_dist_scratch.len() should at least be num_pq_chunks * num_centers",
@@ -190,7 +194,6 @@ impl FixedChunkPQTable {
 
         let offsets: &[usize] = self.table.view_offsets().into();
         let table: &[f32] = self.table.view_pivots().into();
-        let dim = self.get_dim();
 
         for centroid_index in 0..num_centers {
             let table_start = dim * centroid_index;
@@ -277,7 +280,7 @@ impl FixedChunkPQTable {
     /// Calculate the distance between query and given centroid by inner product
     /// * `query_vec` - query vector: 1 * dim
     /// * `base_vec` - given centroid array: 1 * num_pq_chunks
-    pub fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
+    fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
         direct_distance_impl::<distance::simd::ResumableIP<diskann_wide::arch::Current>>(
             self.table.view_pivots().as_slice(),
             self.table.view_offsets().as_slice(),
