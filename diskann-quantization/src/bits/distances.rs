@@ -565,18 +565,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 /// # Implementation Notes
 ///
 /// This implementation is optimized for x86 with the AVX-512 vector extension.
-/// It is structurally identical to the V3 4-bit `SquaredL2` impl above, scaled to 512-bit
-/// registers (16 u32 lanes × 4 nibble positions). **If you fix a correctness bug here,
-/// fix it in the V3 impl as well.**
 ///
 /// We load data as `u32x16`, shift and mask to extract 4-bit nibbles at 16-bit granularity
 /// (`0x000f000f` mask), reinterpret as `i16x32`, compute differences, and use
-/// `_mm512_madd_epi16` via `dot_simd` to accumulate squared differences into `i32x16`.
-///
-/// We perform shifts on the `u32x16` view rather than the `i16x32` view because the
-/// `diskann_wide` type abstractions provide a native shift on `u32x16` but not on
-/// `i16x32`. The reinterpret-after-shift is well-defined because the same shift amount
-/// is applied uniformly to all lanes.
+/// `_mm512_madd_epi16` via `dot_simd` to accumulate squared differences into 4 independent
+/// `i32x16` accumulators. Reinterpreting after a shift is well-defined because the same
+/// shift amount is applied uniformly to all lanes.
 #[cfg(target_arch = "x86_64")]
 impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
     for SquaredL2
@@ -592,6 +586,7 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V4>::i32x16);
         diskann_wide::alias!(u32s = <diskann_wide::arch::x86_64::V4>::u32x16);
+        diskann_wide::alias!(u8s = <diskann_wide::arch::x86_64::V4>::u8x64);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V4>::i16x32);
 
         let px_u32: *const u32 = x.as_ptr().cast();
@@ -600,16 +595,19 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
         let mut i = 0;
         let mut s: u32 = 0;
 
-        // The number of 32-bit blocks over the underlying slice.
-        let blocks = len / 8;
+        // Number of u32 blocks (rounded up). Each u32 holds 8 nibbles = 8 four-bit values.
+        // We use `div_ceil` so a partial trailing byte (1..=7 stray nibbles) is still
+        // covered by the predicated `u8` load below; the scalar fallback only ever needs to
+        // handle at most a single dangling nibble.
+        let blocks = len.div_ceil(8);
         if i < blocks {
             let mut s0 = i32s::default(arch);
             let mut s1 = i32s::default(arch);
             let mut s2 = i32s::default(arch);
             let mut s3 = i32s::default(arch);
             let mask = u32s::splat(arch, 0x000f000f);
-            while i + 16 <= blocks {
-                // SAFETY: We have checked that `i + 16 <= blocks` which means the
+            while i + 16 < blocks {
+                // SAFETY: We have checked that `i + 16 < blocks` which means the
                 // 16-element range `px_u32.add(i)..px_u32.add(i + 16)` (in `u32` units)
                 // is dereferenceable.
                 //
@@ -644,20 +642,30 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
                 i += 16;
             }
 
-            let remainder = blocks - i;
+            // Compute the number of bytes still to process:
+            //   * `len / 2`  — total full bytes in the input (2 nibbles/byte).
+            //   * `4 * i`    — bytes already consumed (4 bytes per u32 × `i` u32s).
+            //
+            // The loop invariant `i + 16 < blocks` (with `blocks = len.div_ceil(8)`)
+            // guarantees `4 * i < len / 2 + small`, so this subtraction is safe.
+            let remainder = len / 2 - 4 * i;
 
             if remainder > 0 {
-                // SAFETY: `remainder` values of type `u32` are dereferenceable starting
-                // at `px_u32.add(i)` (i.e. element offset `i` in `u32` units).
+                // SAFETY: `remainder` bytes are dereferenceable starting at
+                // `px_u32.add(i).cast::<u8>()` (i.e. byte offset `4 * i` from `px_u32`).
                 //
                 // The predicated load is guaranteed not to access memory beyond the
-                // first `remainder` lanes and has no alignment requirements.
-                let vx = unsafe { u32s::load_simd_first(arch, px_u32.add(i), remainder) };
+                // first `remainder` bytes and has no alignment requirements.
+                let vx =
+                    unsafe { u8s::load_simd_first(arch, px_u32.add(i).cast::<u8>(), remainder) };
+                let vx: u32s = vx.reinterpret_simd();
 
                 // SAFETY: The same logic applies to `y` because:
                 // 1. It has the same type as `x`.
                 // 2. We've verified that it has the same length as `x`.
-                let vy = unsafe { u32s::load_simd_first(arch, py_u32.add(i), remainder) };
+                let vy =
+                    unsafe { u8s::load_simd_first(arch, py_u32.add(i).cast::<u8>(), remainder) };
+                let vy: u32s = vy.reinterpret_simd();
 
                 let wx: i16s = (vx & mask).reinterpret_simd();
                 let wy: i16s = (vy & mask).reinterpret_simd();
@@ -678,36 +686,24 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
                 let wy: i16s = (vy >> 12 & mask).reinterpret_simd();
                 let d = wx - wy;
                 s3 = s3.dot_simd(d, d);
-
-                i += remainder;
             }
 
             s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
+            i = (4 * i) + remainder;
         }
 
-        // Convert blocks to indexes.
-        i *= 8;
+        // Convert bytes to nibble indexes.
+        i *= 2;
 
-        // At most 7 nibbles can dangle past the last full u32 block.
-        debug_assert!(len - i < 8);
-
-        // Deal with the remainder the slow way.
+        // Deal with the remainder the slow way (at most 1 element).
+        debug_assert!(len - i <= 1);
         if i != len {
-            // Outline the fallback routine to keep code-generation at this level cleaner.
-            #[inline(never)]
-            fn fallback(x: USlice<'_, 4>, y: USlice<'_, 4>, from: usize) -> u32 {
-                let mut s: i32 = 0;
-                for i in from..x.len() {
-                    // SAFETY: `i` is guaranteed to be less than `x.len()`.
-                    let ix = unsafe { x.get_unchecked(i) } as i32;
-                    // SAFETY: `i` is guaranteed to be less than `y.len()`.
-                    let iy = unsafe { y.get_unchecked(i) } as i32;
-                    let d = ix - iy;
-                    s += d * d;
-                }
-                s as u32
-            }
-            s += fallback(x, y, i);
+            // SAFETY: `i` is guaranteed to be less than `x.len()`.
+            let ix = unsafe { x.get_unchecked(i) } as i32;
+            // SAFETY: `i` is guaranteed to be less than `y.len()`.
+            let iy = unsafe { y.get_unchecked(i) } as i32;
+            let d = ix - iy;
+            s += (d * d) as u32;
         }
 
         Ok(MV::new(s))
@@ -1277,15 +1273,14 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 ///
 /// # Implementation Notes
 ///
-/// Unlike the V3 4-bit `InnerProduct` impl (which uses `_mm256_madd_epi16` over `i16` lanes
-/// and 4 shift positions), this is optimized around the `_mm512_dpbusd_epi32` VNNI
+/// This implementation is optimized around the AVX-512 VNNI `_mm512_dpbusd_epi32`
 /// instruction, which computes the pairwise dot product between vectors of 8-bit integers
-/// and accumulates groups of 4 with an `i32` accumulation vector.
+/// and accumulates groups of 4 into an `i32` accumulator.
 ///
 /// For 4-bit values, each byte holds 2 nibbles. We load data as `u32x16`, mask with
 /// `0x0f0f0f0f` to extract the low nibbles as bytes, and shift right by 4 then mask to
-/// extract the high nibbles. This gives us `u8x64` / `i8x64` operands for VNNI, requiring
-/// only 2 shift positions instead of 4 for the V3 `madd_epi16` approach.
+/// extract the high nibbles. This yields `u8x64` / `i8x64` operands for VNNI, requiring
+/// only 2 shift positions.
 ///
 /// Since AVX-512 does not have an 8-bit shift instruction, we load data as `u32x16`
 /// (which has a native shift) and bit-cast to `u8x64` as needed.
@@ -1317,9 +1312,6 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
         // We use `div_ceil` so a partial trailing byte (1..=7 stray nibbles) is still
         // covered by the predicated `u8` load below; the scalar fallback only ever needs to
         // handle at most a single dangling nibble.
-        //
-        // (The L2 kernel uses `len / 8` because its scalar fallback can handle up to 7
-        // dangling nibbles itself.)
         let blocks = len.div_ceil(8);
         if i < blocks {
             let mut s0 = i32s::default(arch);
@@ -2950,7 +2942,7 @@ mod tests {
             (Key::new(4, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
             (Key::new(4, X86_64_V3), Bounds::new(256, 150)),
-            (Key::new(4, X86_64_V4), Bounds::new(256, 150)),
+            (Key::new(4, X86_64_V4), Bounds::new(512, 300)),
             (Key::new(4, Neon), Bounds::new(64, 64)),
             (Key::new(5, Scalar), Bounds::new(64, 64)),
             (Key::new(5, X86_64_V3), Bounds::new(256, 96)),
