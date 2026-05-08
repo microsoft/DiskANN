@@ -54,8 +54,24 @@ pub enum ChunkOffsetError {
         start: usize,
         next_val: usize,
     },
-    #[error("num_chunks {num_chunks} must not exceed dim {dim}")]
-    TooManyChunks { num_chunks: usize, dim: usize },
+}
+
+/// Error returned by [`ChunkOffsets::partition`].
+#[derive(Error, Debug)]
+#[error("num_chunks {num_chunks} must not exceed dim {dim}")]
+pub struct PartitionError {
+    pub num_chunks: usize,
+    pub dim: usize,
+}
+
+/// Error returned by [`ChunkOffsetsView::partition_into`].
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum PartitionIntoError {
+    #[error("scratch must have a length of at least 2, found {0}")]
+    ScratchTooSmall(usize),
+    #[error(transparent)]
+    PartitionError(#[from] PartitionError),
 }
 
 impl<T> ChunkOffsetsBase<T>
@@ -214,16 +230,16 @@ impl ChunkOffsets {
     ///
     /// Returns an error if the requested partition is not valid (e.g.
     /// `num_chunks.get() > dim.get()`).
-    pub fn from_dim(dim: NonZeroUsize, num_chunks: NonZeroUsize) -> Result<Self, ChunkOffsetError> {
+    pub fn partition(dim: NonZeroUsize, num_chunks: NonZeroUsize) -> Result<Self, PartitionError> {
         if num_chunks.get() > dim.get() {
-            return Err(ChunkOffsetError::TooManyChunks {
+            return Err(PartitionError {
                 num_chunks: num_chunks.get(),
                 dim: dim.get(),
             });
         }
         let mut offsets = vec![0usize; num_chunks.get() + 1].into_boxed_slice();
         fill_chunk_offsets(dim, &mut offsets);
-        Self::new(offsets)
+        Ok(Self { dim, offsets })
     }
 }
 
@@ -231,27 +247,31 @@ impl<'a> ChunkOffsetsView<'a> {
     /// Fill the caller-owned `scratch` buffer with the partition for `dim`
     /// into `scratch.len() - 1` chunks and return a validated view borrowing it.
     ///
-    /// See [`ChunkOffsets::from_dim`] for the partitioning rule.
+    /// See [`ChunkOffsets::partition`] for the partitioning rule.
     ///
     /// Returns an error if `scratch.len() < 2` or if the requested partition is not
     /// valid (e.g. `scratch.len() - 1 > dim.get()`).
-    pub fn from_dim_into(
+    pub fn partition_into(
         dim: NonZeroUsize,
         scratch: &'a mut [usize],
-    ) -> Result<Self, ChunkOffsetError> {
+    ) -> Result<Self, PartitionIntoError> {
         if scratch.len() < 2 {
-            return Err(ChunkOffsetError::LengthNotAtLeastTwo(scratch.len()));
+            return Err(PartitionIntoError::ScratchTooSmall(scratch.len()));
         }
         let num_chunks = scratch.len() - 1;
         if num_chunks > dim.get() {
-            return Err(ChunkOffsetError::TooManyChunks {
+            return Err(PartitionError {
                 num_chunks,
                 dim: dim.get(),
-            });
+            }
+            .into());
         }
 
         fill_chunk_offsets(dim, scratch);
-        Self::new(scratch)
+        Ok(Self {
+            dim,
+            offsets: scratch,
+        })
     }
 }
 
@@ -500,36 +520,36 @@ mod tests {
         );
     }
 
-    //////////////////////////////
-    // from_dimensions builders //
-    //////////////////////////////
+    //////////////////////
+    // partition builders //
+    //////////////////////
 
     #[test]
-    fn from_dimensions_happy_path() {
+    fn partition_happy_path() {
         let nz = |x: usize| NonZeroUsize::new(x).unwrap();
 
         // Even split: 9 / 3 = 3 each.
-        let offsets = ChunkOffsets::from_dim(nz(9), nz(3)).unwrap();
+        let offsets = ChunkOffsets::partition(nz(9), nz(3)).unwrap();
         assert_eq!(offsets.as_slice(), &[0, 3, 6, 9]);
         assert_eq!(offsets.dim(), 9);
         assert_eq!(offsets.len(), 3);
 
         // Uneven split: 8 / 3 = 2 r 2 -> first two chunks get an extra element.
-        let offsets = ChunkOffsets::from_dim(nz(8), nz(3)).unwrap();
+        let offsets = ChunkOffsets::partition(nz(8), nz(3)).unwrap();
         assert_eq!(offsets.as_slice(), &[0, 3, 6, 8]);
 
         // Single chunk degenerate case.
-        let offsets = ChunkOffsets::from_dim(nz(5), nz(1)).unwrap();
+        let offsets = ChunkOffsets::partition(nz(5), nz(1)).unwrap();
         assert_eq!(offsets.as_slice(), &[0, 5]);
 
         // dimensions == num_pq_chunks: each chunk is size 1.
-        let offsets = ChunkOffsets::from_dim(nz(4), nz(4)).unwrap();
+        let offsets = ChunkOffsets::partition(nz(4), nz(4)).unwrap();
         assert_eq!(offsets.as_slice(), &[0, 1, 2, 3, 4]);
 
         // The view-into variant matches the owning constructor; num_chunks is
         // inferred from `scratch.len() - 1`.
         let mut scratch = [0usize; 4];
-        let view = ChunkOffsetsView::from_dim_into(nz(8), &mut scratch).unwrap();
+        let view = ChunkOffsetsView::partition_into(nz(8), &mut scratch).unwrap();
         assert_eq!(view.as_slice(), &[0, 3, 6, 8]);
         assert_eq!(view.dim(), 8);
         assert_eq!(view.len(), 3);
@@ -537,15 +557,15 @@ mod tests {
     }
 
     #[test]
-    fn from_dimensions_construction_errors() {
+    fn partition_construction_errors() {
         let nz = |x: usize| NonZeroUsize::new(x).unwrap();
 
         // num_chunks > dim -> TooManyChunks (caught explicitly before partitioning).
-        let err = ChunkOffsets::from_dim(nz(3), nz(5)).unwrap_err();
+        let err = ChunkOffsets::partition(nz(3), nz(5)).unwrap_err();
         assert!(
             matches!(
                 err,
-                ChunkOffsetError::TooManyChunks {
+                PartitionError {
                     num_chunks: 5,
                     dim: 3
                 }
@@ -553,20 +573,20 @@ mod tests {
             "expected TooManyChunks, got {err:?}"
         );
 
-        // Scratch length < 2 -> LengthNotAtLeastTwo (cannot infer num_chunks).
+        // Scratch length < 2 -> ScratchTooSmall (cannot infer num_chunks).
         let mut too_short = [0usize; 1];
-        let err = ChunkOffsetsView::from_dim_into(nz(8), &mut too_short).unwrap_err();
-        assert!(matches!(err, ChunkOffsetError::LengthNotAtLeastTwo(1)));
+        let err = ChunkOffsetsView::partition_into(nz(8), &mut too_short).unwrap_err();
+        assert!(matches!(err, PartitionIntoError::ScratchTooSmall(1)));
 
         // num_chunks > dim via the view builder too.
         let mut scratch = [0usize; 6];
-        let err = ChunkOffsetsView::from_dim_into(nz(3), &mut scratch).unwrap_err();
+        let err = ChunkOffsetsView::partition_into(nz(3), &mut scratch).unwrap_err();
         assert!(matches!(
             err,
-            ChunkOffsetError::TooManyChunks {
+            PartitionIntoError::PartitionError(PartitionError {
                 num_chunks: 5,
                 dim: 3
-            }
+            })
         ));
     }
 

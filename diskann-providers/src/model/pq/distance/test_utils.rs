@@ -131,7 +131,7 @@ pub(crate) fn generate_expected_vector(
 /// * N + 1: The number of PQ Pivots
 pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     // Get the chunk offsets for the selected dimension and bytes.
-    let chunk_offsets = ChunkOffsets::from_dim(
+    let chunk_offsets = ChunkOffsets::partition(
         std::num::NonZeroUsize::new(config.dim).unwrap(),
         std::num::NonZeroUsize::new(config.pq_chunks).unwrap(),
     )

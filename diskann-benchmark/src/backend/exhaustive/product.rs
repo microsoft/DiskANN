@@ -88,7 +88,7 @@ mod imp {
             let dim = std::num::NonZeroUsize::new(data.ncols())
                 .ok_or_else(|| anyhow::anyhow!("data has zero columns"))?;
             let offsets =
-                diskann_quantization::views::ChunkOffsets::from_dim(dim, input.num_pq_chunks)?;
+                diskann_quantization::views::ChunkOffsets::partition(dim, input.num_pq_chunks)?;
 
             let base = {
                 let threadpool = rayon::ThreadPoolBuilder::new()

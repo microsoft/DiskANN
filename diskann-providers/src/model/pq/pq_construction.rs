@@ -100,7 +100,7 @@ where
         .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
     let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
         .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
-    let chunk_offsets = ChunkOffsets::from_dim(dim, num_chunks).bridge_err()?;
+    let chunk_offsets = ChunkOffsets::partition(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -205,7 +205,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
     // Calculate the chunk offsets, filling the caller-owned buffer.
     let dim = NonZeroUsize::new(parameters.dim())
         .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
-    let chunk_offsets_view = ChunkOffsetsView::from_dim_into(dim, offsets).bridge_err()?;
+    let chunk_offsets_view = ChunkOffsetsView::partition_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -1044,7 +1044,7 @@ mod pq_test {
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
-        let chunk_offsets = ChunkOffsets::from_dim(
+        let chunk_offsets = ChunkOffsets::partition(
             NonZeroUsize::new(train_dim).unwrap(),
             NonZeroUsize::new(num_pq_chunks).unwrap(),
         )
