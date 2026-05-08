@@ -647,11 +647,11 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
             let remainder = blocks - i;
 
             if remainder > 0 {
-                // SAFETY: At least one value of type `u32` is valid for an unaligned
-                // starting at offset `i`. The exact number is computed as `remainder`.
+                // SAFETY: `remainder` values of type `u32` are dereferenceable starting
+                // at `px_u32.add(i)` (i.e. element offset `i` in `u32` units).
                 //
-                // The predicated load is guaranteed not to access memory after `remainder`
-                // and has no alignment requirements.
+                // The predicated load is guaranteed not to access memory beyond the
+                // first `remainder` lanes and has no alignment requirements.
                 let vx = unsafe { u32s::load_simd_first(arch, px_u32.add(i), remainder) };
 
                 // SAFETY: The same logic applies to `y` because:
@@ -1361,10 +1361,11 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
             let remainder = len / 2 - 4 * i;
 
             if remainder > 0 {
-                // SAFETY: At least `remainder` bytes are valid starting at an offset of `i`.
+                // SAFETY: `remainder` bytes are dereferenceable starting at
+                // `px_u32.add(i).cast::<u8>()` (i.e. byte offset `4 * i` from `px_u32`).
                 //
-                // The predicated load is guaranteed not to access memory after `remainder`
-                // and has no alignment requirements.
+                // The predicated load is guaranteed not to access memory beyond the
+                // first `remainder` bytes and has no alignment requirements.
                 let vx =
                     unsafe { u8s::load_simd_first(arch, px_u32.add(i).cast::<u8>(), remainder) };
                 let vx: u32s = vx.reinterpret_simd();
