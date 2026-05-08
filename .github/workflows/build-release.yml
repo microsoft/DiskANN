@@ -9,10 +9,8 @@
 
 on:
   push:
-    branches:
-      - "main"
-      - "u/arrayka/release_builds_ci"  # temporary: remove before merge
-  workflow_dispatch:
+    branches: ["main"]
+  workflow_dispatch:  # allows manual triggering from the Actions UI
 
 name: Release Build Stats
 

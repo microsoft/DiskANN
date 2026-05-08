@@ -7,12 +7,9 @@
 # Intended for weekly scrum review.
 
 on:
-  push:
-    branches:
-      - "u/arrayka/release_builds_ci"  # temporary: remove before merge
   schedule:
     - cron: "0 8 * * *"
-  workflow_dispatch:
+  workflow_dispatch:  # allows manual triggering from the Actions UI
 
 name: Produce Build Stats Report
 
