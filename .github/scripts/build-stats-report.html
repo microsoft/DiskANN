@@ -50,7 +50,7 @@
   <pre>{{ data.latest_cargo_bloat || 'No cargo bloat data available.' }}</pre>
 
   <template v-if="data.latest_run">
-    <h2>Latest Build Details</h2>
+    <h2>Latest Build Details (Top 20 Crates)</h2>
     <p class="meta">
       Run: {{ data.latest_run.created_at }} —
       Commit: <code>{{ data.latest_run.head_sha }}</code> —
@@ -60,7 +60,7 @@
     <table v-if="data.latest_run.units.length">
       <thead><tr><th>#</th><th>Crate</th><th>Version</th><th>Duration</th></tr></thead>
       <tbody>
-        <tr v-for="(u, i) in data.latest_run.units" :key="i">
+        <tr v-for="(u, i) in data.latest_run.units.slice(0, 20)" :key="i">
           <td>{{ i + 1 }}</td>
           <td>{{ u.name }}</td>
           <td>{{ u.version }}</td>
