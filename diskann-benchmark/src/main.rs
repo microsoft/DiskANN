@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn spherical_quantization_intergration() {
         let input_paths = [
-            example_directory().join("spherical.json"),
+            example_directory().join("graph-index-spherical-quantization.json"),
             example_directory().join("spherical-exhaustive.json"),
         ];
 
