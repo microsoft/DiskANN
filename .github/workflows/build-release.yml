@@ -34,10 +34,6 @@ jobs:
       - name: Install Rust
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
       - name: Install tools
         uses: taiki-e/install-action@v2
         with:
