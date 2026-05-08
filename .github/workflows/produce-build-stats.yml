@@ -111,26 +111,21 @@ jobs:
           COUNT=$(python3 -c "import json; print(len(json.loads(open('collected/all_runs.json').read())))")
           echo "Collected data for $COUNT runs"
 
-      - name: Generate HTML report
+      - name: Generate data file for report
         run: |
+          mkdir -p report
           python3 - <<'PYEOF'
           import json
           from pathlib import Path
           from datetime import datetime
 
           data = json.loads(Path("collected/all_runs.json").read_text())
-
-          # Sort by date ascending
           data.sort(key=lambda r: r.get("created_at", ""))
-
-          # --- Prepare chart data ---
 
           dates = []
           total_build_times = []
-          # crate_times: { crate_name: [time_per_run...] }
           crate_times = {}
           total_binary_sizes = []
-          # per_binary: { binary_name: [size_per_run...] }
           per_binary = {}
 
           for run in data:
@@ -140,7 +135,6 @@ jobs:
               bt = run.get("build_times", {})
               total_build_times.append(bt.get("total_wall_time_s", 0))
 
-              # Per-crate build times
               units = bt.get("units", [])
               seen_crates = set()
               for u in units:
@@ -153,10 +147,8 @@ jobs:
                   if name not in seen_crates:
                       crate_times[name].append(None)
 
-              # Binary sizes
               bs = run.get("binary_sizes", [])
-              run_total_size = sum(b.get("bytes", 0) for b in bs)
-              total_binary_sizes.append(run_total_size)
+              total_binary_sizes.append(sum(b.get("bytes", 0) for b in bs))
 
               seen_bins = set()
               for b in bs:
@@ -169,12 +161,12 @@ jobs:
                   if bname not in seen_bins:
                       per_binary[bname].append(None)
 
-          # Filter to top 15 crates by average duration
-          def avg_non_none(lst):
+          # Top 15 crates by average duration
+          def avg(lst):
               vals = [v for v in lst if v is not None]
               return sum(vals) / len(vals) if vals else 0
 
-          top_crates = sorted(crate_times.keys(), key=lambda c: avg_non_none(crate_times[c]), reverse=True)[:15]
+          top_crates = sorted(crate_times.keys(), key=lambda c: avg(crate_times[c]), reverse=True)[:15]
 
           # Latest cargo bloat
           latest_bloat = ""
@@ -183,216 +175,50 @@ jobs:
                   latest_bloat = run["cargo_bloat"]
                   break
 
-          # --- Color palette ---
-          COLORS = [
-              "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
-              "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
-              "#86bcb6", "#8cd17d", "#b6992d", "#499894", "#d37295",
-          ]
-
-          def js_array(lst):
-              return json.dumps(lst)
-
-          def js_datasets_crates():
-              datasets = []
-              for i, name in enumerate(top_crates):
-                  color = COLORS[i % len(COLORS)]
-                  datasets.append({
-                      "label": name,
-                      "data": crate_times[name],
-                      "borderColor": color,
-                      "backgroundColor": color + "33",
-                      "tension": 0.3,
-                      "spanGaps": True,
-                  })
-              return json.dumps(datasets)
-
-          def js_datasets_binaries():
-              datasets = []
-              for i, name in enumerate(sorted(per_binary.keys())):
-                  color = COLORS[i % len(COLORS)]
-                  datasets.append({
-                      "label": name,
-                      "data": [b / 1048576 if b is not None else None for b in per_binary[name]],
-                      "borderColor": color,
-                      "backgroundColor": color + "33",
-                      "tension": 0.3,
-                      "spanGaps": True,
-                  })
-              return json.dumps(datasets)
-
-          # --- Generate HTML ---
-          now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-
-          html = f"""<!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <title>DiskANN Release Build Stats</title>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-            <style>
-              body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                     max-width: 1400px; margin: 0 auto; padding: 20px; background: #fafafa; }}
-              h1 {{ color: #1b1e24; border-bottom: 2px solid #4e79a7; padding-bottom: 8px; }}
-              h2 {{ color: #333; margin-top: 40px; }}
-              .chart-container {{ background: white; border-radius: 8px; padding: 20px;
-                                  box-shadow: 0 1px 3px rgba(0,0,0,0.12); margin-bottom: 30px; }}
-              canvas {{ max-height: 400px; }}
-              pre {{ background: #1b1e24; color: #d5dde5; padding: 16px; border-radius: 8px;
-                     overflow-x: auto; font-size: 13px; line-height: 1.4; }}
-              .meta {{ color: #666; font-size: 14px; }}
-              table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
-              th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
-              th {{ background: #1b1e24; color: #d5dde5; }}
-              tr:nth-child(even) {{ background: #f2f2f2; }}
-            </style>
-          </head>
-          <body>
-            <h1>DiskANN Release Build Statistics</h1>
-            <p class="meta">Generated: {now} &mdash; Last 30 days ({len(data)} runs)</p>
-
-            <h2>Total Build Time Trend</h2>
-            <div class="chart-container">
-              <canvas id="totalBuildTime"></canvas>
-            </div>
-
-            <h2>Build Time by Crate (Top 15)</h2>
-            <div class="chart-container">
-              <canvas id="crateBuildTime"></canvas>
-            </div>
-
-            <h2>Total Binary Size Trend</h2>
-            <div class="chart-container">
-              <canvas id="totalBinarySize"></canvas>
-            </div>
-
-            <h2>Binary Size per Binary</h2>
-            <div class="chart-container">
-              <canvas id="perBinarySize"></canvas>
-            </div>
-
-            <h2>Latest Cargo Bloat (diskann-benchmark)</h2>
-            <pre>{latest_bloat if latest_bloat else "No cargo bloat data available."}</pre>
-
-            <h2>Latest Build Details</h2>
-          """
-
-          # Add latest run details table
+          # Latest run details
+          latest_run = None
           if data:
-              latest = data[-1]
-              bt = latest.get("build_times", {})
-              units = bt.get("units", [])
-              html += f"""
-              <p class="meta">Run: {latest.get('created_at', '?')} &mdash;
-              Commit: <code>{latest.get('head_sha', '?')[:12]}</code> &mdash;
-              Total wall time: {bt.get('total_time_display', '?')}</p>
-              <table>
-                <thead><tr><th>#</th><th>Crate</th><th>Version</th><th>Duration</th></tr></thead>
-                <tbody>
-              """
-              for i, u in enumerate(units, 1):
-                  html += f"<tr><td>{i}</td><td>{u.get('name','?')}</td><td>{u.get('version','?')}</td><td>{u.get('duration',0):.1f}s</td></tr>\n"
-              html += "</tbody></table>\n"
+              last = data[-1]
+              bt = last.get("build_times", {})
+              latest_run = {
+                  "created_at": last.get("created_at", "?"),
+                  "head_sha": last.get("head_sha", "?")[:12],
+                  "total_time_display": bt.get("total_time_display", "?"),
+                  "units": bt.get("units", []),
+                  "binary_sizes": last.get("binary_sizes", []),
+              }
 
-              bs = latest.get("binary_sizes", [])
-              if bs:
-                  html += """
-                  <h3>Binary Sizes</h3>
-                  <table>
-                    <thead><tr><th>Binary</th><th>Size (bytes)</th><th>Size</th></tr></thead>
-                    <tbody>
-                  """
-                  for b in bs:
-                      size = b.get("bytes", 0)
-                      human = f"{size / 1048576:.1f} MiB" if size > 1048576 else f"{size / 1024:.1f} KiB"
-                      html += f"<tr><td>{b.get('name','?')}</td><td>{size:,}</td><td>{human}</td></tr>\n"
-                  html += "</tbody></table>\n"
+          # Assemble the data object
+          build_data = {
+              "generated": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+              "dates": dates,
+              "total_build_times": total_build_times,
+              "total_binary_sizes_mib": [s / 1048576 for s in total_binary_sizes],
+              "crate_datasets": [
+                  {"label": name, "data": crate_times[name]}
+                  for name in top_crates
+              ],
+              "binary_datasets": [
+                  {"label": name, "data": [b / 1048576 if b is not None else None for b in per_binary[name]]}
+                  for name in sorted(per_binary.keys())
+              ],
+              "latest_cargo_bloat": latest_bloat,
+              "latest_run": latest_run,
+          }
 
-          html += f"""
-            <script>
-              const dates = {js_array(dates)};
-
-              // Total Build Time
-              new Chart(document.getElementById('totalBuildTime'), {{
-                type: 'line',
-                data: {{
-                  labels: dates,
-                  datasets: [{{
-                    label: 'Total Wall Time (s)',
-                    data: {js_array(total_build_times)},
-                    borderColor: '#4e79a7',
-                    backgroundColor: '#4e79a733',
-                    fill: true,
-                    tension: 0.3,
-                  }}]
-                }},
-                options: {{
-                  responsive: true,
-                  plugins: {{ title: {{ display: true, text: 'Total Release Build Time' }} }},
-                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'Seconds' }} }} }}
-                }}
-              }});
-
-              // Per-Crate Build Time
-              new Chart(document.getElementById('crateBuildTime'), {{
-                type: 'line',
-                data: {{
-                  labels: dates,
-                  datasets: {js_datasets_crates()}
-                }},
-                options: {{
-                  responsive: true,
-                  plugins: {{ title: {{ display: true, text: 'Build Time by Crate (Top 15)' }} }},
-                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'Seconds' }} }} }}
-                }}
-              }});
-
-              // Total Binary Size
-              new Chart(document.getElementById('totalBinarySize'), {{
-                type: 'line',
-                data: {{
-                  labels: dates,
-                  datasets: [{{
-                    label: 'Total Binary Size (MiB)',
-                    data: {js_array([s / 1048576 for s in total_binary_sizes])},
-                    borderColor: '#e15759',
-                    backgroundColor: '#e1575933',
-                    fill: true,
-                    tension: 0.3,
-                  }}]
-                }},
-                options: {{
-                  responsive: true,
-                  plugins: {{ title: {{ display: true, text: 'Total Binary Size' }} }},
-                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'MiB' }} }} }}
-                }}
-              }});
-
-              // Per-Binary Size
-              new Chart(document.getElementById('perBinarySize'), {{
-                type: 'line',
-                data: {{
-                  labels: dates,
-                  datasets: {js_datasets_binaries()}
-                }},
-                options: {{
-                  responsive: true,
-                  plugins: {{ title: {{ display: true, text: 'Binary Size per Binary' }} }},
-                  scales: {{ y: {{ beginAtZero: true, title: {{ display: true, text: 'MiB' }} }} }}
-                }}
-              }});
-            </script>
-          </body>
-          </html>
-          """
-
-          Path("build-stats-report.html").write_text(html)
-          print(f"Report generated: build-stats-report.html ({len(data)} runs)")
+          # Write as a JS file that assigns to a global constant
+          js_content = f"const BUILD_DATA = {json.dumps(build_data, indent=2)};\n"
+          Path("report/build-stats-data.js").write_text(js_content)
+          print(f"Generated build-stats-data.js ({len(data)} runs)")
           PYEOF
+
+      - name: Assemble report
+        run: |
+          cp .github/scripts/build-stats-report.html report/build-stats-report.html
 
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: build-stats-report
-          path: build-stats-report.html
+          path: report/
           retention-days: 90
