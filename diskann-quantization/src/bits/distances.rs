@@ -573,9 +573,10 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 /// (`0x000f000f` mask), reinterpret as `i16x32`, compute differences, and use
 /// `_mm512_madd_epi16` via `dot_simd` to accumulate squared differences into `i32x16`.
 ///
-/// AVX-512 does not have 16-bit integer bit-shift instructions, so we use 32-bit integer
-/// shifts and then bit-cast to 16-bit intrinsics, which works because we apply the same
-/// shift to all lanes.
+/// We perform shifts on the `u32x16` view rather than the `i16x32` view because the
+/// `diskann_wide` type abstractions provide a native shift on `u32x16` but not on
+/// `i16x32`. The reinterpret-after-shift is well-defined because the same shift amount
+/// is applied uniformly to all lanes.
 #[cfg(target_arch = "x86_64")]
 impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
     for SquaredL2
@@ -608,9 +609,9 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
             let mut s3 = i32s::default(arch);
             let mask = u32s::splat(arch, 0x000f000f);
             while i + 16 <= blocks {
-                // SAFETY: We have checked that `i + 16 <= blocks` which means the address
-                // range `[px_u32 + i, px_u32 + i + 16 * std::mem::size_of::<u32>())` is
-                // valid.
+                // SAFETY: We have checked that `i + 16 <= blocks` which means the
+                // 16-element range `px_u32.add(i)..px_u32.add(i + 16)` (in `u32` units)
+                // is dereferenceable.
                 //
                 // The load has no alignment requirements.
                 let vx = unsafe { u32s::load_simd(arch, px_u32.add(i)) };
@@ -1325,9 +1326,9 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
             let mut s1 = i32s::default(arch);
             let mask = u32s::splat(arch, 0x0f0f0f0f);
             while i + 16 < blocks {
-                // SAFETY: We have checked that `i + 16 < blocks` which means the address
-                // range `[px_u32 + i, px_u32 + i + 16 * std::mem::size_of::<u32>())` is
-                // valid.
+                // SAFETY: We have checked that `i + 16 < blocks` which means the
+                // 16-element range `px_u32.add(i)..px_u32.add(i + 16)` (in `u32` units)
+                // is dereferenceable.
                 //
                 // The load has no alignment requirements.
                 let vx = unsafe { u32s::load_simd(arch, px_u32.add(i)) };
