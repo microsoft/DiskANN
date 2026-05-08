@@ -6,23 +6,6 @@
 #![allow(dead_code)]
 
 //! Self-contained test provider for the flat-search module.
-//!
-//! Mirrors the spirit of [`crate::graph::test::provider`] but stripped down to just
-//! the surface needed by [`crate::flat::FlatIndex`]:
-//!
-//! * no adjacency lists / max-degree / start points,
-//! * no `Delete` / `SetElement` / multi-insert plumbing,
-//! * a single per-element counter (`get_element`) instead of a 5-counter metrics struct,
-//! * no element-buffering accessor — vectors live in a `Vec<Vec<f32>>` and are handed
-//!   to the visitor by reference.
-//!
-//! The three public types parallel their graph counterparts:
-//!
-//! | Graph                                      | Flat                  | Role                                        |
-//! | :----------------------------------------- | :-------------------- | :------------------------------------------ |
-//! | [`crate::graph::test::provider::Provider`] | [`Provider`]          | Owns the data and per-element counter.      |
-//! | [`crate::graph::test::provider::Accessor`] | [`Visitor`]           | Per-search visitor; carries fault state.    |
-//! | [`crate::graph::test::provider::Strategy`] | [`Strategy`]          | Stateless factory of [`Visitor`]s.          |
 
 use std::{
     borrow::Cow,

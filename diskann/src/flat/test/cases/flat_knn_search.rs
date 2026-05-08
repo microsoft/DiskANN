@@ -5,8 +5,7 @@
 
 //! Baseline-cached regression sweep for [`crate::flat::FlatIndex::knn_search`].
 //!
-//! Mirrors [`crate::graph::test::cases::grid_search`]: builds a fresh index per
-//! parameter combination, runs `knn_search` through the
+//! Bbuilds a fresh index per parameter combination, runs `knn_search` through the
 //! [`crate::flat::test::harness`], snapshots the result + statistics into
 //! [`FlatKnnBaseline`], and compares the entire batch against the JSON committed under
 //! `diskann/test/generated/flat/test/cases/flat_knn_search/`.
