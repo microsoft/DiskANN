@@ -33,7 +33,6 @@ mod imp {
     use std::{io::Write, num::NonZeroUsize};
 
     use diskann_benchmark_runner::{
-        describeln,
         dispatcher::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
@@ -225,17 +224,17 @@ mod imp {
         ) -> std::fmt::Result {
             match input {
                 None => {
-                    describeln!(
+                    writeln!(
                         f,
                         "- Exhaustive search for {}-bit minmax quantization",
                         NBITS
                     )?;
-                    describeln!(f, "- Requires `float32` data")?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
+                    writeln!(f, "- Requires `float32` data")?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
                 }
                 Some(from) => {
                     if from.num_bits.get() != NBITS {
-                        describeln!(
+                        writeln!(
                             f,
                             "- Expected \"num_bits = {}\", instead got {}",
                             NBITS,

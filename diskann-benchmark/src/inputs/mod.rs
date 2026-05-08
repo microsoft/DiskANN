@@ -3,16 +3,16 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) mod async_;
 pub(crate) mod disk;
 pub(crate) mod exhaustive;
 pub(crate) mod filters;
+pub(crate) mod graph_index;
 pub(crate) mod save_and_load;
 
 pub(crate) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    async_::register_inputs(registry)?;
+    graph_index::register_inputs(registry)?;
     exhaustive::register_inputs(registry)?;
     disk::register_inputs(registry)?;
     filters::register_inputs(registry)?;

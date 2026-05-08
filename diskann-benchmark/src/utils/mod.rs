@@ -101,11 +101,10 @@ macro_rules! stub_impl {
         #[cfg(not(feature = $feature))]
         mod imp {
             use diskann_benchmark_runner::{
-                describeln,
                 dispatcher::{FailureScore, MatchScore},
                 output::Output,
                 registry::Benchmarks,
-                Benchmark, Checkpoint, Input,
+                Benchmark, Checkpoint,
             };
 
             use crate::inputs;
@@ -130,8 +129,7 @@ macro_rules! stub_impl {
                     f: &mut std::fmt::Formatter<'_>,
                     _input: Option<&$input>,
                 ) -> std::fmt::Result {
-                    writeln!(f, "tag: \"{}\"", <$input as Input>::tag())?;
-                    describeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
+                    writeln!(f, "{}", concat!("Requires the \"", $feature, "\" feature"))
                 }
 
                 fn run(

@@ -2993,7 +2993,10 @@ pub(crate) mod tests {
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // check that we have an unpruned graph
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() > max_degree);
 
         // prune graph and check that max_degree is respected
@@ -3001,7 +3004,10 @@ pub(crate) mod tests {
             .prune_range(&FullPrecision, ctx, 0..256)
             .await
             .unwrap();
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() <= max_degree);
     }
 
@@ -3280,14 +3286,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
-        let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+        let res_unsat = index_unsat
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(
@@ -3302,14 +3311,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
         let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(

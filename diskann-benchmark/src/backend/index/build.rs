@@ -28,7 +28,7 @@ use diskann_utils::{
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
-use crate::inputs::async_::IndexBuild;
+use crate::inputs::graph_index::IndexBuild;
 
 ///////////////////////////////
 // Start Point Configuration //

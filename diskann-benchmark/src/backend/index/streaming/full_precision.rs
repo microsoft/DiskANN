@@ -31,7 +31,7 @@ use crate::{
         build::{BuildKind, BuildStats},
         search::knn,
     },
-    inputs::async_::TopkSearchPhase,
+    inputs::graph_index::TopkSearchPhase,
 };
 
 type FullPrecisionIndex<T> = Arc<
