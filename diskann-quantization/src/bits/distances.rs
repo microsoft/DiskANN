@@ -565,10 +565,13 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 /// # Implementation Notes
 ///
 /// This implementation is optimized for x86 with the AVX-512 vector extension.
-/// It scales the V3 approach to 512-bit registers: we load data as `u32x16`, shift and
-/// mask to extract 4-bit nibbles at 16-bit granularity (`0x000f000f` mask), reinterpret
-/// as `i16x32`, compute differences, and use `_mm512_madd_epi16` via `dot_simd` to
-/// accumulate squared differences into `i32x16`.
+/// It is structurally identical to the V3 4-bit `SquaredL2` impl above, scaled to 512-bit
+/// registers (16 u32 lanes × 4 nibble positions). **If you fix a correctness bug here,
+/// fix it in the V3 impl as well.**
+///
+/// We load data as `u32x16`, shift and mask to extract 4-bit nibbles at 16-bit granularity
+/// (`0x000f000f` mask), reinterpret as `i16x32`, compute differences, and use
+/// `_mm512_madd_epi16` via `dot_simd` to accumulate squared differences into `i32x16`.
 ///
 /// AVX-512 does not have 16-bit integer bit-shift instructions, so we use 32-bit integer
 /// shifts and then bit-cast to 16-bit intrinsics, which works because we apply the same
@@ -577,7 +580,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
     for SquaredL2
 {
-    #[expect(non_camel_case_types)]
     #[inline(always)]
     fn run(
         self,
@@ -587,9 +589,9 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
     ) -> MathematicalResult<u32> {
         let len = check_lengths!(x, y)?;
 
-        type i32s = <diskann_wide::arch::x86_64::V4 as Architecture>::i32x16;
-        type u32s = <diskann_wide::arch::x86_64::V4 as Architecture>::u32x16;
-        type i16s = <diskann_wide::arch::x86_64::V4 as Architecture>::i16x32;
+        diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V4>::i32x16);
+        diskann_wide::alias!(u32s = <diskann_wide::arch::x86_64::V4>::u32x16);
+        diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V4>::i16x32);
 
         let px_u32: *const u32 = x.as_ptr().cast();
         let py_u32: *const u32 = y.as_ptr().cast();
@@ -605,8 +607,8 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
             let mut s2 = i32s::default(arch);
             let mut s3 = i32s::default(arch);
             let mask = u32s::splat(arch, 0x000f000f);
-            while i + 16 < blocks {
-                // SAFETY: We have checked that `i + 16 < blocks` which means the address
+            while i + 16 <= blocks {
+                // SAFETY: We have checked that `i + 16 <= blocks` which means the address
                 // range `[px_u32 + i, px_u32 + i + 16 * std::mem::size_of::<u32>())` is
                 // valid.
                 //
@@ -643,45 +645,50 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
 
             let remainder = blocks - i;
 
-            // SAFETY: At least one value of type `u32` is valid for an unaligned starting
-            // at offset `i`. The exact number is computed as `remainder`.
-            //
-            // The predicated load is guaranteed not to access memory after `remainder` and
-            // has no alignment requirements.
-            let vx = unsafe { u32s::load_simd_first(arch, px_u32.add(i), remainder) };
+            if remainder > 0 {
+                // SAFETY: At least one value of type `u32` is valid for an unaligned
+                // starting at offset `i`. The exact number is computed as `remainder`.
+                //
+                // The predicated load is guaranteed not to access memory after `remainder`
+                // and has no alignment requirements.
+                let vx = unsafe { u32s::load_simd_first(arch, px_u32.add(i), remainder) };
 
-            // SAFETY: The same logic applies to `y` because:
-            // 1. It has the same type as `x`.
-            // 2. We've verified that it has the same length as `x`.
-            let vy = unsafe { u32s::load_simd_first(arch, py_u32.add(i), remainder) };
+                // SAFETY: The same logic applies to `y` because:
+                // 1. It has the same type as `x`.
+                // 2. We've verified that it has the same length as `x`.
+                let vy = unsafe { u32s::load_simd_first(arch, py_u32.add(i), remainder) };
 
-            let wx: i16s = (vx & mask).reinterpret_simd();
-            let wy: i16s = (vy & mask).reinterpret_simd();
-            let d = wx - wy;
-            s0 = s0.dot_simd(d, d);
+                let wx: i16s = (vx & mask).reinterpret_simd();
+                let wy: i16s = (vy & mask).reinterpret_simd();
+                let d = wx - wy;
+                s0 = s0.dot_simd(d, d);
 
-            let wx: i16s = (vx >> 4 & mask).reinterpret_simd();
-            let wy: i16s = (vy >> 4 & mask).reinterpret_simd();
-            let d = wx - wy;
-            s1 = s1.dot_simd(d, d);
+                let wx: i16s = (vx >> 4 & mask).reinterpret_simd();
+                let wy: i16s = (vy >> 4 & mask).reinterpret_simd();
+                let d = wx - wy;
+                s1 = s1.dot_simd(d, d);
 
-            let wx: i16s = (vx >> 8 & mask).reinterpret_simd();
-            let wy: i16s = (vy >> 8 & mask).reinterpret_simd();
-            let d = wx - wy;
-            s2 = s2.dot_simd(d, d);
+                let wx: i16s = (vx >> 8 & mask).reinterpret_simd();
+                let wy: i16s = (vy >> 8 & mask).reinterpret_simd();
+                let d = wx - wy;
+                s2 = s2.dot_simd(d, d);
 
-            let wx: i16s = (vx >> 12 & mask).reinterpret_simd();
-            let wy: i16s = (vy >> 12 & mask).reinterpret_simd();
-            let d = wx - wy;
-            s3 = s3.dot_simd(d, d);
+                let wx: i16s = (vx >> 12 & mask).reinterpret_simd();
+                let wy: i16s = (vy >> 12 & mask).reinterpret_simd();
+                let d = wx - wy;
+                s3 = s3.dot_simd(d, d);
 
-            i += remainder;
+                i += remainder;
+            }
 
             s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
         }
 
         // Convert blocks to indexes.
         i *= 8;
+
+        // At most 7 nibbles can dangle past the last full u32 block.
+        debug_assert!(len - i < 8);
 
         // Deal with the remainder the slow way.
         if i != len {
@@ -1269,9 +1276,10 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 ///
 /// # Implementation Notes
 ///
-/// This is optimized around the `__mm512_dpbusd_epi32` VNNI instruction, which computes the
-/// pairwise dot product between vectors of 8-bit integers and accumulates groups of 4 with
-/// an `i32` accumulation vector.
+/// Unlike the V3 4-bit `InnerProduct` impl (which uses `_mm256_madd_epi16` over `i16` lanes
+/// and 4 shift positions), this is optimized around the `_mm512_dpbusd_epi32` VNNI
+/// instruction, which computes the pairwise dot product between vectors of 8-bit integers
+/// and accumulates groups of 4 with an `i32` accumulation vector.
 ///
 /// For 4-bit values, each byte holds 2 nibbles. We load data as `u32x16`, mask with
 /// `0x0f0f0f0f` to extract the low nibbles as bytes, and shift right by 4 then mask to
@@ -1284,7 +1292,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_, 4>, USlice<'_, 4>>
     for InnerProduct
 {
-    #[expect(non_camel_case_types)]
     #[inline(always)]
     fn run(
         self,
@@ -1294,10 +1301,10 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
     ) -> MathematicalResult<u32> {
         let len = check_lengths!(x, y)?;
 
-        type i32s = <diskann_wide::arch::x86_64::V4 as Architecture>::i32x16;
-        type u32s = <diskann_wide::arch::x86_64::V4 as Architecture>::u32x16;
-        type u8s = <diskann_wide::arch::x86_64::V4 as Architecture>::u8x64;
-        type i8s = <diskann_wide::arch::x86_64::V4 as Architecture>::i8x64;
+        diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V4>::i32x16);
+        diskann_wide::alias!(u32s = <diskann_wide::arch::x86_64::V4>::u32x16);
+        diskann_wide::alias!(u8s = <diskann_wide::arch::x86_64::V4>::u8x64);
+        diskann_wide::alias!(i8s = <diskann_wide::arch::x86_64::V4>::i8x64);
 
         let px_u32: *const u32 = x.as_ptr().cast();
         let py_u32: *const u32 = y.as_ptr().cast();
@@ -1305,8 +1312,13 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
         let mut i = 0;
         let mut s: u32 = 0;
 
-        // The number of 32-bit blocks over the underlying slice.
-        // Each u32 holds 8 nibbles = 8 four-bit values.
+        // Number of u32 blocks (rounded up). Each u32 holds 8 nibbles = 8 four-bit values.
+        // We use `div_ceil` so a partial trailing byte (1..=7 stray nibbles) is still
+        // covered by the predicated `u8` load below; the scalar fallback only ever needs to
+        // handle at most a single dangling nibble.
+        //
+        // (The L2 kernel uses `len / 8` because its scalar fallback can handle up to 7
+        // dangling nibbles itself.)
         let blocks = len.div_ceil(8);
         if i < blocks {
             let mut s0 = i32s::default(arch);
@@ -1325,6 +1337,9 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
                 // 2. We've verified that it has the same length as `x`.
                 let vy = unsafe { u32s::load_simd(arch, py_u32.add(i)) };
 
+                // VNNI `vpdpbusd` requires (unsigned, signed) operands in this order;
+                // `dot_simd(u8s, i8s)` lowers to that intrinsic on V4. 4-bit values fit in
+                // the positive half of `i8`, so the unsigned->signed reinterpret is safe.
                 let wx: u8s = (vx & mask).reinterpret_simd();
                 let wy: i8s = (vy & mask).reinterpret_simd();
                 s0 = s0.dot_simd(wx, wy);
@@ -1336,31 +1351,38 @@ impl Target2<diskann_wide::arch::x86_64::V4, MathematicalResult<u32>, USlice<'_,
                 i += 16;
             }
 
-            // Here
-            // * `len / 2` gives the number of full bytes (2 nibbles per byte)
-            // * `4 * i` gives the number of bytes processed (4 bytes per u32 × i u32s).
+            // Compute the number of bytes still to process:
+            //   * `len / 2`  — total full bytes in the input (2 nibbles/byte).
+            //   * `4 * i`    — bytes already consumed (4 bytes per u32 × `i` u32s).
+            //
+            // The loop invariant `i + 16 < blocks` (with `blocks = len.div_ceil(8)`)
+            // guarantees `4 * i < len / 2 + small`, so this subtraction is safe.
             let remainder = len / 2 - 4 * i;
 
-            // SAFETY: At least `remainder` bytes are valid starting at an offset of `i`.
-            //
-            // The predicated load is guaranteed not to access memory after `remainder` and
-            // has no alignment requirements.
-            let vx = unsafe { u8s::load_simd_first(arch, px_u32.add(i).cast::<u8>(), remainder) };
-            let vx: u32s = vx.reinterpret_simd();
+            if remainder > 0 {
+                // SAFETY: At least `remainder` bytes are valid starting at an offset of `i`.
+                //
+                // The predicated load is guaranteed not to access memory after `remainder`
+                // and has no alignment requirements.
+                let vx =
+                    unsafe { u8s::load_simd_first(arch, px_u32.add(i).cast::<u8>(), remainder) };
+                let vx: u32s = vx.reinterpret_simd();
 
-            // SAFETY: The same logic applies to `y` because:
-            // 1. It has the same type as `x`.
-            // 2. We've verified that it has the same length as `x`.
-            let vy = unsafe { u8s::load_simd_first(arch, py_u32.add(i).cast::<u8>(), remainder) };
-            let vy: u32s = vy.reinterpret_simd();
+                // SAFETY: The same logic applies to `y` because:
+                // 1. It has the same type as `x`.
+                // 2. We've verified that it has the same length as `x`.
+                let vy =
+                    unsafe { u8s::load_simd_first(arch, py_u32.add(i).cast::<u8>(), remainder) };
+                let vy: u32s = vy.reinterpret_simd();
 
-            let wx: u8s = (vx & mask).reinterpret_simd();
-            let wy: i8s = (vy & mask).reinterpret_simd();
-            s0 = s0.dot_simd(wx, wy);
+                let wx: u8s = (vx & mask).reinterpret_simd();
+                let wy: i8s = (vy & mask).reinterpret_simd();
+                s0 = s0.dot_simd(wx, wy);
 
-            let wx: u8s = ((vx >> 4) & mask).reinterpret_simd();
-            let wy: i8s = ((vy >> 4) & mask).reinterpret_simd();
-            s1 = s1.dot_simd(wx, wy);
+                let wx: u8s = ((vx >> 4) & mask).reinterpret_simd();
+                let wy: i8s = ((vy >> 4) & mask).reinterpret_simd();
+                s1 = s1.dot_simd(wx, wy);
+            }
 
             s = (s0 + s1).sum_tree() as u32;
             i = (4 * i) + remainder;
