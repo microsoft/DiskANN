@@ -34,3 +34,6 @@ pub mod strategy;
 pub use index::{FlatIndex, SearchStats};
 pub use iterator::{DistancesUnordered, FlatIterator, Iterated, OnElementsUnordered};
 pub use strategy::SearchStrategy;
+
+#[cfg(test)]
+mod test;

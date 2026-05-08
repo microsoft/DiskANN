@@ -107,3 +107,98 @@ impl<P: DataProvider> FlatIndex<P> {
         }
     }
 }
+
+/////////////
+// Tests ///
+/////////////
+
+#[cfg(test)]
+mod tests {
+    use crate::flat::{
+        FlatIndex,
+        test::{
+            harness::KnnOracleRun,
+            provider::{self as flat_provider, Strategy},
+        },
+    };
+    use crate::graph::test::synthetic::Grid;
+
+    fn fixture(grid: Grid, size: usize) -> (FlatIndex<flat_provider::Provider>, usize) {
+        let provider = flat_provider::Provider::grid(grid, size);
+        let len = provider.len();
+        (FlatIndex::new(provider), len)
+    }
+
+    /// `knn_search` returns a `Send` future, and a shared `&FlatIndex` can serve
+    /// many concurrent searches on a multi-threaded runtime, each producing the
+    /// correct top-k independently.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn knn_search() {
+        use std::sync::Arc;
+
+        let (index, len) = fixture(Grid::Two, 4);
+        let index = Arc::new(index);
+
+        // Mix of corner, axis-aligned, and off-grid queries; k spans 1..=len.
+        let cases: &[(&[f32], usize)] = &[
+            (&[-1.0, -1.0], 1),
+            (&[1.0, 1.0], len),
+            (&[-1.0, 1.0], len / 2),
+            (&[1.0, -1.0], len - 1),
+            (&[0.0, 0.0], 3),
+            (&[3.0, 3.0], len),
+            (&[-2.0, 0.5], 2),
+            (&[0.5, -0.5], len),
+        ];
+
+        let mut set = tokio::task::JoinSet::new();
+        for (query, k) in cases {
+            let index = Arc::clone(&index);
+            let query: Vec<f32> = query.to_vec();
+            let k = *k;
+            set.spawn(async move {
+                let outcome = KnnOracleRun::run(&index, &Strategy::new(), &query, k)
+                    .await
+                    .expect("knn_search failed");
+                (query, k, outcome)
+            });
+        }
+
+        while let Some(joined) = set.join_next().await {
+            let (query, k, outcome) = joined.expect("task panicked");
+            assert_eq!(
+                outcome.top_k, outcome.ground_truth,
+                "query = {query:?}, k = {k}: top-k must match brute force",
+            );
+            assert_eq!(outcome.stats.cmps as usize, len);
+            assert_eq!(outcome.stats.result_count as usize, k.min(len));
+        }
+    }
+
+    /// A transient error from the visitor's scan must escalate up through `knn_search`.
+    #[test]
+    fn transient_scan_error() {
+        let (index, _len) = fixture(Grid::Two, 3);
+
+        // The flat scan must touch every id, so any transient id is guaranteed to be
+        // hit.
+        for transient_ids in [&[0u32][..], &[3][..], &[1, 2, 5][..]] {
+            let err = KnnOracleRun::run_sync(
+                &index,
+                &Strategy::with_transient(transient_ids.iter().copied()),
+                &[1.0, 0.0],
+                4,
+            )
+            .expect_err("transient error during full scan must escalate");
+
+            let msg = format!("{err}");
+            assert!(
+                transient_ids
+                    .iter()
+                    .any(|id| msg.contains(&format!("id {id}"))),
+                "transients = {transient_ids:?}: expected error to name one of the \
+                 transient ids, got: {msg}",
+            );
+        }
+    }
+}

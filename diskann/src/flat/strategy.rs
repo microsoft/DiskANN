@@ -47,3 +47,32 @@ where
         context: &'a P::Context,
     ) -> Result<Self::Visitor<'a>, Self::Error>;
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        flat::test::provider::{self as flat_provider, Strategy},
+        graph::test::synthetic::Grid,
+    };
+
+    use super::SearchStrategy;
+
+    /// `create_visitor` produces independent visitors on successive calls.
+    ///
+    /// The strategy is a stateless factory; calling it twice should yield two
+    /// distinct visitors that may be used in parallel without interfering with
+    /// each other.
+    #[test]
+    fn exercise_create_visitor() {
+        let provider = flat_provider::Provider::grid(Grid::Two, 3);
+        let context = flat_provider::Context::new();
+        let strategy = Strategy::new();
+
+        let v1 = strategy.create_visitor(&provider, &context).unwrap();
+        let v2 = strategy.create_visitor(&provider, &context).unwrap();
+
+        // The two visitors must occupy distinct stack slots — i.e. holding `v1`
+        // does not preclude constructing `v2`.
+        let _ = (&v1, &v2);
+    }
+}
