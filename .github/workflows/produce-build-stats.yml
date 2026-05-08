@@ -40,11 +40,11 @@ jobs:
           gh api --paginate \
             "repos/${{ github.repository }}/actions/workflows/build-release.yml/runs?status=success&created=>=$SINCE&per_page=100" \
             --jq '.workflow_runs[] | [.id, .created_at, .head_sha] | @tsv' \
-            > runs.tsv || true
+            > runs.tsv
 
           if [ ! -s runs.tsv ]; then
             echo "::warning::No successful build-release runs found in the last 30 days"
-            exit 0
+            exit 1
           fi
 
           echo "Found $(wc -l < runs.tsv) runs"
