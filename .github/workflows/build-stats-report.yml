@@ -31,36 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Collect artifacts from recent runs
+      - name: Generate report
         run: |
           set -euo pipefail
           mkdir -p collected
-          SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
-
-          gh api --paginate \
-            "repos/${{ github.repository }}/actions/workflows/build-stats.yml/runs?status=success&created=>=$SINCE&per_page=100" \
-            --jq '.workflow_runs[] | [.id, .created_at, .head_sha] | @tsv' \
-            > runs.tsv
-
-          if [ ! -s runs.tsv ]; then
-            echo "::warning::No successful build-release runs found in the last 30 days"
-            exit 1
-          fi
-
-          echo "Found $(wc -l < runs.tsv) runs"
-          cp runs.tsv collected/runs.tsv
-
-          while IFS=$'\t' read -r run_id created_at head_sha; do
-            gh run download "$run_id" --repo "${{ github.repository }}" \
-              --name build-stats --dir "collected/$run_id" 2>/dev/null \
-              || echo "::warning::Skipping run $run_id (artifact expired)"
-          done < runs.tsv
-
-      - name: Generate report
-        run: |
           mkdir -p report
-          python3 .github/scripts/build-stats-report-data.py collected report
-          cp .github/reports/build-stats-report.html report/
+          bash .github/scripts/build-stats-report.sh "${{ github.repository }}" collected report
 
       - name: Upload report
         uses: actions/upload-artifact@v4
