@@ -5,7 +5,7 @@
 #
 # Runs on every push to main to capture release build timings, binary sizes,
 # and cargo-bloat analysis. The data is uploaded as structured JSON artifacts
-# so the companion `produce-build-stats.yml` workflow can aggregate trends.
+# so the companion `build-stats-report.yml` workflow can aggregate trends.
 
 on:
   push:

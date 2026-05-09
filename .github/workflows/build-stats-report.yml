@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 # Aggregates release build statistics from the last 30 days of
-# `build-release.yml` runs and produces an HTML dashboard with trend charts.
+# `build-stats.yml` runs and produces an HTML dashboard with trend charts.
 #
 # Intended for weekly scrum review.
 
@@ -38,7 +38,7 @@ jobs:
           SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
 
           gh api --paginate \
-            "repos/${{ github.repository }}/actions/workflows/build-release.yml/runs?status=success&created=>=$SINCE&per_page=100" \
+            "repos/${{ github.repository }}/actions/workflows/build-stats.yml/runs?status=success&created=>=$SINCE&per_page=100" \
             --jq '.workflow_runs[] | [.id, .created_at, .head_sha] | @tsv' \
             > runs.tsv
 
