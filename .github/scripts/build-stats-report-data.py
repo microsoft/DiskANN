@@ -56,10 +56,9 @@ def main():
         run_id, created_at, head_sha = parts[0], parts[1], parts[2]
         run_dir = collected_dir / run_id
 
-        timing_path = run_dir / "cargo-timing.html"
+        timing_path = run_dir / "target/cargo-timings/cargo-timing.html"
         bs_path = run_dir / "build-stats-size.json"
         cb_path = run_dir / "cargo-bloat.txt"
-
         ll_path = run_dir / "cargo-llvm-lines.txt"
 
         if not timing_path.exists():
