@@ -2,7 +2,7 @@
 
 Reads from:
   collected/runs.tsv        — tab-separated: run_id, created_at, head_sha
-  collected/<run_id>/       — contains cargo-timing.html, binary-sizes.json, cargo-bloat.txt
+  collected/<run_id>/       — contains cargo-timing.html, build-stats-size.json, cargo-bloat.txt
 
 Usage: python build-stats-report-data.py <collected_dir> <output_dir>
 """
@@ -57,7 +57,7 @@ def main():
         run_dir = collected_dir / run_id
 
         timing_path = run_dir / "cargo-timing.html"
-        bs_path = run_dir / "binary-sizes.json"
+        bs_path = run_dir / "build-stats-size.json"
         cb_path = run_dir / "cargo-bloat.txt"
 
         ll_path = run_dir / "cargo-llvm-lines.txt"

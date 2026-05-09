@@ -43,7 +43,7 @@ jobs:
         run: cargo clean && cargo build --workspace --release --locked --timings
 
       - name: Parse and display build stats
-        run: python3 .github/scripts/parse-build-stats.py
+        run: python3 .github/scripts/build-stats-size.py
 
       - name: Run cargo bloat
         run: cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
@@ -57,7 +57,7 @@ jobs:
           name: build-stats
           path: |
             target/cargo-timings/cargo-timing.html
-            binary-sizes.json
+            build-stats-size.json
             cargo-bloat.txt
             cargo-llvm-lines.txt
           retention-days: 90
