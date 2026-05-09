@@ -1,16 +1,11 @@
 # DiskANN
 
-The main branch implements DiskANN3, a library for bringing scalable, accurate and cost-effective vector indexing to stores and databases. It is meant to be used in search, recommendation, RAG and vector DB platforms. 
-See our [wiki](https://github.com/microsoft/DiskANN/wiki/DiskANN-Project-and-Research-Overview-(2018%E2%80%90present)) for a comrehensive overview  of research underlying this project. 
+The main branch implements DiskANN3, a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple stores and databases. 
+See our [wiki](https://github.com/microsoft/DiskANN/wiki/DiskANN-Project-and-Research-Overview-(2018%E2%80%90present)) for an overview  of research underlying this project. 
 
-DiskANN3 is written to be extensible to a new store via the implementation of `Provider` API.
-The library provides and update and query API to users and translate the requests into reads and mutations to the underlying store via the Provider API.
+To use DiskANN3 in your system, implement the `DataProvider` trait for your store.
+The library provides vector update and query API to users and translate these requests into reads and mutations to the underlying store via the `DataProvider` trait.
 
-The library supports the following algorithmic features
-- Real-time updates while allowing stable recall under long update streams -- no merges, rebuilds, patches needed.
-- A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
-- Choice of memory tiers to allow operation at different price-performance points. 
-- Hooks to allow simple filters (predicate) processsing in conjuction with vector search.
 
 This repo offers the following Provider implementations as illustrative examples: 
 - In-memory providers. These are volatile and not intended for use in databases. DiskANN3 with in-memory providers outperforms HNSWlib on throughput.
@@ -19,6 +14,13 @@ This repo offers the following Provider implementations as illustrative examples
 - Bf-tree provider as an illustration of how to connect to a B-tree in your database. 
 
 The provider for [Cosmos DB NoSQLVector Search](https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search) is not included but documented in the [VLDB'25 paper](https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf). 
+
+
+The library supports the following algorithmic features
+- Real-time updates while allowing stable recall under long update streams -- no merges, rebuilds, patches needed.
+- A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
+- Choice of memory tiers to allow operation at different price-performance points. 
+- Hooks to allow simple filters (predicate) processsing in conjuction with vector search.
 
 ## Getting Started
 
