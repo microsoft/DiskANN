@@ -24,7 +24,12 @@ else
   REPORT_DIR="${3:?report_dir is required when collected_dir is provided}"
 fi
 
-SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+# GNU date: Linux/WSL. BSD date (macOS): use 'date -u -v-30d' instead.
+if date -u -d '30 days ago' '+%Y' >/dev/null 2>&1; then
+  SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+else
+  SINCE=$(date -u -v-30d '+%Y-%m-%dT%H:%M:%SZ')
+fi
 
 gh api --paginate \
   "repos/$GITHUB_REPOSITORY/actions/workflows/build-stats.yml/runs?status=success&created=>=$SINCE&per_page=100" \
