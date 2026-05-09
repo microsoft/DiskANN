@@ -14,11 +14,11 @@ The library supports the following algorithmic features
 
 This repo offers the following Provider implementations as illustrative examples: 
 - In-memory providers. These are volatile and not intended for use in databases. DiskANN3 with in-memory providers outperforms HNSWlib on throughput.
-- Disk provider. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://img.shields.io/badge/Paper-NeurIPS%3A_DiskANN-blue)](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
+- Disk provider. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
 - Garnet provider for high-throughput scale up vector search, and as an example of mapping to a k-v store.
 - Bf-tree provider as an illustration of how to connect to a B-tree in your database. 
 
-The provider for [https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search](Cosmos DB NoSQLVector Search) is not included but documented in the [https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf](VLDB'25 paper). 
+The provider for [Cosmos DB NoSQLVector Search](https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search) is not included but documented in the [VLDB'25 paper](https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf). 
 
 ## Getting Started
 
