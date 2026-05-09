@@ -1,4 +1,4 @@
-# DiskANN
+# DiskANN3: A composable vector indexing library
 
 The main branch implements DiskANN3, a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple stores and databases. 
 See our [wiki](https://github.com/microsoft/DiskANN/wiki/DiskANN-Project-and-Research-Overview-(2018%E2%80%90present)) for an overview  of research underlying this project. 
