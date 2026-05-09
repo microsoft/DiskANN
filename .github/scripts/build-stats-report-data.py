@@ -4,7 +4,7 @@ Reads from:
   collected/runs.tsv        — tab-separated: run_id, created_at, head_sha
   collected/<run_id>/       — contains build-times.json, binary-sizes.json, cargo-bloat.txt
 
-Usage: python generate-stats-data.py <collected_dir> <output_dir>
+Usage: python build-stats-report-data.py <collected_dir> <output_dir>
 """
 import json
 import sys
@@ -129,7 +129,7 @@ def main():
         "latest_run": latest_run,
     }
 
-    js_path = output_dir / "build-stats-data.js"
+    js_path = output_dir / "build-stats-report.js"
     js_path.write_text(f"const BUILD_DATA = {json.dumps(build_data, indent=2)};\n")
     print(f"Generated {js_path} ({len(runs)} runs)")
 

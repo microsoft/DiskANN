@@ -59,7 +59,7 @@ jobs:
       - name: Generate report
         run: |
           mkdir -p report
-          python3 .github/scripts/generate-stats-data.py collected report
+          python3 .github/scripts/build-stats-report-data.py collected report
           cp .github/reports/build-stats-report.html report/
 
       - name: Upload report
