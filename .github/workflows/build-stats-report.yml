@@ -7,8 +7,6 @@
 # Intended for weekly review.
 
 on:
-  push:
-    branches: ["u/arrayka/release_builds_ci"]  # TODO: remove before merging
   schedule:
     - cron: "0 8 * * *"
   workflow_dispatch:  # allows manual triggering from the Actions UI
