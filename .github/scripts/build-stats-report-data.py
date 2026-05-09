@@ -52,7 +52,7 @@ def main():
     for line in runs_tsv.read_text().strip().splitlines():
         parts = line.split("\t")
         if len(parts) < 3:
-            continue
+            raise ValueError(f"Malformed line in runs.tsv: {line!r}")
         run_id, created_at, head_sha = parts[0], parts[1], parts[2]
         run_dir = collected_dir / run_id
 
@@ -63,7 +63,7 @@ def main():
         ll_path = run_dir / "cargo-llvm-lines.txt"
 
         if not timing_path.exists():
-            continue  # skip runs without data
+            raise FileNotFoundError(f"Missing cargo-timing.html for run {run_id} in {run_dir}")
 
         runs.append({
             "run_id": run_id,
