@@ -17,6 +17,8 @@ This repo offers the following Provider implementations as illustrative examples
 - Disk provider. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://img.shields.io/badge/Paper-NeurIPS%3A_DiskANN-blue)](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
 - Garnet provider for high-throughput scale up vector search, and as an example of mapping to a k-v store.
 - Bf-tree provider as an illustration of how to connect to a B-tree in your database. 
+
+
 The provider for [https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search](Cosmos DB NoSQLVector Search) is not included but documented in the [https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf](VLDB'25 paper). 
 
 ## Getting Started
