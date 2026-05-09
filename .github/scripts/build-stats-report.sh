@@ -29,21 +29,20 @@ SINCE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
 gh api --paginate \
   "repos/$GITHUB_REPOSITORY/actions/workflows/build-stats.yml/runs?status=success&created=>=$SINCE&per_page=100" \
   --jq '.workflow_runs[] | [.id, .created_at, .head_sha] | @tsv' \
-  > runs.tsv || true
+  > "$COLLECTED_DIR/runs.tsv" || true
 
-if [ ! -s runs.tsv ]; then
+if [ ! -s "$COLLECTED_DIR/runs.tsv" ]; then
   echo "::warning::No successful build-stats runs found in the last 30 days"
   exit 1
 fi
 
-echo "Found $(wc -l < runs.tsv) runs"
-cp runs.tsv "$COLLECTED_DIR/runs.tsv"
+echo "Found $(wc -l < "$COLLECTED_DIR/runs.tsv") runs"
 
 while IFS=$'\t' read -r run_id created_at head_sha; do
   gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
     --name build-stats --dir "$COLLECTED_DIR/$run_id" 2>/dev/null \
     || echo "::warning::Skipping run $run_id (artifact expired)"
-done < runs.tsv
+done < "$COLLECTED_DIR/runs.tsv"
 
 python3 "$SCRIPT_DIR/build-stats-report-data.py" "$COLLECTED_DIR" "$REPORT_DIR"
 cp "$SCRIPT_DIR/../reports/build-stats-report.html" "$REPORT_DIR/"
