@@ -41,8 +41,8 @@ def parse_cargo_timing(html_path: Path) -> dict:
 
 
 def main():
-    collected_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("collected")
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("report")
+    collected_dir = Path(sys.argv[1])
+    output_dir = Path(sys.argv[2])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     runs_tsv = collected_dir / "runs.tsv"

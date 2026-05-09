@@ -4,7 +4,7 @@
 # Aggregates release build statistics from the last 30 days of
 # `build-stats.yml` runs and produces an HTML dashboard with trend charts.
 #
-# Intended for weekly scrum review.
+# Intended for weekly review.
 
 on:
   schedule:
