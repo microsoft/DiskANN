@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-# Release build statistics workflow.
+# Build statistics workflow.
 #
 # Runs on every push to main to capture release build timings, binary sizes,
 # and cargo-bloat analysis. The data is uploaded as structured JSON artifacts
@@ -12,7 +12,7 @@ on:
     branches: ["main", "u/arrayka/release_builds_ci"]  # TODO: remove temp branch before merging
   workflow_dispatch:  # allows manual triggering from the Actions UI
 
-name: Release Build Stats
+name: Build Stats
 
 env:
   CARGO_TERM_COLOR: always
