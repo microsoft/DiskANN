@@ -57,7 +57,6 @@ jobs:
           name: build-stats
           path: |
             target/cargo-timings/cargo-timing.html
-            build-times.json
             binary-sizes.json
             cargo-bloat.txt
             cargo-llvm-lines.txt

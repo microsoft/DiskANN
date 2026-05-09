@@ -2,14 +2,42 @@
 
 Reads from:
   collected/runs.tsv        — tab-separated: run_id, created_at, head_sha
-  collected/<run_id>/       — contains build-times.json, binary-sizes.json, cargo-bloat.txt
+  collected/<run_id>/       — contains cargo-timing.html, binary-sizes.json, cargo-bloat.txt
 
 Usage: python build-stats-report-data.py <collected_dir> <output_dir>
 """
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def parse_cargo_timing(html_path: Path) -> dict:
+    """Parse build times from a cargo-timing.html file."""
+    if not html_path.exists():
+        return {}
+
+    html = html_path.read_text()
+
+    m = re.search(r"DURATION\s*=\s*(\d+(?:\.\d+)?)", html)
+    total_s = float(m.group(1)) if m else 0
+
+    m2 = re.search(r"Total time:</td><td>([^<]+)</td>", html)
+    total_display = m2.group(1).strip() if m2 else f"{total_s:.1f}s"
+
+    m = re.search(r"const UNIT_DATA\s*=\s*(\[.*?\]);", html, re.DOTALL)
+    if not m:
+        return {"total_wall_time_s": total_s, "total_time_display": total_display, "units": []}
+
+    units = json.loads(m.group(1))
+    units_sorted = sorted(units, key=lambda u: u.get("duration", 0), reverse=True)
+
+    return {
+        "total_wall_time_s": total_s,
+        "total_time_display": total_display,
+        "units": [{"name": u["name"], "version": u.get("version", ""), "duration": u.get("duration", 0)} for u in units_sorted],
+    }
 
 
 def main():
@@ -28,20 +56,20 @@ def main():
         run_id, created_at, head_sha = parts[0], parts[1], parts[2]
         run_dir = collected_dir / run_id
 
-        bt_path = run_dir / "build-times.json"
+        timing_path = run_dir / "cargo-timing.html"
         bs_path = run_dir / "binary-sizes.json"
         cb_path = run_dir / "cargo-bloat.txt"
 
         ll_path = run_dir / "cargo-llvm-lines.txt"
 
-        if not bt_path.exists():
+        if not timing_path.exists():
             continue  # skip runs without data
 
         runs.append({
             "run_id": run_id,
             "created_at": created_at,
             "head_sha": head_sha,
-            "build_times": json.loads(bt_path.read_text()) if bt_path.exists() else {},
+            "build_times": parse_cargo_timing(timing_path),
             "binary_sizes": json.loads(bs_path.read_text()) if bs_path.exists() else [],
             "cargo_bloat": cb_path.read_text() if cb_path.exists() else "",
             "cargo_llvm_lines": ll_path.read_text() if ll_path.exists() else "",
