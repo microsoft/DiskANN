@@ -42,8 +42,8 @@ jobs:
       - name: Build release with timings
         run: cargo clean && cargo build --workspace --release --locked --timings
 
-      - name: Parse and display build stats
-        run: python3 .github/scripts/build-stats-size.py
+      - name: Collect binary sizes
+        run: python3 .github/scripts/build-stats-size.py target/release build-stats-size.json
 
       - name: Run cargo bloat
         run: cargo bloat --release --package diskann-benchmark -n 100 | tee cargo-bloat.txt
