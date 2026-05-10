@@ -1,7 +1,13 @@
 #pragma once
 
+#include <memory>
+#include <string>
+
 #include "common_includes.h"
 #include "parameters.h"
+#include "distance.h"
+#include "ann_exception.h"
+#include "logger.h"
 
 namespace diskann
 {
@@ -198,13 +204,8 @@ class IndexConfigBuilder
 
     IndexConfig build()
     {
-        if (_data_type == "" || _data_type.empty())
+        if (_data_type.empty())
             throw ANNException("Error: data_type can not be empty", -1);
-
-        if (_dynamic_index && _num_frozen_pts == 0)
-        {
-            _num_frozen_pts = 1;
-        }
 
         if (_dynamic_index)
         {
