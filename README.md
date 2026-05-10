@@ -1,30 +1,26 @@
-# DiskANN3: A composable vector indexing library
+# DiskANN3: A Composable Vector Indexing Library
 
-The main branch implements DiskANN3, a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple stores and databases. 
-See our [wiki](https://github.com/microsoft/DiskANN/wiki/DiskANN-Project-and-Research-Overview-(2018%E2%80%90present)) for an overview  of research underlying this project. 
+DiskANN3 is a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple databases. It draws on research from the DiskANN project, which is overviewed in the [wiki page](https://github.com/microsoft/DiskANN/wiki/DiskANN-Project-and-Research-Overview-(2018%E2%80%90present)). 
 
-To use DiskANN3 in your system, implement the `DataProvider` trait for your store.
-The library provides vector update and query API to users and translate these requests into reads and mutations to the underlying store via the `DataProvider` trait.
-
+To use DiskANN3 in your system, you would implement the `DataProvider` trait for your store to describe how index terms such as vectors, adjacency lists should be store and retrieved. DiskANN3 provides vector update and query API to users and internally uses the implementation of `DataProvider` trait to serve these requests.
 
 This repo offers the following Provider implementations as illustrative examples: 
-- In-memory providers. These are volatile and not intended for use in databases. DiskANN3 with in-memory providers outperforms HNSWlib on throughput.
-- Disk provider. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
-- Garnet provider for high-throughput scale up vector search, and as an example of mapping to a k-v store.
+- In-memory providers, for maximum performance. These are volatile and not intended for use in databases. DiskANN3 + in-memory providers outperforms HNSWlib on throughput.
+- Disk provider, for larger than memory support. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
+- [Garnet](https://github.com/Microsoft/Garnet)-based provider for high-throughput scale up vector search, and as an example of mapping to a k-v store.
 - Bf-tree provider as an illustration of how to connect to a B-tree in your database. 
 
 The provider for [Cosmos DB NoSQLVector Search](https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search) is not included but documented in the [VLDB'25 paper](https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf). 
 
-
 The library supports the following algorithmic features
-- Real-time updates while allowing stable recall under long update streams -- no merges, rebuilds, patches needed.
+- Real-time updates (using [ideas here](https://arxiv.org/abs/2502.13826))that support stable recall under long update streams -- no merges, rebuilds, patches needed.
 - A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
 - Choice of memory tiers to allow operation at different price-performance points. 
-- Hooks to allow simple filters (predicate) processsing in conjuction with vector search.
+- Hooks to allow attribute filters (predicate) processsing along with vector search.
 
 ## Getting Started
 
--  Please start with [diskann-benchmarks](/diskann-benchmark/README.md) to benchmark this library and its concrete implementations. This also allows you to build, store and load indices.
+- Start with [diskann-benchmarks](/diskann-benchmark/README.md) to benchmark this library and its concrete implementations. This also allows you to build, store and load indices.
 - To add a new backend, implement the [Provider API](/diskann/src/provider.rs) contract for your store/DB.
 
 
