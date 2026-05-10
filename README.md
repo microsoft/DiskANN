@@ -5,9 +5,9 @@ DiskANN3 is a composable library for bringing scalable, accurate and cost-effect
 To use DiskANN3 in your system, you would implement the `DataProvider` trait for your store to describe how index terms such as vectors, adjacency lists should be store and retrieved. DiskANN3 provides vector update and query API to users and internally uses the implementation of `DataProvider` trait to serve these requests.
 
 This repo offers the following Provider implementations as illustrative examples: 
-- In-memory providers, for maximum performance. These are volatile and not intended for use in databases. DiskANN3 + in-memory providers outperforms HNSWlib on throughput.
+- In-memory providers, for maximum performance. These are volatile and not intended for use in databases. DiskANN3 + in-memory providers [outperforms](https://github.com/microsoft/DiskANN/wiki/Perf:-DiskANN3---In%E2%80%90memory-providers) HNSWlib on throughput.
 - Disk provider, for larger than memory support. This is intended to match the performormance of the first version of DiskANN reported in [NeurIPS'19 Paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf).
-- [Garnet](https://github.com/Microsoft/Garnet)-based provider for high-throughput scale up vector search, and as an example of mapping to a k-v store.
+- [Garnet](https://github.com/Microsoft/Garnet)-based provider for high-throughput scale up vector search, and as an example of mapping to a k-v store. This [outperforms](https://github.com/microsoft/DiskANN/wiki/Perf:-DiskANN3---Garnet-Providers-vs-other-Vector-DBs-(Zilliz,-Pinecone,-etc.)) all vector DBs on throughput, latency and recall.
 - Bf-tree provider as an illustration of how to connect to a B-tree in your database. 
 
 The provider for [Cosmos DB NoSQL Vector Search](https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search) is not included here but documented in the [VLDB'25 paper](https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf). 
