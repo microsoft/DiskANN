@@ -3,15 +3,7 @@
 **Last Updated**: 2026-05-04 (based on v0.50.1, Rust 1.92)
 
 
-## Repository Structure
-
-The repository uses a Cargo workspace with crates organized into functional tiers. See [`Cargo.toml`](Cargo.toml) for:
-- Workspace members and their dependencies
-- Shared dependency versions
-- Build profiles (release, ci)
-- Workspace-level lints
-
-### Crate Organization
+## Crate Organization
 
 **Tier 1: Foundation**
 - `diskann-wide/` - Low-level SIMD, bit manipulation, type width abstractions
@@ -40,9 +32,8 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 ---
 
-## Dependencies
+### Internal Dependencies
 
-### Internal
 
 - Tier 1 and Tier 2 crates may be added as dependencies of any internal crate
 - `diskann` may be added as a dependency of any equal or higher tier internal crate except those below
@@ -55,7 +46,7 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 ## Boundaries
 
-### 🚫 Never
+### Never
 
 - Modify files in `diskann/tests/generated/` by hand — these are auto-generated baselines. Regenerate with `DISKANN_TEST=overwrite`.
 - Modify `rust-toolchain.toml`, `.github/workflows/`, or `.codecov.yml` without explicit approval.
@@ -65,14 +56,14 @@ The repository uses a Cargo workspace with crates organized into functional tier
 - Remove or weaken existing tests without a strong, documented reason.
 - Commit secrets, credentials, or API keys.
 
-### ⚠️ Ask First
+### Ask First
 
 - Adding new workspace dependencies to `Cargo.toml` — justify the addition.
 - Changing public API signatures in any `diskann-*` crate — requires SemVer analysis (may need a major version bump).
 - Modifying tier dependency rules (e.g., adding a Tier 3 dependency to a Tier 4 benchmark crate).
 - Changing `clippy.toml` or `rustfmt.toml` lint/formatting configuration.
 
-### ✅ Always
+### Always
 
 - Include the MIT license header in every new source file.
 - Run `cargo fmt --all` and `cargo clippy --workspace --all-targets -- -Dwarnings` before committing.
@@ -81,63 +72,17 @@ The repository uses a Cargo workspace with crates organized into functional tier
 
 ---
 
-## Testing
 
-### Test Execution
 
-```bash
-# Run all tests
-cargo test
 
-# Run tests for specific crate
-cargo test -p diskann
-
-# Run specific test
-cargo test -p diskann -- --exact test_name
-
-# Run with CI profile (faster)
-cargo test --profile ci
-
-# Run doc tests
-cargo test --doc
-```
-
-**Note**: CI uses `cargo-nextest` for running tests. See [`.cargo/nextest.toml`](.cargo/nextest.toml) for test configuration (timeouts, retries, etc.).
-
-### Test Baseline Caching System
-
-DiskANN uses a baseline caching system for regression detection. Test results are serialized as JSON into `diskann/tests/generated/` and compared against on subsequent runs. Any difference is flagged as a test failure.
-
-- To regenerate baselines: run tests with `DISKANN_TEST=overwrite`
-- Before checking in: delete `diskann/tests/generated/` first, then regenerate to prune unused baselines
-- Regenerated JSON files should be inspected via `git diff` during review
-
-The APIs are **`pub(crate)`** (internal to the `diskann` crate only):
-- [`diskann/src/test/cache.rs`](diskann/src/test/cache.rs) — `get_or_save_test_results`, `TestRoot`, `TestPath`
-- [`diskann/src/test/cmp.rs`](diskann/src/test/cmp.rs) — `VerboseEq` trait, `verbose_eq!` macro, `assert_eq_verbose!`
-
-See [`diskann/README.md`](diskann/README.md) for additional details.
-
-### AVX-512, Aarch64, and multi-platform
-
-When touching architecture-specific intrinsics, run cross-platform validation per `diskann-wide/README.md`:
-
-- Testing AVX-512 code on non-AVX-512 capable x86-64 machines.
-- Testing Aarch64 code on x86-64 machines.
-- Testing code compiled for and running on the `x86-64` CPU (no AVX/AVX2) does not execute unsupported instructions.
-
----
-
-## Code Quality & Linting
-
-### Error Handling
+## Error Handling
 
 There are three regimes of error handling and the strategy to use depends on the regime.
 
-#### Low-Level
+### Low-Level
 
-Low-level crates should use bespoke, precise, non-allocating error types. Use `thiserror` for boilerplate. Chain with `std::error::Error::source`.
-
+Low-level crates should use bespoke, precise, non-allocating error types. 
+Use `thiserror` for boilerplate. Chain with `std::error::Error::source`.
 `diskann::ANNError` is not a suitable low-level error type.
 
 ```rust
@@ -162,7 +107,7 @@ pub enum MyLibError {
 }
 ```
 
-#### Mid-Level (diskann algorithms)
+### Mid-Level (diskann algorithms)
 
 Use `diskann::ANNError` and its context machinery. This type:
 
@@ -193,11 +138,11 @@ fn process_vectors(data: &[f32]) -> Result<(), ANNError> {
 Traits with associated error types should consider constraining with `diskann::error::ToRanked` instead of `Into<ANNError>` if non-critical errors should be supported.
 `ANNError` is the mid-level propagated error type; use `ToRanked` and `RankedError` to distinguish transient/recoverable failures from fatal ones.
 
-#### High Level (tooling)
+### High Level (tooling)
 
 At this level `anyhow::Error` is appropriate for binaries and CLI entry points. Note that some tooling helpers still use `ANNError` for compatibility.
 
-#### Do Not
+### Do Not
 
 Do not use a single crate-level error enum. Problems:
 
@@ -206,22 +151,8 @@ Do not use a single crate-level error enum. Problems:
 - Generates large structs that blow up the stack
 - Branch-heavy `Drop` implementations which bloat code
 
-### Formatting
 
-See [`rustfmt.toml`](rustfmt.toml) for formatting configuration. Commands are in [Quick Reference](#quick-reference).
-
-### Clippy (Linting)
-
-```bash
-# Check with no default features (for specific crates)
-cargo clippy -p diskann --no-default-features
-```
-
-See [`clippy.toml`](clippy.toml) for linting rules, including:
-- Disallowed methods (rayon global thread pool, rand::thread_rng, etc.)
-
-The workspace-level lint in [`Cargo.toml`](Cargo.toml) enforces documentation for unsafe blocks:
-- `undocumented_unsafe_blocks = "warn"`
+## Document unsafe usage
 
 ```rust
 // ✅ Good — specific, verifiable precondition
@@ -238,42 +169,13 @@ unsafe { ffi::sgemm(m, n, k, a.as_ptr(), b.as_ptr(), c.as_mut_ptr()) };
 let val = unsafe { ptr.add(i).read() };
 ```
 
-### Code Coverage
 
-Code coverage of changes is required for PRs. See [`.codecov.yml`](.codecov.yml) for coverage policy and thresholds.
-
-### CI Pipeline
+## CI Pipeline
 
 CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Key jobs include:
 - Format and clippy checks
 - Tests on multiple platforms (Linux, Windows)
-- Code coverage
+- [Code coverage](.codecov.yml)
 - Architecture compatibility (SDE)
 
-### Test Patterns
-
-**DO**:
-- Look for existing setup/execution infrastructure
-- Factor out common patterns
-
-**DON'T**:
-- Add tests for derived traits (Clone, Debug, PartialEq)
-- Add tests for enums unless they have explicit functionality
-
----
-
-## Pre-commit Checklist
-
-Before committing changes, always run the format and clippy commands from [Quick Reference](#quick-reference).
-
-### Points to Add
-how to create a new runtime
-how to write error handling
-how to configure providers
-how to write a new benchmark
-
----
-
-**End of Agent Onboarding Guide**
-
-*This guide should be updated when major changes occur to the repository structure or development workflows.*
+**Note**: CI uses `cargo-nextest` for running tests. See [`.cargo/nextest.toml`](.cargo/nextest.toml) for test configuration (timeouts, retries, etc.).
