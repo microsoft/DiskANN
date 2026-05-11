@@ -367,11 +367,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - ubuntu-24.04-arm
-          - macos-latest
+        # Include macOS only on push (post-merge) to avoid slowing down PR checks.
+        os: ${{ github.event_name == 'push' && fromJSON('["windows-latest","ubuntu-latest","ubuntu-24.04-arm","macos-latest"]') || fromJSON('["windows-latest","ubuntu-latest","ubuntu-24.04-arm"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -400,10 +397,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os:
-          - windows-latest
-          - ubuntu-latest
-          - macos-latest
+        # Include macOS only on push (post-merge) to avoid slowing down PR checks.
+        os: ${{ github.event_name == 'push' && fromJSON('["windows-latest","ubuntu-latest","macos-latest"]') || fromJSON('["windows-latest","ubuntu-latest"]') }}
 
     steps:
       - uses: actions/checkout@v4
