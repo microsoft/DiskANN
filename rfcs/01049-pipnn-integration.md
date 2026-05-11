@@ -112,6 +112,8 @@ pub enum BuildAlgorithm {
 
 `DiskIndexBuildParameters` gains a `build_algorithm: BuildAlgorithm` field and a constructor pair: `new` (defaults to Vamana, no PiPNN dep) and `new_with_algorithm` (explicit). The JSON schema for benchmark configs gains an optional `build_algorithm` block that, when present, deserializes via `#[serde(tag = "algorithm")]` into one of the variants above.
 
+**Deserialization behavior when the `pipnn` feature is disabled**: because `BuildAlgorithm::PiPNN` is gated by `#[cfg(feature = "pipnn")]`, a binary built without the feature does not see that variant. A JSON config containing `"algorithm": "PiPNN"` fed to such a binary fails at parse time with a serde error along the lines of `unknown variant 'PiPNN', expected 'Vamana'`. This is a clear, fail-fast diagnostic — not a backward-compatibility regression. Configs that omit `build_algorithm` (or set `"algorithm": "Vamana"`) parse identically across feature combinations. Documentation alongside the config schema will call this out so users know that PiPNN configs require a PiPNN-enabled build.
+
 ### Builder dispatch
 
 In `DiskIndexBuilder::build()` (or the new equivalent), dispatch on `BuildAlgorithm`:
@@ -194,6 +196,8 @@ For deployments that need PiPNN's build speed but cannot afford its working memo
 | **One-shot** (in-memory) | 10.8 GB | 133s | 95.00% | RAM ≥ ~32 GB |
 | **Disk-edges** (per-batch reservoir flush) | 6.4 GB | 126s | 95.00% | RAM 8-32 GB |
 | **Merged shards** (per-shard graph, then merge) | 3.3 GB | 332s | 95.31% | RAM 4-8 GB |
+
+Note on disk-edges build time (~126s vs one-shot's ~133s): the disk-edges path is not slower despite the extra I/O. The smaller resident working set means HashPrune inserts touch fewer cache lines per operation, and the spill to disk is sequential append-only and overlaps with leaf-build compute. Net: roughly the same wall-clock as one-shot in this benchmark, with significantly lower peak RSS.
 
 The merged-shards path **uses less peak RSS than Vamana** (3.3 GB vs Vamana's 6.3 GB on this same dataset) at a 2.5× build-time cost. The disk-edges path matches Vamana on RAM at 3× the build speed.
 
