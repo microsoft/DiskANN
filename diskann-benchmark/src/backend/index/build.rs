@@ -213,12 +213,12 @@ impl std::fmt::Display for BuildStats {
     }
 }
 
-pub struct ProgressMeter<'a> {
+pub(crate) struct ProgressMeter<'a> {
     output: &'a mut dyn Output,
 }
 
 impl<'a> ProgressMeter<'a> {
-    pub fn new(output: &'a mut dyn Output) -> Self {
+    pub(crate) fn new(output: &'a mut dyn Output) -> Self {
         Self { output }
     }
 }

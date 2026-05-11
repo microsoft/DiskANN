@@ -15,13 +15,22 @@ use diskann::{utils::VectorId, ANNError, ANNErrorKind, ANNResult};
 use diskann_utils::future::AsyncFriendly;
 use std::sync::{Arc, RwLock};
 
-pub(crate) struct RoaringAttributeStore<IT>
+pub struct RoaringAttributeStore<IT>
 where
     IT: VectorId + AsyncFriendly,
 {
     attribute_map: Arc<RwLock<AttributeEncoder>>,
     index: Arc<RwLock<RoaringTreemapSetProvider<IT>>>,
     inv_index: Arc<RwLock<RoaringTreemapSetProvider<u64>>>,
+}
+
+impl<IT> Default for RoaringAttributeStore<IT>
+where
+    IT: VectorId,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<IT> RoaringAttributeStore<IT>

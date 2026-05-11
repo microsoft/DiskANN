@@ -33,6 +33,8 @@ tempfile.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 tracing.workspace = true
+diskann = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["rt"] }
 
 
 

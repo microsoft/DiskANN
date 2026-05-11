@@ -74,11 +74,11 @@ where
     }
 }
 
-impl<'a, VT, DP, AS> SetElement<Document<'a, VT>> for DocumentProvider<DP, AS>
+impl<'doc, VT, DP, AS> SetElement<&'doc Document<'doc, VT>> for DocumentProvider<DP, AS>
 where
-    DP: DataProvider + Delete + SetElement<&'a VT>,
+    DP: DataProvider + Delete + SetElement<&'doc VT>,
     AS: AttributeStore<DP::InternalId> + AsyncFriendly,
-    VT: Sync + Send,
+    VT: Sync + Send + ?Sized,
 {
     type SetError = ANNError;
 
@@ -86,7 +86,7 @@ where
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: Document<'a, VT>,
+        element: &'doc Document<'doc, VT>,
     ) -> Result<Self::Guard, Self::SetError> {
         let guard = self
             .inner_provider

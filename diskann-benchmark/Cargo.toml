@@ -63,6 +63,9 @@ scalar-quantization = []
 # Enable minmax-quantization based algorithms
 minmax-quantization = []
 
+# Enable Document Index benchmarks
+document-index = []
+
 # Enable Disk Index benchmarks
 disk-index = [
     "diskann-disk/perf_test",

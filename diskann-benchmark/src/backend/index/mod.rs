@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-mod build;
+pub(crate) mod build;
 mod search;
 mod streaming;
 

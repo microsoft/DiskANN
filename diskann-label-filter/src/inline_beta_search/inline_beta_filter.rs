@@ -9,6 +9,7 @@ use diskann::neighbor::Neighbor;
 use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
 use diskann::ANNError;
+use diskann_utils::Reborrow;
 use diskann_vector::PreprocessedDistanceFunction;
 use roaring::RoaringTreemap;
 
@@ -27,15 +28,22 @@ pub struct InlineBetaStrategy<Strategy> {
     inner: Strategy,
 }
 
+impl<Strategy> InlineBetaStrategy<Strategy> {
+    /// Create a new InlineBetaStrategy with the given beta value and inner strategy.
+    pub fn new(beta: f32, inner: Strategy) -> Self {
+        Self { beta, inner }
+    }
+}
+
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, &'q Q>,
-    Q: Send + Sync,
+    Strategy: SearchStrategy<DP, Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
@@ -67,12 +75,12 @@ where
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        &'q FilteredQuery<Q>,
+        &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
-    Q: Send + Sync,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -116,22 +124,15 @@ where
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
-        match self.filter_expr.encoded_filter_expr().accept(&pred_eval) {
-            Ok(matched) => {
-                if matched {
-                    sim * self.beta_value
-                } else {
-                    sim
-                }
-            }
-            Err(_) => {
-                //TODO: If predicate evaluation fails, we are taking the approach that we will simply
-                //return the score returned by the inner computer, as though no predicate was specified.
-                tracing::warn!(
-                    "Predicate evaluation failed in OnlineBetaComputer::evaluate_similarity()"
-                );
-                sim
-            }
+        if self
+            .filter_expr
+            .encoded_filter_expr()
+            .accept(&pred_eval)
+            .expect("Expected predicate evaluation to not error out!")
+        {
+            sim * self.beta_value
+        } else {
+            sim
         }
     }
 }
@@ -140,20 +141,29 @@ pub struct FilterResults<IPP> {
     inner_post_processor: IPP,
 }
 
-impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
+impl<IPP> FilterResults<IPP> {
+    #[cfg(test)]
+    pub(crate) fn new(inner_post_processor: IPP) -> Self {
+        Self {
+            inner_post_processor,
+        }
+    }
+}
+
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'_, Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<&'q Q>,
-    Q: Send + Sync,
-    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
+    IA: BuildQueryComputer<Q::Target>,
+    Q: Send + Sync + Reborrow<'q>,
+    IPP: SearchPostProcess<IA, Q::Target> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
+        query: &'q FilteredQuery<'_, Q>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q::Target>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
