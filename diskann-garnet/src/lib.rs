@@ -72,7 +72,7 @@ impl From<usize> for IndexState {
     }
 }
 
-pub struct Index {
+pub(crate) struct Index {
     inner: Box<dyn DynIndex>,
     quant_type: VectorQuantType,
     state: AtomicUsize,
@@ -176,8 +176,14 @@ fn create_index_impl<T: VectorRepr>(
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
-    let provider =
-        GarnetProvider::<T>::new(dim, quant_type, metric_type, max_degree, callbacks, context)?;
+    let provider = GarnetProvider::<T>::new(
+        dim,
+        quant_type,
+        metric_type,
+        max_degree,
+        callbacks,
+        &context,
+    )?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
     } else {
@@ -228,7 +234,7 @@ pub unsafe extern "C" fn create_index(
         return ptr::null();
     };
 
-    let context = Context(ctx);
+    let context = Context::new(ctx);
     let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
 
     match quant_type {
@@ -397,7 +403,7 @@ pub unsafe extern "C" fn insert(
     attribute_len: usize,
 ) -> u8 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
@@ -429,11 +435,11 @@ pub unsafe extern "C" fn insert(
         return INSERT_FAIL;
     }
 
-    let old_ready = provider::QUANTIZER_READY.with(|v| v.load(Ordering::Acquire));
+    let old_ready = ctx.quantizer_ready();
 
     // Insert the vector
     if index.inner.insert(&ctx, &id, &v).is_ok() {
-        let ready = provider::QUANTIZER_READY.with(|v| v.load(Ordering::Acquire));
+        let ready = ctx.quantizer_ready();
         if !old_ready && ready {
             INSERT_SUCCESS_START_TRAINING
         } else {
@@ -489,7 +495,7 @@ where
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_void) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(context);
+    let ctx = Context::new(context);
 
     index.inner.train_quantizer(&ctx)
 }
@@ -505,7 +511,7 @@ pub unsafe extern "C" fn backfill_quant_vectors(
     task_count: usize,
 ) {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(context);
+    let ctx = Context::new(context);
     index
         .inner
         .backfill_quant_vectors(&ctx, task_index, task_count);
@@ -524,7 +530,7 @@ pub unsafe extern "C" fn set_attribute(
     attribute_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(context);
+    let ctx = Context::new(context);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -577,7 +583,7 @@ pub unsafe extern "C" fn search_vector(
         return -1;
     };
 
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_ids,
@@ -642,7 +648,7 @@ pub unsafe extern "C" fn search_element(
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_ids,
@@ -710,7 +716,7 @@ pub unsafe extern "C" fn remove(
     id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -742,7 +748,7 @@ pub unsafe extern "C" fn check_internal_id_valid(
     internal_id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let internal_id_bytes = unsafe { slice::from_raw_parts(internal_id_data, internal_id_len) };
     if internal_id_bytes.len() != mem::size_of::<u32>() {
         return false;
@@ -765,7 +771,7 @@ pub unsafe extern "C" fn check_external_id_valid(
     id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 

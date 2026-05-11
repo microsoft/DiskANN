@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
-pub trait DynIndex: Send + Sync {
+pub(crate) trait DynIndex: Send + Sync {
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
 
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;

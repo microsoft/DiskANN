@@ -14,7 +14,7 @@ bytemuck.workspace = true
 crossbeam = "0.8.4"
 dashmap = { workspace = true, features = ["inline"] }
 diskann.workspace = true
-diskann-quantization.workspace = true
+diskann-quantization = { workspace = true, features = ["flatbuffers"] }
 diskann-providers.workspace = true
 diskann-utils.workspace = true
 diskann-vector.workspace = true

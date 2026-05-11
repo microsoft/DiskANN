@@ -3,17 +3,26 @@
  * Licensed under the MIT license.
  */
 
-use std::{ffi::c_void, fmt, mem, ops::Deref, slice};
+use std::{
+    ffi::c_void,
+    fmt, mem,
+    ops::Deref,
+    slice,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use diskann::provider::ExecutionContext;
 use thiserror::Error;
 
 /// Bitmask for extracting the Term bits from a Context.
 /// Must have enough bits to represent all Term variants (max value is 6, needs 3 bits).
-pub const TERM_BITMASK: u64 = (1 << 3) - 1;
+pub(crate) const TERM_BITMASK: u64 = (1 << 3) - 1;
 
 #[derive(Debug)]
-pub enum Term {
+pub(crate) enum Term {
     Vector = 0,
     Neighbors = 1,
     Quantized = 2,
@@ -23,28 +32,62 @@ pub enum Term {
     ExtMap = 6,
 }
 
-#[derive(Copy, Clone)]
-pub struct Context(pub u64);
+#[derive(Clone, Debug)]
+pub(crate) struct Context {
+    inner: u64,
+    quantizer_ready: Arc<AtomicBool>,
+}
 
 impl Context {
-    pub fn term(&self, kind: Term) -> Self {
-        Context(self.0 | (kind as u64 & TERM_BITMASK))
+    pub(crate) fn new(inner: u64) -> Self {
+        Self {
+            inner,
+            quantizer_ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get(&self) -> u64 {
+        self.inner
+    }
+
+    pub(crate) fn term(&self, kind: Term) -> Self {
+        let Context {
+            inner,
+            quantizer_ready,
+        } = self;
+        let inner = *inner | (kind as u64 & TERM_BITMASK);
+        let quantizer_ready = quantizer_ready.clone();
+
+        Self {
+            inner,
+            quantizer_ready,
+        }
+    }
+
+    pub(crate) fn quantizer_ready(&self) -> bool {
+        self.quantizer_ready.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_quantizer_ready(&self) {
+        self.quantizer_ready.store(true, Ordering::Release);
     }
 }
 
 impl ExecutionContext for Context {}
 
-pub type ReadCallback =
+pub(crate) type ReadCallback =
     unsafe extern "C" fn(u64, u32, *const u8, usize, ReadDataCallback, *mut c_void);
-pub type WriteCallback = unsafe extern "C" fn(u64, *const u8, usize, *const u8, usize) -> bool;
-pub type DeleteCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
-pub type ReadModifyWriteCallback =
+pub(crate) type WriteCallback =
+    unsafe extern "C" fn(u64, *const u8, usize, *const u8, usize) -> bool;
+pub(crate) type DeleteCallback = unsafe extern "C" fn(u64, *const u8, usize) -> bool;
+pub(crate) type ReadModifyWriteCallback =
     unsafe extern "C" fn(u64, *const u8, usize, usize, RmwDataCallback, *mut c_void) -> bool;
-pub type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
-pub type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
+pub(crate) type ReadDataCallback = unsafe extern "C" fn(u32, *mut c_void, *const u8, usize);
+pub(crate) type RmwDataCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize);
 
 #[derive(Copy, Clone)]
-pub struct Callbacks {
+pub(crate) struct Callbacks {
     read_callback: ReadCallback,
     write_callback: WriteCallback,
     delete_callback: DeleteCallback,
@@ -52,7 +95,7 @@ pub struct Callbacks {
 }
 
 impl Callbacks {
-    pub fn new(
+    pub(crate) fn new(
         read_callback: ReadCallback,
         write_callback: WriteCallback,
         delete_callback: DeleteCallback,
@@ -67,36 +110,33 @@ impl Callbacks {
     }
 
     #[cfg(test)]
-    pub fn read_callback(&self) -> ReadCallback {
+    pub(crate) fn read_callback(&self) -> ReadCallback {
         self.read_callback
     }
 
     #[cfg(test)]
-    pub fn write_callback(&self) -> WriteCallback {
+    pub(crate) fn write_callback(&self) -> WriteCallback {
         self.write_callback
     }
 
     #[cfg(test)]
-    pub fn delete_callback(&self) -> DeleteCallback {
+    pub(crate) fn delete_callback(&self) -> DeleteCallback {
         self.delete_callback
     }
 
     #[cfg(test)]
-    pub fn rmw_callback(&self) -> ReadModifyWriteCallback {
+    pub(crate) fn rmw_callback(&self) -> ReadModifyWriteCallback {
         self.rmw_callback
     }
 
-    #[expect(
-        dead_code,
-        reason = "currently unused, but may be needed in the future"
-    )]
-    pub fn exists_iid(&self, ctx: Context, id: u32) -> bool {
+    #[cfg(test)]
+    pub(crate) fn exists_iid(&self, ctx: &Context, id: u32) -> bool {
         let key = [4, id];
         // SAFETY: Key bytes are preceded by 4 bytes of space.
         unsafe { self.exists_raw(ctx, bytemuck::bytes_of(&key)) }
     }
 
-    pub fn exists_wid(&self, ctx: Context, key: u64) -> bool {
+    pub(crate) fn exists_wid(&self, ctx: &Context, key: u64) -> bool {
         // NOTE: the length is bit-shifted so that we have a u32 in the lower half of the u64.
         let mut key = [8 << 32, key];
         let key_bytes = bytemuck::bytes_of_mut(&mut key);
@@ -108,7 +148,7 @@ impl Callbacks {
         dead_code,
         reason = "currently unused, but may be needed in the future"
     )]
-    pub fn exists_eid(&self, ctx: Context, id: &GarnetId) -> bool {
+    pub(crate) fn exists_eid(&self, ctx: &Context, id: &GarnetId) -> bool {
         // SAFETY: GarnetId ensures there are 4 bytes preceding the key bytes.
         unsafe { self.exists_raw(ctx, id) }
     }
@@ -117,7 +157,7 @@ impl Callbacks {
     ///
     /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
     /// This invariant must be checked by the caller.
-    unsafe fn exists_raw(&self, ctx: Context, key: &[u8]) -> bool {
+    unsafe fn exists_raw(&self, ctx: &Context, key: &[u8]) -> bool {
         let mut called = false;
         let mut cb = |_, _: &[u8]| {
             called = true;
@@ -125,7 +165,7 @@ impl Callbacks {
 
         unsafe {
             (self.read_callback)(
-                ctx.0,
+                ctx.inner,
                 1,
                 key.as_ptr(),
                 key.len(),
@@ -138,9 +178,9 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn read_single_iid<D: bytemuck::Pod>(
+    pub(crate) fn read_single_iid<D: bytemuck::Pod>(
         &self,
-        ctx: Context,
+        ctx: &Context,
         id: u32,
         value: &mut [D],
     ) -> bool {
@@ -156,9 +196,9 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn read_single_wid<D: bytemuck::Pod>(
+    pub(crate) fn read_single_wid<D: bytemuck::Pod>(
         &self,
-        ctx: Context,
+        ctx: &Context,
         key: u64,
         value: &mut [D],
     ) -> bool {
@@ -176,9 +216,9 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn read_single_eid<D: bytemuck::Pod>(
+    pub(crate) fn read_single_eid<D: bytemuck::Pod>(
         &self,
-        ctx: Context,
+        ctx: &Context,
         id: &GarnetId,
         value: &mut [D],
     ) -> bool {
@@ -197,7 +237,7 @@ impl Callbacks {
     /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
     /// This invariant must be checked by the caller.
     #[must_use]
-    unsafe fn read_single_raw(&self, ctx: Context, key: &[u8], value: &mut [u8]) -> bool {
+    unsafe fn read_single_raw(&self, ctx: &Context, key: &[u8], value: &mut [u8]) -> bool {
         let mut found = false;
         let mut cb = |_, data: &[u8]| {
             found = true;
@@ -206,7 +246,7 @@ impl Callbacks {
 
         unsafe {
             (self.read_callback)(
-                ctx.0,
+                ctx.inner,
                 1,
                 key.as_ptr(),
                 key.len(),
@@ -219,8 +259,12 @@ impl Callbacks {
     }
 
     // ids must be passed as 4-byte length prefixed u32s. so [4, I1_u32, 4, I2_u32, ...]
-    pub fn read_multi_lpiid<'a, F, T: bytemuck::Pod>(&self, ctx: Context, ids: &[u32], mut f: F)
-    where
+    pub(crate) fn read_multi_lpiid<'a, F, T: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        ids: &[u32],
+        mut f: F,
+    ) where
         F: FnMut(u32, &'a [T]),
     {
         if ids.is_empty() {
@@ -229,7 +273,7 @@ impl Callbacks {
 
         unsafe {
             (self.read_callback)(
-                ctx.0,
+                ctx.inner,
                 ids.len() as u32 / 2,
                 bytemuck::must_cast_slice::<_, u8>(ids).as_ptr(),
                 mem::size_of_val(ids),
@@ -244,7 +288,11 @@ impl Callbacks {
     /// This function allocations inside the read callback since it can't know the size
     /// of the value up front.
     #[must_use]
-    pub fn read_varsize_iid<T: bytemuck::Pod>(&self, ctx: Context, id: u32) -> Option<Vec<T>> {
+    pub(crate) fn read_varsize_iid<T: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        id: u32,
+    ) -> Option<Vec<T>> {
         let key = [4, id];
         let mut result = None;
         let mut cb = |_, data: &[u8]| {
@@ -262,7 +310,7 @@ impl Callbacks {
         // SAFETY: Key bytes are preceded by 4 bytes of extra space.
         unsafe {
             (self.read_callback)(
-                ctx.0,
+                ctx.inner,
                 1,
                 bytemuck::bytes_of(&key).as_ptr(),
                 mem::size_of_val(&key),
@@ -275,7 +323,7 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn write_iid<D: bytemuck::Pod>(&self, ctx: Context, id: u32, value: &[D]) -> bool {
+    pub(crate) fn write_iid<D: bytemuck::Pod>(&self, ctx: &Context, id: u32, value: &[D]) -> bool {
         let key = [0, id];
         // SAFETY: Key bytes are preceded by 4 bytes of extra space.
         unsafe {
@@ -288,7 +336,7 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn write_wid<D: bytemuck::Pod>(&self, ctx: Context, key: u64, value: &[D]) -> bool {
+    pub(crate) fn write_wid<D: bytemuck::Pod>(&self, ctx: &Context, key: u64, value: &[D]) -> bool {
         let key = [0, key];
         // SAFETY: Key bytes are preceded by 8 bytes of extra space.
         unsafe {
@@ -301,7 +349,12 @@ impl Callbacks {
     }
 
     #[must_use]
-    pub fn write_eid<D: bytemuck::Pod>(&self, ctx: Context, id: &GarnetId, value: &[D]) -> bool {
+    pub(crate) fn write_eid<D: bytemuck::Pod>(
+        &self,
+        ctx: &Context,
+        id: &GarnetId,
+        value: &[D],
+    ) -> bool {
         // SAFETY: GarnetId ensures there are 4 bytes preceding the key bytes.
         unsafe { self.write_raw(ctx, id, bytemuck::must_cast_slice::<D, u8>(value)) }
     }
@@ -311,22 +364,22 @@ impl Callbacks {
     /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
     /// This invariant must be checked by the caller.
     #[must_use]
-    unsafe fn write_raw(&self, ctx: Context, key: &[u8], value: &[u8]) -> bool {
+    unsafe fn write_raw(&self, ctx: &Context, key: &[u8], value: &[u8]) -> bool {
         let value_ptr = value.as_ptr();
         let value_len = value.len();
-        unsafe { (self.write_callback)(ctx.0, key.as_ptr(), key.len(), value_ptr, value_len) }
+        unsafe { (self.write_callback)(ctx.inner, key.as_ptr(), key.len(), value_ptr, value_len) }
     }
 
     #[must_use]
-    pub fn delete_iid(&self, ctx: Context, id: u32) -> bool {
+    pub(crate) fn delete_iid(&self, ctx: &Context, id: u32) -> bool {
         let key = [0, id];
-        unsafe { (self.delete_callback)(ctx.0, bytemuck::bytes_of(&key[1]).as_ptr(), 4) }
+        unsafe { (self.delete_callback)(ctx.inner, bytemuck::bytes_of(&key[1]).as_ptr(), 4) }
     }
 
     #[must_use]
-    pub fn delete_eid(&self, ctx: Context, id: &GarnetId) -> bool {
+    pub(crate) fn delete_eid(&self, ctx: &Context, id: &GarnetId) -> bool {
         let id: &[u8] = id;
-        unsafe { (self.delete_callback)(ctx.0, id.as_ptr(), id.len()) }
+        unsafe { (self.delete_callback)(ctx.inner, id.as_ptr(), id.len()) }
     }
 
     /// Modify a value in Garnet by internal ID.
@@ -336,7 +389,13 @@ impl Callbacks {
     ///
     /// `f` should not panic.
     #[must_use]
-    pub fn rmw_iid<'a, F, T>(&self, ctx: Context, id: u32, write_len: usize, mut f: F) -> bool
+    pub(crate) fn rmw_iid<'a, F, T>(
+        &self,
+        ctx: &Context,
+        id: u32,
+        write_len: usize,
+        mut f: F,
+    ) -> bool
     where
         F: FnMut(&'a mut [T]),
         T: bytemuck::Pod,
@@ -365,7 +424,13 @@ impl Callbacks {
     ///
     /// `f` should not panic.
     #[must_use]
-    pub fn rmw_wid<'a, F, T>(&self, ctx: Context, key: u64, write_len: usize, mut f: F) -> bool
+    pub(crate) fn rmw_wid<'a, F, T>(
+        &self,
+        ctx: &Context,
+        key: u64,
+        write_len: usize,
+        mut f: F,
+    ) -> bool
     where
         F: FnMut(&'a mut [T]),
         T: bytemuck::Pod,
@@ -397,13 +462,13 @@ impl Callbacks {
     ///
     /// `f` should not panic.
     #[must_use]
-    unsafe fn rmw_raw<'a, F>(&self, ctx: Context, key: &[u8], write_len: usize, mut f: F) -> bool
+    unsafe fn rmw_raw<'a, F>(&self, ctx: &Context, key: &[u8], write_len: usize, mut f: F) -> bool
     where
         F: FnMut(&'a mut [u8]),
     {
         unsafe {
             (self.rmw_callback)(
-                ctx.0,
+                ctx.inner,
                 key.as_ptr(),
                 key.len(),
                 write_len,
@@ -467,7 +532,7 @@ where
 }
 
 #[derive(Debug, Error, PartialEq)]
-pub enum GarnetError {
+pub(crate) enum GarnetError {
     #[error("garnet read failed")]
     Read,
     #[error("garnet write failed")]
@@ -485,12 +550,12 @@ pub enum GarnetError {
 /// Dereferencing this type will return a slice to the actual ID bytes, without the padding,
 /// which makes this interchangeable in most respects with using a raw `Box<[u8]>`.
 #[derive(Clone, PartialEq)]
-pub struct GarnetId {
+pub(crate) struct GarnetId {
     inner: Box<[u8]>,
 }
 
 impl GarnetId {
-    pub fn as_prefixed_key_bytes(&self) -> &[u8] {
+    pub(crate) fn as_prefixed_key_bytes(&self) -> &[u8] {
         &self.inner
     }
 }

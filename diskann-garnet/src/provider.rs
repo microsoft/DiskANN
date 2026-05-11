@@ -49,13 +49,6 @@ use crate::{
     },
 };
 
-thread_local! {
-    /// Thread local flag to detect when we've reached the quantization threshold. This is needed
-    /// to return the correct status at the end of insert() since the provider code that becomes
-    /// aware of the state change cannot directly communicate it back to the caller.
-    pub static QUANTIZER_READY: AtomicBool = const { AtomicBool::new(false) };
-}
-
 #[derive(Clone)]
 struct AdjList(AdjacencyList<u32>);
 
@@ -85,7 +78,7 @@ impl AsPooled<Undef> for AdjList {
 
 /// A type erased vector, properly aligned so that it can hold any size element
 /// (up to 8 bytes long).
-pub struct DynVector<T: VectorRepr> {
+pub(crate) struct DynVector<T: VectorRepr> {
     inner: Poly<[u8], AlignToEight>,
     ty: PhantomData<T>,
 }
@@ -122,7 +115,7 @@ impl<'a, T: VectorRepr> Reborrow<'a> for DynVector<T> {
 }
 
 #[derive(Debug, Error)]
-pub enum GarnetProviderError {
+pub(crate) enum GarnetProviderError {
     #[error("Garnet operation failed")]
     Garnet(#[from] GarnetError),
     #[error("FSM error")]
@@ -133,10 +126,6 @@ pub enum GarnetProviderError {
     AllocFailed(#[from] AllocatorError),
     #[error("Invalid quantizer for vector data")]
     InvalidQuantizer,
-    #[error("Expected quantizer is missing")]
-    MissingQuantizer,
-    #[error("Failed to gather quantizer training data")]
-    MissingTrainingData,
     #[error("Quantizer error: {0}")]
     Quantizer(#[from] GarnetQuantizerError),
     #[error("Post processing error: {0}")]
@@ -153,7 +142,7 @@ impl From<GarnetProviderError> for ANNError {
 diskann::always_escalate!(GarnetProviderError);
 
 /// The Garnet DataProvider implementation.
-pub struct GarnetProvider<T: VectorRepr> {
+pub(crate) struct GarnetProvider<T: VectorRepr> {
     dim: usize,
     metric_type: Metric,
     max_degree: usize,
@@ -175,13 +164,13 @@ pub struct GarnetProvider<T: VectorRepr> {
 }
 
 impl<T: VectorRepr> GarnetProvider<T> {
-    pub fn new(
+    pub(crate) fn new(
         dim: usize,
         quant_type: VectorQuantType,
         metric_type: Metric,
         max_degree: usize,
         callbacks: Callbacks,
-        context: Context,
+        context: &Context,
     ) -> Result<Self, GarnetProviderError> {
         let parallelism = std::thread::available_parallelism().unwrap().get() * 2;
         let id_buffer_pool =
@@ -201,9 +190,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         // Try to read the start point from Garnet
         let mut v = Poly::broadcast(0u8, dim * mem::size_of::<T>(), AlignToEight)?;
-        if callbacks.read_single_iid(context.term(Term::Vector), 0, &mut v) {
+        if callbacks.read_single_iid(&context.term(Term::Vector), 0, &mut v) {
             let mut neighbors = vec![0u32; max_degree + 1];
-            if !callbacks.read_single_iid(context.term(Term::Neighbors), 0, &mut neighbors) {
+            if !callbacks.read_single_iid(&context.term(Term::Neighbors), 0, &mut neighbors) {
                 return Err(GarnetError::Read.into());
             }
 
@@ -263,7 +252,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         })
     }
 
-    pub fn maybe_set_start_point(
+    pub(crate) fn maybe_set_start_point(
         &self,
         context: &Context,
         point: &[T],
@@ -271,13 +260,13 @@ impl<T: VectorRepr> GarnetProvider<T> {
         let mut v = Poly::broadcast(0u8, self.dim * mem::size_of::<T>(), AlignToEight)?;
         if self
             .callbacks
-            .read_single_iid(context.term(Term::Vector), 0, &mut v)
+            .read_single_iid(&context.term(Term::Vector), 0, &mut v)
         {
             // Garnet already has a start point, so use that instead of `point`
             let mut neighbors = vec![0u32; self.max_degree + 1];
             if !self
                 .callbacks
-                .read_single_iid(context.term(Term::Neighbors), 0, &mut neighbors)
+                .read_single_iid(&context.term(Term::Neighbors), 0, &mut neighbors)
             {
                 return Err(GarnetError::Read.into());
             }
@@ -290,15 +279,15 @@ impl<T: VectorRepr> GarnetProvider<T> {
             let neighbors = vec![0u32; self.max_degree + 1];
 
             // Grab the start point id, which must be zero.
-            let id = self.fsm.next_id(*context)?;
+            let id = self.fsm.next_id(context)?;
             if id != 0 {
-                self.fsm.mark_free(*context, id)?;
+                self.fsm.mark_free(context, id)?;
                 return Err(GarnetProviderError::StartPoint);
             }
 
             if !self
                 .callbacks
-                .write_iid(context.term(Term::Vector), 0, point)
+                .write_iid(&context.term(Term::Vector), 0, point)
             {
                 return Err(GarnetError::Write.into());
             }
@@ -313,7 +302,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
                 if !self
                     .callbacks
-                    .write_iid(context.term(Term::Quantized), 0, &qpoint)
+                    .write_iid(&context.term(Term::Quantized), 0, &qpoint)
                 {
                     return Err(GarnetError::Write.into());
                 }
@@ -324,7 +313,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
             if !self
                 .callbacks
-                .write_iid(context.term(Term::Neighbors), 0, &neighbors)
+                .write_iid(&context.term(Term::Neighbors), 0, &neighbors)
             {
                 return Err(GarnetError::Write.into());
             }
@@ -343,11 +332,11 @@ impl<T: VectorRepr> GarnetProvider<T> {
         Ok(())
     }
 
-    pub fn start_points_exist(&self) -> bool {
+    pub(crate) fn start_points_exist(&self) -> bool {
         self.start_point_cache.get(&0).is_some() && self.neighbor_cache.get(&0).is_some()
     }
 
-    pub fn set_attributes(
+    pub(crate) fn set_attributes(
         &self,
         context: &Context,
         id: &GarnetId,
@@ -355,26 +344,26 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ) -> Result<(), GarnetProviderError> {
         if self
             .callbacks
-            .write_eid(context.term(Term::Attributes), id, data)
+            .write_eid(&context.term(Term::Attributes), id, data)
         {
             Ok(())
         } else {
             Err(GarnetError::Write.into())
         }
     }
-    pub fn vector_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
+    pub(crate) fn vector_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
         let iid = match self.to_internal_id(context, id) {
             Ok(iid) => iid,
             Err(_) => return false,
         };
-        !self.fsm.is_free(*context, iid).unwrap_or(true)
+        !self.fsm.is_free(context, iid).unwrap_or(true)
     }
 
-    pub fn vector_iid_exists(&self, context: &Context, id: u32) -> bool {
-        !self.fsm.is_free(*context, id).unwrap_or(true)
+    pub(crate) fn vector_iid_exists(&self, context: &Context, id: u32) -> bool {
+        !self.fsm.is_free(context, id).unwrap_or(true)
     }
 
-    pub fn max_internal_id(&self) -> u32 {
+    pub(crate) fn max_internal_id(&self) -> u32 {
         self.fsm.max_id()
     }
 
@@ -382,7 +371,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ///
     /// This should only be called when at least `quantizer.required_vectors()` vectors exist in
     /// the provider. This will build quantization tables, but does not quantize any vectors.
-    pub fn train_quantizer(&self, context: &Context) -> bool {
+    pub(crate) fn train_quantizer(&self, context: &Context) -> bool {
         // Collect up to `self.quantizer.required_vectors()` vectors and use them for quantizer training.
 
         let current_time: u64 =
@@ -424,7 +413,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         if self
             .fsm
-            .visit_used(*context, |id| {
+            .visit_used(context, |id| {
                 // Skip the start point.
                 if id == 0 {
                     return true;
@@ -439,7 +428,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 let row = data.row_mut(row_idx);
                 if !self
                     .callbacks
-                    .read_single_iid(context.term(Term::Vector), id, row)
+                    .read_single_iid(&context.term(Term::Vector), id, row)
                 {
                     return false;
                 }
@@ -480,7 +469,12 @@ impl<T: VectorRepr> GarnetProvider<T> {
     ///
     /// This function will be invoked on multiple threads. The total number of tasks and the ID of
     /// the current task are given as inputs.
-    pub fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize) {
+    pub(crate) fn backfill_quant_vectors(
+        &self,
+        context: &Context,
+        task_idx: usize,
+        task_count: usize,
+    ) {
         let quantizer = match &self.quantizer {
             Some(q) => q,
             None => return,
@@ -504,7 +498,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
         for id in start_id..end_id {
             if !self
                 .callbacks
-                .read_single_iid(context.term(Term::Vector), id, &mut v)
+                .read_single_iid(&context.term(Term::Vector), id, &mut v)
             {
                 continue;
             }
@@ -515,7 +509,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
             if !self
                 .callbacks
-                .write_iid(context.term(Term::Quantized), id, &q)
+                .write_iid(&context.term(Term::Quantized), id, &q)
             {
                 continue;
             }
@@ -532,7 +526,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
             {
                 let _ = self
                     .callbacks
-                    .write_iid(context.term(Term::Quantized), 0, &q);
+                    .write_iid(&context.term(Term::Quantized), 0, &q);
 
                 // set the cache
                 let point = if let Ok(p) = Poly::from_iter(q.iter().copied(), AlignToEight) {
@@ -557,7 +551,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
     }
 
     /// Returns quantization status. If this is true, the index is operating fully quantized.
-    pub fn is_quantized(&self) -> bool {
+    pub(crate) fn is_quantized(&self) -> bool {
         self.quantizer.is_some() && self.all_quantized.load(Ordering::Acquire)
     }
 
@@ -603,7 +597,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     ) -> Result<Self::InternalId, Self::Error> {
         let mut id = 0u32;
         if !self.callbacks.read_single_eid(
-            context.term(Term::IntMap),
+            &context.term(Term::IntMap),
             gid,
             bytemuck::bytes_of_mut(&mut id),
         ) {
@@ -615,7 +609,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     fn to_external_id(&self, context: &Context, id: u32) -> Result<Self::ExternalId, Self::Error> {
         match self
             .callbacks
-            .read_varsize_iid(context.term(Term::ExtMap), id)
+            .read_varsize_iid(&context.term(Term::ExtMap), id)
         {
             Some(eid) => Ok(eid.into()),
             None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
@@ -632,19 +626,19 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
         id: &Self::ExternalId,
         element: &[T],
     ) -> Result<Self::Guard, Self::SetError> {
-        let internal_id = self.fsm.next_id(*context)?;
+        let internal_id = self.fsm.next_id(context)?;
 
         // Set quantization readiness
         if let Some(quantizer) = &self.quantizer
             && !quantizer.is_prepared()
             && self.fsm.total_used() > quantizer.required_vectors()
         {
-            QUANTIZER_READY.with(|v| v.store(true, Ordering::Release));
+            context.set_quantizer_ready();
         }
 
         let insert = || -> Result<(), Self::SetError> {
             self.callbacks
-                .write_iid(context.term(Term::Vector), internal_id, element)
+                .write_iid(&context.term(Term::Vector), internal_id, element)
                 .then_some(())
                 .ok_or(GarnetError::Write)?;
             if let Some(quantizer) = &self.quantizer
@@ -655,17 +649,17 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
                     .get_ref(Undef::new(quantizer.canonical_bytes()));
                 quantizer.compress(bytemuck::cast_slice::<T, f32>(element), &mut quant)?;
                 self.callbacks
-                    .write_iid(context.term(Term::Quantized), internal_id, &quant)
+                    .write_iid(&context.term(Term::Quantized), internal_id, &quant)
                     .then_some(())
                     .ok_or(GarnetError::Write)?;
             }
             self.callbacks
-                .write_iid(context.term(Term::ExtMap), internal_id, id)
+                .write_iid(&context.term(Term::ExtMap), internal_id, id)
                 .then_some(())
                 .ok_or(GarnetError::Write)?;
             self.callbacks
                 .write_eid(
-                    context.term(Term::IntMap),
+                    &context.term(Term::IntMap),
                     id,
                     bytemuck::bytes_of(&internal_id),
                 )
@@ -677,7 +671,7 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
         match insert() {
             Ok(()) => (),
             Err(e) => {
-                self.fsm.mark_free(*context, internal_id)?;
+                self.fsm.mark_free(context, internal_id)?;
                 return Err(e);
             }
         }
@@ -698,21 +692,23 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         };
 
         // Mark the ID free in the FSM.
-        if let Err(e) = self.fsm.mark_free(*context, id) {
+        if let Err(e) = self.fsm.mark_free(context, id) {
             return future::ready(Err(e.into()));
         };
 
         // Delete all the data associated with the vector.
         let mut ok = true;
-        ok &= self.callbacks.delete_iid(context.term(Term::ExtMap), id);
-        ok &= self.callbacks.delete_eid(context.term(Term::IntMap), gid);
+        ok &= self.callbacks.delete_iid(&context.term(Term::ExtMap), id);
+        ok &= self.callbacks.delete_eid(&context.term(Term::IntMap), gid);
         ok &= self
             .callbacks
-            .delete_eid(context.term(Term::Attributes), gid);
+            .delete_eid(&context.term(Term::Attributes), gid);
         // NOTE: Commented out until DiskANN fixes accessing neighbor data post-delete.
         //ok &= self.callbacks.delete_iid(context.term(Term::Neighbors), id);
-        ok &= self.callbacks.delete_iid(context.term(Term::Vector), id);
-        ok &= self.callbacks.delete_iid(context.term(Term::Quantized), id);
+        ok &= self.callbacks.delete_iid(&context.term(Term::Vector), id);
+        ok &= self
+            .callbacks
+            .delete_iid(&context.term(Term::Quantized), id);
 
         if !ok {
             return future::ready(Err(GarnetError::Delete.into()));
@@ -735,7 +731,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         context: &Self::Context,
         id: Self::InternalId,
     ) -> impl Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send {
-        let status = match self.fsm.is_free(*context, id) {
+        let status = match self.fsm.is_free(context, id) {
             Ok(true) => ElementStatus::Deleted,
             Ok(false) => ElementStatus::Valid,
             Err(e) => return future::ready(Err(e.into())),
@@ -757,9 +753,9 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
 /// Dynamic accessor that seamlessly transitions from full precision vector based operation to
 /// quantized-only operation.
 #[derive(Copy, Clone, Debug)]
-pub struct DynamicQuantization;
+pub(crate) struct DynamicQuantization;
 
-pub struct DynamicAccessor<'a, T: VectorRepr> {
+pub(crate) struct DynamicAccessor<'a, T: VectorRepr> {
     provider: &'a GarnetProvider<T>,
     context: &'a Context,
     /// Whether this accessor should use quantized vectors
@@ -803,7 +799,7 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
         }
 
         if !self.provider.callbacks.read_single_iid(
-            self.context.term(Term::Neighbors),
+            &self.context.term(Term::Neighbors),
             id,
             &mut guard,
         ) {
@@ -905,7 +901,7 @@ impl<T: VectorRepr> ExpandBeam<&[T]> for DynamicAccessor<'_, T> {
             if !self.filtered_ids.is_empty() {
                 self.provider
                     .callbacks
-                    .read_multi_lpiid(ctx, &self.filtered_ids, |i, v| {
+                    .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
                         let dist = computer.evaluate_similarity(v);
                         on_neighbors(dist, self.filtered_ids[i as usize * 2 + 1]);
                     });
@@ -967,7 +963,7 @@ impl<T: VectorRepr> Accessor for DynamicAccessor<'_, T> {
             self.context.term(Term::Vector)
         };
 
-        if !self.provider.callbacks.read_single_iid(ctx, id, &mut v) {
+        if !self.provider.callbacks.read_single_iid(&ctx, id, &mut v) {
             return future::ready(Err(GarnetError::Read.into()));
         }
 
@@ -976,7 +972,7 @@ impl<T: VectorRepr> Accessor for DynamicAccessor<'_, T> {
 }
 
 /// Wrapper for full precision distance computer.
-pub struct FullPrecisionDistance<T: VectorRepr>(T::Distance);
+pub(crate) struct FullPrecisionDistance<T: VectorRepr>(T::Distance);
 
 impl<T: VectorRepr> DynDistanceComputer for FullPrecisionDistance<T> {
     fn evaluate_similarity(&self, a: &[u8], b: &[u8]) -> f32 {
@@ -988,7 +984,7 @@ impl<T: VectorRepr> DynDistanceComputer for FullPrecisionDistance<T> {
 }
 
 /// Wrapper for full precision query computer.
-pub struct FullPrecisionQueryDistance<T: VectorRepr>(T::QueryDistance);
+pub(crate) struct FullPrecisionQueryDistance<T: VectorRepr>(T::QueryDistance);
 
 impl<T: VectorRepr> DynQueryComputer for FullPrecisionQueryDistance<T> {
     fn evaluate_similarity(&self, a: &[u8]) -> f32 {
@@ -997,12 +993,12 @@ impl<T: VectorRepr> DynQueryComputer for FullPrecisionQueryDistance<T> {
 }
 
 /// Type-erased distance computer.
-pub struct GarnetDistanceComputer {
+pub(crate) struct GarnetDistanceComputer {
     inner: Box<dyn DynDistanceComputer>,
 }
 
 impl GarnetDistanceComputer {
-    pub fn new<T: DynDistanceComputer + 'static>(computer: T) -> Self {
+    pub(crate) fn new<T: DynDistanceComputer + 'static>(computer: T) -> Self {
         Self {
             inner: Box::new(computer),
         }
@@ -1015,12 +1011,12 @@ impl DistanceFunction<&[u8], &[u8]> for GarnetDistanceComputer {
 }
 
 /// Type-erased query computer.
-pub struct GarnetQueryComputer {
+pub(crate) struct GarnetQueryComputer {
     inner: Box<dyn DynQueryComputer>,
 }
 
 impl GarnetQueryComputer {
-    pub fn new<T: DynQueryComputer + 'static>(computer: T) -> Self {
+    pub(crate) fn new<T: DynQueryComputer + 'static>(computer: T) -> Self {
         Self {
             inner: Box::new(computer),
         }
@@ -1078,7 +1074,7 @@ impl<T: VectorRepr> BuildQueryComputer<&[T]> for DynamicAccessor<'_, T> {
 ///
 /// Without an `&[T]: Into<Escape<T>>`, the blanket implementation for `workingset::Map`
 /// is not applicable, allowing customization of `Fill`.
-pub struct Escape<T>(Box<[T]>);
+pub(crate) struct Escape<T>(Box<[T]>);
 
 impl<'a, T> Reborrow<'a> for Escape<T> {
     type Target = &'a [T];
@@ -1087,13 +1083,13 @@ impl<'a, T> Reborrow<'a> for Escape<T> {
     }
 }
 
-pub struct WorkingSet {
+pub(crate) struct WorkingSet {
     map: workingset::Map<u32, Escape<u8>>,
     contains_unquantized: bool,
 }
 
 impl WorkingSet {
-    pub fn new(capacity_type: workingset::map::Capacity, capacity: usize) -> Self {
+    pub(crate) fn new(capacity_type: workingset::map::Capacity, capacity: usize) -> Self {
         Self {
             map: workingset::map::Builder::new(capacity_type).build(capacity),
             contains_unquantized: false,
@@ -1177,7 +1173,7 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet> for DynamicAccessor<'_, T> {
         if !self.filtered_ids.is_empty() {
             self.provider
                 .callbacks
-                .read_multi_lpiid(ctx, &self.filtered_ids, |id, v| {
+                .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
                     set.insert(self.filtered_ids[id as usize * 2 + 1], Escape(v.into()));
                 });
         }
@@ -1186,7 +1182,7 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet> for DynamicAccessor<'_, T> {
     }
 }
 
-pub struct DelegateNeighborAccessor<'p, 'a, T: VectorRepr>(&'a mut DynamicAccessor<'p, T>);
+pub(crate) struct DelegateNeighborAccessor<'p, 'a, T: VectorRepr>(&'a mut DynamicAccessor<'p, T>);
 
 impl<T: VectorRepr> HasId for DelegateNeighborAccessor<'_, '_, T> {
     type Id = u32;
@@ -1228,7 +1224,7 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
             .0
             .provider
             .callbacks
-            .write_iid(self.0.context.term(Term::Neighbors), id, &guard)
+            .write_iid(&self.0.context.term(Term::Neighbors), id, &guard)
         {
             return future::ready(Err(GarnetProviderError::Garnet(GarnetError::Write).into()));
         }
@@ -1252,7 +1248,7 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
     ) -> impl Future<Output = ANNResult<Self>> + Send {
         let max_degree = self.0.provider.max_degree;
         if !self.0.provider.callbacks.rmw_iid(
-            self.0.context.term(Term::Neighbors),
+            &self.0.context.term(Term::Neighbors),
             id,
             (self.0.provider.max_degree + 1) * mem::size_of::<u32>(),
             |data: &mut [u32]| {
@@ -1290,7 +1286,7 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
 /// A [`SearchPostProcess`] base object that copies each `Neighbor` to a `(ExternalId, f32)` pair
 /// and writes as many as possible to the output buffer.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct CopyExternalIds;
+pub(crate) struct CopyExternalIds;
 
 impl<'a, 'b, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &'b [T], GarnetId>
     for CopyExternalIds
@@ -1328,7 +1324,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &'b [T], G
 
 /// A [`SearchPostProcess`] base object that reranks quantized vectors by full precision distance.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Rerank;
+pub(crate) struct Rerank;
 
 impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T], GarnetId>
     for Rerank
@@ -1372,7 +1368,7 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
                 if !provider.vector_iid_exists(accessor.context, n.id) {
                     None
                 } else if provider.callbacks.read_single_iid(
-                    accessor.context.term(Term::Vector),
+                    &accessor.context.term(Term::Vector),
                     n.id,
                     &mut v,
                 ) {
@@ -1496,7 +1492,7 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
         let mut v = vec![T::default(); provider.dim];
-        if !provider.callbacks.read_single_iid(*context, id, &mut v) {
+        if !provider.callbacks.read_single_iid(context, id, &mut v) {
             return future::ready(Err(GarnetError::Read.into()));
         }
         future::ready(Ok(v.into()))

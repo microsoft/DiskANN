@@ -19,7 +19,7 @@ use thiserror::Error;
 use crate::provider::{GarnetDistanceComputer, GarnetQueryComputer};
 
 #[derive(Debug, Error)]
-pub enum GarnetQuantizerError {
+pub(crate) enum GarnetQuantizerError {
     #[error("Quantization training error: {0}")]
     Training(Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Quantization alloc error: {0}")]
@@ -37,7 +37,7 @@ pub enum GarnetQuantizerError {
 }
 
 /// Quantizer trait that all diskann-garnet quantizers must implement
-pub trait GarnetQuantizer: Send + Sync {
+pub(crate) trait GarnetQuantizer: Send + Sync {
     /// Check whether the quantizer is ready to be used
     fn is_prepared(&self) -> bool;
     /// Returns the number of vectors needed before the quantizer can be trained
@@ -56,12 +56,12 @@ pub trait GarnetQuantizer: Send + Sync {
 }
 
 /// Type-erased distance computer
-pub trait DynDistanceComputer: Send + Sync {
+pub(crate) trait DynDistanceComputer: Send + Sync {
     fn evaluate_similarity(&self, a: &[u8], b: &[u8]) -> f32;
 }
 
 /// Type-erased query computer
-pub trait DynQueryComputer: Send + Sync {
+pub(crate) trait DynQueryComputer: Send + Sync {
     fn evaluate_similarity(&self, a: &[u8]) -> f32;
 }
 
@@ -70,13 +70,13 @@ pub trait DynQueryComputer: Send + Sync {
 /// This quantizer corresponds to `BIN` quantizer in the Redis protocol. It requires hundreds of
 /// vectors (but not thousands) for training. Quantized vectors have 1 bit per dimension plus up
 /// to 6 bytes of overhead.
-pub struct Spherical1Bit {
+pub(crate) struct Spherical1Bit {
     dim: usize,
     inner: RwLock<Option<spherical::iface::Impl<1, GlobalAllocator>>>,
 }
 
 impl Spherical1Bit {
-    pub fn new(dim: usize) -> Self {
+    pub(crate) fn new(dim: usize) -> Self {
         Self {
             dim,
             inner: RwLock::new(None),
@@ -197,14 +197,14 @@ impl DynQueryComputer for iface::QueryComputer {
 ///
 /// This quantizer requires no training at all and is usable immediately on the first first. Each
 /// quantized vector has 8 bits per dimension and 20 bytes of overhead.
-pub struct MinMax8Bit {
+pub(crate) struct MinMax8Bit {
     dim: usize,
     metric: Metric,
     inner: minmax::MinMaxQuantizer,
 }
 
 impl MinMax8Bit {
-    pub fn new(dim: usize, metric: Metric) -> Result<Self, GarnetQuantizerError> {
+    pub(crate) fn new(dim: usize, metric: Metric) -> Result<Self, GarnetQuantizerError> {
         let dim = match NonZero::new(dim) {
             Some(d) => d,
             None => return Err(GarnetQuantizerError::ZeroDim),
