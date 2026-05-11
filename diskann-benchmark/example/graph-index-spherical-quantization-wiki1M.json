@@ -1,443 +1,290 @@
 {
-  "search_directories": [
+  "search_directories":[
     "test_data/disk_index_search"
   ],
   "jobs": [
     {
-      "type": "exhaustive-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
+        "build": {
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 8,
+          "multi_insert": null
+        },
+        "search_phase": {
+          "search-type": "topk",
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
+          "reps": 5,
+          "num_threads": [
+            8
+          ],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "recall_k": 10
+            }
+          ]
         },
-        "query_layouts": [
-          "same_as_data",
-          "four_bit_transposed"
-        ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
+        "seed": 12648430,
         "transform_kind": {
           "padding_hadamard": "same"
         },
+        "query_layouts": [
+          "four_bit_transposed",
+          "same_as_data",
+          "full_precision"
+        ],
+        "num_bits": 1,
         "pre_scale": {
             "some": 0.00390625
         }
       }
     },
     {
-      "type": "exhaustive-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
+        "build": {
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 8,
+          "multi_insert": null
+        },
+        "search_phase": {
+          "search-type": "topk",
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
+          "reps": 5,
+          "num_threads": [
+            8
+          ],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "recall_k": 10
+            }
+          ]
         },
-        "query_layouts": [
-          "same_as_data",
-          "four_bit_transposed"
-        ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
+        "seed": 12648430,
         "transform_kind": {
           "padding_hadamard": "natural"
         },
+        "query_layouts": [
+          "four_bit_transposed",
+          "same_as_data",
+          "full_precision"
+        ],
+        "num_bits": 1,
         "pre_scale": {
             "some": 0.00390625
         }
       }
     },
     {
-      "type": "exhaustive-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
+        "build": {
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 8,
+          "multi_insert": null
+        },
+        "search_phase": {
+          "search-type": "topk",
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
+          "reps": 5,
+          "num_threads": [
+            8
+          ],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "recall_k": 10
+            }
+          ]
         },
-        "query_layouts": [
-          "same_as_data",
-          "four_bit_transposed"
-        ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
+        "seed": 12648430,
         "transform_kind": {
           "padding_hadamard": {
-            "override": 100
+            "override": 64
           }
         },
+        "query_layouts": [
+          "four_bit_transposed",
+          "same_as_data",
+          "full_precision"
+        ],
+        "num_bits": 1,
         "pre_scale": {
             "some": 0.00390625
         }
       }
     },
     {
-      "type": "exhaustive-spherical-quantization",
+      "type": "graph-index-build-spherical-quantization",
       "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
+        "build": {
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 8,
+          "multi_insert": null
+        },
+        "search_phase": {
+          "search-type": "topk",
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
+          "reps": 5,
+          "num_threads": [
+            8
+          ],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "recall_k": 10
+            }
+          ]
+        },
+        "seed": 12648430,
+        "transform_kind": {
+          "padding_hadamard": "natural"
         },
         "query_layouts": [
+          "scalar_quantized",
           "same_as_data",
-          "four_bit_transposed"
+          "full_precision"
         ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
+        "num_bits": 2,
+        "pre_scale": {
+            "some": 0.00390625
+        }
+      }
+    },
+    {
+      "type": "graph-index-build-spherical-quantization",
+      "content": {
+        "build": {
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 8,
+          "multi_insert": null
+        },
+        "search_phase": {
+          "search-type": "topk",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "reps": 5,
+          "num_threads": [
+            8
+          ],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "recall_k": 10
+            }
+          ]
+        },
+        "seed": 12648430,
         "transform_kind": {
           "random_rotation": "same"
         },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
         "query_layouts": [
+          "scalar_quantized",
           "same_as_data",
-          "four_bit_transposed"
+          "full_precision"
         ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "random_rotation": "natural"
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "four_bit_transposed"
-        ],
-        "compression_threads": 1,
-        "num_bits": 1,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "random_rotation": {
-            "override": 100
-          }
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
         "num_bits": 4,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "padding_hadamard": "same"
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
-        "num_bits": 4,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "padding_hadamard": "natural"
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
-        "num_bits": 4,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "padding_hadamard": {
-            "override": 100
-          }
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
-        "num_bits": 4,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "random_rotation": {
-            "override": 100
-          }
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
-        "num_bits": 8,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "padding_hadamard": "same"
-        },
-        "pre_scale": {
-            "some": 0.00390625
-        }
-      }
-    },
-    {
-      "type": "exhaustive-spherical-quantization",
-      "content": {
-        "data": "disk_index_siftsmall_learn_256pts_data.fbin",
-        "data_type": "float32",
-        "distance": "squared_l2",
-        "search": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "num_threads": 1,
-          "recalls": {
-            "recall_k": [
-              5,
-              10
-            ],
-            "recall_n": [
-              5,
-              10
-            ]
-          }
-        },
-        "query_layouts": [
-          "same_as_data",
-          "scalar_quantized"
-        ],
-        "compression_threads": 1,
-        "num_bits": 8,
-        "seed": 7831252621480178695,
-        "transform_kind": {
-          "random_rotation": "natural"
-        },
         "pre_scale": {
             "some": 0.00390625
         }
