@@ -21,8 +21,6 @@ The library supports the following algorithmic features
 ## Getting Started
 
 - Start with [diskann-benchmarks](/diskann-benchmark/README.md) to benchmark this library and its concrete implementations. This also allows you to build, store and load indices.
-- To add a new backend, implement the [Provider API](/diskann/src/provider.rs) contract for your store/DB.
-
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
@@ -32,7 +30,6 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 
 ## Legacy C++ Code
 
-[![DiskANN Main](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml/badge.svg?branch=main)](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml)
 [![PyPI version](https://img.shields.io/pypi/v/diskannpy.svg)](https://pypi.org/project/diskannpy/)
 [![Downloads shield](https://pepy.tech/badge/diskannpy)](https://pepy.tech/project/diskannpy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
