@@ -2,9 +2,7 @@ When performing a code review, check that:
 
 ## SemVer and API Compatibility
 
-- The workspace obeys SemVer. Removing or changing public API signatures (functions, types, re-exports) is a breaking change and requires a major version bump or a deprecated compatibility shim.
-- Re-exports are part of the public API surface — removing them is also a breaking change.
-- If changing public behavior, explain migration impact in the PR description.
+ The workspace obeys SemVer. Removing or changing public API signatures (functions, types, re-exports)  requires a version bump, suggested  migration impact in the PR description.
 
 ## Dependency and Build Hygiene
 - Check for changes that introduce new dependencies or increase build times. If a dependency is added, it must be justified in the PR description.
@@ -20,14 +18,14 @@ When performing a code review, check that:
 
 ## Documentation
 
-- Doc comments and README examples must match actual API signatures and serialized shapes. Stale examples that fail to compile or deserialize are treated as bugs.
+- Doc comments and README examples must match actual API signatures and serialized shapes. 
+- Stale examples that fail to compile or deserialize are treated as bugs.
 - Do not leave dead references to APIs that no longer exist.
 - When changing a function signature or removing a parameter, update all doc comments that mention the old signature.
 
 ## Constants and Assumptions
 
 - Do not hardcode magic values — make them configurable with sensible defaults and document the rationale.
-- If using `wrapping_add` or other wrapping arithmetic, justify why overflow is expected or acceptable.
 - Add assertions for invariants that callers or maintainers would otherwise have to discover by reading the implementation.
 
 ## SIMD and Platform Portability
@@ -44,11 +42,12 @@ When performing a code review, check that:
 ## Rayon and Parallelism
 
 - Never use the global Rayon thread pool. Always execute parallel work within the provided `RayonThreadPool` or `RayonThreadPoolRef`.
-- Preserve deadlock-avoidance intent when modifying nested parallel loops. Be aware that combining blocking synchronization (e.g., mutex acquisition) with Rayon work-stealing can cause deadlocks.
+- Preserve deadlock-avoidance intent when modifying nested parallel loops.
+- Be aware that combining blocking synchronization (e.g., mutex acquisition) with Rayon work-stealing can cause deadlocks.
 
 ## Unsafe Code and Safety
 
-- Every `unsafe` block must have a `// SAFETY:` comment directly above it explaining why the operation is sound. This is enforced by the `undocumented_unsafe_blocks = "warn"` workspace lint.
+- Every `unsafe` block must have a `// SAFETY:` comment directly above it explaining why the operation is sound.
 - Safety comments must be specific and verifiable — state the concrete precondition that makes the operation safe (e.g., `// SAFETY: i + width <= len ensures this read is in-bounds`). Do not use vague justifications like `// SAFETY: this is safe`.
 - Safety contracts on `unsafe fn` signatures must be internally consistent — if the documented precondition says `scratch.len() >= n`, ensure the implementation does not write beyond `n` elements (e.g., due to rounding up to a panel/block size).
 - Prefer safe abstractions over raw `unsafe` when possible. Use `unsafe` only when there is a measurable performance benefit or when interfacing with FFI/intrinsics.

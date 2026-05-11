@@ -140,7 +140,8 @@ Traits with associated error types should consider constraining with `diskann::e
 
 ### High Level (tooling)
 
-At this level `anyhow::Error` is appropriate for binaries and CLI entry points. Note that some tooling helpers still use `ANNError` for compatibility.
+At this level `anyhow::Error` is appropriate for binaries and CLI entry points.
+ Note that some tooling helpers still use `ANNError` for compatibility.
 
 ### Do Not
 
