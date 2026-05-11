@@ -381,7 +381,7 @@ mod tests {
         let err = KNN::new(
             index,
             queries.clone(),
-            Strategy::collection([strategy, strategy]),
+            Strategy::collection([strategy.clone(), strategy.clone()]),
         )
         .unwrap_err();
         let msg = err.to_string();

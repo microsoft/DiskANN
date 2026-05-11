@@ -5,10 +5,8 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::{
-    ANNResult,
-    utils::object_pool::{self, ObjectPool, PoolOption},
-};
+use diskann::ANNResult;
+use diskann_utils::object_pool::{self, ObjectPool, PoolOption};
 use diskann_vector::PreprocessedDistanceFunction;
 
 use super::common::get_lookup_table_size;
@@ -141,7 +139,6 @@ mod tests {
     fn test_l2<T>(
         #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
         _marker: PhantomData<T>,
-        #[values(false, true)] use_opq: bool,
     ) where
         T: Into<f32> + TestDistribution,
     {
@@ -158,7 +155,6 @@ mod tests {
                         pq_chunks,
                         num_pivots,
                         start_value: 0.0,
-                        use_opq,
                     };
 
                     let table = test_utils::seed_pivot_table(config);
@@ -195,7 +191,6 @@ mod tests {
             pq_chunks: 3,
             num_pivots: 4,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -214,7 +209,6 @@ mod tests {
             pq_chunks: 3,
             num_pivots: 4,
             start_value: 0.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);

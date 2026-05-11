@@ -258,17 +258,17 @@ mod tests {
         }
     }
 
-    // Async Build Integration Test.
+    // Graph Index Build Integration Test.
     #[test]
-    fn async_integration() {
+    fn graph_index_integration() {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("async.json"));
+        let mut raw = value_from_file(&example_directory().join("graph-index.json"));
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("async.json");
+        let input_path = tempdir.path().join("graph-index.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -279,6 +279,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -322,6 +323,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -343,6 +345,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -387,6 +390,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -408,6 +412,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -430,7 +435,7 @@ mod tests {
     #[test]
     fn spherical_quantization_intergration() {
         let input_paths = [
-            example_directory().join("spherical.json"),
+            example_directory().join("graph-index-spherical-quantization.json"),
             example_directory().join("spherical-exhaustive.json"),
         ];
 
@@ -455,6 +460,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -476,6 +482,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -515,6 +522,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -550,15 +558,15 @@ mod tests {
     }
 
     #[test]
-    fn async_filter_integration() {
+    fn graph_index_filter_integration() {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("async-filter.json"));
+        let mut raw = value_from_file(&example_directory().join("graph-index-filter.json"));
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("async-filter.json");
+        let input_path = tempdir.path().join("graph-index-filter.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -569,6 +577,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -587,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn async_filter_integration_with_gt_compute() {
+    fn graph_index_filter_integration_with_gt_compute() {
         let storage_provider = FileStorageProvider;
 
         let disk_index_search_path = root_directory().join("test_data/disk_index_search");
@@ -635,13 +644,16 @@ mod tests {
             }
         };
 
-        let mut raw =
-            value_from_file(&example_directory().join("async-filter-ground-truth-small.json"));
+        let mut raw = value_from_file(
+            &example_directory().join("graph-index-filter-ground-truth-small.json"),
+        );
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("async-filter-ground-truth-small.json");
+        let input_path = tempdir
+            .path()
+            .join("graph-index-filter-ground-truth-small.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -652,6 +664,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
@@ -725,6 +738,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let cli = Cli::from_commands(command, true);
@@ -746,6 +760,7 @@ mod tests {
             input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
+            allow_debug: true,
         };
         let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();

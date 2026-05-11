@@ -12,9 +12,7 @@ mod chunkable_disk_index_build_tests {
         time::Duration,
     };
 
-    use diskann_providers::test_utils::{
-        graph_data_type_utils::GraphDataF32VectorUnitData, GraphDataMinMaxVectorUnitData,
-    };
+    use crate::test_utils::{GraphDataF32VectorUnitData, GraphDataMinMaxVectorUnitData};
     use diskann_utils::test_data_root;
     use rstest::rstest;
 

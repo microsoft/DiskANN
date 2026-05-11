@@ -12,7 +12,6 @@ default-target = "x86_64-pc-windows-msvc"
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-pc-windows-msvc",
-    "i686-pc-windows-msvc",
     "x86_64-pc-windows-msvc",
 ]
 
@@ -62,6 +61,8 @@ diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
 iai-callgrind.workspace = true
 diskann = { workspace = true }
+approx.workspace = true
+proptest.workspace = true
 
 [features]
 default = []

@@ -4,7 +4,7 @@
  */
 
 use diskann_benchmark_runner::{output, registry, App, Output};
-use diskann_benchmark_simd::{register, SimdInput};
+use diskann_benchmark_simd::{register, SimdOp};
 
 pub fn main() -> anyhow::Result<()> {
     // Create the pocket bench application.
@@ -15,7 +15,7 @@ pub fn main() -> anyhow::Result<()> {
 fn main_inner(app: &App, output: &mut dyn Output) -> anyhow::Result<()> {
     // Register inputs and benchmarks.
     let mut inputs = registry::Inputs::new();
-    inputs.register(SimdInput)?;
+    inputs.register::<SimdOp>()?;
 
     let mut benchmarks = registry::Benchmarks::new();
     register(&mut benchmarks);
@@ -34,13 +34,14 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
-    use diskann_benchmark_runner::app::Commands;
+    use diskann_benchmark_runner::app::{Check, Commands};
 
     fn run_integration_test(input_file: &Path, output_file: &Path) {
         let commands = Commands::Run {
             input_file: input_file.to_str().unwrap().into(),
             output_file: output_file.to_str().unwrap().into(),
             dry_run: false,
+            allow_debug: true,
         };
 
         let app = App::from_commands(commands);
@@ -53,6 +54,19 @@ mod tests {
         );
 
         assert!(output_file.exists());
+    }
+
+    fn run_check_test(input_file: &Path, tolerances: &Path) -> String {
+        let commands = Commands::Check(Check::Verify {
+            tolerances: tolerances.to_str().unwrap().into(),
+            input_file: input_file.to_str().unwrap().into(),
+        });
+
+        let app = App::from_commands(commands);
+
+        let mut output = output::Memory::new();
+        main_inner(&app, &mut output).unwrap();
+        String::from_utf8(output.into_inner()).unwrap()
     }
 
     #[test]
@@ -73,5 +87,18 @@ mod tests {
         let output_path = tempdir.path().join("output.json");
 
         run_integration_test(&input_path, &output_path);
+    }
+
+    #[test]
+    fn check_verify() {
+        let input_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("simd-scalar.json");
+        let tolerance_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("tolerance.json");
+
+        let stdout = run_check_test(&input_path, &tolerance_path);
+        println!("stdout = {}", stdout);
     }
 }

@@ -14,12 +14,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{
-    ANNError, ANNResult,
-    error::IntoANNResult,
-    utils::{VectorRepr, object_pool::ObjectPool},
-};
+use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::distance::Metric;
 
 use super::common::{AlignedMemoryVectorStore, TestCallCount};
@@ -115,9 +112,7 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Create a distance computer for the underlying schema.
-    pub fn distance_computer(
-        &self,
-    ) -> Result<DistanceComputer, pq::distance::dynamic::DistanceComputerConstructionError> {
+    pub fn distance_computer(&self) -> DistanceComputer {
         DistanceComputer::new(self.pq_chunk_table.clone(), self.metric)
     }
 
@@ -376,14 +371,9 @@ mod tests {
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
-        let pq_chunk_table = FixedChunkPQTable::new(
-            dim,
-            full_pivot_data.into(),
-            centroid.into(),
-            offsets.into(),
-            None,
-        )
-        .unwrap();
+        let pq_chunk_table =
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+                .unwrap();
         let provider = FastMemoryQuantVectorProviderAsync::new(Metric::L2, 10, pq_chunk_table);
 
         // try to set an out of bounds vector
@@ -412,7 +402,6 @@ mod tests {
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
             Box::new([0.0, 0.0]),
             Box::new([0, dim]),
-            None,
         )
         .unwrap();
 
@@ -455,21 +444,18 @@ mod tests {
             // Query Computer.
             let c = provider.query_computer(&[-0.5, -0.5]).unwrap();
             let expected: f32 = 1.5 * 1.5 * 2.0;
-            assert_eq!(
-                c.evaluate_similarity(&provider.get_vector_sync(3)),
-                expected
-            );
+            assert_eq!(c.evaluate_similarity(provider.get_vector_sync(3)), expected);
 
             // Distance Computer.
-            let d = provider.distance_computer().unwrap();
+            let d = provider.distance_computer();
             assert_eq!(
-                d.evaluate_similarity(&provider.get_vector_sync(0), &provider.get_vector_sync(3)),
+                d.evaluate_similarity(provider.get_vector_sync(0), provider.get_vector_sync(3),),
                 2.0
             );
 
             let slice: &[f32] = &[-0.5, -0.5];
             assert_eq!(
-                d.evaluate_similarity(slice, &provider.get_vector_sync(3)),
+                d.evaluate_similarity(slice, provider.get_vector_sync(3)),
                 expected,
             );
         }

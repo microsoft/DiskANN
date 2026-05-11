@@ -9,7 +9,6 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "disk-index")] {
         mod benchmarks;
         mod build;
-        mod graph_data_type;
         mod search;
         mod json_spancollector;
 

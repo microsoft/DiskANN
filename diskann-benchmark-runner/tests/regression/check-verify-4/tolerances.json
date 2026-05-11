@@ -1,0 +1,17 @@
+{
+  "checks": [
+    {
+      "input": {
+        "type": "test-input-types",
+        "content": {}
+      },
+      "tolerance": {
+        "type": "test-input-dim-tolerance",
+        "content": {
+          "succeed": true,
+          "error_in_check": false
+        }
+      }
+    }
+  ]
+}

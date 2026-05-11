@@ -4,8 +4,12 @@
  */
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
-use diskann::{utils::TryIntoVectorId, ANNError, ANNResult};
-use diskann_providers::{common::AlignedBoxWithSlice, model::graph::traits::GraphDataType};
+use crate::data_model::GraphDataType;
+use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
+use diskann_quantization::{
+    alloc::{AlignedAllocator, Poly},
+    num::PowerOfTwo,
+};
 use hashbrown::HashSet;
 use tracing::info;
 
@@ -51,14 +55,19 @@ where
         // since this is the implementation for the disk vertex provider, there're only two kinds of sector lengths: 4096 and 512.
         // it's okay to hardcoded at this place.
         let buffer_len = GraphHeader::get_size().next_multiple_of(DEFAULT_DISK_SECTOR_LEN);
-        let mut read_buf = AlignedBoxWithSlice::<u8>::new(buffer_len, buffer_len)?;
-        let aligned_read = AlignedRead::new(0_u64, read_buf.as_mut_slice())?;
+        let mut read_buf = Poly::broadcast(
+            0u8,
+            buffer_len,
+            AlignedAllocator::new(PowerOfTwo::new(buffer_len).map_err(ANNError::log_index_error)?),
+        )
+        .map_err(ANNError::log_index_error)?;
+        let aligned_read = AlignedRead::new(0_u64, &mut read_buf)?;
         self.aligned_reader_factory
             .build()?
             .read(&mut [aligned_read])?;
 
         // Create a GraphHeader from the buffer.
-        GraphHeader::try_from(&read_buf.as_slice()[8..])
+        GraphHeader::try_from(&read_buf[8..])
     }
 
     fn create_vertex_provider(
@@ -131,7 +140,6 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
 
                 let graph_metadata = self.get_header()?;
                 let graph_metadata = graph_metadata.metadata();
-                let memory_aligned_dimension = graph_metadata.dims.next_multiple_of(8);
 
                 if num_nodes_to_cache > graph_metadata.num_pts as usize {
                     info!(
@@ -145,7 +153,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
                 self.cache = Some(Arc::new(self.build_cache_via_bfs(
                     start_node,
                     num_nodes_to_cache,
-                    memory_aligned_dimension,
+                    graph_metadata.dims,
                 )?));
             }
             CachingStrategy::None => {}
@@ -219,18 +227,21 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         let adjacency_list = vertex_provider.get_adjacency_list(node)?;
         let associated_data = vertex_provider.get_associated_data(node)?;
 
-        cache.insert(node, vector, adjacency_list.clone(), *associated_data)
+        cache.insert(
+            node,
+            vector,
+            AdjacencyList::from_iter_untrusted(adjacency_list.iter().copied()),
+            *associated_data,
+        )
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::test_utils::GraphDataF32VectorUnitData;
     use crate::utils::VirtualAlignedReaderFactory;
-    use diskann_providers::{
-        storage::VirtualStorageProvider,
-        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
-    };
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 

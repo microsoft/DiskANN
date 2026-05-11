@@ -6,7 +6,7 @@
 use diskann_benchmark_runner::{files::InputFile, CheckDeserialization, Checker};
 use serde::{Deserialize, Serialize};
 
-use crate::inputs::{as_input, Example, Input};
+use crate::inputs::{as_input, Example};
 
 //////////////
 // Registry //
@@ -17,7 +17,7 @@ as_input!(MetadataIndexBuild);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<MetadataIndexBuild>::new())?;
+    registry.register::<MetadataIndexBuild>()?;
     Ok(())
 }
 

@@ -12,7 +12,7 @@ use diskann_benchmark_runner::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, Example, Input},
+    inputs::{as_input, Example},
     utils::{datafiles::ConvertingLoad, SimilarityMeasure},
 };
 
@@ -34,9 +34,9 @@ as_input!(MinMax);
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
-    registry.register(Input::<Spherical>::new())?;
-    registry.register(Input::<Product>::new())?;
-    registry.register(Input::<MinMax>::new())?;
+    registry.register::<Spherical>()?;
+    registry.register::<Product>()?;
+    registry.register::<MinMax>()?;
     Ok(())
 }
 
@@ -482,6 +482,7 @@ impl std::fmt::Display for Spherical {
 pub(crate) enum MinMaxQuery {
     SameAsData,
     FullPrecision,
+    EightBit,
 }
 
 impl std::fmt::Display for MinMaxQuery {
@@ -489,6 +490,7 @@ impl std::fmt::Display for MinMaxQuery {
         let st = match self {
             Self::SameAsData => "same_as_data",
             Self::FullPrecision => "full_precision",
+            Self::EightBit => "eight_bit",
         };
         write!(f, "{}", st)
     }
@@ -541,7 +543,11 @@ impl Example for MinMax {
             data_type: DataType::Float32,
             distance: SimilarityMeasure::SquaredL2,
             search: SearchPhase::example(),
-            query_layouts: vec![MinMaxQuery::SameAsData, MinMaxQuery::FullPrecision],
+            query_layouts: vec![
+                MinMaxQuery::SameAsData,
+                MinMaxQuery::FullPrecision,
+                MinMaxQuery::EightBit,
+            ],
             num_bits: NUM_BITS,
             transform_kind: TransformKind::DoubleHadamard(TargetDim::Same),
             seed: 0x6cae32c479ac3407,

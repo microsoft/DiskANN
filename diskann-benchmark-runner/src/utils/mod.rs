@@ -6,6 +6,7 @@
 pub mod datatype;
 pub mod fmt;
 pub mod microseconds;
+pub mod num;
 pub mod percentiles;
 
 pub use microseconds::MicroSeconds;

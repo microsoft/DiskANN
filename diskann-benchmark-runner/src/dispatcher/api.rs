@@ -8,7 +8,7 @@ use std::fmt::{self, Display, Formatter};
 /// Successful matches from [`DispatchRule`] will return `MatchScores`.
 ///
 /// A lower numerical value indicates a better match for purposes of overload resolution.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MatchScore(pub u32);
 
 impl Display for MatchScore {
@@ -21,7 +21,7 @@ impl Display for MatchScore {
 ///
 /// A lower numerical value indicates a better match, which can help when compiling a
 /// list of considered and rejected candidates.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FailureScore(pub u32);
 
 impl Display for FailureScore {
@@ -215,155 +215,6 @@ impl<'a, T: Sized> DispatchRule<&'a mut T> for &'a T {
             None => write!(f, "&{}", std::any::type_name::<T>()),
             Some(_) => write!(f, "identity match"),
         }
-    }
-}
-
-/// # Lifetime Mapping
-///
-/// The types in signatures for dispatches need to be `'static` due to Rust.
-/// However, it is nice to allow objects with lifetimes to cross the dispatcher boundary.
-///
-/// The `Map` trait facilitates this by allowing `'static` types to have an optional
-/// lifetime attached as a generic associated type.
-///
-/// This associated type is that is what is actually given to dispatcher methods.
-///
-/// ## Example
-///
-/// To pass a `Vec` across a dispatcher boundary, we can use the [`Type`] helper:
-///
-/// ```
-/// use diskann_benchmark_runner::dispatcher::{Dispatcher1, Type};
-///
-/// let mut d = Dispatcher1::<&'static str, Type<Vec<f32>>>::new();
-/// d.register::<_, Type<Vec<f32>>>("method",  |_: Vec<f32>| "called");
-/// assert_eq!(d.call(vec![1.0]), Some("called"));
-/// ```
-///
-/// This is a bit tedious to write every time, so instead types can implement [`Map`] for
-/// themselves:
-///
-/// ```
-/// use diskann_benchmark_runner::{self_map, dispatcher::{Dispatcher1}};
-///
-/// struct MyNum(f32);
-/// self_map!(MyNum);
-///
-/// // Now, `MyNum` can be used directly in dispatcher signatures.
-/// let mut d = Dispatcher1::<f32, MyNum>::new();
-/// d.register::<_, MyNum>("method", |n: MyNum| n.0);
-/// assert_eq!(d.call(MyNum(0.0)), Some(0.0));
-/// ```
-///
-/// ## See Also:
-///
-/// * [`Ref`]: Mapping References
-/// * [`MutRef`]: Mapping Mutable References
-/// * [`Type`]: Mapper for generic types
-/// * [`crate::self_map!`]: Allow types to represent themselves in dispatcher signatures.
-///
-pub trait Map: 'static {
-    /// The actual type provided to the dispatcher, with an optional additional lifetime.
-    type Type<'a>;
-}
-
-/// Allow references to cross dispatcher boundaries as shown in the following example:
-///
-/// ```
-/// use diskann_benchmark_runner::dispatcher::{Dispatcher1, Ref};
-///
-/// let mut d = Dispatcher1::<*const f32, Ref<[f32]>>::new();
-/// d.register::<_, Ref<[f32]>>("method", |data: &[f32]| data.as_ptr());
-///
-/// let v = vec![1.0, 2.0];
-/// assert_eq!(d.call(&v), Some(v.as_ptr()));
-/// ```
-pub struct Ref<T: ?Sized + 'static>(std::marker::PhantomData<T>);
-
-impl<T: ?Sized> Map for Ref<T> {
-    type Type<'a> = &'a T;
-}
-
-/// Allow mutable references to cross dispatcher boundaries as shown below.
-///
-/// ```
-/// use diskann_benchmark_runner::dispatcher::{Dispatcher1, MutRef};
-///
-/// let mut d = Dispatcher1::<(), MutRef<Vec<f32>>>::new();
-/// d.register::<_, MutRef<Vec<f32>>>("method", |v: &mut Vec<f32>| v.push(0.0));
-///
-/// let mut v = Vec::new();
-/// d.call(&mut v).unwrap();
-/// assert_eq!(&v, &[0.0]);
-/// ```
-pub struct MutRef<T: ?Sized + 'static>(std::marker::PhantomData<T>);
-impl<T: ?Sized> Map for MutRef<T> {
-    type Type<'a> = &'a mut T;
-}
-
-pub struct Type<T: 'static>(std::marker::PhantomData<T>);
-impl<T> Map for Type<T> {
-    type Type<'a> = T;
-}
-
-#[macro_export]
-macro_rules! self_map {
-    ($($type:tt)*) => {
-        impl $crate::dispatcher::Map for $($type)* {
-            type Type<'a> = $($type)*;
-        }
-    }
-}
-
-self_map!(bool);
-self_map!(usize);
-self_map!(u8);
-self_map!(u16);
-self_map!(u32);
-self_map!(u64);
-self_map!(u128);
-self_map!(i8);
-self_map!(i16);
-self_map!(i32);
-self_map!(i64);
-self_map!(i128);
-self_map!(String);
-self_map!(f32);
-self_map!(f64);
-
-/// Reasons for a method call mismatch.
-///
-/// The name of the associated method can be queried using `self.method()` and reasons
-/// are obtained in `self.mismatches()`.
-pub struct ArgumentMismatch<'a, const N: usize> {
-    pub(crate) method: &'a str,
-    pub(crate) mismatches: [Option<Box<dyn std::fmt::Display + 'a>>; N],
-}
-
-impl<'a, const N: usize> ArgumentMismatch<'a, N> {
-    /// Return the name of the associated method.
-    pub fn method(&self) -> &str {
-        self.method
-    }
-
-    /// Return a slice of reasons for method match failure.
-    ///
-    /// The returned slice contains one entry per argument. An entry is `None` if that
-    /// argument matched the input value.
-    ///
-    /// If the argument did not match the input value, then the corresponding
-    /// [`std::fmt::Display`] object can be used to retrieve the reason.
-    pub fn mismatches(&self) -> &[Option<Box<dyn std::fmt::Display + 'a>>; N] {
-        &self.mismatches
-    }
-}
-
-/// Return the signature for an argument type.
-pub struct Signature(pub(crate) fn(&mut Formatter<'_>) -> std::fmt::Result);
-
-impl std::fmt::Display for Signature {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        (self.0)(f)
     }
 }
 

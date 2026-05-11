@@ -12,33 +12,10 @@ crate::utils::stub_impl!("spherical-quantization", inputs::exhaustive::Spherical
 // Spherical - requires feature "spherical-quantization"
 #[cfg(feature = "spherical-quantization")]
 pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<imp::SphericalQ<'static, 1>>(NAME, |object, _checkpoint, output| {
-        match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    benchmarks.register::<imp::SphericalQ<'static, 2>>(NAME, |object, _checkpoint, output| {
-        match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    benchmarks.register::<imp::SphericalQ<'static, 4>>(NAME, |object, _checkpoint, output| {
-        match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
-
-    benchmarks.register::<imp::SphericalQ<'static, 8>>(NAME, |object, _checkpoint, output| {
-        match object.run(output) {
-            Ok(v) => Ok(serde_json::to_value(v)?),
-            Err(err) => Err(err),
-        }
-    });
+    benchmarks.register(NAME, imp::SphericalQ::<1>);
+    benchmarks.register(NAME, imp::SphericalQ::<2>);
+    benchmarks.register(NAME, imp::SphericalQ::<4>);
+    benchmarks.register(NAME, imp::SphericalQ::<8>);
 }
 
 // Stub implementation
@@ -56,11 +33,9 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        describeln,
-        dispatcher::{self, DispatchRule, FailureScore, MatchScore},
-        output::Output,
+        dispatcher::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
-        Any,
+        Benchmark, Output,
     };
     use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
     use diskann_quantization::{
@@ -103,16 +78,14 @@ mod imp {
     }
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct SphericalQ<'a, const NBITS: usize> {
-        input: &'a inputs::exhaustive::Spherical,
-    }
+    pub(super) struct SphericalQ<const NBITS: usize>;
 
-    impl<'a, const NBITS: usize> SphericalQ<'a, NBITS> {
-        pub(super) fn new(input: &'a inputs::exhaustive::Spherical) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results>
+    impl<const NBITS: usize> SphericalQ<NBITS> {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::Spherical,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results>
         where
             Unsigned: Representation<NBITS>,
             Plan: algos::CreateQuantComputer<Store<NBITS>>,
@@ -121,8 +94,7 @@ mod imp {
             SphericalQuantizer:
                 for<'x> CompressIntoWith<&'x [f32], DataMut<'x, NBITS>, ScopedAllocator<'x>>,
         {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -226,17 +198,23 @@ mod imp {
         }
     }
 
-    impl<const NBITS: usize> dispatcher::Map for SphericalQ<'static, NBITS> {
-        type Type<'a> = SphericalQ<'a, NBITS>;
-    }
-
-    impl<'a, const NBITS: usize> DispatchRule<&'a inputs::exhaustive::Spherical>
-        for SphericalQ<'a, NBITS>
+    impl<const NBITS: usize> Benchmark for SphericalQ<NBITS>
+    where
+        Unsigned: Representation<NBITS>,
+        Plan: algos::CreateQuantComputer<Store<NBITS>>,
+        diskann_quantization::spherical::iface::Impl<NBITS>:
+            diskann_quantization::spherical::iface::Constructible,
+        SphericalQuantizer:
+            for<'x> CompressIntoWith<&'x [f32], DataMut<'x, NBITS>, ScopedAllocator<'x>>,
     {
-        type Error = std::convert::Infallible;
+        type Input = inputs::exhaustive::Spherical;
+        type Output = Results;
 
-        fn try_match(from: &&'a inputs::exhaustive::Spherical) -> Result<MatchScore, FailureScore> {
-            let num_bits = from.num_bits.get();
+        fn try_match(
+            &self,
+            input: &inputs::exhaustive::Spherical,
+        ) -> Result<MatchScore, FailureScore> {
+            let num_bits = input.num_bits.get();
             if num_bits == NBITS {
                 Ok(MatchScore(0))
             } else {
@@ -246,32 +224,24 @@ mod imp {
             }
         }
 
-        fn convert(from: &'a inputs::exhaustive::Spherical) -> Result<Self, Self::Error> {
-            assert_eq!(
-                from.num_bits.get(),
-                NBITS,
-                "This should not have occurred. Please file a bug report"
-            );
-            Ok(Self::new(from))
-        }
-
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a inputs::exhaustive::Spherical>,
+            input: Option<&inputs::exhaustive::Spherical>,
         ) -> std::fmt::Result {
-            match from {
+            match input {
                 None => {
-                    describeln!(
+                    writeln!(
                         f,
                         "- Exhaustive search for {}-bit spherical quantization",
                         NBITS
                     )?;
-                    describeln!(f, "- Requires `float32` data")?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
+                    writeln!(f, "- Requires `float32` data")?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
                 }
                 Some(from) => {
                     if from.num_bits.get() != NBITS {
-                        describeln!(
+                        writeln!(
                             f,
                             "- Expected \"num_bits = {}\", instead got {}",
                             NBITS,
@@ -282,28 +252,14 @@ mod imp {
             }
             Ok(())
         }
-    }
 
-    impl<'a, const NBITS: usize> DispatchRule<&'a Any> for SphericalQ<'a, NBITS> {
-        type Error = anyhow::Error;
-
-        fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-            from.try_match::<inputs::exhaustive::Spherical, Self>()
-        }
-
-        fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-            from.convert::<inputs::exhaustive::Spherical, Self>()
-        }
-
-        fn description(
-            f: &mut std::fmt::Formatter<'_>,
-            from: Option<&&'a Any>,
-        ) -> std::fmt::Result {
-            Any::description::<inputs::exhaustive::Spherical, Self>(
-                f,
-                from,
-                inputs::exhaustive::Spherical::tag(),
-            )
+        fn run(
+            &self,
+            input: &inputs::exhaustive::Spherical,
+            _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
+            output: &mut dyn Output,
+        ) -> anyhow::Result<Results> {
+            self.run(input, output)
         }
     }
 

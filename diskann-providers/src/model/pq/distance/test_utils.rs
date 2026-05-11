@@ -6,15 +6,15 @@
 // Common utilities for testing PQ-based distance computations.
 use approx::assert_relative_eq;
 use diskann::utils::IntoUsize;
-use diskann_utils::views;
 use diskann_vector::{
     Half, PreprocessedDistanceFunction, PureDistanceFunction,
     distance::{Cosine, InnerProduct, SquaredL2},
 };
-use rand::{Rng, SeedableRng, distr::Distribution};
+use rand::{Rng, distr::Distribution};
 use rand_distr::{Normal, Uniform};
 
-use crate::model::{FixedChunkPQTable, pq::calculate_chunk_offsets_auto};
+use crate::model::FixedChunkPQTable;
+use diskann_quantization::views::ChunkOffsets;
 
 /// We need a way to generate random queries.
 ///
@@ -85,8 +85,6 @@ pub(crate) struct TableConfig {
     pub(crate) num_pivots: usize,
     // The starting value for chunk 0, pivot 0.
     pub(crate) start_value: f32,
-    // Flag to initialize both the transformation matrix and the centroid.
-    pub(crate) use_opq: bool,
 }
 
 /// With reference to the docstring for `seed_pivot_table`, this function generates
@@ -133,7 +131,12 @@ pub(crate) fn generate_expected_vector(
 /// * N + 1: The number of PQ Pivots
 pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     // Get the chunk offsets for the selected dimension and bytes.
-    let offsets = calculate_chunk_offsets_auto(config.dim, config.pq_chunks);
+    let chunk_offsets = ChunkOffsets::partition(
+        std::num::NonZeroUsize::new(config.dim).unwrap(),
+        std::num::NonZeroUsize::new(config.pq_chunks).unwrap(),
+    )
+    .unwrap();
+    let offsets = chunk_offsets.as_slice();
 
     // Create the pivot table following the schema described in the docstring.
     let mut pivots = Vec::<f32>::new();
@@ -153,29 +156,9 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
 
     assert_eq!(pivots.len(), config.dim * config.num_pivots);
 
-    let (centroid, matrix) = if config.use_opq {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(0x1c3e6b3951ac5b73);
-        let dist = Normal::<f32>::new(0.0, 1.0).unwrap();
+    let centroid = vec![0.0f32; config.dim];
 
-        let centroid = (0..config.dim).map(|_| dist.sample(&mut rng)).collect();
-        let matrix = views::Matrix::new(
-            views::Init(|| dist.sample(&mut rng)),
-            config.dim,
-            config.dim,
-        );
-        (centroid, Some(matrix))
-    } else {
-        (vec![0.0f32; config.dim], None)
-    };
-
-    FixedChunkPQTable::new(
-        config.dim,
-        pivots.into(),
-        centroid.into(),
-        offsets.into(),
-        matrix.map(|x| x.into_inner()),
-    )
-    .unwrap()
+    FixedChunkPQTable::new(config.dim, pivots.into(), centroid.into(), offsets.into()).unwrap()
 }
 
 /// Generate a random PQ code spanning the requested number of pivots and chunks.
