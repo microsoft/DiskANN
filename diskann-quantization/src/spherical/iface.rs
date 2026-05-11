@@ -1378,12 +1378,12 @@ cfg_if::cfg_if! {
 
         dispatch_map!(1, AsData<1>, V4, downcast_to_v3);
         dispatch_map!(2, AsData<2>, V4); // specialized
-        dispatch_map!(4, AsData<4>, V4, downcast_to_v3);
+        dispatch_map!(4, AsData<4>, V4); // specialized
         dispatch_map!(8, AsData<8>, V4, downcast_to_v3);
 
         dispatch_map!(1, AsQuery<4, bits::BitTranspose>, V4, downcast_to_v3);
         dispatch_map!(2, AsQuery<2>, V4); // specialized
-        dispatch_map!(4, AsQuery<4>, V4, downcast_to_v3);
+        dispatch_map!(4, AsQuery<4>, V4); // specialized
         dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
     } else if #[cfg(target_arch = "aarch64")] {
         fn downcast(arch: Neon) -> Scalar {
