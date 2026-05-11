@@ -525,6 +525,10 @@ pub struct SphericalChamferData {
     offsets: Vec<usize>,
     /// `counts[doc_id]` = number of sub-vectors for this document.
     counts: Vec<usize>,
+    /// Pre-computed constants enabling the 1-bit tiled Chamfer fast path. `Some` iff
+    /// the quantizer is 1-bit InnerProduct, in which case the fast path is used for
+    /// `QueryLayout::SameAsData` queries.
+    fast_1bit: Option<chamfer_1bit::Constants>,
 }
 
 impl SphericalChamferData {
@@ -588,12 +592,15 @@ impl SphericalChamferData {
                 }
             });
 
+        let fast_1bit = chamfer_1bit::Constants::try_from_quantizer(&quantizer, bytes_per_vector);
+
         Self {
             data,
             quantizer: Box::new(quantizer),
             bytes_per_vector,
             offsets,
             counts,
+            fast_1bit,
         }
     }
 
@@ -663,6 +670,88 @@ impl SphericalChamferData {
         }
         sum
     }
+
+    /// Returns `true` if [`SphericalChamferData::compress_queries_fast`] /
+    /// [`SphericalChamferData::chamfer_distance_fast`] can be used for the given
+    /// `layout`.
+    ///
+    /// The 1-bit fast path is currently enabled when the quantizer is 1-bit
+    /// `InnerProduct` and the query layout matches the data layout
+    /// ([`spherical::iface::QueryLayout::SameAsData`]).
+    fn supports_fast_path(&self, layout: spherical::iface::QueryLayout) -> bool {
+        matches!(layout, spherical::iface::QueryLayout::SameAsData) && self.fast_1bit.is_some()
+    }
+
+    /// Compress each row of `query` using the quantizer's `SameAsData` layout into a
+    /// single contiguous byte buffer suitable for [`Self::chamfer_distance_fast`].
+    ///
+    /// Returns `None` if the fast path is not supported by this quantizer.
+    fn compress_queries_fast<T>(
+        &self,
+        query: MultiVecRef<'_, T>,
+        allow_rescale: bool,
+    ) -> Option<Result<Vec<u8>, inmem::spherical::QueryComputerError>>
+    where
+        T: VectorRepr,
+    {
+        if !self.supports_fast_path(spherical::iface::QueryLayout::SameAsData) {
+            return None;
+        }
+
+        let bytes_per_vector = self.bytes_per_vector;
+        let q_count = query.num_vectors();
+        let mut buffer = vec![0u8; q_count * bytes_per_vector];
+
+        for (i, row) in query.rows().enumerate() {
+            let qf32 = match T::as_f32(row) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Some(Err(
+                        inmem::spherical::QueryComputerError::FullPrecisionConversionErr(Box::new(
+                            e,
+                        )),
+                    ));
+                }
+            };
+            let slot = &mut buffer[i * bytes_per_vector..(i + 1) * bytes_per_vector];
+            if let Err(e) = self.quantizer.compress_query(
+                qf32.as_ref(),
+                spherical::iface::QueryLayout::SameAsData,
+                allow_rescale,
+                spherical::iface::OpaqueMut::new(slot),
+                ScopedAllocator::global(),
+            ) {
+                return Some(Err(
+                    inmem::spherical::QueryComputerError::FullPrecisionConversionErr(Box::new(e)),
+                ));
+            }
+        }
+
+        Some(Ok(buffer))
+    }
+
+    /// Compute approximate Chamfer distance using the tiled 1-bit fast path.
+    ///
+    /// `query_bytes` must have been produced by [`Self::compress_queries_fast`] for
+    /// this [`SphericalChamferData`]. Returns `f32::MAX` for an unknown `doc_id`.
+    fn chamfer_distance_fast(&self, query_bytes: &[u8], q_count: usize, doc_id: u32) -> f32 {
+        let Some(constants) = self.fast_1bit.as_ref() else {
+            // Caller invoked the fast path without checking `supports_fast_path` first.
+            return f32::MAX;
+        };
+
+        let Some((offset, count)) = self.doc_range(doc_id) else {
+            return f32::MAX;
+        };
+
+        chamfer_1bit::chamfer_strided(
+            query_bytes,
+            q_count,
+            &self.data[offset..offset + count * self.bytes_per_vector],
+            count,
+            constants,
+        )
+    }
 }
 
 impl std::fmt::Debug for SphericalChamferData {
@@ -675,7 +764,259 @@ impl std::fmt::Debug for SphericalChamferData {
                 &self.counts.iter().copied().sum::<usize>(),
             )
             .field("data_bytes", &self.data.len())
+            .field("fast_1bit", &self.fast_1bit.is_some())
             .finish()
+    }
+}
+
+/// Tiled 1-bit Chamfer distance kernel for spherical-quantized vectors.
+///
+/// The kernel restructures the per-pair distance computation into three phases:
+///
+/// 1. Compute the raw `popcnt(q & d)` matrix for a 32 query × 32 doc tile.
+/// 2. Apply scalar quantization corrections (`f16` -> `f32` metadata) per pair.
+/// 3. Fold each query row's running maximum (in mathematical-IP space) across all
+///    doc tiles, then negate-and-sum at the end to produce the Chamfer distance.
+///
+/// The fast path is symmetric and assumes both queries and docs use the 1-bit
+/// `SameAsData` layout produced by [`spherical::iface::Quantizer::compress`] /
+/// [`spherical::iface::Quantizer::compress_query`].
+///
+/// Per-pair formula matches [`diskann_quantization::spherical::CompensatedIP`]:
+///
+/// ```text
+/// f_ij = c_i*c_j * (popcnt(q_i & d_j) - 0.5*(s_i + s_j) + 0.25*D) + m_i + m_j + S
+/// dist_ij = -f_ij
+/// Chamfer(Q, D) = sum_i (-max_j f_ij)
+/// ```
+///
+/// where `c`, `m`, `s` are the per-vector `DataMeta` fields, `D` is the dimensionality,
+/// and `S` is the squared norm of the centroid (shift).
+mod chamfer_1bit {
+    use diskann_quantization::spherical::{self, DataMeta};
+
+    /// The width of one query-row / doc-row tile, in vectors.
+    const TILE: usize = 32;
+
+    /// Pre-computed constants describing how to run the 1-bit Chamfer fast path
+    /// against a particular [`super::SphericalChamferData`].
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct Constants {
+        /// The dimensionality (number of compressed bits per vector).
+        pub(super) dim: usize,
+        /// The number of bytes per bit-slice (`ceil(dim / 8)`).
+        pub(super) bit_bytes: usize,
+        /// The stride between successive vectors in the packed byte buffer. Equals
+        /// `bit_bytes + size_of::<DataMeta>()`.
+        pub(super) stride: usize,
+        /// `|C|^2` for the centroid `C` — the constant additive term in
+        /// [`spherical::CompensatedIP`].
+        pub(super) squared_shift_norm: f32,
+    }
+
+    impl Constants {
+        /// Inspect a quantizer and return `Some(Self)` iff it implements the 1-bit
+        /// `InnerProduct` quantization scheme that the fast path supports.
+        pub(super) fn try_from_quantizer(
+            quantizer: &(dyn spherical::iface::Quantizer + Send + Sync),
+            stride: usize,
+        ) -> Option<Self> {
+            if quantizer.nbits() != 1 {
+                return None;
+            }
+            if quantizer.metric() != spherical::SupportedMetric::InnerProduct {
+                return None;
+            }
+            let dim = quantizer.dim();
+            let meta_bytes = std::mem::size_of::<DataMeta>();
+            if stride < meta_bytes {
+                return None;
+            }
+            let bit_bytes = stride - meta_bytes;
+            // Sanity check: bit_bytes should be just large enough to hold `dim` bits.
+            if bit_bytes != dim.div_ceil(8) {
+                return None;
+            }
+            Some(Self {
+                dim,
+                bit_bytes,
+                stride,
+                squared_shift_norm: quantizer.squared_shift_norm(),
+            })
+        }
+    }
+
+    /// Per-vector `DataMeta`, expanded to `f32` once per call to avoid redundant
+    /// `f16 -> f32` conversions inside the inner tile loop.
+    #[derive(Debug, Clone, Copy, Default)]
+    struct Meta {
+        /// `inner_product_correction`.
+        c: f32,
+        /// `metric_specific`.
+        m: f32,
+        /// `bit_sum`.
+        s: f32,
+    }
+
+    impl Meta {
+        #[inline]
+        fn from_data_meta(d: DataMeta) -> Self {
+            Self {
+                c: f32::from(d.inner_product_correction),
+                m: f32::from(d.metric_specific),
+                s: f32::from(d.bit_sum),
+            }
+        }
+    }
+
+    /// Decode all `count` `DataMeta` fields from the back of each stride-sized vector
+    /// in `packed[0..count*stride]` into a freshly allocated `Vec<Meta>`.
+    fn decode_metas(packed: &[u8], count: usize, stride: usize, bit_bytes: usize) -> Vec<Meta> {
+        let mut out = Vec::with_capacity(count);
+        for j in 0..count {
+            let meta_off = j * stride + bit_bytes;
+            let bytes = &packed[meta_off..meta_off + std::mem::size_of::<DataMeta>()];
+            let meta: DataMeta = *bytemuck::from_bytes(bytes);
+            out.push(Meta::from_data_meta(meta));
+        }
+        out
+    }
+
+    /// Compute `popcnt(q[i] & d[j])` for `i in 0..q_rows, j in 0..d_rows` (each up to
+    /// [`TILE`]) and write the resulting `u32`s to `out[i * TILE + j]`.
+    ///
+    /// `q_packed` / `d_packed` are stride-separated byte slabs; only the first
+    /// `bit_bytes` of each vector are read (the trailing `DataMeta` is skipped).
+    #[inline]
+    fn ip_tile(
+        q_packed: &[u8],
+        d_packed: &[u8],
+        q_rows: usize,
+        d_rows: usize,
+        stride: usize,
+        bit_bytes: usize,
+        out: &mut [u32; TILE * TILE],
+    ) {
+        debug_assert!(q_rows <= TILE && d_rows <= TILE);
+
+        let chunks = bit_bytes / 8;
+        let tail_off = chunks * 8;
+        let tail_len = bit_bytes - tail_off;
+
+        for i in 0..q_rows {
+            let q_off = i * stride;
+            let q = &q_packed[q_off..q_off + bit_bytes];
+            for j in 0..d_rows {
+                let d_off = j * stride;
+                let d = &d_packed[d_off..d_off + bit_bytes];
+
+                let mut acc: u32 = 0;
+                for (q_chunk, d_chunk) in q[..chunks * 8]
+                    .chunks_exact(8)
+                    .zip(d[..chunks * 8].chunks_exact(8))
+                {
+                    let qk: u64 = bytemuck::pod_read_unaligned(q_chunk);
+                    let dk: u64 = bytemuck::pod_read_unaligned(d_chunk);
+                    acc += (qk & dk).count_ones();
+                }
+                for k in 0..tail_len {
+                    acc += u32::from(q[tail_off + k] & d[tail_off + k]).count_ones();
+                }
+                out[i * TILE + j] = acc;
+            }
+        }
+    }
+
+    /// Apply per-pair corrections to a raw popcnt tile and fold a per-row running max
+    /// in mathematical-IP space (see module docs for the formula).
+    #[inline]
+    fn correct_and_fold(
+        raw: &[u32; TILE * TILE],
+        qm: &[Meta],
+        dm: &[Meta],
+        dim_f: f32,
+        shift_f: f32,
+        row_max: &mut [f32],
+    ) {
+        debug_assert_eq!(qm.len(), row_max.len());
+        let quarter_dim = 0.25 * dim_f;
+        for (i, &qmi) in qm.iter().enumerate() {
+            let mut maxv = row_max[i];
+            let row = &raw[i * TILE..i * TILE + dm.len()];
+            for (&ip, &dmj) in row.iter().zip(dm.iter()) {
+                // Match the expression order of `CompensatedIP::run` (vectors.rs).
+                let inner = (ip as f32) - 0.5 * (qmi.s + dmj.s) + quarter_dim;
+                let kern = qmi.c * dmj.c * inner;
+                let f = qmi.m + dmj.m + kern + shift_f;
+                if f > maxv {
+                    maxv = f;
+                }
+            }
+            row_max[i] = maxv;
+        }
+    }
+
+    /// Tiled 1-bit Chamfer distance over `q_count` queries and `d_count` docs packed
+    /// in the canonical `[bit_slice][DataMeta]` layout (stride from `constants`).
+    pub(super) fn chamfer_strided(
+        q_packed: &[u8],
+        q_count: usize,
+        d_packed: &[u8],
+        d_count: usize,
+        constants: &Constants,
+    ) -> f32 {
+        if q_count == 0 {
+            return 0.0;
+        }
+        if d_count == 0 {
+            // No candidate docs: distance is "infinite" in IP-space, i.e. -inf.
+            return f32::MAX;
+        }
+
+        let Constants {
+            dim,
+            bit_bytes,
+            stride,
+            squared_shift_norm,
+        } = *constants;
+        let dim_f = dim as f32;
+
+        // Decode metadata up front so the inner tile loop stays scalar-arithmetic.
+        let q_metas = decode_metas(q_packed, q_count, stride, bit_bytes);
+        let d_metas = decode_metas(d_packed, d_count, stride, bit_bytes);
+
+        let mut tile = [0u32; TILE * TILE];
+        let mut row_max = vec![f32::NEG_INFINITY; q_count];
+
+        let mut qi = 0;
+        while qi < q_count {
+            let q_rows = (q_count - qi).min(TILE);
+            let q_slice = &q_packed[qi * stride..(qi + q_rows) * stride];
+            let qm = &q_metas[qi..qi + q_rows];
+            let row_max_chunk = &mut row_max[qi..qi + q_rows];
+
+            let mut dj = 0;
+            while dj < d_count {
+                let d_rows = (d_count - dj).min(TILE);
+                let d_slice = &d_packed[dj * stride..(dj + d_rows) * stride];
+                let dm = &d_metas[dj..dj + d_rows];
+
+                ip_tile(
+                    q_slice, d_slice, q_rows, d_rows, stride, bit_bytes, &mut tile,
+                );
+                correct_and_fold(&tile, qm, dm, dim_f, squared_shift_norm, row_max_chunk);
+
+                dj += TILE;
+            }
+            qi += TILE;
+        }
+
+        // Chamfer distance = sum_i (-max_j f_ij).
+        let mut sum = 0.0f32;
+        for &v in &row_max {
+            sum -= v;
+        }
+        sum
     }
 }
 
@@ -686,8 +1027,12 @@ impl std::fmt::Debug for SphericalChamferData {
 /// full multi-vector set vs. a reduced set).
 pub struct QuantizedChamferRerank {
     data: Arc<SphericalChamferData>,
-    /// Pre-built query computers, one per query sub-vector.
+    /// Pre-built query computers, one per query sub-vector. Populated as a fallback
+    /// when the fast 1-bit path is not applicable.
     query_computers: Vec<spherical::iface::QueryComputer>,
+    /// Pre-compressed queries packed for the 1-bit fast path, when supported.
+    /// `(packed_bytes, q_count)`.
+    fast_query: Option<(Vec<u8>, usize)>,
 }
 
 impl QuantizedChamferRerank {
@@ -700,17 +1045,38 @@ impl QuantizedChamferRerank {
         rerank_query: MultiVecRef<'_, f32>,
         layout: spherical::iface::QueryLayout,
     ) -> Self {
-        let query_computers: Vec<_> = rerank_query
-            .rows()
-            .map(|q_vec| {
-                data.query_computer(q_vec, layout, true)
-                    .expect("failed to build query computer for sub-vector")
-            })
-            .collect();
+        let fast_query = data
+            .compress_queries_fast(rerank_query, true)
+            .map(|r| r.expect("failed to compress queries for chamfer fast path"))
+            .map(|bytes| (bytes, rerank_query.num_vectors()));
+
+        let query_computers: Vec<_> = if fast_query.is_some() {
+            // The fast path is exercised below; the dyn computers are unused.
+            Vec::new()
+        } else {
+            rerank_query
+                .rows()
+                .map(|q_vec| {
+                    data.query_computer(q_vec, layout, true)
+                        .expect("failed to build query computer for sub-vector")
+                })
+                .collect()
+        };
 
         Self {
             data,
             query_computers,
+            fast_query,
+        }
+    }
+
+    /// Compute Chamfer distance to `doc_id`, dispatching to the 1-bit fast path
+    /// when available.
+    #[inline]
+    fn distance_to(&self, doc_id: u32) -> f32 {
+        match &self.fast_query {
+            Some((bytes, q_count)) => self.data.chamfer_distance_fast(bytes, *q_count, doc_id),
+            None => self.data.chamfer_distance(&self.query_computers, doc_id),
         }
     }
 }
@@ -742,7 +1108,7 @@ where
                 if checker.deletion_check(n.id) {
                     None
                 } else {
-                    let dist = self.data.chamfer_distance(&self.query_computers, n.id);
+                    let dist = self.distance_to(n.id);
                     Some((n.id, dist))
                 }
             })
@@ -935,13 +1301,21 @@ where
 /// compressed sub-vectors.
 pub struct ChamferQueryComputer {
     data: Arc<SphericalChamferData>,
+    /// Pre-built query computers, one per query sub-vector. Populated as a fallback
+    /// when the fast 1-bit path is not applicable.
     query_computers: Vec<spherical::iface::QueryComputer>,
+    /// Pre-compressed queries packed for the 1-bit fast path, when supported.
+    /// `(packed_bytes, q_count)`.
+    fast_query: Option<(Vec<u8>, usize)>,
 }
 
 impl PreprocessedDistanceFunction<u32, f32> for ChamferQueryComputer {
     #[inline]
     fn evaluate_similarity(&self, doc_id: u32) -> f32 {
-        self.data.chamfer_distance(&self.query_computers, doc_id)
+        match &self.fast_query {
+            Some((bytes, q_count)) => self.data.chamfer_distance_fast(bytes, *q_count, doc_id),
+            None => self.data.chamfer_distance(&self.query_computers, doc_id),
+        }
     }
 }
 
@@ -997,30 +1371,44 @@ where
         &self,
         from: MultiVecRef<'_, T>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        let query_computers: Vec<_> = from
-            .rows()
-            .map(|q_vec| {
-                let qf32 = T::as_f32(q_vec).map_err(|e| {
-                    ANNError::new(
-                        diskann::ANNErrorKind::SQError,
-                        crate::utils::Bridge(
-                            inmem::spherical::QueryComputerError::FullPrecisionConversionErr(
-                                Box::new(e),
-                            ),
-                        ),
-                    )
-                })?;
-                self.data
-                    .query_computer(qf32.as_ref(), self.layout, true)
-                    .map_err(|e| {
-                        ANNError::new(diskann::ANNErrorKind::SQError, crate::utils::Bridge(e))
-                    })
+        let fast_query = self
+            .data
+            .compress_queries_fast(from, true)
+            .map(|r| {
+                r.map(|bytes| (bytes, from.num_vectors())).map_err(|e| {
+                    ANNError::new(diskann::ANNErrorKind::SQError, crate::utils::Bridge(e))
+                })
             })
-            .collect::<Result<_, _>>()?;
+            .transpose()?;
+
+        let query_computers: Vec<_> = if fast_query.is_some() {
+            Vec::new()
+        } else {
+            from.rows()
+                .map(|q_vec| {
+                    let qf32 = T::as_f32(q_vec).map_err(|e| {
+                        ANNError::new(
+                            diskann::ANNErrorKind::SQError,
+                            crate::utils::Bridge(
+                                inmem::spherical::QueryComputerError::FullPrecisionConversionErr(
+                                    Box::new(e),
+                                ),
+                            ),
+                        )
+                    })?;
+                    self.data
+                        .query_computer(qf32.as_ref(), self.layout, true)
+                        .map_err(|e| {
+                            ANNError::new(diskann::ANNErrorKind::SQError, crate::utils::Bridge(e))
+                        })
+                })
+                .collect::<Result<_, _>>()?
+        };
 
         Ok(ChamferQueryComputer {
             data: Arc::clone(&self.data),
             query_computers,
+            fast_query,
         })
     }
 }
@@ -1200,7 +1588,7 @@ where
                 if checker.deletion_check(n.id) {
                     None
                 } else {
-                    let dist = self.data.chamfer_distance(&self.query_computers, n.id);
+                    let dist = self.distance_to(n.id);
                     Some((n.id, dist))
                 }
             })
@@ -1251,5 +1639,119 @@ where
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         std::future::ready(Ok(output.extend(reranked)))
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use diskann_quantization::{
+        alloc::GlobalAllocator,
+        multi_vector::{Mat, Standard},
+        spherical::{SphericalQuantizer, SupportedMetric},
+    };
+    use diskann_utils::views::{Init, Matrix};
+    use rand::{SeedableRng, distr::Distribution, rngs::StdRng};
+    use rand_distr::StandardNormal;
+
+    use super::*;
+
+    /// Construct an owned `MultiVec<f32>` of `nrows` sub-vectors of dimension `ncols`,
+    /// populated with random values.
+    fn random_multi_vec(nrows: usize, ncols: usize, rng: &mut StdRng) -> MultiVec<f32> {
+        let mut m: Mat<Standard<f32>> =
+            Mat::new(Standard::new(nrows, ncols).unwrap(), 0.0f32).expect("Mat allocation");
+        for i in 0..nrows {
+            let row = m.get_row_mut(i).expect("row in range");
+            for v in row.iter_mut() {
+                *v = StandardNormal {}.sample(rng);
+            }
+        }
+        m
+    }
+
+    /// Train a 1-bit `InnerProduct` `SphericalQuantizer` over the given training data.
+    fn train_1bit_ip(training: &Matrix<f32>, rng: &mut StdRng) -> spherical::iface::Impl<1> {
+        let quantizer = SphericalQuantizer::train(
+            training.as_view(),
+            diskann_quantization::algorithms::transforms::TransformKind::PaddingHadamard {
+                target_dim: diskann_quantization::algorithms::transforms::TargetDim::Natural,
+            },
+            SupportedMetric::InnerProduct,
+            diskann_quantization::spherical::PreScale::None,
+            rng,
+            GlobalAllocator,
+        )
+        .expect("quantizer training");
+        spherical::iface::Impl::<1>::new(quantizer).expect("Impl::new")
+    }
+
+    /// Check that the tiled 1-bit fast path produces Chamfer distances that match the
+    /// dyn-dispatch reference path within tight numerical tolerance.
+    #[test]
+    fn fast_path_matches_reference_chamfer_1bit_ip() {
+        let mut rng = StdRng::seed_from_u64(0x6f2b_1d99_4cb1_7c5a);
+
+        let dim = 96;
+        let n_train = 256;
+        let n_docs = 6;
+        let doc_sub_vecs = [8usize, 17, 32, 33, 47, 64];
+        let query_sub_vecs = 33; // not a multiple of TILE on purpose
+
+        // Train quantizer.
+        let training: Matrix<f32> =
+            Matrix::new(Init(|| StandardNormal {}.sample(&mut rng)), n_train, dim);
+        let quantizer = train_1bit_ip(&training, &mut rng);
+
+        // Build docs.
+        let docs: Vec<MultiVec<f32>> = (0..n_docs)
+            .map(|i| random_multi_vec(doc_sub_vecs[i], dim, &mut rng))
+            .collect();
+        let data = Arc::new(SphericalChamferData::new(quantizer, &docs));
+
+        assert!(
+            data.fast_1bit.is_some(),
+            "fast path should be available for 1-bit IP"
+        );
+
+        // Build a query (random multi-vector).
+        let query = random_multi_vec(query_sub_vecs, dim, &mut rng);
+        let query_view = query.as_view();
+
+        // Reference path: dyn-dispatched query computers.
+        let ref_computers: Vec<_> = query_view
+            .rows()
+            .map(|q| {
+                data.query_computer(q, spherical::iface::QueryLayout::SameAsData, true)
+                    .expect("ref query computer")
+            })
+            .collect();
+
+        // Fast path: packed query bytes.
+        let packed = data
+            .compress_queries_fast(query_view, true)
+            .expect("fast path supported")
+            .expect("compress queries");
+
+        for (doc_id, _) in docs.iter().enumerate() {
+            let reference = data.chamfer_distance(&ref_computers, doc_id as u32);
+            let fast = data.chamfer_distance_fast(&packed, query_sub_vecs, doc_id as u32);
+
+            let scale = reference.abs().max(1.0);
+            let tol = 1e-4 * scale + 1e-5;
+            assert!(
+                (reference - fast).abs() < tol,
+                "doc {doc_id}: reference {reference} vs fast {fast} (tol {tol})"
+            );
+        }
+
+        // Unknown doc id should also agree (both return f32::MAX).
+        assert_eq!(
+            data.chamfer_distance(&ref_computers, n_docs as u32),
+            data.chamfer_distance_fast(&packed, query_sub_vecs, n_docs as u32),
+        );
     }
 }

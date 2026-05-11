@@ -327,6 +327,14 @@ where
     /// Return the metric this plan was created with.
     fn metric(&self) -> SupportedMetric;
 
+    /// Return the squared L2 norm of the shift (centroid) vector.
+    ///
+    /// This is the constant term added by [`CompensatedIP`] / [`CompensatedCosine`]
+    /// during distance computation. It is exposed so callers (e.g., the multi-vector
+    /// Chamfer fast path) can recompute distances from raw bit-level kernels without
+    /// going through the opaque [`DistanceComputer`] / [`QueryComputer`] interface.
+    fn squared_shift_norm(&self) -> f32;
+
     /// Clone the backing object.
     fn try_clone_into(&self, allocator: A) -> Result<Poly<dyn Quantizer<A>, A>, AllocatorError>;
 
@@ -1713,6 +1721,10 @@ where
         self.quantizer.metric()
     }
 
+    fn squared_shift_norm(&self) -> f32 {
+        self.quantizer.shift().iter().map(|&v| v * v).sum()
+    }
+
     fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
         let clone = (*self).try_clone()?;
         poly!({ Quantizer<B> }, clone, allocator)
@@ -1932,6 +1944,10 @@ macro_rules! plan {
 
             fn metric(&self) -> SupportedMetric {
                 self.quantizer.metric()
+            }
+
+            fn squared_shift_norm(&self) -> f32 {
+                self.quantizer.shift().iter().map(|&v| v * v).sum()
             }
 
             fn try_clone_into(&self, allocator: B) -> Result<Poly<dyn Quantizer<B>, B>, AllocatorError> {
