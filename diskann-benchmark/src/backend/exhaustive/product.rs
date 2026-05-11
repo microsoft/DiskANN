@@ -84,10 +84,10 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_providers::model::pq::calculate_chunk_offsets_auto(
-                data.ncols(),
-                input.num_pq_chunks.get(),
-            );
+            let dim = std::num::NonZeroUsize::new(data.ncols())
+                .ok_or_else(|| anyhow::anyhow!("data has zero columns"))?;
+            let offsets =
+                diskann_quantization::views::ChunkOffsets::partition(dim, input.num_pq_chunks)?;
 
             let base = {
                 let threadpool = rayon::ThreadPoolBuilder::new()
@@ -96,7 +96,7 @@ mod imp {
                 threadpool.install(|| -> anyhow::Result<_> {
                     Ok(parameters.train(
                         data.as_view(),
-                        diskann_quantization::views::ChunkOffsetsView::new(offsets.as_slice())?,
+                        offsets.as_view(),
                         diskann_quantization::Parallelism::Rayon,
                         &diskann_quantization::random::StdRngBuilder::new(input.seed),
                         &diskann_quantization::cancel::DontCancel,
@@ -108,7 +108,7 @@ mod imp {
                 data.ncols(),
                 base.flatten().into(),
                 vec![0.0; data.ncols()].into(),
-                offsets.into(),
+                offsets.as_slice().into(),
             )?;
 
             let training_time: MicroSeconds = start.elapsed().into();

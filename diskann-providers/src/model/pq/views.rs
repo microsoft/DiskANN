@@ -17,6 +17,22 @@ impl From<Bridge<diskann_quantization::views::ChunkOffsetError>> for ANNError {
 }
 
 // Compatibility with ANNError.
+impl From<Bridge<diskann_quantization::views::PartitionError>> for ANNError {
+    #[track_caller]
+    fn from(value: Bridge<diskann_quantization::views::PartitionError>) -> Self {
+        ANNError::log_pq_error(value.into_inner())
+    }
+}
+
+// Compatibility with ANNError.
+impl From<Bridge<diskann_quantization::views::PartitionIntoError>> for ANNError {
+    #[track_caller]
+    fn from(value: Bridge<diskann_quantization::views::PartitionIntoError>) -> Self {
+        ANNError::log_pq_error(value.into_inner())
+    }
+}
+
+// Compatibility with ANNError.
 impl From<Bridge<diskann_quantization::views::ChunkViewError>> for ANNError {
     #[track_caller]
     fn from(value: Bridge<diskann_quantization::views::ChunkViewError>) -> Self {
