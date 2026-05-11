@@ -253,48 +253,86 @@ PiPNN beats Vamana on recall at every L on the 384d Enron 10M workload, at parit
 
 ## Future Work
 
-The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M1–M7 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel.
+The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M1–M8 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel.
 
 ### M0 — Skeleton integration
 
-The foundation that ships first: introduce the `diskann-pipnn` crate, the `BuildAlgorithm` enum, and the dispatch in `DiskIndexBuilder` behind a `pipnn` Cargo feature. The JSON config gains an optional `build_algorithm` block; default behavior is unchanged. PiPNN-built indexes are read by the existing search pipeline unchanged (the on-disk format is identical) and produce recall numbers within the tolerances the existing disk-index test suite enforces. CI runs the benchmark binary with `--features pipnn` on a small smoke test (SIFT-1M).
+The foundation that ships first.
 
-This milestone delivers the opt-in alternative described in this RFC. M1-M4 close the feature-parity gaps; M5-M7 are validation.
+- **Scope:** introduce the `diskann-pipnn` crate, the `BuildAlgorithm` enum, and the dispatch in `DiskIndexBuilder` behind a `pipnn` Cargo feature.
+- **Config surface:** JSON config gains an optional `build_algorithm` block; default behavior unchanged.
+- **Compatibility:** PiPNN-built indexes are read by the existing search pipeline unchanged (the on-disk format is identical) and produce recall numbers within the tolerances the existing disk-index test suite enforces.
+- **CI:** benchmark binary runs with `--features pipnn` on a small smoke test (SIFT-1M).
 
-### M1 — Feature parity: checkpoint / resume
+M1–M5 close the feature-parity gaps; M6–M8 are validation and operational readiness.
 
-Add checkpoint/resume to the PiPNN build pipeline using the existing `CheckpointManager` / `ChunkingConfig` infrastructure in `diskann-disk/src/build/chunking/`. The natural checkpoint boundaries are the partition output (`Vec<Leaf>`), per-leaf HashPrune flush, and post-extract graph. Behavior matches Vamana's: a killed build resumes from the last checkpoint instead of starting over. Validation is a kill-and-resume test on BigANN 10M at three different checkpoint phases; final graph is byte-identical to a non-interrupted build given the same seeds.
+### M1 — Feature parity: in-memory build / search
 
-### M2 — Feature parity: quantized vector support
+Vamana supports both a **disk-resident** build/search path (via `diskann-disk`) and an **in-memory only** path (via `diskann::graph::index::DiskANNIndex`). PiPNN today only produces graphs handed to `DiskIndexWriter`; an in-mem-only consumer that wants PiPNN's speed has no entry point.
 
-PiPNN currently has only a `SQ1` (1-bit) build path. Extend the build to accept `QuantizationType::SQ { nbits, standard_deviation }` for the same `nbits` values Vamana supports (`SQ_2`, `SQ_4`, `SQ_8`). Reuse the trained `ScalarQuantizer` from `diskann-quantization` rather than duplicating quantizer training. The leaf-build distance kernel needs an `nbits`-aware path; the current implementation is either FP (GEMM) or 1-bit Hamming. Validation: PiPNN at `SQ_8` produces recall within 0.5% of FP for BigANN 10M and Enron 10M, matching the Vamana SQ_8 baseline.
+- **Scope:** expose `diskann_pipnn::build_typed` output (`Vec<Vec<u32>>`) as a populated in-memory `DiskANNIndex` so callers can build + search without touching disk.
+- **API:** add `diskann_pipnn::build_into_inmem_index(...)` returning an in-memory index that is read by the existing `DiskANNIndex::search` path unchanged.
+- **Validation:** in-mem search recall on Enron 1M with PiPNN-built graph matches the disk-build + load round-trip recall within noise.
 
-*Note: Build-time Product Quantization (PQ-distance during graph construction) is not currently used by Vamana in any production path and is out of scope.*
+### M2 — Feature parity: checkpoint / resume
 
-### M3 — Feature parity: label-filtered indexes
+- **Scope:** add checkpoint/resume to the PiPNN build pipeline using the existing `CheckpointManager` / `ChunkingConfig` infrastructure in `diskann-disk/src/build/chunking/`.
+- **Boundaries:** natural checkpoint points are partition output (`Vec<Leaf>`), per-leaf HashPrune flush, post-extract graph.
+- **Behavior:** matches Vamana's — a killed build resumes from the last checkpoint instead of starting over.
+- **Validation:** kill-and-resume test on BigANN 10M at three different checkpoint phases; final graph byte-identical to a non-interrupted build given the same seeds.
 
-PiPNN-built graphs already work with the existing search-time filter pipeline (`diskann-label-filter`) because the disk format is the same. The build-time flow for filter-aware indexes (`FilteredIndex`, `vector_filter_file`) has not been exercised end-to-end. M3 runs the filter benchmark JSON configs with `BuildAlgorithm::PiPNN` and confirms filter-recall numbers match Vamana's. If gaps surface — for example, the partition phase needing label-aware leaf assignment for high-cardinality labels — they are documented as M3 follow-ups.
+### M3 — Feature parity: quantized vector support
 
-### M4 — Memory mitigation: three-tier dispatch
+PiPNN currently has only a `SQ1` (1-bit) build path.
 
-Implement two memory-constrained PiPNN paths and select among them via the existing `build_ram_limit_gb` knob:
+- **Scope:** extend the build to accept `QuantizationType::SQ { nbits, standard_deviation }` for the same `nbits` values Vamana supports (`SQ_2`, `SQ_4`, `SQ_8`).
+- **Reuse:** trained `ScalarQuantizer` from `diskann-quantization`; do not duplicate quantizer training.
+- **Implementation:** the leaf-build distance kernel needs an `nbits`-aware path. Today the kernel is either FP (GEMM) or 1-bit Hamming.
+- **Validation:** PiPNN at `SQ_8` produces recall within 0.5% of FP for BigANN 10M and Enron 10M, matching the Vamana SQ_8 baseline.
 
-- **Disk-edges**: HashPrune reservoirs spill to disk between leaf batches when `MemoryBudget` is below a threshold (currently ~8 GB for 10M-scale workloads).
-- **Merged-shards**: per-shard graphs built independently then merged, mirroring Vamana's `build_merged_vamana_index` pipeline at `diskann-disk/src/build/builder/build.rs:327`. The existing shard merger is reused.
+*Note: build-time Product Quantization (PQ-distance during graph construction) is not currently used by Vamana in any production path and is out of scope.*
 
-Dispatch happens inside `build_inmem_pipnn_index()` — no new public parameter. Validation: at `build_ram_limit_gb=4`, the PiPNN-merged path on BigANN 10M produces peak RSS ≤ 4 GB and recall within 1% of one-shot PiPNN.
+### M4 — Feature parity: label-filtered indexes
 
-### M5 — Production validation: recall × QPS × dimensionality matrix
+PiPNN-built graphs already work with the existing search-time filter pipeline (`diskann-label-filter`) because the disk format is the same. The build-time flow for filter-aware indexes has not been exercised end-to-end.
 
-End-to-end validation on the full production workload mix. At minimum three dataset families (BigANN, Enron, plus one production-representative), scales of 10M and 100M (and one billion-scale sample if hardware permits), and both `squared_l2` and `cosine_normalized` metrics. The pass criterion for each (dataset, scale, metric) cell: PiPNN recall@K is within Vamana's recall ±1% at matching QPS, *or* higher QPS at matching recall. Cells that fall outside the band are documented as "PiPNN not yet recommended for X" rather than blocking Stage 2 entirely.
+- **Scope:** run the filter benchmark JSON configs with `BuildAlgorithm::PiPNN`; confirm filter-recall numbers match Vamana's.
+- **Risk:** the partition phase may need label-aware leaf assignment for high-cardinality labels.
+- **Validation:** filter-recall on a representative labeled dataset within ±1% of Vamana's filter-recall.
 
-### M6 — Production validation: hybrid update model
+### M5 — Memory mitigation: three-tier dispatch
 
-Validate the Stage-2 hybrid loop end-to-end: build a graph with PiPNN, apply N incremental Vamana inserts representing production churn, measure recall decay vs. graph age, trigger a PiPNN rebuild from the current snapshot, and confirm post-rebuild recall is restored. The output is a recommended "quality decay threshold" for production triggers based on the measured curve. M6 also confirms that Vamana's incremental-insert path reads the PiPNN-produced graph correctly — this is the disk-format compatibility test that matters most for the hybrid model.
+Implement two memory-constrained PiPNN paths and select among them via the existing `build_ram_limit_gb` knob.
 
-### M7 — Operational readiness
+- **Disk-edges:** HashPrune reservoirs spill to disk between leaf batches when `MemoryBudget` is below a threshold (currently ~8 GB for 10M-scale workloads).
+- **Merged-shards:** per-shard graphs built independently then merged, mirroring Vamana's `build_merged_vamana_index` pipeline at `diskann-disk/src/build/builder/build.rs:327`. The existing shard merger is reused.
+- **Dispatch:** inside `build_inmem_pipnn_index()` — no new public parameter.
+- **Validation:** at `build_ram_limit_gb=4`, the PiPNN-merged path on BigANN 10M produces peak RSS ≤ 4 GB and recall within 1% of one-shot PiPNN.
 
-Build-time telemetry: emit per-phase timing and peak RSS via the existing OpenTelemetry tracer, comparable to Vamana's spans. Documentation: replace the experimental notes in `CLAUDE.md` with a permanent doc covering recommended parameters per workload class (dim × scale × metric). Runbook: failure modes (OOM under one-shot, partition timeout, l_max saturation), how to diagnose, how to recover. Default parameter recommendations are baked into the JSON config builder so users don't hand-tune for common cases.
+### M6 — Production validation: recall × QPS × dimensionality matrix
+
+End-to-end validation on the full production workload mix.
+
+- **Datasets:** at minimum three families (BigANN, Enron, plus one production-representative).
+- **Scales:** 10M and 100M; one billion-scale sample if hardware permits.
+- **Metrics:** `squared_l2` and `cosine_normalized`.
+- **Pass criterion:** for each (dataset, scale, metric) cell, PiPNN recall@K is within Vamana's recall ±1% at matching QPS, *or* higher QPS at matching recall.
+- **Out-of-band cells** are documented as "PiPNN not yet recommended for X" rather than blocking Stage 2 entirely.
+
+### M7 — Production validation: hybrid update model
+
+Validate the Stage-2 hybrid loop end-to-end.
+
+- **Sequence:** PiPNN build → N incremental Vamana inserts representing production churn → measure recall decay vs. graph age → trigger PiPNN rebuild from snapshot → confirm post-rebuild recall restored.
+- **Output:** a recommended "quality decay threshold" for production rebuild triggers, derived from the measured decay curve.
+- **Disk-format compatibility test:** confirm Vamana's incremental-insert path reads PiPNN-produced graphs correctly. This is the load-bearing compatibility check for the hybrid model.
+
+### M8 — Operational readiness
+
+- **Telemetry:** emit per-phase timing and peak RSS via the existing OpenTelemetry tracer, comparable to Vamana's spans.
+- **Documentation:** replace experimental notes in `CLAUDE.md` with a permanent doc covering recommended parameters per workload class (dim × scale × metric).
+- **Runbook:** failure modes (OOM under one-shot, partition timeout, `l_max` saturation), diagnosis, recovery.
+- **Defaults:** parameter recommendations baked into the JSON config builder so users don't hand-tune for common cases.
 
 ### Out of scope (intentionally not on this list)
 
