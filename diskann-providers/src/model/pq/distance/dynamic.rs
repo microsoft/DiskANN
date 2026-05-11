@@ -73,16 +73,13 @@ where
         query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
     ) -> ANNResult<Self> {
-        // Accept oversized `query` (only the first `dim` elements are used) for
-        // backwards compatibility with callers that hold alignment-padded buffers.
         let dim = table.get_dim();
-        if query.len() < dim {
+        if query.len() != dim {
             return Err(ANNError::log_dimension_mismatch_error(format!(
-                "QueryComputer::new: expected query of length >= {dim}, got {}",
+                "QueryComputer::new: expected query of length {dim}, got {}",
                 query.len()
             )));
         }
-        let query = &query[..dim];
         let result = match metric {
             Metric::L2 => Self::L2(TableL2::new(table, query, pool)?),
             Metric::InnerProduct => Self::IP(TableIP::new(table, query, pool)?),
@@ -216,14 +213,12 @@ where
 {
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &[u8]) -> f32 {
-        // Accept oversized `fp` (only the first `dim` elements are used) for
-        // backwards compatibility with callers that hold alignment-padded buffers.
-        let dim = self.table.get_dim();
-        assert!(
-            fp.len() >= dim,
-            "DistanceComputer: full-precision query length {} < dim {}",
+        assert_eq!(
             fp.len(),
-            dim,
+            self.table.get_dim(),
+            "DistanceComputer: full-precision query length {} != dim {}",
+            fp.len(),
+            self.table.get_dim(),
         );
         assert_eq!(
             q.len(),
@@ -231,7 +226,7 @@ where
             "{}",
             INVALID_PQ_DIMENSION
         );
-        (self.vtable.distance_fn)(&self.table, &fp[..dim], q)
+        (self.vtable.distance_fn)(&self.table, fp, q)
     }
 }
 
@@ -525,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn query_computer_new_rejects_undersized_query() {
+    fn query_computer_new_rejects_mismatched_query() {
         let config = test_utils::TableConfig {
             dim: 16,
             pq_chunks: 4,
@@ -540,7 +535,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "DistanceComputer: full-precision query length")]
-    fn distance_computer_panics_on_undersized_fp_query() {
+    fn distance_computer_panics_on_mismatched_fp_query() {
         let config = test_utils::TableConfig {
             dim: 16,
             pq_chunks: 4,
