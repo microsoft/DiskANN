@@ -444,10 +444,7 @@ mod tests {
             // Query Computer.
             let c = provider.query_computer(&[-0.5, -0.5]).unwrap();
             let expected: f32 = 1.5 * 1.5 * 2.0;
-            assert_eq!(
-                c.evaluate_similarity(&provider.get_vector_sync(3)),
-                expected
-            );
+            assert_eq!(c.evaluate_similarity(provider.get_vector_sync(3)), expected);
 
             // Distance Computer.
             let d = provider.distance_computer();
