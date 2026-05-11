@@ -101,25 +101,6 @@ where
     }
 }
 
-impl<T> PreprocessedDistanceFunction<&Vec<u8>, f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &Vec<u8>) -> f32 {
-        self.evaluate_similarity(changing.as_slice())
-    }
-}
-
-impl<T> PreprocessedDistanceFunction<&&[u8], f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &&[u8]) -> f32 {
-        let changing: &[u8] = changing;
-        self.evaluate_similarity(changing)
-    }
-}
-
 /// Pre-dispatched distance functions for the `FixedChunkPQTable`.
 #[derive(Debug)]
 pub struct VTable {

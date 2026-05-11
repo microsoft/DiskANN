@@ -13,7 +13,8 @@ use diskann_vector::{
 use rand::{Rng, distr::Distribution};
 use rand_distr::{Normal, Uniform};
 
-use crate::model::{FixedChunkPQTable, pq::calculate_chunk_offsets_auto};
+use crate::model::FixedChunkPQTable;
+use diskann_quantization::views::ChunkOffsets;
 
 /// We need a way to generate random queries.
 ///
@@ -130,7 +131,12 @@ pub(crate) fn generate_expected_vector(
 /// * N + 1: The number of PQ Pivots
 pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     // Get the chunk offsets for the selected dimension and bytes.
-    let offsets = calculate_chunk_offsets_auto(config.dim, config.pq_chunks);
+    let chunk_offsets = ChunkOffsets::partition(
+        std::num::NonZeroUsize::new(config.dim).unwrap(),
+        std::num::NonZeroUsize::new(config.pq_chunks).unwrap(),
+    )
+    .unwrap();
+    let offsets = chunk_offsets.as_slice();
 
     // Create the pivot table following the schema described in the docstring.
     let mut pivots = Vec::<f32>::new();
