@@ -2,7 +2,7 @@ When performing a code review, check that:
 
 ## SemVer and API Compatibility
 
- The workspace obeys SemVer. Removing or changing public API signatures (functions, types, re-exports)  requires a version bump, suggested  migration impact in the PR description.
+The workspace obeys SemVer. Removing or changing public API signatures (functions, types, re-exports) requires a version bump and a description of the suggested migration impact in the PR description.
 
 ## Dependency and Build Hygiene
 - Check for changes that introduce new dependencies or increase build times. If a dependency is added, it must be justified in the PR description.
