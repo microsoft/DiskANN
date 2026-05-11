@@ -15,7 +15,7 @@
 - `diskann-utils/` - Shared utilities (Reborrow, MatrixView traits)
 - `diskann-quantization/` - Vector quantization 
 
-**Tier 3: Algorithm & Proivders**
+**Tier 3: Algorithm & Providers**
 - `diskann/` - Core indexing logic
 - `diskann-providers/` - Hodge-podge of stuff, will be dismantled
 - `diskann-disk/` - Disk-based provider for the index with io_uring support
