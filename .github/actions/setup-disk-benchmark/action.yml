@@ -23,7 +23,10 @@ runs:
   steps:
     - name: Install Rust
       shell: bash
-      run: rustup show
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y rustup
+        rustup show
 
     - name: Install system dependencies
       shell: bash
