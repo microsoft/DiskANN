@@ -28,7 +28,10 @@ runs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
         fi
-        rustup show
+
+    - name: Show Rust toolchain
+      shell: bash
+      run: rustup show
 
     - name: Install system dependencies
       shell: bash
