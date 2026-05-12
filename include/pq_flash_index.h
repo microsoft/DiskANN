@@ -17,6 +17,7 @@
 #include "tsl/robin_set.h"
 #include "label_bitmask.h"
 #include "integer_label_vector.h"
+#include "debug_utils.h"
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
@@ -81,10 +82,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const std::vector<LabelT> &filter_labels,
-                                              const uint32_t io_limit, uint32_t maxLperSeller = 0, 
+                                              const uint32_t io_limit, uint32_t maxLperSeller = 0,
                                               const bool use_reorder_data = false,
                                               std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
-                                              QueryStats *stats = nullptr);
+                                              QueryStats *stats = nullptr,
+                                              DebugTraversalInfo *debug_info = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
@@ -116,6 +118,25 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT std::vector<std::uint8_t> get_pq_vector(std::uint64_t vid);
     DISKANN_DLLEXPORT uint64_t get_num_points();
+
+    // Debug interface: retrieve full-precision embedding for a given internal node ID.
+    // Caller must pre-allocate vec with at least the index dimension elements (get_data_dim()).
+    DISKANN_DLLEXPORT void get_embedding(uint32_t id, T *vec);
+
+    // Debug search: runs ANN search and records every traversed node with a FilterReason.
+    DISKANN_DLLEXPORT void debug_search(
+        const T *query, const uint64_t k_search, const uint64_t l_search,
+        uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+        DebugTraversalInfo &debug_info,
+        uint32_t maxLperSeller = 0);
+
+    // Debug filtered search: same as debug_search but applies label filtering.
+    DISKANN_DLLEXPORT void debug_search_with_filters(
+        const T *query, const uint64_t k_search, const uint64_t l_search,
+        uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+        const std::vector<LabelT> &filter_labels,
+        DebugTraversalInfo &debug_info,
+        uint32_t maxLperSeller = 0);
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
