@@ -18,11 +18,16 @@ added:
 
 - `XB8`: When specifying vector input type, you can use `XB8` instead of `FP32`
   to specify binary data in uint8 format, one byte per dimension.
+- `SB8`: When specifying vector input type, you can use `SB8` instead of `FP32`
+  to specify binary data in int8 (signed) format, one byte per dimension.
 - `XPREQ8`: This is a pseudo-quantizer that specifies the vector data will be
   stored as full precision data in uint8 format.
+- `Q8`: This is a pseudo-quantizer that specifies the vector data will be
+  stored as full precision data in int8 (signed) format.
 
-Generally you will use `XB8` with `XPREQ8` to input and store uint8 vectors and
-`FP32` with `NOQUANT` to input and store f32 vectors.
+Generally you will use `XB8` with `XPREQ8` to input and store uint8 vectors,
+`SB8` with `Q8` to input and store int8 vectors, and `FP32` with `NOQUANT` to
+input and store f32 vectors.
 
 Support for binary and scalar quantization is coming, along with support for
 customizing the distance metric.

@@ -32,6 +32,7 @@ const DEFAULT_PORT: u16 = 6379;
 trait Element: bytemuck::Pod + std::fmt::Debug + Send + Sync + 'static {}
 
 impl Element for u8 {}
+impl Element for i8 {}
 impl Element for f32 {}
 
 #[derive(Deserialize)]
@@ -158,6 +159,7 @@ struct QueryArgs {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum DataType {
     Uint8,
+    Int8,
     Float32,
 }
 
@@ -287,6 +289,7 @@ async fn async_main(opts: Options) -> Result<()> {
 
     match opts.data_type {
         DataType::Uint8 => dispatch::<u8>(&opts.command, &opts, infos, cred).await,
+        DataType::Int8 => dispatch::<i8>(&opts.command, &opts, infos, cred).await,
         DataType::Float32 => dispatch::<f32>(&opts.command, &opts, infos, cred).await,
     }
 }
@@ -393,6 +396,9 @@ async fn ingest<T: Element>(
                             DataType::Uint8 => {
                                 pipeline.arg(b"XB8");
                             }
+                            DataType::Int8 => {
+                                pipeline.arg(b"SB8");
+                            }
                             DataType::Float32 => {
                                 pipeline.arg(b"FP32");
                             }
@@ -405,6 +411,9 @@ async fn ingest<T: Element>(
                         match data_type {
                             DataType::Uint8 => {
                                 pipeline.arg(b"XPREQ8");
+                            }
+                            DataType::Int8 => {
+                                pipeline.arg(b"Q8");
                             }
                             DataType::Float32 => {
                                 pipeline.arg(b"NOQUANT");
@@ -533,6 +542,7 @@ async fn query<T: Element>(
 
                     match data_type {
                         DataType::Uint8 => pipeline.arg(b"XB8"),
+                        DataType::Int8 => pipeline.arg(b"SB8"),
                         DataType::Float32 => pipeline.arg(b"FP32"),
                     };
 

@@ -83,6 +83,7 @@ pub enum VectorValueType {
     Invalid = 0,
     FP32,
     XB8,
+    SB8,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -245,6 +246,21 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
+        VectorQuantType::Q8 => {
+            if let Ok(index) = create_index_impl::<i8>(
+                quant_type,
+                config,
+                dim as usize,
+                metric_type,
+                max_degree as usize,
+                callbacks,
+                context,
+            ) {
+                Arc::into_raw(index).cast::<c_void>()
+            } else {
+                ptr::null()
+            }
+        }
         VectorQuantType::NoQuant => {
             if let Ok(index) = create_index_impl::<f32>(
                 quant_type,
@@ -309,7 +325,7 @@ fn interpret_vector<'a>(
 ) -> Option<PolyCow<'a>> {
     let vector_len_bytes = match vector_value_type {
         VectorValueType::FP32 => vector_len * 4,
-        VectorValueType::XB8 => vector_len,
+        VectorValueType::XB8 | VectorValueType::SB8 => vector_len,
         VectorValueType::Invalid => return None,
     };
 
@@ -329,6 +345,20 @@ fn interpret_vector<'a>(
                     *e = f32::from_le_bytes(
                         v[idx * el_size..(idx + 1) * el_size].try_into().unwrap(),
                     ) as u8;
+                }
+                PolyCow::from(bp)
+            }
+            VectorQuantType::Q8 => {
+                let mut bp = if let Ok(bp) = Poly::broadcast(0u8, vector_len, AlignToEight) {
+                    bp
+                } else {
+                    return None;
+                };
+                for (idx, e) in bp.iter_mut().enumerate() {
+                    let el_size = mem::size_of::<f32>();
+                    *e = f32::from_le_bytes(
+                        v[idx * el_size..(idx + 1) * el_size].try_into().unwrap(),
+                    ) as i8 as u8;
                 }
                 PolyCow::from(bp)
             }
@@ -365,6 +395,26 @@ fn interpret_vector<'a>(
                     .zip(v)
                 {
                     *fe = *be as f32;
+                }
+                PolyCow::from(fp)
+            }
+            _ => return None,
+        },
+        VectorValueType::SB8 => match quant_type {
+            VectorQuantType::Q8 => PolyCow::from(v),
+            VectorQuantType::NoQuant => {
+                let mut fp = if let Ok(p) =
+                    Poly::broadcast(0u8, vector_len_bytes * mem::size_of::<f32>(), AlignToEight)
+                {
+                    p
+                } else {
+                    return None;
+                };
+                for (fe, be) in bytemuck::cast_slice_mut::<u8, f32>(&mut fp)
+                    .iter_mut()
+                    .zip(v)
+                {
+                    *fe = (*be as i8) as f32;
                 }
                 PolyCow::from(fp)
             }
