@@ -24,6 +24,8 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
+  NVME_MOUNT_PATH: /mnt/nvme
+  DISKANN_RUST: /mnt/nvme/diskann_rust
 
 defaults:
   run:
@@ -51,41 +53,42 @@ jobs:
             archive: openai-100K.tar.gz
 
     steps:
+      - name: Setup benchmark environment
+        uses: ${{ env.DISKANN_RUST }}/.github/actions/setup-disk-benchmark
+        with:
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: ${{ env.DISKANN_RUST }}/target/tmp
+          nvme-mount-path: ${{ env.NVME_MOUNT_PATH }}
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
-          path: diskann_rust
+          path: ${{ env.DISKANN_RUST }}
           lfs: true
-
-      - name: Setup benchmark environment
-        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
-        with:
-          dataset: ${{ matrix.dataset }}
-          archive: ${{ matrix.archive }}
-          extract-to: diskann_rust/target/tmp
 
       # A/A: build once, run twice (identical code — only detecting environment noise)
       - name: Build benchmark binary
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: cargo build -p diskann-benchmark --features disk-index --release
 
       - name: Run baseline benchmark
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run target benchmark
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
@@ -100,8 +103,8 @@ jobs:
         with:
           name: aa-results-${{ matrix.dataset }}
           path: |
-            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
-            diskann_rust/target/tmp/${{ matrix.dataset }}_baseline.json
+            ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.dataset }}_target.json
+            ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30
 
   # Notify diskann-disk-maintainers on A/A failure — but only when the failure

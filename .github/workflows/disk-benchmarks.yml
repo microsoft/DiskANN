@@ -42,6 +42,9 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
+  NVME_MOUNT_PATH: /mnt/nvme
+  DISKANN_RUST: /mnt/nvme/diskann_rust
+  BASELINE: /mnt/nvme/baseline
 
 defaults:
   run:
@@ -77,50 +80,51 @@ jobs:
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:
-          path: diskann_rust
+          path: ${{ env.DISKANN_RUST }}
           lfs: true
 
       - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.baseline_ref || 'main' }}
-          path: baseline
+          path: ${{ env.BASELINE }}
           lfs: true
 
       - name: Setup benchmark environment
-        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
+        uses: ${{ env.DISKANN_RUST }}/.github/actions/setup-disk-benchmark
         with:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
-          extract-to: diskann_rust/target/tmp
+          extract-to: ${{ env.DISKANN_RUST }}/target/tmp
+          nvme-mount-path: ${{ env.NVME_MOUNT_PATH }}
 
       - name: Copy dataset to baseline
         run: |
-          mkdir -p baseline/target/tmp
-          cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
+          mkdir -p ${{ env.BASELINE }}/target/tmp
+          cp -r ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.data_dir }} ${{ env.BASELINE }}/target/tmp/
 
       - name: Run baseline benchmark
-        working-directory: baseline
+        working-directory: ${{ env.BASELINE }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ../${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
-        working-directory: diskann_rust
+        working-directory: ${{ env.DISKANN_RUST }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
             --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
             --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
-            --before ../baseline/target/tmp/${{ matrix.dataset }}_baseline.json \
+            --before ${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json \
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
@@ -129,6 +133,6 @@ jobs:
         with:
           name: benchmark-results-${{ matrix.dataset }}
           path: |
-            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
-            baseline/target/tmp/${{ matrix.dataset }}_baseline.json
+            ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.dataset }}_target.json
+            ${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30

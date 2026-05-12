@@ -17,6 +17,10 @@ inputs:
   extract-to:
     description: 'Directory to extract the dataset into'
     required: true
+  nvme-mount-path:
+    description: 'Mount point for the high-speed NVMe SSD'
+    required: false
+    default: '/mnt/nvme'
 
 runs:
   using: composite
@@ -32,6 +36,14 @@ runs:
     - name: Show Rust toolchain
       shell: bash
       run: rustup show
+
+    - name: Mount high-speed NVMe SSD
+      shell: bash
+      run: |
+        sudo mkdir -p -m 777 ${{ inputs.nvme-mount-path }}
+        sudo lsblk
+        sudo mkfs.ext4 /dev/nvme0n1
+        sudo mount /dev/nvme0n1 ${{ inputs.nvme-mount-path }}
 
     - name: Install system dependencies
       shell: bash
