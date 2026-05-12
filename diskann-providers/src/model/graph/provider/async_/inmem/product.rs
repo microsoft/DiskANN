@@ -17,7 +17,7 @@ use diskann::{
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
-        ExecutionContext, HasElementRef, HasId, HasQueryComputer,
+        ExecutionContext, HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -205,15 +205,6 @@ where
     }
 }
 
-impl<V, D, Ctx> HasQueryComputer for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-}
-
 impl<T, V, D, Ctx> BuildQueryComputer<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
@@ -222,6 +213,7 @@ where
     Ctx: ExecutionContext,
 {
     type QueryComputerError = ANNError;
+    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
 
     fn build_query_computer(
         &self,
@@ -247,16 +239,18 @@ where
     }
 }
 
-impl<V, D, Ctx> ExpandBeam for QuantAccessor<'_, V, D, Ctx>
+impl<T, V, D, Ctx> ExpandBeam<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
+    T: VectorRepr,
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
 }
 
-impl<V, D, Ctx> DistancesUnordered for QuantAccessor<'_, V, D, Ctx>
+impl<T, V, D, Ctx> DistancesUnordered<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
+    T: VectorRepr,
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,

@@ -323,7 +323,7 @@ where
 ///
 /// Expands the search frontier to find all points within the specified radius.
 /// Called after the initial graph search has identified starting candidates.
-pub(crate) async fn range_search_internal<I, A>(
+pub(crate) async fn range_search_internal<I, A, T>(
     max_degree_with_slack: usize,
     search_params: &Range,
     accessor: &mut A,
@@ -332,7 +332,7 @@ pub(crate) async fn range_search_internal<I, A>(
 ) -> ANNResult<InternalSearchStats>
 where
     I: crate::utils::VectorId,
-    A: ExpandBeam<Id = I> + SearchExt,
+    A: ExpandBeam<T, Id = I> + SearchExt,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 

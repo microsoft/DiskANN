@@ -2007,7 +2007,7 @@ where
     }
 
     // A is the accessor type, T is the query type used for BuildQueryComputer
-    pub(crate) fn search_internal<A, SR, Q>(
+    pub(crate) fn search_internal<A, T, SR, Q>(
         &self,
         beam_width: Option<usize>,
         start_ids: &[DP::InternalId],
@@ -2017,7 +2017,7 @@ where
         search_record: &mut SR,
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
-        A: ExpandBeam<Id = DP::InternalId> + SearchExt,
+        A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {

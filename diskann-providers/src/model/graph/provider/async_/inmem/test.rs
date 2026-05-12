@@ -21,7 +21,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        DistancesUnordered, HasElementRef, HasId, HasQueryComputer,
+        DistancesUnordered, HasElementRef, HasId,
     },
     utils::IntoUsize,
 };
@@ -218,13 +218,10 @@ impl<'a> BuildDistanceComputer for FlakyAccessor<'a> {
     }
 }
 
-impl<'b> HasQueryComputer for FlakyAccessor<'b> {
-    type QueryComputer = <FullAccessor<'b> as HasQueryComputer>::QueryComputer;
-}
-
 impl<'a, 'b> BuildQueryComputer<&'a [f32]> for FlakyAccessor<'b> {
     type QueryComputerError =
         <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputerError;
+    type QueryComputer = <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputer;
 
     fn build_query_computer(
         &self,
@@ -234,9 +231,9 @@ impl<'a, 'b> BuildQueryComputer<&'a [f32]> for FlakyAccessor<'b> {
     }
 }
 
-impl ExpandBeam for FlakyAccessor<'_> {}
+impl ExpandBeam<&[f32]> for FlakyAccessor<'_> {}
 
-impl DistancesUnordered for FlakyAccessor<'_> {}
+impl DistancesUnordered<&[f32]> for FlakyAccessor<'_> {}
 
 impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     type Delegate = &'a SimpleNeighborProviderAsync<u32>;
@@ -245,8 +242,8 @@ impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     }
 }
 
-impl SearchStrategy<TestProvider, &[f32]> for Flaky {
-    type QueryComputer = <FullAccessor<'static> as HasQueryComputer>::QueryComputer;
+impl<'x> SearchStrategy<TestProvider, &'x [f32]> for Flaky {
+    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<&'x [f32]>>::QueryComputer;
     type SearchAccessor<'a> = FlakyAccessor<'a>;
     type SearchAccessorError = ANNError;
 

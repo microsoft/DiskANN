@@ -8,7 +8,7 @@
 use diskann::{
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, HasId, HasQueryComputer},
+    provider::{BuildQueryComputer, HasId},
 };
 
 /// A bridge allowing `Accessors` to opt-in to [`RemoveDeletedIdsAndCopy`] by delegating to
@@ -47,7 +47,7 @@ where
         &self,
         accessor: &mut A,
         _query: T,
-        _computer: &<A as HasQueryComputer>::QueryComputer,
+        _computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send

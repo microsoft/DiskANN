@@ -29,7 +29,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor,
-        DistancesUnordered, HasElementRef, HasId, HasQueryComputer, NeighborAccessor, NoopGuard,
+        DistancesUnordered, HasElementRef, HasId, NeighborAccessor, NoopGuard,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -406,20 +406,13 @@ impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
     }
 }
 
-impl<Data, VP> HasQueryComputer for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    type QueryComputer = DiskQueryComputer;
-}
-
 impl<Data, VP> BuildQueryComputer<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
     type QueryComputerError = ANNError;
+    type QueryComputer = DiskQueryComputer;
 
     fn build_query_computer(
         &self,
@@ -436,7 +429,7 @@ where
     }
 }
 
-impl<Data, VP> DistancesUnordered for DiskAccessor<'_, Data, VP>
+impl<Data, VP> DistancesUnordered<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -455,7 +448,7 @@ where
     }
 }
 
-impl<Data, VP> ExpandBeam for DiskAccessor<'_, Data, VP>
+impl<Data, VP> ExpandBeam<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,

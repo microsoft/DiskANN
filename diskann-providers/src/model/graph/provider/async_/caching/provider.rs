@@ -75,7 +75,7 @@ use diskann::{
     provider::{
         Accessor, AsNeighbor, BuildDistanceComputer, BuildQueryComputer, CacheableAccessor,
         DataProvider, DelegateNeighbor, Delete, DistancesUnordered, ElementStatus, HasElementRef,
-        HasId, HasQueryComputer, NeighborAccessor, NeighborAccessorMut, SetElement,
+        HasId, NeighborAccessor, NeighborAccessorMut, SetElement,
     },
 };
 use diskann_utils::{
@@ -781,20 +781,13 @@ where
     }
 }
 
-impl<A, C> HasQueryComputer for CachingAccessor<A, C>
-where
-    A: HasQueryComputer + CacheableAccessor,
-    C: ElementCache<A::Id, A::Map>,
-{
-    type QueryComputer = A::QueryComputer;
-}
-
 impl<T, A, C> BuildQueryComputer<T> for CachingAccessor<A, C>
 where
     A: BuildQueryComputer<T> + CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
     type QueryComputerError = A::QueryComputerError;
+    type QueryComputer = A::QueryComputer;
 
     fn build_query_computer(
         &self,
@@ -832,16 +825,16 @@ where
     }
 }
 
-impl<A, C> ExpandBeam for CachingAccessor<A, C>
+impl<A, C, T> ExpandBeam<T> for CachingAccessor<A, C>
 where
-    A: DistancesUnordered + CacheableAccessor + AsNeighbor,
+    A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
     C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,
 {
 }
 
-impl<A, C> DistancesUnordered for CachingAccessor<A, C>
+impl<A, C, T> DistancesUnordered<T> for CachingAccessor<A, C>
 where
-    A: HasQueryComputer + CacheableAccessor + AsNeighbor,
+    A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
     C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,
 {
 }
@@ -867,7 +860,7 @@ where
         next: &Next,
         accessor: &mut CachingAccessor<A, C>,
         query: T,
-        computer: &<A as HasQueryComputer>::QueryComputer,
+        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error<Next::Error>>> + Send

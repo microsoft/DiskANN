@@ -26,7 +26,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, AsNeighbor, BuildQueryComputer, DataProvider, DelegateNeighbor,
-        DistancesUnordered, HasElementRef, HasId, HasQueryComputer,
+        DistancesUnordered, HasElementRef, HasId,
     },
     utils::VectorId,
 };
@@ -286,18 +286,12 @@ where
     }
 }
 
-impl<Inner> HasQueryComputer for BetaAccessor<Inner>
-where
-    Inner: HasQueryComputer + Accessor,
-{
-    /// Use a [`BetaComputer`] to apply filtering.
-    type QueryComputer = BetaComputer<Inner::QueryComputer, Inner::Id>;
-}
-
 impl<Inner, T> BuildQueryComputer<T> for BetaAccessor<Inner>
 where
     Inner: BuildQueryComputer<T> + Accessor,
 {
+    /// Use a [`BetaComputer`] to apply filtering.
+    type QueryComputer = BetaComputer<Inner::QueryComputer, Inner::Id>;
     /// Use the same error as `Inner`.
     type QueryComputerError = Inner::QueryComputerError;
 
@@ -311,12 +305,15 @@ where
     }
 }
 
-impl<Inner> ExpandBeam for BetaAccessor<Inner> where
-    Inner: DistancesUnordered + AsNeighbor + Accessor
+impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where
+    Inner: BuildQueryComputer<T> + AsNeighbor + Accessor
 {
 }
 
-impl<Inner> DistancesUnordered for BetaAccessor<Inner> where Inner: HasQueryComputer + Accessor {}
+impl<Inner, T> DistancesUnordered<T> for BetaAccessor<Inner> where
+    Inner: BuildQueryComputer<T> + Accessor
+{
+}
 
 /// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
 pub struct BetaComputer<Inner, I: VectorId> {
@@ -507,11 +504,8 @@ mod tests {
         }
     }
 
-    impl HasQueryComputer for Doubler {
-        type QueryComputer = AddingComputer;
-    }
-
     impl BuildQueryComputer<u64> for Doubler {
+        type QueryComputer = AddingComputer;
         type QueryComputerError = ANNError;
 
         fn build_query_computer(
@@ -522,9 +516,9 @@ mod tests {
         }
     }
 
-    impl ExpandBeam for Doubler {}
+    impl ExpandBeam<u64> for Doubler {}
 
-    impl DistancesUnordered for Doubler {}
+    impl DistancesUnordered<u64> for Doubler {}
 
     #[derive(Debug)]
     struct SimpleStrategy;

@@ -6,14 +6,10 @@
 //! [`SearchStrategy`] — glue between [`DataProvider`] and per-query
 //! [`DistancesUnordered`] visitors.
 
-use crate::{
-    error::StandardError,
-    flat::DistancesUnordered,
-    provider::{BuildQueryComputer, DataProvider},
-};
+use crate::{error::StandardError, flat::DistancesUnordered, provider::DataProvider};
 
 /// Per-call configuration that knows how to construct a per-query
-/// [`DistancesUnordered`] visitor for a provider.
+/// [`DistancesUnordered<T>`] visitor for a provider.
 ///
 /// `SearchStrategy` is the flat counterpart to [`crate::graph::glue::SearchStrategy`]
 /// (disambiguated by module path). A strategy instance carries the per-query setup
@@ -21,8 +17,8 @@ use crate::{
 /// strategy may be reused across many searches.
 ///
 /// The strategy itself is a pure factory; the visitor it produces carries the
-/// query-preprocessing capability via [`crate::provider::BuildQueryComputer<T>`]
-/// (bound alongside [`DistancesUnordered`]).
+/// query-preprocessing capability via [`crate::provider::BuildQueryComputer<T>`] (a
+/// super-trait of [`DistancesUnordered<T>`]).
 pub trait SearchStrategy<P, T>: Send + Sync
 where
     P: DataProvider,
@@ -30,9 +26,9 @@ where
     /// The visitor type produced by [`Self::create_visitor`]. Borrows from `self` and the
     /// provider.
     ///
-    /// The visitor implements both the streaming [`DistancesUnordered`] primitive and
+    /// The visitor implements both the streaming [`DistancesUnordered<T>`] primitive and
     /// the query preprocessor [`crate::provider::BuildQueryComputer<T>`].
-    type Visitor<'a>: DistancesUnordered + BuildQueryComputer<T>
+    type Visitor<'a>: DistancesUnordered<T>
     where
         Self: 'a,
         P: 'a;

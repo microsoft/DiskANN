@@ -29,7 +29,7 @@ use diskann::{
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
         DelegateNeighbor, Delete, DistancesUnordered, ElementStatus, HasElementRef, HasId,
-        HasQueryComputer, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -1040,15 +1040,6 @@ where
     }
 }
 
-impl<T, Q, D> HasQueryComputer for FullAccessor<'_, T, Q, D>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-{
-    type QueryComputer = T::QueryDistance;
-}
-
 impl<T, Q, D> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
@@ -1056,6 +1047,7 @@ where
     D: AsyncFriendly,
 {
     type QueryComputerError = Panics;
+    type QueryComputer = T::QueryDistance;
 
     fn build_query_computer(
         &self,
@@ -1064,7 +1056,7 @@ where
         Ok(T::query_distance(from, self.provider.metric))
     }
 }
-impl<T, Q, D> ExpandBeam for FullAccessor<'_, T, Q, D>
+impl<T, Q, D> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1072,7 +1064,7 @@ where
 {
 }
 
-impl<T, Q, D> DistancesUnordered for FullAccessor<'_, T, Q, D>
+impl<T, Q, D> DistancesUnordered<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1224,20 +1216,13 @@ where
     }
 }
 
-impl<T, D> HasQueryComputer for QuantAccessor<'_, T, D>
-where
-    T: VectorRepr,
-    D: AsyncFriendly,
-{
-    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-}
-
 impl<T, D> BuildQueryComputer<&[T]> for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
 {
     type QueryComputerError = ANNError;
+    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
 
     fn build_query_computer(
         &self,
@@ -1247,14 +1232,14 @@ where
     }
 }
 
-impl<T, D> ExpandBeam for QuantAccessor<'_, T, D>
+impl<T, D> ExpandBeam<&[T]> for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
 {
 }
 
-impl<T, D> DistancesUnordered for QuantAccessor<'_, T, D>
+impl<T, D> DistancesUnordered<&[T]> for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,

@@ -153,7 +153,7 @@ where
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
         query: &'q FilteredQuery<Q>,
-        computer: &InlineBetaComputer<IA::QueryComputer>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>

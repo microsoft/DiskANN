@@ -33,7 +33,7 @@ use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
     error::ToRanked,
-    provider::{HasElementRef, HasId, HasQueryComputer},
+    provider::{BuildQueryComputer, HasElementRef, HasId},
 };
 
 /// Callback-driven sequential scan over the elements of a flat index.
@@ -51,19 +51,21 @@ pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
 
 /// Extension of [`OnElementsUnordered`] that drives the scan with a query computer.
 ///
-/// The computer type is named via the [`HasQueryComputer`] supertrait.
-/// This trait does **not** require [`BuildQueryComputer`] — callers that also need to
-/// *construct* a computer should bound on `DistancesUnordered + BuildQueryComputer<T>`
-/// at the call site.
+/// The computer is produced by the visitor's [`BuildQueryComputer<T>`] impl,
+/// and invokes a callback with `(id, distance)` pairs.
+///
+/// This fuses the scan with a pre-processed query computer and runs over a
+/// streaming visitor. It pulls the computer type from the implementor's own
+/// [`BuildQueryComputer<T>`] impl.
 ///
 /// The default implementation delegates to [`OnElementsUnordered::on_elements_unordered`],
 /// calling `computer.evaluate_similarity` on each element.
-pub trait DistancesUnordered: OnElementsUnordered + HasQueryComputer {
+pub trait DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T> {
     /// Drive the entire scan, scoring each element with `computer` and invoking `f` with
     /// the resulting `(id, distance)` pair.
     fn distances_unordered<F>(
         &mut self,
-        computer: &<Self as HasQueryComputer>::QueryComputer,
+        computer: &<Self as BuildQueryComputer<T>>::QueryComputer,
         mut f: F,
     ) -> impl SendFuture<Result<(), <Self as OnElementsUnordered>::Error>>
     where
@@ -176,7 +178,7 @@ mod tests {
     use crate::{
         ANNError, always_escalate,
         error::Infallible,
-        provider::{BuildQueryComputer, HasElementRef, HasId, HasQueryComputer},
+        provider::{BuildQueryComputer, HasElementRef, HasId},
         utils::VectorRepr,
     };
 
@@ -212,10 +214,9 @@ mod tests {
     // Common impl macro //
     ///////////////////////
 
-    /// Implement [`HasId`], [`HasElementRef`], [`HasQueryComputer`],
-    /// [`BuildQueryComputer`], and [`DistancesUnordered`] for an iterator type.
-    /// Every fixture in this module shares these impls — only
-    /// [`FlatIterator::Element`] varies.
+    /// Implement [`HasId`], [`HasElementRef`], [`BuildQueryComputer`], and
+    /// [`DistancesUnordered`] for an iterator type. Every fixture in this module
+    /// shares these impls — only [`FlatIterator::Element`] varies.
     macro_rules! common_iterator_impls {
         ($T:ty) => {
             impl HasId for $T {
@@ -226,12 +227,9 @@ mod tests {
                 type ElementRef<'a> = &'a [f32];
             }
 
-            impl HasQueryComputer for $T {
-                type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-            }
-
             impl BuildQueryComputer<&[f32]> for $T {
                 type QueryComputerError = Infallible;
+                type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
                 fn build_query_computer(
                     &self,
@@ -241,15 +239,11 @@ mod tests {
                 }
             }
 
-            // Forward `HasQueryComputer` and `BuildQueryComputer` through the
-            // `Iterated` adapter so the `DistancesUnordered` supertrait bound
-            // is satisfied.
-            impl HasQueryComputer for Iterated<$T> {
-                type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-            }
-
+            // Forward `BuildQueryComputer` through the `Iterated` adapter so the
+            // `DistancesUnordered` supertrait bound is satisfied.
             impl BuildQueryComputer<&[f32]> for Iterated<$T> {
                 type QueryComputerError = Infallible;
+                type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
                 fn build_query_computer(
                     &self,
@@ -259,7 +253,7 @@ mod tests {
                 }
             }
 
-            impl DistancesUnordered for Iterated<$T> {}
+            impl DistancesUnordered<&[f32]> for Iterated<$T> {}
         };
     }
 
@@ -594,9 +588,11 @@ mod tests {
             I: FlatIterator<Id = u32> + Send + Sync,
             I: for<'a> HasElementRef<ElementRef<'a> = &'a [f32]>,
             Iterated<I>: HasId<Id = u32>
-                + HasQueryComputer<QueryComputer = <f32 as VectorRepr>::QueryDistance>
-                + for<'q> BuildQueryComputer<&'q [f32], QueryComputerError = Infallible>
-                + DistancesUnordered,
+                + for<'q> BuildQueryComputer<
+                    &'q [f32],
+                    QueryComputerError = Infallible,
+                    QueryComputer = <f32 as VectorRepr>::QueryDistance,
+                > + for<'q> DistancesUnordered<&'q [f32]>,
         {
             let computer = visitor.build_query_computer(query).unwrap();
             let mut seen: Vec<(u32, f32)> = Vec::new();

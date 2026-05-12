@@ -17,7 +17,7 @@ use diskann::{
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
-        ExecutionContext, HasElementRef, HasId, HasQueryComputer,
+        ExecutionContext, HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -527,17 +527,6 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> HasQueryComputer for QuantAccessor<'_, NBITS, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-    Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
-{
-    type QueryComputer = QueryComputer<NBITS>;
-}
-
 impl<const NBITS: usize, V, D, Ctx, T> BuildQueryComputer<&[T]>
     for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
@@ -549,6 +538,7 @@ where
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
     type QueryComputerError = ANNError;
+    type QueryComputer = QueryComputer<NBITS>;
 
     fn build_query_computer(
         &self,
@@ -562,8 +552,9 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> ExpandBeam for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
+    T: VectorRepr,
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
@@ -572,8 +563,10 @@ where
 {
 }
 
-impl<const NBITS: usize, V, D, Ctx> DistancesUnordered for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> DistancesUnordered<&[T]>
+    for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
+    T: VectorRepr,
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,

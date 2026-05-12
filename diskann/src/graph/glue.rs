@@ -252,7 +252,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 /// ## Error Handling
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam: DistancesUnordered + AsNeighbor + Sized {
+pub trait ExpandBeam<T>: DistancesUnordered<T> + AsNeighbor + Sized {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -311,8 +311,7 @@ where
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor<'a>: ExpandBeam<QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
-        + BuildQueryComputer<T>
+    type SearchAccessor<'a>: ExpandBeam<T, QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
         + SearchExt;
 
     /// Construct and return the search accessor.
@@ -397,7 +396,7 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &A::QueryComputer,
+        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -456,7 +455,7 @@ where
         next: &Next,
         accessor: &mut A,
         query: T,
-        computer: &A::QueryComputer,
+        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
@@ -551,7 +550,7 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &A::QueryComputer,
+        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -787,8 +786,7 @@ where
     /// of associated types.
     ///
     /// Lifting the accessor all the way to the trait level makes the caching provider possible.
-    type DeleteSearchAccessor<'a>: ExpandBeam<Id = Provider::InternalId>
-        + BuildQueryComputer<Self::DeleteElement<'a>>
+    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
         + SearchExt;
 
     /// The processor used during the delete-search phase.
@@ -856,10 +854,7 @@ mod tests {
     use super::*;
     use crate::{
         ANNResult, neighbor,
-        provider::{
-            DelegateNeighbor, ExecutionContext, HasElementRef, HasId, HasQueryComputer,
-            NeighborAccessor,
-        },
+        provider::{DelegateNeighbor, ExecutionContext, HasElementRef, HasId, NeighborAccessor},
     };
 
     // A really simple provider that just holds floats and uses the absolute value for its
@@ -977,20 +972,17 @@ mod tests {
         }
     }
 
-    impl HasQueryComputer for Retriever<'_> {
-        type QueryComputer = QueryComputer;
-    }
-
     impl BuildQueryComputer<f32> for Retriever<'_> {
         type QueryComputerError = ANNError;
+        type QueryComputer = QueryComputer;
         fn build_query_computer(&self, _from: f32) -> Result<QueryComputer, ANNError> {
             Ok(QueryComputer)
         }
     }
 
-    impl ExpandBeam for Retriever<'_> {}
+    impl ExpandBeam<f32> for Retriever<'_> {}
 
-    impl DistancesUnordered for Retriever<'_> {}
+    impl DistancesUnordered<f32> for Retriever<'_> {}
 
     // This strategy explicitly does not define `post_process` so we can test the provided
     // implementation.

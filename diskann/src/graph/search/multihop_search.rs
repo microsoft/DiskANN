@@ -171,7 +171,7 @@ impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {
 ///
 /// Performs label-filtered search by expanding through non-matching nodes
 /// to find matching neighbors within two hops.
-pub(crate) async fn multihop_search_internal<I, A, SR>(
+pub(crate) async fn multihop_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
@@ -182,7 +182,7 @@ pub(crate) async fn multihop_search_internal<I, A, SR>(
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
-    A: ExpandBeam<Id = I> + SearchExt,
+    A: ExpandBeam<T, Id = I> + SearchExt,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();

@@ -25,10 +25,7 @@ use crate::{
     flat::{DistancesUnordered, OnElementsUnordered, SearchStrategy},
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
-    provider::{
-        self, BuildQueryComputer, ExecutionContext, HasElementRef, HasId, HasQueryComputer,
-        NoopGuard,
-    },
+    provider::{self, BuildQueryComputer, ExecutionContext, HasElementRef, HasId, NoopGuard},
     utils::VectorRepr,
 };
 
@@ -349,12 +346,9 @@ impl HasElementRef for Visitor<'_> {
     type ElementRef<'a> = &'a [f32];
 }
 
-impl HasQueryComputer for Visitor<'_> {
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-}
-
 impl BuildQueryComputer<&[f32]> for Visitor<'_> {
     type QueryComputerError = Infallible;
+    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
     fn build_query_computer(
         &self,
@@ -387,7 +381,7 @@ impl OnElementsUnordered for Visitor<'_> {
     }
 }
 
-impl DistancesUnordered for Visitor<'_> {}
+impl DistancesUnordered<&[f32]> for Visitor<'_> {}
 
 //////////////
 // Strategy //

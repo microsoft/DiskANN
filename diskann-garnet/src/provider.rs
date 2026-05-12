@@ -18,8 +18,8 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
-        Delete, DistancesUnordered, ElementStatus, HasElementRef, HasId, HasQueryComputer,
-        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        Delete, DistancesUnordered, ElementStatus, HasElementRef, HasId, NeighborAccessor,
+        NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::VectorRepr,
 };
@@ -467,7 +467,7 @@ impl<T: VectorRepr> SearchExt for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> ExpandBeam for FullAccessor<'_, T> {
+impl<T: VectorRepr> ExpandBeam<&[T]> for FullAccessor<'_, T> {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -573,11 +573,8 @@ impl<T: VectorRepr> BuildDistanceComputer for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> HasQueryComputer for FullAccessor<'_, T> {
-    type QueryComputer = T::QueryDistance;
-}
-
 impl<T: VectorRepr> BuildQueryComputer<&[T]> for FullAccessor<'_, T> {
+    type QueryComputer = T::QueryDistance;
     type QueryComputerError = GarnetProviderError;
 
     fn build_query_computer(
@@ -588,7 +585,7 @@ impl<T: VectorRepr> BuildQueryComputer<&[T]> for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> DistancesUnordered for FullAccessor<'_, T> {}
+impl<T: VectorRepr> DistancesUnordered<&[T]> for FullAccessor<'_, T> {}
 
 /// An escape hatch for the blanket implementation of [`workingset::Fill`].
 ///
@@ -763,14 +760,16 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CopyExternalIds;
 
-impl<'a, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, &[T], GarnetId> for CopyExternalIds {
+impl<'a, 'b, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, &'b [T], GarnetId>
+    for CopyExternalIds
+{
     type Error = GarnetProviderError;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut FullAccessor<'a, T>,
         _query: &[T],
-        _computer: &<FullAccessor<'a, T> as HasQueryComputer>::QueryComputer,
+        _computer: &<FullAccessor<'a, T> as BuildQueryComputer<&'b [T]>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
