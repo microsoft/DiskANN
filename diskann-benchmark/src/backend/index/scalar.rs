@@ -12,13 +12,23 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
     #[cfg(feature = "scalar-quantization")]
     {
         use crate::backend::index::search::plugins::Topk;
-        use half::f16;
 
-        // NOTE: We just register `Topk` for now to reduce compilation cost.
+        // NOTE: This benchmark is heavily monomorphized. Each `(NBITS, T)` pair
+        // generates a full `Benchmark` impl via the `impl_sq_build!` macro in `mod imp`,
+        // which materially impacts compile time. We intentionally keep the registered
+        // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
+        // `example/scalar.json`.
         //
-        // Feel free to add search plugins, but be mindful of the monomorphization cost.
+        // To add a new variant (e.g. another bit-width or element type):
+        //   1. Add a `benchmarks.register("graph-index-sq-<N>-bit-<T>",
+        //      imp::ScalarQuantized::<N, T>::new().search(Topk));` call here.
+        //   2. Add a matching `impl_sq_build!(N, T);` invocation at the bottom of
+        //      `mod imp` below.
+        //
+        // Search plugins (e.g. `Range`, filter variants) are also monomorphized per
+        // variant, so additions multiply compile cost across every registered variant.
+        // Only `Topk` is registered today; add others sparingly.
 
-        // f32
         benchmarks.register(
             "graph-index-sq-8-bit-f32",
             imp::ScalarQuantized::<8, f32>::new().search(Topk),
@@ -28,34 +38,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
         );
         benchmarks.register(
-            "graph-index-sq-2-bit-f32",
-            imp::ScalarQuantized::<2, f32>::new().search(Topk),
-        );
-        benchmarks.register(
             "graph-index-sq-1-bit-f32",
             imp::ScalarQuantized::<1, f32>::new().search(Topk),
-        );
-        // f16                                  ,
-        benchmarks.register(
-            "graph-index-sq-8-bit-f16",
-            imp::ScalarQuantized::<8, f16>::new().search(Topk),
-        );
-        benchmarks.register(
-            "graph-index-sq-4-bit-f16",
-            imp::ScalarQuantized::<4, f16>::new().search(Topk),
-        );
-        benchmarks.register(
-            "graph-index-sq-2-bit-f16",
-            imp::ScalarQuantized::<2, f16>::new().search(Topk),
-        );
-        benchmarks.register(
-            "graph-index-sq-1-bit-f16",
-            imp::ScalarQuantized::<1, f16>::new().search(Topk),
-        );
-        // i8
-        benchmarks.register(
-            "graph-index-sq-1-bit-i8",
-            imp::ScalarQuantized::<1, i8>::new().search(Topk),
         );
     }
 
@@ -83,7 +67,6 @@ mod imp {
         },
     };
     use diskann_utils::views::{Matrix, MatrixView};
-    use half::f16;
 
     use crate::{
         backend::index::{
@@ -347,15 +330,10 @@ mod imp {
         };
     }
 
+    // See the doc comment in `register_benchmarks` above for the policy on
+    // adding/removing variants. Each invocation here generates a full `Benchmark`
+    // impl and materially affects compile time.
     impl_sq_build!(8, f32);
     impl_sq_build!(4, f32);
-    impl_sq_build!(2, f32);
     impl_sq_build!(1, f32);
-
-    impl_sq_build!(8, f16);
-    impl_sq_build!(4, f16);
-    impl_sq_build!(2, f16);
-    impl_sq_build!(1, f16);
-
-    impl_sq_build!(1, i8);
 }
