@@ -1214,10 +1214,8 @@ mod fixed_chunk_pq_table_test {
         assert_eq!(fixed_chunk_pq_table.table.ncenters(), NUM_PQ_CENTROIDS);
 
         // Assert the output vector is correct
-        let expected_output: f32 = SquaredL2::evaluate(
-            fixed_chunk_pq_table.table.view_pivots().row(0),
-            &*query_vec,
-        );
+        let expected_output: f32 =
+            SquaredL2::evaluate(fixed_chunk_pq_table.table.view_pivots().row(0), &*query_vec);
         assert_eq!(aligned_pq_table_dist_scratch[0], expected_output);
     }
 
@@ -1235,8 +1233,8 @@ mod fixed_chunk_pq_table_test {
         let query_vec = vec![0.0; dim];
 
         // Test when aligned_pq_table_dist_scratch is too short
-        let result = pq_table
-            .populate_chunk_distances(&query_vec, &mut aligned_pq_table_dist_scratch);
+        let result =
+            pq_table.populate_chunk_distances(&query_vec, &mut aligned_pq_table_dist_scratch);
         assert!(result.is_err());
     }
 }
