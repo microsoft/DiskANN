@@ -32,7 +32,7 @@ pub struct FixedChunkPQTable {
 // These free functions use internals of the `FixedChunkPQTable`.
 //
 // We should clean up the API in the FFI.
-pub fn direct_distance_impl<T>(
+fn direct_distance_impl<T>(
     pq_table: &[f32],
     chunk_offsets: &[usize],
     dim: usize,
@@ -42,6 +42,7 @@ pub fn direct_distance_impl<T>(
 where
     T: distance::simd::ResumableSIMDSchema<f32, f32, FinalReturn = f32>,
 {
+    debug_assert_eq!(query_vec.len(), dim);
     let mut accumulator = distance::simd::Resumable::new(T::init(ARCH));
     let mut start = chunk_offsets[0];
     let num_pq_chunks = chunk_offsets.len() - 1;
@@ -164,17 +165,18 @@ impl FixedChunkPQTable {
         self.table.nchunks()
     }
 
-    /// Shifting the query according to mean or the whole corpus. The output is a rotated query vector,
-    /// which is later used to calculate the distance between each query chunk and each centroid using populate_chunk_distances.
-    pub fn preprocess_query(&self, rotated_query_vec: &mut [f32]) {
-        for (query, &centroid) in rotated_query_vec.iter_mut().zip(self.centroids.iter()) {
-            *query -= centroid;
+    /// Subtract the corpus centroid from `query` in place. The mean-shifted output is
+    /// later used to calculate the distance between each query chunk and each centroid using populate_chunk_distances.
+    pub fn preprocess_query(&self, query: &mut [f32]) {
+        debug_assert_eq!(query.len(), self.centroids.len());
+        for (q, &centroid) in query.iter_mut().zip(self.centroids.iter()) {
+            *q -= centroid;
         }
     }
 
-    pub fn populate_chunk_distances_impl<T>(
+    fn populate_chunk_distances_impl<T>(
         &self,
-        rotated_query_vec: &[f32],
+        query: &[f32],
         aligned_pq_table_dist_scratch: &mut [f32],
     ) -> ANNResult<()>
     where
@@ -182,6 +184,8 @@ impl FixedChunkPQTable {
     {
         let num_centers = self.get_num_centers();
         let num_chunks = self.get_num_chunks();
+        let dim = self.get_dim();
+        debug_assert_eq!(query.len(), dim);
         if aligned_pq_table_dist_scratch.len() < num_chunks * num_centers {
             return Err(ANNError::log_pq_error(
                 "aligned_pq_table_dist_scratch.len() should at least be num_pq_chunks * num_centers",
@@ -190,7 +194,6 @@ impl FixedChunkPQTable {
 
         let offsets: &[usize] = self.table.view_offsets().into();
         let table: &[f32] = self.table.view_pivots().into();
-        let dim = self.get_dim();
 
         for centroid_index in 0..num_centers {
             let table_start = dim * centroid_index;
@@ -198,10 +201,10 @@ impl FixedChunkPQTable {
                 let start = offsets[chunk_index];
                 let stop = offsets[chunk_index + 1];
 
-                let query = &rotated_query_vec[start..stop];
+                let query_chunk = &query[start..stop];
                 let chunk = &table[(table_start + start)..(table_start + stop)];
                 aligned_pq_table_dist_scratch[chunk_index * num_centers + centroid_index] =
-                    T::evaluate(query, chunk);
+                    T::evaluate(query_chunk, chunk);
             }
         }
 
@@ -210,16 +213,16 @@ impl FixedChunkPQTable {
 
     /// Pre-calculated the distance between each chunk in the query vector and each centroid
     /// by l2 distance.
-    /// * `rotated_query_vec` - query vector: 1 * dim
+    /// * `query` - query vector: 1 * dim
     /// * `aligned_pq_table_dist_scratch` - pre-calculated the distance between query and
     ///   each centroid: chunk_size * num_centroids
     pub fn populate_chunk_distances(
         &self,
-        rotated_query_vec: &[f32],
+        query: &[f32],
         aligned_pq_table_dist_scratch: &mut [f32],
     ) -> ANNResult<()> {
         self.populate_chunk_distances_impl::<distance::SquaredL2>(
-            rotated_query_vec,
+            query,
             aligned_pq_table_dist_scratch,
         )
     }
@@ -277,7 +280,7 @@ impl FixedChunkPQTable {
     /// Calculate the distance between query and given centroid by inner product
     /// * `query_vec` - query vector: 1 * dim
     /// * `base_vec` - given centroid array: 1 * num_pq_chunks
-    pub fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
+    fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
         direct_distance_impl::<distance::simd::ResumableIP<diskann_wide::arch::Current>>(
             self.table.view_pivots().as_slice(),
             self.table.view_offsets().as_slice(),
@@ -1196,11 +1199,11 @@ mod fixed_chunk_pq_table_test {
         )
         .unwrap();
 
-        let rotated_query_vec: Vec<f32> = (0..dim).map(|_| rng.random()).collect();
+        let query_vec: Vec<f32> = (0..dim).map(|_| rng.random()).collect();
         let mut aligned_pq_table_dist_scratch = vec![0.0; num_pq_chunks * NUM_PQ_CENTROIDS];
 
         fixed_chunk_pq_table
-            .populate_chunk_distances(&rotated_query_vec, &mut aligned_pq_table_dist_scratch)
+            .populate_chunk_distances(&query_vec, &mut aligned_pq_table_dist_scratch)
             .unwrap();
 
         assert_eq!(
@@ -1211,10 +1214,8 @@ mod fixed_chunk_pq_table_test {
         assert_eq!(fixed_chunk_pq_table.table.ncenters(), NUM_PQ_CENTROIDS);
 
         // Assert the output vector is correct
-        let expected_output: f32 = SquaredL2::evaluate(
-            fixed_chunk_pq_table.table.view_pivots().row(0),
-            &*rotated_query_vec,
-        );
+        let expected_output: f32 =
+            SquaredL2::evaluate(fixed_chunk_pq_table.table.view_pivots().row(0), &*query_vec);
         assert_eq!(aligned_pq_table_dist_scratch[0], expected_output);
     }
 
@@ -1229,11 +1230,11 @@ mod fixed_chunk_pq_table_test {
                 .unwrap();
 
         let mut aligned_pq_table_dist_scratch = [0.0; 2];
-        let rotated_query_vec = vec![0.0; dim];
+        let query_vec = vec![0.0; dim];
 
         // Test when aligned_pq_table_dist_scratch is too short
-        let result = pq_table
-            .populate_chunk_distances(&rotated_query_vec, &mut aligned_pq_table_dist_scratch);
+        let result =
+            pq_table.populate_chunk_distances(&query_vec, &mut aligned_pq_table_dist_scratch);
         assert!(result.is_err());
     }
 }

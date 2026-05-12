@@ -101,7 +101,7 @@ impl FastMemoryQuantVectorProviderAsync {
     /// Create a query computer for the provided query vector.
     pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer>
     where
-        T: Copy + VectorRepr,
+        T: VectorRepr,
     {
         QueryComputer::new(
             self.pq_chunk_table.clone(),

@@ -23,7 +23,6 @@ pub fn quantizer_preprocess(
 ) -> ANNResult<()> {
     match &pq_data.pq_table() {
         PQTable::Transposed(table) => {
-            let dim = table.dim();
             let expected_len = table.ncenters() * table.nchunks();
             let dst = diskann_utils::views::MutMatrixView::try_from(
                 &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
@@ -40,13 +39,13 @@ pub fn quantizer_preprocess(
                 // as L2 until a more thorough evaluation can be made.
                 Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
                     table.process_into::<diskann_quantization::distances::SquaredL2>(
-                        &pq_scratch.rotated_query[..dim],
+                        &pq_scratch.query_scratch,
                         dst,
                     );
                 }
                 Metric::InnerProduct => {
                     table.process_into::<diskann_quantization::distances::InnerProduct>(
-                        &pq_scratch.rotated_query[..dim],
+                        &pq_scratch.query_scratch,
                         dst,
                     );
                 }
@@ -60,21 +59,17 @@ pub fn quantizer_preprocess(
                 // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
                 // as L2 until a more thorough evaluation can be made.
                 Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
-                    // The scratch only stores the aligned dimension. However, preprocessing
-                    // wants the actual dimension used, so we have to shrink the rotated query
-                    // accordingly.
-                    let dim = table.get_dim();
-                    table.preprocess_query(&mut pq_scratch.rotated_query[..dim]);
+                    table.preprocess_query(&mut pq_scratch.query_scratch);
 
                     // Compute the distance between each chunk of the query to each pq centroids.
                     table.populate_chunk_distances(
-                        pq_scratch.rotated_query.as_slice(),
+                        &pq_scratch.query_scratch,
                         &mut pq_scratch.aligned_pqtable_dist_scratch,
                     )?;
                 }
                 Metric::InnerProduct => {
                     table.populate_chunk_inner_products(
-                        pq_scratch.rotated_query.as_slice(),
+                        &pq_scratch.query_scratch,
                         &mut pq_scratch.aligned_pqtable_dist_scratch,
                     )?;
                 }
