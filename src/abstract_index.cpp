@@ -409,23 +409,10 @@ std::pair<uint32_t, uint32_t> AbstractIndex::debug_search_with_filters(
     const uint32_t maxLperSeller,
     std::function<float(const std::uint8_t *, size_t)> rerank_fn)
 {
-    diskann::cout << "AbstractIndex::debug_search_with_filters: K=" << K << " L=" << L
-                  << " labelCount=" << raw_labels.size()
-                  << " query_type=" << typeid(data_type).name()
-                  << " id_type=" << typeid(IDType).name() << std::endl;
-    for (size_t i = 0; i < raw_labels.size(); i++)
-    {
-        diskann::cout << "  label[" << i << "]: \"" << raw_labels[i] << "\" (len=" << raw_labels[i].size() << ")" << std::endl;
-    }
     auto any_query   = std::any(query);
-    diskann::cout << "  any_query type: " << any_query.type().name() << std::endl;
     auto any_indices = std::any(indices);
-    diskann::cout << "  any_indices type: " << any_indices.type().name() << std::endl;
-    diskann::cout << "  calling _debug_search_with_filters..." << std::endl;
-    auto result = _debug_search_with_filters(any_query, raw_labels, K, L, any_indices, distances,
+    return _debug_search_with_filters(any_query, raw_labels, K, L, any_indices, distances,
                                       debug_info, maxLperSeller, std::move(rerank_fn));
-    diskann::cout << "  _debug_search_with_filters returned: hops=" << result.first << " comparisons=" << result.second << std::endl;
-    return result;
 }
 
 // Explicit instantiations for get_embedding
