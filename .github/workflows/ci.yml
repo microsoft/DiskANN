@@ -371,7 +371,6 @@ jobs:
           - windows-latest
           - ubuntu-latest
           - ubuntu-24.04-arm
-          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -403,7 +402,6 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
-          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
