@@ -77,6 +77,21 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
+      # Shallow checkout to $GITHUB_WORKSPACE so the composite action is accessible via uses:.
+      - name: Checkout action definitions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+          path: github_actions
+
+      - name: Setup benchmark environment
+        uses: ./github_actions/.github/actions/setup-disk-benchmark
+        with:
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: ${{ env.DISKANN_RUST }}/target/tmp
+          nvme-mount-path: ${{ env.NVME_MOUNT_PATH }}
+
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:
@@ -90,14 +105,6 @@ jobs:
           path: ${{ env.BASELINE }}
           lfs: true
 
-      - name: Setup benchmark environment
-        uses: ${{ env.DISKANN_RUST }}/.github/actions/setup-disk-benchmark
-        with:
-          dataset: ${{ matrix.dataset }}
-          archive: ${{ matrix.archive }}
-          extract-to: ${{ env.DISKANN_RUST }}/target/tmp
-          nvme-mount-path: ${{ env.NVME_MOUNT_PATH }}
-
       - name: Copy dataset to baseline
         run: |
           mkdir -p ${{ env.BASELINE }}/target/tmp
@@ -107,7 +114,7 @@ jobs:
         working-directory: ${{ env.BASELINE }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark

@@ -53,8 +53,15 @@ jobs:
             archive: openai-100K.tar.gz
 
     steps:
+      # Shallow checkout to $GITHUB_WORKSPACE so the composite action is accessible via uses:.
+      - name: Checkout action definitions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+          path: github_actions
+
       - name: Setup benchmark environment
-        uses: ${{ env.DISKANN_RUST }}/.github/actions/setup-disk-benchmark
+        uses: ./github_actions/.github/actions/setup-disk-benchmark
         with:
           dataset: ${{ matrix.dataset }}
           archive: ${{ matrix.archive }}
