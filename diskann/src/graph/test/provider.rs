@@ -1068,9 +1068,12 @@ impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
     }
 }
 
+impl provider::HasQueryComputer for Accessor<'_> {
+    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
+}
+
 impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
     type QueryComputerError = Infallible;
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
     fn build_query_computer(
         &self,
@@ -1080,7 +1083,7 @@ impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
     }
 }
 
-impl provider::DistancesUnordered<&[f32]> for Accessor<'_> {}
+impl provider::DistancesUnordered for Accessor<'_> {}
 
 impl provider::BuildDistanceComputer for Accessor<'_> {
     type DistanceComputerError = Infallible;
@@ -1106,7 +1109,7 @@ impl glue::SearchExt for Accessor<'_> {
     }
 }
 
-impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
+impl glue::ExpandBeam for Accessor<'_> {}
 
 impl glue::IdIterator<std::vec::IntoIter<u32>> for Accessor<'_> {
     async fn id_iterator(&mut self) -> Result<std::vec::IntoIter<u32>, ANNError> {

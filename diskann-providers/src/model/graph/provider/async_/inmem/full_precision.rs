@@ -20,7 +20,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        DistancesUnordered, ExecutionContext, HasElementRef, HasId,
+        DistancesUnordered, ExecutionContext, HasElementRef, HasId, HasQueryComputer,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -296,6 +296,16 @@ where
     }
 }
 
+impl<T, Q, D, Ctx> HasQueryComputer for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type QueryComputer = T::QueryDistance;
+}
+
 impl<T, Q, D, Ctx> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -304,7 +314,6 @@ where
     Ctx: ExecutionContext,
 {
     type QueryComputerError = Panics;
-    type QueryComputer = T::QueryDistance;
 
     fn build_query_computer(
         &self,
@@ -314,7 +323,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> ExpandBeam for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -323,7 +332,7 @@ where
 {
 }
 
-impl<T, Q, D, Ctx> DistancesUnordered<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> DistancesUnordered for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,

@@ -10,7 +10,7 @@ use diskann::{
     graph::glue::{ExpandBeam, SearchExt},
     provider::{
         Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
-        HasElementRef, HasId,
+        HasElementRef, HasId, HasQueryComputer,
     },
     ANNError, ANNErrorKind,
 };
@@ -171,12 +171,18 @@ where
     }
 }
 
+impl<IA> HasQueryComputer for EncodedDocumentAccessor<IA>
+where
+    IA: HasQueryComputer + Accessor,
+{
+    type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
+}
+
 impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
 where
     IA: BuildQueryComputer<&'q Q> + Accessor,
 {
     type QueryComputerError = ANNError;
-    type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
 
     fn build_query_computer(
         &self,
@@ -196,19 +202,17 @@ where
     }
 }
 
-impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
+impl<IA> ExpandBeam for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
-    EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
-    Q: Clone,
+    EncodedDocumentAccessor<IA>: DistancesUnordered + AsNeighbor,
 {
 }
 
-impl<IA, Q> DistancesUnordered<Q> for EncodedDocumentAccessor<IA>
+impl<IA> DistancesUnordered for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
-    EncodedDocumentAccessor<IA>: BuildQueryComputer<Q>,
-    Q: Clone,
+    EncodedDocumentAccessor<IA>: HasQueryComputer,
 {
 }
 

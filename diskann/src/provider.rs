@@ -71,11 +71,14 @@
 //! * [`BuildDistanceComputer`]: A sub-trait of [`Accessor`] that allows for random-access
 //!   distance computations on the retrieved elements.
 //!
-//! * [`BuildQueryComputer`]: A sub-trait of [`HasElementRef`] that allows for specialized
+//! * [`HasQueryComputer`]: Names the canonical query-computer type for an accessor,
+//!   analogous to [`HasElementRef`].
+//!
+//! * [`BuildQueryComputer`]: A sub-trait of [`HasQueryComputer`] that allows for specialized
 //!   query based computations. This allows a query to be pre-processed in a way that allows
 //!   faster computations.
 //!
-//! * [`DistancesUnordered`]: A sub-trait of [`Accessor`] and [`BuildQueryComputer`] that
+//! * [`DistancesUnordered`]: A sub-trait of [`Accessor`] and [`HasQueryComputer`] that
 //!   provides a fused iterate-and-compute primitive over a set of element ids using a
 //!   pre-built query computer.
 //!
@@ -533,27 +536,44 @@ pub trait BuildDistanceComputer: Accessor {
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError>;
 }
 
-/// A trait that provides query computations for a query type `T`.
-///
-/// Query computers are allowed to preprocess the query to enable more efficient distance
-/// computations.
-///
-/// This trait only requires [`HasElementRef`] (so the query computer's element type can be
-/// named) so that it can be used with multiple access patterns - like [`Accessor`] and
-/// [`crate::flat::FlastSearchStrategy`].
-///
-/// A fused iterate-and-compute primitive can be created as a sub-trait -
-/// e.g. [`DistancesUnordered`], which requires both [`Accessor`] and `BuildQueryComputer`.
-pub trait BuildQueryComputer<T>: HasElementRef {
-    /// The error type (if any) associated with distance computer construction.
-    type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
+//////////////////////
+// HasQueryComputer //
+//////////////////////
 
+/// Declare the canonical query-computer type for this accessor.
+///
+/// This is the query-computer analogue of [`HasElementRef`]: it names the associated
+/// type without imposing any construction requirement. Traits that only *use* a
+/// pre-built computer (e.g. [`DistancesUnordered`]) require this trait; traits that
+/// also *build* one (e.g. [`BuildQueryComputer`]) extend it.
+pub trait HasQueryComputer: HasElementRef {
     /// The concrete type of the distance computer, which must be applicable for all
     /// elements yielded by the [`Accessor`].
     type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
         + Send
         + Sync
         + 'static;
+}
+
+/////////////////////////
+// BuildQueryComputer //
+/////////////////////////
+
+/// A trait that provides query computations for a query type `T`.
+///
+/// Query computers are allowed to preprocess the query to enable more efficient distance
+/// computations.
+///
+/// This trait extends [`HasQueryComputer`] (which names the computer type) with a
+/// factory method that constructs a computer from a query of type `T`.
+///
+/// A fused iterate-and-compute primitive can be created as a sub-trait -
+/// e.g. [`DistancesUnordered`], which requires [`Accessor`] and [`HasQueryComputer`].
+/// Callers that need both iteration *and* computer construction should bound on
+/// `DistancesUnordered + BuildQueryComputer<T>` at the call site.
+pub trait BuildQueryComputer<T>: HasQueryComputer {
+    /// The error type (if any) associated with distance computer construction.
+    type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
     /// Build the query computer for this accessor.
     ///
@@ -565,12 +585,16 @@ pub trait BuildQueryComputer<T>: HasElementRef {
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 }
 
-/// A sub-trait of [`Accessor`] and [`BuildQueryComputer`] that exposes the fused
+/// A sub-trait of [`Accessor`] and [`HasQueryComputer`] that exposes the fused
 /// iterate-and-compute primitive `distances_unordered`.
 ///
 /// The default implementation uses [`Accessor::on_elements_unordered`] to iterate over the
 /// elements and computes their distances using the provided `computer`.
-pub trait DistancesUnordered<T>: Accessor + BuildQueryComputer<T> {
+///
+/// This trait does **not** require [`BuildQueryComputer`] — it only needs the computer
+/// *type* via [`HasQueryComputer`]. Callers that also need to *construct* a computer
+/// should bound on `DistancesUnordered + BuildQueryComputer<T>` at the call site.
+pub trait DistancesUnordered: Accessor + HasQueryComputer {
     /// Compute the distances for the elements in the iterator `vec_id_itr` using the
     /// `computer` and apply the closure `f` to each distance and ID.
     fn distances_unordered<Itr, F>(
