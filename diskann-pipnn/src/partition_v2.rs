@@ -16,23 +16,11 @@ use rayon::prelude::*;
 use crate::partition::{Leaf, PartitionConfig};
 
 
-/// Maximum leaders per partition level.
-/// Configurable via PIPNN_LEADER_CAP for tuning; defaults to paper's 1000.
-fn leader_hardcap() -> usize {
-    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("PIPNN_LEADER_CAP")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1000)
-    })
-}
-
-/// Compute the number of leaders to sample.
+/// Compute the number of leaders to sample, capped by leader_cap.
 #[inline]
-fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
+fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
     ((n as f64 * p_samp).ceil() as usize)
-        .clamp(2, leader_hardcap())
+        .clamp(2, leader_cap)
         .min(n)
 }
 
@@ -65,7 +53,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         }];
     }
 
-    let nl0 = sample_num_leaders(npoints, config.p_samp);
+    let nl0 = sample_num_leaders(npoints, config.p_samp, config.leader_cap);
     tracing::info!(npoints, leaders = nl0, ndims, "Partition start");
 
     let mut leaves: Vec<Leaf> = Vec::new();
@@ -165,7 +153,7 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
         .copied()
         .unwrap_or(1)
         .min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
     let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
@@ -212,7 +200,7 @@ fn partition_one_level_quantized(
         .copied()
         .unwrap_or(1)
         .min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
     let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
@@ -799,6 +787,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![4, 2],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = partition(&data, ndims, npoints, &config, 123);
 
@@ -824,6 +813,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = partition(&data, ndims, npoints, &config, 0);
         assert_eq!(leaves.len(), 1);

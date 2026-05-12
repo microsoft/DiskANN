@@ -73,6 +73,9 @@ mod metric_serde {
 }
 
 /// Configuration for the PiPNN index builder.
+fn default_leader_cap() -> usize { 1000 }
+fn default_true() -> bool { true }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiPNNConfig {
     /// Number of LSH hyperplanes for HashPrune.
@@ -104,6 +107,13 @@ pub struct PiPNNConfig {
     /// Number of threads to use. 0 means use all available cores.
     #[serde(default)]
     pub num_threads: usize,
+    /// Maximum leaders per partition level. Default: 1000 (paper recommendation).
+    #[serde(default = "default_leader_cap")]
+    pub leader_cap: usize,
+    /// Whether to saturate after final prune (fill remaining degree slots with
+    /// closest non-selected candidates). Default: true.
+    #[serde(default = "default_true")]
+    pub saturate_after_prune: bool,
 }
 
 impl PiPNNConfig {
@@ -188,6 +198,8 @@ impl Default for PiPNNConfig {
             final_prune: false,
             alpha: 1.2,
             num_threads: 0,
+            leader_cap: 1000,
+            saturate_after_prune: true,
         }
     }
 }

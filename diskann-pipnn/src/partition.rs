@@ -19,15 +19,13 @@ use rayon::prelude::*;
 /// Maximum recursion depth to prevent stack overflow.
 const MAX_DEPTH: usize = 30;
 
-/// Maximum leaders per partition level. The paper recommends ~1000 as a practical
-/// upper bound; larger values increase partition GEMM cost without improving quality.
-const LEADER_HARDCAP: usize = 1000;
-
-/// Compute the number of leaders to sample for a partition level.
+/// Compute the number of leaders to sample for a partition level, capped by leader_cap.
+/// The paper recommends ~1000 as a practical upper bound; larger values increase
+/// partition GEMM cost without improving quality.
 #[inline]
-fn sample_num_leaders(n: usize, p_samp: f64) -> usize {
+fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
     ((n as f64 * p_samp).ceil() as usize)
-        .clamp(2, LEADER_HARDCAP)
+        .clamp(2, leader_cap)
         .min(n)
 }
 
@@ -49,6 +47,8 @@ pub struct PartitionConfig {
     pub fanout: Vec<usize>,
     /// Distance metric for partition assignment.
     pub metric: diskann_vector::distance::Metric,
+    /// Maximum leaders per partition level.
+    pub leader_cap: usize,
 }
 
 /// Quantized version of partition_assign using Hamming distance on 1-bit data.
@@ -528,11 +528,11 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         .unwrap_or(1)
         .min(n);
 
-    let mut num_leaders = sample_num_leaders(n, config.p_samp);
+    let mut num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
     // If too few leaders for the fanout, re-sample with a much larger rate
     // so the partition actually splits instead of assigning every point to every leader.
     if num_leaders < fanout * 8 {
-        num_leaders = sample_num_leaders(n, 0.1);
+        num_leaders = sample_num_leaders(n, 0.1, config.leader_cap);
     }
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
@@ -597,7 +597,7 @@ pub fn parallel_partition<T: VectorRepr + Send + Sync>(
         .unwrap_or(1)
         .min(n);
 
-    let num_leaders = sample_num_leaders(n, config.p_samp);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
     let leaders: Vec<usize> = indices
         .choose_multiple(&mut rng, num_leaders)
         .copied()
@@ -701,7 +701,7 @@ pub fn parallel_partition_quantized(
         .unwrap_or(1)
         .min(n);
 
-    let num_leaders = sample_num_leaders(n, config.p_samp);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
     let leaders: Vec<usize> = indices
         .choose_multiple(&mut rng, num_leaders)
         .copied()
@@ -800,7 +800,7 @@ fn partition_quantized_recursive(
         .copied()
         .unwrap_or(1)
         .min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
@@ -855,6 +855,7 @@ mod tests {
             p_samp: 0.5,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -876,6 +877,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![3, 2],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
 
         let mut rng2 = rand::rngs::StdRng::seed_from_u64(123);
@@ -917,6 +919,7 @@ mod tests {
             p_samp: 0.05,
             fanout: vec![5, 3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
 
         let leaves = parallel_partition(&data, 2, &indices, &config, 42);
@@ -949,6 +952,7 @@ mod tests {
             p_samp: 0.05,
             fanout: vec![3, 2], // fanout > 1 creates overlap
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
 
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
@@ -978,6 +982,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![5, 2],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
 
         let leaves = parallel_partition(&data, ndims, &indices, &config, 99);
@@ -1002,6 +1007,7 @@ mod tests {
             p_samp: 0.5,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -1024,6 +1030,7 @@ mod tests {
             p_samp: 0.5,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -1052,6 +1059,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "should produce at least one leaf");
@@ -1089,6 +1097,7 @@ mod tests {
             p_samp: 0.5,
             fanout: vec![100], // much larger than npoints
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(
@@ -1122,6 +1131,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![4, 2],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(
@@ -1155,6 +1165,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "c_min == c_max should produce leaves");
@@ -1185,6 +1196,7 @@ mod tests {
             p_samp: 1.0,
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "p_samp=1.0 should produce leaves");
@@ -1215,6 +1227,7 @@ mod tests {
             p_samp: 0.05,
             fanout: vec![3, 2],
             metric: diskann_vector::distance::Metric::L2,
+            leader_cap: 1000,
         };
 
         let (shift, inverse_scale) = {
@@ -1266,6 +1279,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![4],
             metric: Metric::CosineNormalized,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty());
@@ -1290,6 +1304,7 @@ mod tests {
             p_samp: 0.1,
             fanout: vec![3],
             metric: Metric::Cosine,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty());
@@ -1313,6 +1328,7 @@ mod tests {
             p_samp: 0.2,
             fanout: vec![2],
             metric: Metric::Cosine,
+            leader_cap: 1000,
         };
         let leaves = parallel_partition(&data, 4, &indices, &config, 42);
         assert!(!leaves.is_empty());

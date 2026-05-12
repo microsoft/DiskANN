@@ -209,27 +209,15 @@ pub struct HashPruneReservoir {
     /// Cached farthest distance (bf16) and its index in entries.
     farthest_dist: u16,
     farthest_idx: usize,
-    /// Overflow buffer for evicted/rejected candidates, used for saturation
-    /// when entries.len() < max_degree at extraction time.
-    overflow: Vec<ReservoirEntry>,
-    overflow_farthest_dist: u16,
-    overflow_farthest_idx: usize,
 }
 
 impl HashPruneReservoir {
-    /// Overflow cap: evicted candidates kept for degree saturation.
-    /// 32 entries × 8 bytes = 256 bytes per node (lazy-allocated).
-    const OVERFLOW_CAP: usize = 32;
-
     pub fn new(l_max: usize) -> Self {
         Self {
             entries: Vec::with_capacity(l_max),
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
-            overflow: Vec::new(),
-            overflow_farthest_dist: 0,
-            overflow_farthest_idx: 0,
         }
     }
 
@@ -240,9 +228,6 @@ impl HashPruneReservoir {
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
-            overflow: Vec::new(),
-            overflow_farthest_dist: 0,
-            overflow_farthest_idx: 0,
         }
     }
 
@@ -253,35 +238,6 @@ impl HashPruneReservoir {
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
-            overflow: Vec::new(),
-            overflow_farthest_dist: 0,
-            overflow_farthest_idx: 0,
-        }
-    }
-
-    /// Save an evicted/rejected candidate to overflow. Keeps closest OVERFLOW_CAP entries.
-    #[inline]
-    fn push_overflow(&mut self, entry: ReservoirEntry) {
-        if self.overflow.len() < Self::OVERFLOW_CAP {
-            let idx = self.overflow.len();
-            self.overflow.push(entry);
-            if entry.distance >= self.overflow_farthest_dist {
-                self.overflow_farthest_dist = entry.distance;
-                self.overflow_farthest_idx = idx;
-            }
-        } else if entry.distance < self.overflow_farthest_dist {
-            self.overflow[self.overflow_farthest_idx] = entry;
-            // Rescan for new farthest (32 entries — cheap).
-            let mut max_d = 0u16;
-            let mut max_i = 0;
-            for (i, e) in self.overflow.iter().enumerate() {
-                if e.distance > max_d {
-                    max_d = e.distance;
-                    max_i = i;
-                }
-            }
-            self.overflow_farthest_dist = max_d;
-            self.overflow_farthest_idx = max_i;
         }
     }
 
@@ -395,15 +351,12 @@ impl HashPruneReservoir {
         // If dist_bf16 >= farthest_dist >= X, then dist_bf16 >= X, so we wouldn't
         // update the existing entry anyway.
         if self.entries.len() >= self.l_max && dist_bf16 >= self.farthest_dist {
-            self.push_overflow(ReservoirEntry { neighbor, distance: dist_bf16, hash });
             return false;
         }
 
         // If the hash bucket already exists, keep the closer point.
         if let Some(idx) = self.find_hash(hash) {
             if dist_bf16 < self.entries[idx].distance {
-                let evicted = self.entries[idx];
-                self.push_overflow(evicted);
                 let was_farthest = idx == self.farthest_idx;
                 self.entries[idx].neighbor = neighbor;
                 self.entries[idx].distance = dist_bf16;
@@ -412,7 +365,6 @@ impl HashPruneReservoir {
                 }
                 return true;
             }
-            self.push_overflow(ReservoirEntry { neighbor, distance: dist_bf16, hash });
             return false;
         }
 
@@ -433,8 +385,6 @@ impl HashPruneReservoir {
 
         // Reservoir is full: evict farthest if new is closer.
         if dist_bf16 < self.farthest_dist {
-            let evicted = self.entries[self.farthest_idx];
-            self.push_overflow(evicted);
             self.entries[self.farthest_idx] = ReservoirEntry {
                 neighbor,
                 distance: dist_bf16,
@@ -447,29 +397,15 @@ impl HashPruneReservoir {
         false
     }
 
-    /// Get all neighbors sorted by distance, with overflow saturation up to `saturate_to`.
-    pub fn get_neighbors_saturated(&self, saturate_to: usize) -> Vec<(u32, f32)> {
+    /// Get all neighbors sorted by distance, truncated to `max_degree`.
+    pub fn get_neighbors_saturated(&self, max_degree: usize) -> Vec<(u32, f32)> {
         let mut neighbors: Vec<(u32, u16)> = self
             .entries
             .iter()
             .map(|e| (e.neighbor, e.distance))
             .collect();
-
-        // Saturate from overflow if under target degree.
-        if neighbors.len() < saturate_to && !self.overflow.is_empty() {
-            let mut overflow_sorted: Vec<&ReservoirEntry> = self.overflow.iter().collect();
-            overflow_sorted.sort_unstable_by_key(|e| e.distance);
-            for e in overflow_sorted {
-                if neighbors.len() >= saturate_to {
-                    break;
-                }
-                if !neighbors.iter().any(|&(n, _)| n == e.neighbor) {
-                    neighbors.push((e.neighbor, e.distance));
-                }
-            }
-        }
-
         neighbors.sort_unstable_by_key(|&(_, d)| d);
+        neighbors.truncate(max_degree);
         neighbors
             .into_iter()
             .map(|(id, d)| (id, bf16_to_f32(d)))
@@ -625,21 +561,6 @@ impl HashPrune {
                 neighbors.into_iter().map(|(id, _)| id).collect()
             })
             .collect();
-
-        // Log degree stats.
-        let total_edges: usize = result.iter().map(|v| v.len()).sum();
-        let under_degree = result.iter().filter(|v| v.len() < max_degree).count();
-        let zero_degree = result.iter().filter(|v| v.is_empty()).count();
-        let min_deg = result.iter().map(|v| v.len()).min().unwrap_or(0);
-        let max_deg = result.iter().map(|v| v.len()).max().unwrap_or(0);
-        eprintln!(
-            "  Graph stats: {} nodes, avg_degree={:.1}, min={}, max={}, under_max_degree={} ({:.1}%), isolated={}",
-            npoints,
-            total_edges as f64 / npoints.max(1) as f64,
-            min_deg, max_deg, under_degree,
-            100.0 * under_degree as f64 / npoints.max(1) as f64,
-            zero_degree
-        );
 
         result
     }

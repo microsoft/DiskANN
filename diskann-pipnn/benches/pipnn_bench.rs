@@ -202,6 +202,7 @@ fn bench_partition(c: &mut Criterion) {
             p_samp: 0.05,
             fanout: vec![8],
             metric: Metric::L2,
+            leader_cap: 1000,
         };
 
         group.throughput(Throughput::Elements(npoints as u64));

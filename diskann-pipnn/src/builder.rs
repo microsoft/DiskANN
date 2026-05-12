@@ -568,6 +568,7 @@ fn build_internal_sq_impl(
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
             metric: config.metric,
+            leader_cap: config.leader_cap,
         };
         let leaves = crate::partition_v2::partition_quantized(
             &qdata,
@@ -692,6 +693,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
             metric: config.metric,
+            leader_cap: config.leader_cap,
         };
 
         let leaves = if let Some(ref q) = qdata {
@@ -818,6 +820,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                 config.max_degree,
                 config.metric,
                 config.alpha,
+                config.saturate_after_prune,
             )
         } else {
             tracing::info!("Using paper-style single-pass prune");
@@ -828,6 +831,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                 config.max_degree,
                 config.metric,
                 config.alpha,
+                config.saturate_after_prune,
             )
         };
 
@@ -901,6 +905,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
+    saturate: bool,
 ) -> Vec<Vec<u32>> {
     // Dimension-specialized distance kernel — enables SIMD target features AND
     // compile-time loop unrolling for the known dimension. dispatch2 (not no_features)
@@ -970,7 +975,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             // Saturation: fill remaining degree slots with any non-selected candidate,
             // closest-first (candidates are distance-sorted). Matches DiskANN's behavior:
             // iterate pool in distance order, add any candidate not already selected.
-            if selected.len() < max_degree {
+            if saturate && selected.len() < max_degree {
                 for i in 0..nc {
                     if selected.len() >= max_degree {
                         break;
@@ -1003,6 +1008,7 @@ fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
+    saturate: bool,
 ) -> Vec<Vec<u32>> {
     let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
     let increment_factor = alpha.min(1.2);
@@ -1103,8 +1109,9 @@ fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
 
             // Saturation: if selected < max_degree after all alpha rounds,
             // fill remaining slots with closest un-selected candidates by distance.
-            // Matches DiskANN's saturate_after_prune behavior (always on when alpha > 1.0).
-            if alpha > 1.0 && selected_idx.len() < max_degree {
+            // Matches DiskANN's saturate_after_prune behavior. Gated on caller's
+            // `saturate` so it's tunable per-build (still requires alpha > 1.0).
+            if saturate && alpha > 1.0 && selected_idx.len() < max_degree {
                 for i in 0..nc {
                     if selected_idx.len() >= max_degree {
                         break;
@@ -2102,7 +2109,7 @@ mod tests {
             vec![],
         ];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2, true);
         let node0 = &result[0];
         // With alpha=1.2, point 3 should be selected first (closest).
         // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
@@ -2120,7 +2127,7 @@ mod tests {
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
         let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
 
@@ -2128,7 +2135,7 @@ mod tests {
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
         let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
     }
