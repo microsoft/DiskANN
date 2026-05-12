@@ -75,9 +75,7 @@ where
     fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
         let mut local_query: Vec<f32> = query.to_vec();
 
-        // This function does the following:
-        // 1. Centers the data (if the centorid is non-zero).
-        // 2. Applies the OPQ transformation matrix (if it exists).
+        // Center the data by subtracting the corpus centroid (no-op if zero).
         self.parent.preprocess_query(&mut local_query);
 
         // Compute the partial distances into the lookup-table.

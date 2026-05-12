@@ -26,14 +26,14 @@ pub struct PQScratch {
     /// Query scratch buffer stored as `f32`, sized by the PQ table's logical dimension.
     /// `set` populates it from a caller-provided `&[f32]`; `PQTable::preprocess_query` can
     /// then rotate or otherwise preprocess it.
-    pub rotated_query: Vec<f32>,
+    pub query_scratch: Vec<f32>,
 }
 
 impl PQScratch {
     /// Create a new pq scratch.
     ///
     /// `dim` is the PQ table's logical dimension (`PQData::get_dim()`); the
-    /// internal `rotated_query` buffer is sized to exactly this many `f32` slots.
+    /// internal `query_scratch` buffer is sized to exactly this many `f32` slots.
     pub fn new(
         graph_degree: usize,
         dim: usize,
@@ -48,17 +48,17 @@ impl PQScratch {
                 .map_err(ANNError::log_index_error)?;
         let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
             .map_err(ANNError::log_index_error)?;
-        let rotated_query = vec![0.0f32; dim];
+        let query_scratch = vec![0.0f32; dim];
 
         Ok(Self {
             aligned_pqtable_dist_scratch,
             aligned_dist_scratch,
             aligned_pq_coord_scratch,
-            rotated_query,
+            query_scratch,
         })
     }
 
-    /// Copy the first `dim` elements of `query` into `rotated_query`.
+    /// Copy the first `dim` elements of `query` into `query_scratch`.
     ///
     /// `query` must already be in full-precision `f32` representation; quantized
     /// inputs (e.g. `MinMaxElement`) should be decoded via `VectorRepr::as_f32`
@@ -66,16 +66,16 @@ impl PQScratch {
     ///
     /// Accepts oversized `query` (only the first `dim` elements are used) for
     /// backwards compatibility with callers that hold alignment-padded buffers.
-    /// Returns `DimensionMismatchError` if `query.len() < rotated_query.len()`.
+    /// Returns `DimensionMismatchError` if `query.len() < query_scratch.len()`.
     pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
-        let dim = self.rotated_query.len();
+        let dim = self.query_scratch.len();
         if query.len() < dim {
             return Err(ANNError::log_dimension_mismatch_error(format!(
                 "PQScratch::set: expected query of length >= {dim}, got {}",
                 query.len()
             )));
         }
-        self.rotated_query.copy_from_slice(&query[..dim]);
+        self.query_scratch.copy_from_slice(&query[..dim]);
         Ok(())
     }
 }
@@ -117,7 +117,7 @@ mod tests {
         pq_scratch.set(&query).unwrap();
 
         (0..query.len()).for_each(|i| {
-            assert_eq!(pq_scratch.rotated_query[i], query[i]);
+            assert_eq!(pq_scratch.query_scratch[i], query[i]);
         });
     }
 }
