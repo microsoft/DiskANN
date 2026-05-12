@@ -21,7 +21,6 @@ members = [
     "diskann-benchmark-runner",
     "diskann-benchmark-core",
     "diskann-benchmark-simd",
-    "diskann-benchmark-multi-vector",
     "diskann-benchmark",
     "diskann-tools",
     "vectorset",
