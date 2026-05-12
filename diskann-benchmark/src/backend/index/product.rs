@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::registry::Registry;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
 crate::utils::stub_impl!(
@@ -11,7 +11,7 @@ crate::utils::stub_impl!(
     inputs::graph_index::IndexPQOperation
 );
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     {
         use crate::backend::index::search::plugins;
@@ -21,21 +21,23 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         //
         // Feel free to add search plugins, but be mindful of the monomorphization cost.
 
-        benchmarks.register(
+        registry.register(
             "graph-index-pq-f32",
             imp::ProductQuantized::<f32>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range),
-        );
-        benchmarks.register(
+        )?;
+        registry.register(
             "graph-index-pq-f16",
             imp::ProductQuantized::<f16>::new().search(plugins::Topk),
-        );
+        )?;
     }
 
     // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("graph-index-pq", benchmarks);
+    imp::register("graph-index-pq", registry)?;
+
+    Ok(())
 }
 
 #[cfg(feature = "product-quantization")]

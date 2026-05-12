@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{checker::Checker, input, registry, Any};
+use crate::{checker::Checker, input, Registry, Any};
 
 #[derive(Debug)]
 pub(crate) struct Jobs {
@@ -33,14 +33,14 @@ impl Jobs {
     /// the post-load validation of the requested runs, including:
     ///
     /// * Resolution of input files.
-    pub(crate) fn load(path: &Path, registry: &registry::Inputs) -> anyhow::Result<Self> {
+    pub(crate) fn load(path: &Path, registry: &Registry) -> anyhow::Result<Self> {
         Self::parse(&Partial::load(path)?, registry)
     }
 
     /// Parse `self` from a [`Partial`].
     ///
     /// This method also perform deserialization checks on the parsed inputs.
-    pub(crate) fn parse(partial: &Partial, registry: &registry::Inputs) -> anyhow::Result<Self> {
+    pub(crate) fn parse(partial: &Partial, registry: &Registry) -> anyhow::Result<Self> {
         let mut checker = Checker::new(
             partial
                 .search_directories
@@ -65,7 +65,7 @@ impl Jobs {
                 };
 
                 let input = registry
-                    .get(&unprocessed.tag)
+                    .input(&unprocessed.tag)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Unrecognized input tag: \"{}\"", unprocessed.tag)
                     })

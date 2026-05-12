@@ -7,7 +7,7 @@ use anyhow::Result;
 use diskann_benchmark_runner::{
     dispatcher::{FailureScore, MatchScore},
     output::Output,
-    registry::Benchmarks,
+    registry::Registry,
     utils::{percentiles, MicroSeconds},
     Benchmark, Checkpoint,
 };
@@ -28,8 +28,8 @@ use crate::{
     utils::filters::QueryBitmapEvaluator,
 };
 
-pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register("metadata-index-build", MetadataIndexJob);
+pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
+    Ok(benchmarks.register("metadata-index-build", MetadataIndexJob)?)
 }
 
 // Metadata-only index job.

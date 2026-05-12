@@ -3,18 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::registry::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
 crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register(NAME, imp::ProductQ);
+    registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, benchmarks)
+    imp::register(NAME, registry)?;
+
+    Ok(())
 }
 
 //////////////

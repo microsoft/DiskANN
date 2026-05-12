@@ -42,15 +42,11 @@ impl Cli {
     fn run(&self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
         self.check_target(output)?;
 
-        // Collect inputs.
-        let mut inputs = runner::registry::Inputs::new();
-        inputs::register_inputs(&mut inputs)?;
-
         // Collect benchmarks.
-        let mut benchmarks = runner::registry::Benchmarks::new();
-        backend::register_benchmarks(&mut benchmarks);
+        let mut registry = runner::registry::Registry::new();
+        backend::register_benchmarks(&mut registry)?;
 
-        self.app.run(&inputs, &benchmarks, output)
+        self.app.run(&registry, output)
     }
 
     #[cfg(test)]

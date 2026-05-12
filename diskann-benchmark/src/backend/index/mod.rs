@@ -15,6 +15,8 @@ mod product;
 mod scalar;
 mod spherical;
 
-pub(crate) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks::register_benchmarks(benchmarks)
+pub(crate) fn register_benchmarks(
+    registry: &mut diskann_benchmark_runner::registry::Registry,
+) -> anyhow::Result<()> {
+    benchmarks::register_benchmarks(registry)
 }

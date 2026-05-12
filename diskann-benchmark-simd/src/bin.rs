@@ -13,15 +13,11 @@ pub fn main() -> anyhow::Result<()> {
 }
 
 fn main_inner(app: &App, output: &mut dyn Output) -> anyhow::Result<()> {
-    // Register inputs and benchmarks.
-    let mut inputs = registry::Inputs::new();
-    inputs.register::<SimdOp>()?;
-
-    let mut benchmarks = registry::Benchmarks::new();
-    register(&mut benchmarks);
+    let mut registry = registry::Registry::new();
+    register(&mut registry)?;
 
     // Here we go!
-    app.run(&inputs, &benchmarks, output)
+    app.run(&registry, output)
 }
 
 ///////////

@@ -14,10 +14,11 @@ mod minmax;
 mod product;
 mod spherical;
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::registry::Registry;
 
-pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    spherical::register_benchmarks(benchmarks);
-    minmax::register_benchmarks(benchmarks);
-    product::register_benchmarks(benchmarks);
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    spherical::register_benchmarks(registry)?;
+    minmax::register_benchmarks(registry)?;
+    product::register_benchmarks(registry)?;
+    Ok(())
 }

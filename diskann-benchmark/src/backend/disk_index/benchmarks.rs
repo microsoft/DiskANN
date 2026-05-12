@@ -121,11 +121,14 @@ where
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register_regression("disk-index-f32", DiskIndex::<f32>::new());
-    benchmarks.register_regression("disk-index-f16", DiskIndex::<f16>::new());
-    benchmarks.register_regression("disk-index-u8", DiskIndex::<u8>::new());
-    benchmarks.register_regression("disk-index-i8", DiskIndex::<i8>::new());
+pub(super) fn register_benchmarks(
+    registry: &mut diskann_benchmark_runner::registry::Registry,
+) -> anyhow::Result<()> {
+    registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
+    registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
+    registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;
+    registry.register_regression("disk-index-i8", DiskIndex::<i8>::new())?;
+    Ok(())
 }
 
 /////////////////////////
