@@ -303,8 +303,8 @@ impl std::fmt::Display for CheckResult {
 ////////////////////////////
 
 fn register_benchmarks_impl(
-    registry: &mut diskann_benchmark_runner::registry::Registry,
-) -> Result<(), diskann_benchmark_runner::registry::RegistryError> {
+    registry: &mut diskann_benchmark_runner::Registry,
+) -> Result<(), diskann_benchmark_runner::RegistryError> {
     // x86-64-v4
     #[cfg(target_arch = "x86_64")]
     {

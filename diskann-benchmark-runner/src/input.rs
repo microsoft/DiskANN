@@ -40,7 +40,7 @@ pub trait Input {
     fn example() -> anyhow::Result<serde_json::Value>;
 }
 
-/// A registered input. See [`crate::registry::Inputs::get`].
+/// A registered input. See [`crate::Registry::input`].
 #[derive(Clone, Copy)]
 pub struct Registered<'a>(pub(crate) &'a dyn DynInput);
 
