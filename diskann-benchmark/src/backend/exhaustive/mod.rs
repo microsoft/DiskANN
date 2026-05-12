@@ -14,7 +14,7 @@ mod minmax;
 mod product;
 mod spherical;
 
-use diskann_benchmark_runner::registry::Registry;
+use diskann_benchmark_runner::Registry;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     spherical::register_benchmarks(registry)?;

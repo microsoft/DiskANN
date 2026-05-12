@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{checker::Checker, input, Registry, Any};
+use crate::{checker::Checker, input, Any, Registry};
 
 #[derive(Debug)]
 pub(crate) struct Jobs {

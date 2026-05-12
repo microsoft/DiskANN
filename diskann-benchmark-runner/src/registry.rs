@@ -62,7 +62,7 @@ impl Registry {
     /// * [`register`](Self::register)
     /// * [`register_regression`](Self::register_regression)
     pub fn input(&self, tag: &str) -> Option<input::Registered<'_>> {
-        self.inputs.get(tag).map(|t| input::Registered(&**t))
+        self._input(tag).map(input::Registered)
     }
 
     /// Return an iterator over all registered input tags in an unspecified order.
@@ -70,7 +70,11 @@ impl Registry {
         self.inputs.keys().copied()
     }
 
-    /// Register a new benchmark with the given name.
+    /// Register a new `benchmark` with the given `name`.
+    ///
+    /// As a side-effect, the benchmark's [`Input`](Benchmark::Input) type is also registered.
+    /// Duplicate registrations of the same tag and type are allowed; mismatched types for the
+    /// same tag return an error.
     pub fn register<T>(
         &mut self,
         name: impl Into<String>,
@@ -177,6 +181,10 @@ impl Registry {
             .map(|(entry, _)| entry)
     }
 
+    fn _input(&self, tag: &str) -> Option<&dyn input::DynInput> {
+        self.inputs.get(tag).map(|v| &**v)
+    }
+
     fn register_input<T>(&mut self) -> Result<(), RegistryError>
     where
         T: Input + 'static,
@@ -208,7 +216,11 @@ impl Registry {
     // Regression Checks //
     //-------------------//
 
-    /// Register a regression-checkable benchmark with the associated name.
+    /// Register a regression-checkable `benchmark` with the given `name`.
+    ///
+    /// As a side-effect, the benchmark's [`Input`](Benchmark::Input) type is also registered.
+    /// Duplicate registrations of the same tag and type are allowed; mismatched types for the
+    /// same tag return an error.
     ///
     /// Upon registration, the associated [`Regression::Tolerances`] input and the benchmark
     /// itself will be reachable via [`Check`](crate::app::Check).
@@ -286,7 +298,6 @@ pub struct RegistryError {
     new: &'static str,
 }
 
-
 /// Document the reason for a method matching failure.
 pub struct Mismatch {
     method: String,
@@ -361,5 +372,77 @@ impl std::fmt::Display for Capture<'_> {
 impl std::fmt::Debug for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.description(f, self.1)
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{input, Checker};
+
+    macro_rules! input {
+        ($T:ident, $tag:literal) => {
+            struct $T;
+
+            impl Input for $T {
+                fn tag() -> &'static str {
+                    $tag
+                }
+                fn try_deserialize(
+                    _serialized: &serde_json::Value,
+                    _checker: &mut Checker,
+                ) -> anyhow::Result<Any> {
+                    unimplemented!("this struct is for test only");
+                }
+                fn example() -> anyhow::Result<serde_json::Value> {
+                    unimplemented!("this struct is for test only");
+                }
+            }
+        };
+    }
+
+    // For the types below, `A` and `B` have distinct tags, but `A2`'s tag conflicts with `A2`.
+    input!(A, "type-a");
+    input!(B, "type-b");
+    input!(A2, "type-a");
+
+    #[test]
+    fn test_name_conflicts() {
+        let mut registry = Registry::new();
+        registry.register_input::<A>().unwrap();
+        registry.register_input::<B>().unwrap();
+
+        let mut tags: Vec<_> = registry.input_tags().collect();
+        tags.sort();
+        assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
+
+        {
+            let a = registry._input(A::tag()).unwrap();
+            assert!(a.as_any().is::<input::Wrapper<A>>());
+
+            let name = a.type_name();
+            assert!(name.contains("A"), "{}", name);
+        }
+
+        {
+            let b = registry._input(B::tag()).unwrap();
+            assert!(b.as_any().is::<input::Wrapper<B>>());
+
+            let name = b.type_name();
+            assert!(name.contains("B"), "{}", name);
+        }
+
+        let err = registry.register_input::<A2>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("A different input with tag \"type-a\" was already registered"),
+            "FAILED: {}",
+            msg
+        );
     }
 }

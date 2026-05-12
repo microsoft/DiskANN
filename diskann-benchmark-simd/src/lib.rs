@@ -27,14 +27,14 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, Benchmark, CheckDeserialization, Checker, Input,
+    Any, Benchmark, CheckDeserialization, Checker, Input, Registry,
 };
 
 ////////////////
 // Public API //
 ////////////////
 
-pub fn register(registry: &mut diskann_benchmark_runner::registry::Registry) -> anyhow::Result<()> {
+pub fn register(registry: &mut Registry) -> anyhow::Result<()> {
     Ok(register_benchmarks_impl(registry)?)
 }
 

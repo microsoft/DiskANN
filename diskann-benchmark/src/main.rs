@@ -43,7 +43,7 @@ impl Cli {
         self.check_target(output)?;
 
         // Collect benchmarks.
-        let mut registry = runner::registry::Registry::new();
+        let mut registry = runner::Registry::new();
         backend::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)

@@ -3,10 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use crate::{
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
-    Input,
-};
+use crate::dispatcher::{DispatchRule, FailureScore, MatchScore};
 
 /// An refinement of [`std::any::Any`] with an associated name (tag) and serialization.
 ///
@@ -34,13 +31,6 @@ impl Any {
             any: Box::new(any),
             tag,
         }
-    }
-
-    pub fn input<T>(any: T) -> Self
-    where
-        T: Input + serde::Serialize + std::fmt::Debug + 'static,
-    {
-        Self::new(any, T::tag())
     }
 
     /// A lower level API for constructing an [`Any`] that decouples the serialized

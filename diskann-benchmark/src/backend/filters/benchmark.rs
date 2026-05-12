@@ -7,9 +7,8 @@ use anyhow::Result;
 use diskann_benchmark_runner::{
     dispatcher::{FailureScore, MatchScore},
     output::Output,
-    registry::Registry,
     utils::{percentiles, MicroSeconds},
-    Benchmark, Checkpoint,
+    Benchmark, Checkpoint, Registry,
 };
 use diskann_label_filter::{
     kv_index::GenericIndex,

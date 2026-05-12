@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Registry;
+use diskann_benchmark_runner::Registry;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
 crate::utils::stub_impl!(

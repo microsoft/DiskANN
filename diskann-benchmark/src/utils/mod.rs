@@ -103,8 +103,7 @@ macro_rules! stub_impl {
             use diskann_benchmark_runner::{
                 dispatcher::{FailureScore, MatchScore},
                 output::Output,
-                registry::Registry,
-                Benchmark, Checkpoint,
+                Benchmark, Checkpoint, Registry,
             };
 
             use crate::inputs;

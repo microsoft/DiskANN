@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Registry;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 

@@ -213,7 +213,7 @@ impl App {
                 }
 
                 writeln!(output, "Available input kinds are listed below:")?;
-                let mut tags: Vec<_> = registry.tags().collect();
+                let mut tags: Vec<_> = registry.input_tags().collect();
                 tags.sort();
                 for i in tags.iter() {
                     writeln!(output, "    {}", i)?;

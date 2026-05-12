@@ -19,7 +19,7 @@ use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     utils::datatype,
-    Benchmark, Checkpoint,
+    Benchmark, Checkpoint, Registry,
 };
 use diskann_providers::{
     index::diskann_async,
@@ -57,9 +57,7 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(
-    registry: &mut diskann_benchmark_runner::registry::Registry,
-) -> anyhow::Result<()> {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     // Notes on registration:
     //
     // We register all supported search types for `f32`, but intentionally limit the number
