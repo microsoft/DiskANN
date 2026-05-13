@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// A built-in helper for benchmarking the K-nearest neighbors method
-/// [`graph::DiskANNIndex::search`].
+/// [`graph::DiskANNIndex::search`] with optional post-processing support.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or
 /// [`search::search_all`] and provides some basic additional metrics for
@@ -31,21 +31,29 @@ use crate::{
 ///
 /// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
 /// and returns [`Metrics`] as additional output.
+///
+/// # Type Parameters
+///
+/// - `DP`: The data provider type
+/// - `T`: The query element type
+/// - `S`: The search strategy type
+/// - `PP`: Optional post-processor type (defaults to `()` for no post-processing)
 #[derive(Debug)]
-pub struct KNN<DP, T, S>
+pub struct KNN<DP, T, S, PP = ()>
 where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
+    post_processor: Option<PP>,
 }
 
-impl<DP, T, S> KNN<DP, T, S>
+impl<DP, T, S> KNN<DP, T, S, ()>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`KNN`] searcher.
+    /// Construct a new [`KNN`] searcher without post-processing.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -67,7 +75,55 @@ where
             index,
             queries,
             strategy,
+            post_processor: None,
         }))
+    }
+}
+
+impl<DP, T, S, PP> KNN<DP, T, S, PP>
+where
+    DP: provider::DataProvider,
+{
+    /// Construct a new [`KNN`] searcher with post-processing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the number of elements in `strategy` is not compatible with
+    /// the number of rows in `queries`.
+    pub fn with_postprocessor(
+        index: Arc<graph::DiskANNIndex<DP>>,
+        queries: Arc<Matrix<T>>,
+        strategy: Strategy<S>,
+        post_processor: PP,
+    ) -> anyhow::Result<Arc<Self>> {
+        strategy.length_compatible(queries.nrows())?;
+
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            strategy,
+            post_processor: Some(post_processor),
+        }))
+    }
+
+    /// Access the index.
+    pub fn index(&self) -> &Arc<graph::DiskANNIndex<DP>> {
+        &self.index
+    }
+
+    /// Access the queries.
+    pub fn queries(&self) -> &Arc<Matrix<T>> {
+        &self.queries
+    }
+
+    /// Access the strategy.
+    pub fn strategy(&self) -> &Strategy<S> {
+        &self.strategy
+    }
+
+    /// Access the post-processor, if present.
+    pub fn post_processor(&self) -> &Option<PP> {
+        &self.post_processor
     }
 }
 
@@ -85,7 +141,7 @@ pub struct Metrics {
     pub hops: u32,
 }
 
-impl<DP, T, S> Search for KNN<DP, T, S>
+impl<DP, T, S> Search for KNN<DP, T, S, ()>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
