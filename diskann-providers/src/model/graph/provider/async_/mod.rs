@@ -7,12 +7,12 @@ pub mod experimental;
 pub mod common;
 pub use common::{PrefetchCacheLineLevel, StartPoints, VectorGuard};
 
-mod determinant_diversity_post_process;
+
 pub(crate) mod postprocess;
-pub use determinant_diversity_post_process::determinant_diversity_post_process;
-
+// Re-export from parent module for backward compatibility.
+// The algorithm is not async-specific and lives in provider::determinant_diversity.
 pub mod distances;
-
+pub use super::determinant_diversity_post_process;
 pub mod memory_vector_provider;
 pub use memory_vector_provider::MemoryVectorProviderAsync;
 
