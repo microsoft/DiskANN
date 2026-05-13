@@ -42,9 +42,9 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
-  NVME_MOUNT_PATH: /mnt/nvme
-  DISKANN_RUST: /mnt/nvme/diskann_rust
-  BASELINE: /mnt/nvme/baseline
+  NVME_MOUNT_PATH: nvme
+  DISKANN_RUST: nvme/diskann_rust
+  BASELINE: nvme/baseline
 
 defaults:
   run:
@@ -114,7 +114,7 @@ jobs:
         working-directory: ${{ env.BASELINE }}
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ../../${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
@@ -131,7 +131,7 @@ jobs:
             check run \
             --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
             --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
-            --before ${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json \
+            --before ../../${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json \
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results

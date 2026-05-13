@@ -24,8 +24,8 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
-  NVME_MOUNT_PATH: /mnt/nvme
-  DISKANN_RUST: /mnt/nvme/diskann_rust
+  NVME_MOUNT_PATH: nvme
+  DISKANN_RUST: nvme/diskann_rust
 
 defaults:
   run:
