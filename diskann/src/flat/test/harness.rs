@@ -21,7 +21,7 @@
 
 use std::{cmp::Ordering, num::NonZeroUsize};
 
-use diskann_vector::PreprocessedDistanceFunction;
+use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
 use crate::{
     ANNResult,
@@ -88,7 +88,7 @@ impl KnnOracleRun {
 
         let top_k = top_k_sorted(&buf, stats.result_count as usize);
         let top_k_distances = top_k.iter().map(|(_, d)| *d).collect();
-        let ground_truth = brute_force_topk(index.provider(), query, k);
+        let ground_truth = brute_force_topk(index.provider(), Metric::L2, query, k);
 
         Ok(Self {
             top_k,
@@ -100,12 +100,17 @@ impl KnnOracleRun {
 }
 
 /// Compute the brute-force top-`k` `(id, distance)` pairs over every element of
-/// `provider`. Iterates [`Provider::items`] directly and scores with a fresh
-/// [`f32::query_distance`] computer, so the oracle is independent of the
+/// `provider` under `metric`. Iterates [`Provider::items`] directly and scores with
+/// a fresh [`f32::query_distance`] computer, so the oracle is independent of the
 /// [`crate::flat::test::provider::Visitor`] under test. Ties are broken by ascending
 /// id for determinism.
-pub(crate) fn brute_force_topk(provider: &Provider, query: &[f32], k: usize) -> Vec<(u32, f32)> {
-    let computer = f32::query_distance(query, provider.metric());
+pub(crate) fn brute_force_topk(
+    provider: &Provider,
+    metric: Metric,
+    query: &[f32],
+    k: usize,
+) -> Vec<(u32, f32)> {
+    let computer = f32::query_distance(query, metric);
 
     let mut neighbors: Vec<Neighbor<u32>> = provider
         .items()

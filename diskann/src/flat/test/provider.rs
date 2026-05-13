@@ -38,14 +38,13 @@ use crate::{
 pub struct Provider {
     items: Vec<Vec<f32>>,
     dim: usize,
-    metric: Metric,
     get_element: Counter,
 }
 
 impl Provider {
     /// Construct a provider that owns `items`. Every vector must have the same
     /// (non-zero) length.
-    pub fn new(metric: Metric, items: impl IntoIterator<Item = Vec<f32>>) -> Self {
+    pub fn new(items: impl IntoIterator<Item = Vec<f32>>) -> Self {
         let items: Vec<Vec<f32>> = items.into_iter().collect();
         assert!(
             !items.is_empty(),
@@ -67,40 +66,24 @@ impl Provider {
         Self {
             items,
             dim,
-            metric,
             get_element: Counter::new(),
         }
     }
 
     /// Build a provider over the row vectors of [`Grid::data`]. IDs are `0..n` in
-    /// row-major order (last coordinate varies fastest). Uses [`Metric::L2`].
+    /// row-major order (last coordinate varies fastest).
     ///
     /// Unlike the graph-side `Provider::grid`, this does *not* add a separate
     /// start-point row — flat search has no notion of one.
     pub fn grid(grid: Grid, size: usize) -> Self {
         let data = grid.data(size);
         let items: Vec<Vec<f32>> = data.row_iter().map(|row| row.to_vec()).collect();
-        Self::new(Metric::L2, items)
-    }
-
-    /// Dimensionality of every vector in the provider.
-    pub fn dim(&self) -> usize {
-        self.dim
+        Self::new(items)
     }
 
     /// Number of vectors in the provider.
     pub fn len(&self) -> usize {
         self.items.len()
-    }
-
-    /// `true` if there are no vectors.
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    /// Distance metric the provider was constructed with.
-    pub fn metric(&self) -> Metric {
-        self.metric
     }
 
     /// Snapshot of the per-provider counters.
@@ -322,11 +305,6 @@ impl<'a> Visitor<'a> {
             get_element: provider.get_element.local(),
         }
     }
-
-    /// The borrowed [`Provider`].
-    pub fn provider(&self) -> &'a Provider {
-        self.provider
-    }
 }
 
 impl Debug for Visitor<'_> {
@@ -354,7 +332,7 @@ impl BuildQueryComputer<&[f32]> for Visitor<'_> {
         &self,
         from: &[f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(f32::query_distance(from, self.provider.metric))
+        Ok(f32::query_distance(from, Metric::L2))
     }
 }
 
