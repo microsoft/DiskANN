@@ -11,4 +11,3 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .expect("current thread runtime initialization failed")
         .block_on(future)
 }
-

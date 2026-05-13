@@ -339,8 +339,8 @@ mod tests {
         // Three candidates with equal distance: two very similar (nearly parallel) and one orthogonal.
         // Equal distances remove relevance weighting, so pure diversity drives selection.
         let candidates = vec![
-            (0u32, 0.1, vec![1.0, 0.0, 0.0]), // along x
-            (1u32, 0.1, vec![0.0, 1.0, 0.0]), // along y - orthogonal to 0
+            (0u32, 0.1, vec![1.0, 0.0, 0.0]),   // along x
+            (1u32, 0.1, vec![0.0, 1.0, 0.0]),   // along y - orthogonal to 0
             (2u32, 0.1, vec![0.99, 0.01, 0.0]), // nearly parallel to 0
         ];
         let query = &[1.0, 1.0, 1.0];
@@ -351,7 +351,10 @@ mod tests {
         // The diverse pair is (0, 1) - orthogonal. Candidate 2 is redundant with 0.
         let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
         assert!(ids.contains(&0), "Expected candidate 0 to be selected");
-        assert!(ids.contains(&1), "Expected candidate 1 (orthogonal) to be selected, not redundant candidate 2");
+        assert!(
+            ids.contains(&1),
+            "Expected candidate 1 (orthogonal) to be selected, not redundant candidate 2"
+        );
     }
 
     /// Verify eta variant selects the same k results.
@@ -368,7 +371,10 @@ mod tests {
         assert_eq!(result.len(), 2);
         let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
         assert!(ids.contains(&0), "Expected candidate 0 to be selected");
-        assert!(ids.contains(&1), "Expected candidate 1 (orthogonal) to be selected");
+        assert!(
+            ids.contains(&1),
+            "Expected candidate 1 (orthogonal) to be selected"
+        );
     }
 
     /// Verify power=high weights nearby candidates (distance=0.1) more strongly than far ones.
@@ -385,7 +391,10 @@ mod tests {
         let result = determinant_diversity_post_process(candidates.clone(), query, 1, 0.0, 10.0);
         assert_eq!(result.len(), 1);
         // Closest candidate should be preferred due to high power weighting
-        assert_eq!(result[0].0, 0, "Closest candidate should be selected with high power");
+        assert_eq!(
+            result[0].0, 0,
+            "Closest candidate should be selected with high power"
+        );
     }
 
     /// Verify that distance-to-similarity conversion handles equal distances gracefully.

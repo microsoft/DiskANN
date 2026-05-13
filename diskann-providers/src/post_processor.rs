@@ -92,16 +92,12 @@ pub enum DeterminantDiversityError {
 impl fmt::Display for DeterminantDiversityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidPower(p) => write!(
-                f,
-                "determinant-diversity power must be > 0.0, got: {}",
-                p
-            ),
-            Self::InvalidEta(e) => write!(
-                f,
-                "determinant-diversity eta must be >= 0.0, got: {}",
-                e
-            ),
+            Self::InvalidPower(p) => {
+                write!(f, "determinant-diversity power must be > 0.0, got: {}", p)
+            }
+            Self::InvalidEta(e) => {
+                write!(f, "determinant-diversity eta must be >= 0.0, got: {}", e)
+            }
         }
     }
 }
@@ -133,6 +129,9 @@ mod tests {
     #[test]
     fn test_display() {
         let params = DeterminantDiversityParams::new(1.5, 0.5).unwrap();
-        assert_eq!(params.to_string(), "DeterminantDiversity(power=1.5, eta=0.5)");
+        assert_eq!(
+            params.to_string(),
+            "DeterminantDiversity(power=1.5, eta=0.5)"
+        );
     }
 }

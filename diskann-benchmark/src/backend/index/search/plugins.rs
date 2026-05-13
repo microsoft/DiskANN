@@ -179,7 +179,9 @@ impl DeterminantDiversity {
         "topk + determinant-diversity"
     }
 
-    pub(crate) fn get(phase: &SearchPhase) -> anyhow::Result<(&TopkSearchPhase, DeterminantDiversityParams)> {
+    pub(crate) fn get(
+        phase: &SearchPhase,
+    ) -> anyhow::Result<(&TopkSearchPhase, DeterminantDiversityParams)> {
         let topk = phase.as_topk()?;
         match topk.post_processor.as_ref() {
             Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => {

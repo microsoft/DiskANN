@@ -46,9 +46,7 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::graph_index::{
-        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase,
-    },
+    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
         self,
         datafiles::{self},
@@ -518,8 +516,7 @@ where
             .await?;
 
         Ok(benchmark_core::search::graph::knn::Metrics::new(
-            stats.cmps,
-            stats.hops,
+            stats.cmps, stats.hops,
         ))
     }
 }
