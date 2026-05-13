@@ -3,6 +3,49 @@
  * Licensed under the MIT license.
  */
 
+//! Determinant-Diversity post-processing for search results.
+//!
+//! This module implements the Determinant-Diversity algorithm for diversity-promoting
+//! reranking of approximate nearest neighbor search results. The algorithm takes
+//! relevance-ranked candidates and reorders them to maximize geometric diversity
+//! while maintaining relevance to the original query.
+//!
+//! # Algorithm Overview
+//!
+//! Determinant-Diversity selects a diverse subset from an initial set of candidates
+//! by iteratively choosing points that maximize the determinant of the distance matrix.
+//! This creates a diverse set that is both relevant to the query and geometrically spread out.
+//!
+//! # Parameters
+//!
+//! - **power**: Relevance weighting exponent (must be > 0.0). Controls the emphasis on
+//!   maintaining relevance scores from the initial search. Higher values prefer relevance
+//!   over diversity.
+//!
+//! - **eta**: Numerical stability parameter (must be >= 0.0). Used for ridge regularization:
+//!   - `eta = 0`: Exact determinant computation (can be numerically unstable for some inputs)
+//!   - `eta > 0`: Ridge-regularized computation for improved numerical stability
+//!
+//! # Variants
+//!
+//! The module provides two implementations:
+//!
+//! - `post_process_with_eta_f32()`: Uses ridge regularization for numerical stability
+//! - `post_process_without_eta_f32()`: Computes exact determinants (faster but less stable)
+//!
+//! These are selected automatically based on the eta parameter value.
+//!
+//! # Time Complexity
+//!
+//! O(m³) where m is the number of candidates, due to determinant computation.
+//! In practice, m is typically small (search returns hundreds of candidates,
+//! but only top-k ≪ m are selected).
+//!
+//! # References
+//!
+//! The algorithm is based on diversity-promoting ranking methods for nearest neighbor search,
+//! as used in approximate nearest neighbor indices like DiskANN.
+
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 pub fn determinant_diversity_post_process<Id: Copy>(
