@@ -17,7 +17,7 @@ The library supports the following algorithmic features
 - A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
 - Choice of memory tiers to allow operation at different price-performance points. 
 - Vector search interfaces that allow pagination, range filters (e.g., dist<0.5), [diversity aware](https://arxiv.org/abs/2602.08742) top-k search.
-- Hooks to allow attribute filters (predicate) processsing along with vector search.
+- Hooks to allow attribute filters (predicate) processing along with vector search.
 
 ## Getting Started
 
