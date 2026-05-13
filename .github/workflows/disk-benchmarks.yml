@@ -42,9 +42,6 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   PERF_INPUTS: diskann-benchmark/perf_test_inputs
-  NVME_MOUNT_PATH: nvme
-  DISKANN_RUST: nvme/diskann_rust
-  BASELINE: nvme/baseline
 
 defaults:
   run:
@@ -57,7 +54,7 @@ jobs:
   # Macro benchmark: compare current branch against baseline
   macro-benchmark:
     name: Macro Benchmark - ${{ matrix.dataset }}
-    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
+    runs-on: ubuntu-latest
     # TODO: For production benchmarks, consider using a self-hosted runner with:
     # - NVMe storage for consistent I/O performance
     # - CPU pinning (taskset) for reduced variance
@@ -77,61 +74,53 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
-      # Shallow checkout to $GITHUB_WORKSPACE so the composite action is accessible via uses:.
-      - name: Checkout action definitions
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github
-          path: github_actions
-
-      - name: Setup benchmark environment
-        uses: ./github_actions/.github/actions/setup-disk-benchmark
-        with:
-          dataset: ${{ matrix.dataset }}
-          archive: ${{ matrix.archive }}
-          extract-to: ${{ env.DISKANN_RUST }}/target/tmp
-          nvme-mount-path: ${{ env.NVME_MOUNT_PATH }}
-
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:
-          path: ${{ env.DISKANN_RUST }}
+          path: diskann_rust
           lfs: true
 
       - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.baseline_ref || 'main' }}
-          path: ${{ env.BASELINE }}
+          path: baseline
           lfs: true
+
+      - name: Setup benchmark environment
+        uses: ./diskann_rust/.github/actions/setup-disk-benchmark
+        with:
+          dataset: ${{ matrix.dataset }}
+          archive: ${{ matrix.archive }}
+          extract-to: diskann_rust/target/tmp
 
       - name: Copy dataset to baseline
         run: |
-          mkdir -p ${{ env.BASELINE }}/target/tmp
-          cp -r ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.data_dir }} ${{ env.BASELINE }}/target/tmp/
+          mkdir -p baseline/target/tmp
+          cp -r diskann_rust/target/tmp/${{ matrix.data_dir }} baseline/target/tmp/
 
       - name: Run baseline benchmark
-        working-directory: ${{ env.BASELINE }}
+        working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file ../../${{ env.DISKANN_RUST }}/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
+            run --input-file ../diskann_rust/${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_baseline.json
 
       - name: Run current branch benchmark
-        working-directory: ${{ env.DISKANN_RUST }}
+        working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             run --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
             --output-file target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Validate benchmark results
-        working-directory: ${{ env.DISKANN_RUST }}
+        working-directory: diskann_rust
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
             check run \
             --tolerances ${{ env.PERF_INPUTS }}/disk-index-tolerances.json \
             --input-file ${{ env.PERF_INPUTS }}/${{ matrix.config }} \
-            --before ../../${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json \
+            --before ../baseline/target/tmp/${{ matrix.dataset }}_baseline.json \
             --after target/tmp/${{ matrix.dataset }}_target.json
 
       - name: Upload benchmark results
@@ -140,6 +129,6 @@ jobs:
         with:
           name: benchmark-results-${{ matrix.dataset }}
           path: |
-            ${{ env.DISKANN_RUST }}/target/tmp/${{ matrix.dataset }}_target.json
-            ${{ env.BASELINE }}/target/tmp/${{ matrix.dataset }}_baseline.json
+            diskann_rust/target/tmp/${{ matrix.dataset }}_target.json
+            baseline/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30
