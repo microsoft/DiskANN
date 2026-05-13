@@ -40,10 +40,11 @@ runs:
     - name: Mount high-speed NVMe SSD
       shell: bash
       run: |
-        sudo mkdir -p -m 777 ${{ inputs.nvme-mount-path }}
+        sudo mkdir -p ${{ inputs.nvme-mount-path }}
         sudo lsblk
         sudo mkfs.ext4 /dev/nvme0n1
         sudo mount /dev/nvme0n1 ${{ inputs.nvme-mount-path }}
+        sudo chmod 777 ${{ inputs.nvme-mount-path }}
 
     - name: Install system dependencies
       shell: bash
