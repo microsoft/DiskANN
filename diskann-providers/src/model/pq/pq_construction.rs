@@ -94,15 +94,18 @@ where
         }
     }
 
-    let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
-    if legacy_center_data {
+    let centroid = if legacy_center_data {
+        let mut centroid: Vec<f32> = vec![0.0; parameters.dim()];
         move_train_data_by_centroid(
             train_data,
             parameters.num_train(),
             parameters.dim(),
             &mut centroid,
         );
-    }
+        Some(centroid)
+    } else {
+        None
+    };
 
     let dim = NonZeroUsize::new(parameters.dim())
         .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
@@ -132,7 +135,7 @@ where
 
     pq_storage.write_pivot_data(
         &full_pivot_data,
-        Some(&centroid),
+        centroid.as_deref(),
         chunk_offsets.as_slice(),
         parameters.num_centers(),
         parameters.dim(),
