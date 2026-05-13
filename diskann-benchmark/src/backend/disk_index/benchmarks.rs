@@ -62,7 +62,7 @@ where
             DiskIndexSource::Load(load) => load.data_type,
             DiskIndexSource::Build(build) => build.data_type,
         };
-        crate::utils::data_type_score::<T>(data_type)
+        crate::utils::match_data_type::<T>(data_type)
     }
 
     fn description(

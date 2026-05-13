@@ -176,7 +176,7 @@ where
     type Output = BuildResult;
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        let score = utils::data_type_score::<T>(*input.source.data_type());
+        let score = utils::match_data_type::<T>(*input.source.data_type());
         if self.plugins.is_match(&input.search_phase) {
             score
         } else {
@@ -303,7 +303,7 @@ where
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        utils::data_type_score::<T>(input.build.data_type)
+        utils::match_data_type::<T>(input.build.data_type)
     }
 
     fn description(

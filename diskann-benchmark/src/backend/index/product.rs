@@ -131,7 +131,7 @@ mod imp {
         type Output = QuantBuildResult;
 
         fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            let score = utils::data_type_score::<T>(*input.index_operation.source.data_type());
+            let score = utils::match_data_type::<T>(*input.index_operation.source.data_type());
             if self
                 .quant_search
                 .is_match(&input.index_operation.search_phase)
