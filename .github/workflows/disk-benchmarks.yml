@@ -77,14 +77,14 @@ jobs:
       - name: Mount high-speed NVMe SSD
         shell: bash
         run: |
-          sudo mkdir -p nvme
+          sudo mkdir -p /mnt/nvme
           sudo lsblk
           sudo mkfs.ext4 /dev/nvme0n1
-          sudo mount /dev/nvme0n1 nvme
-          sudo chmod 777 nvme
-          mkdir -p nvme/diskann_rust nvme/baseline
-          ln -s nvme/diskann_rust diskann_rust
-          ln -s nvme/baseline baseline
+          sudo mount /dev/nvme0n1 /mnt/nvme
+          sudo chmod 777 /mnt/nvme
+          mkdir -p /mnt/nvme/diskann_rust /mnt/nvme/baseline
+          ln -s /mnt/nvme/diskann_rust diskann_rust
+          ln -s /mnt/nvme/baseline baseline
 
       - name: Checkout current branch
         uses: actions/checkout@v4
