@@ -37,7 +37,7 @@ jobs:
   # A/A benchmark: run main vs main to detect environment noise.
   aa-benchmark:
     name: A/A - ${{ matrix.dataset }}
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest ]
     timeout-minutes: 120
     strategy:
       fail-fast: false
