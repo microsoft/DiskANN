@@ -13,7 +13,7 @@ mod result;
 
 pub mod any;
 pub mod app;
-pub mod dispatcher;
+// pub mod dispatcher;
 pub mod files;
 pub mod input;
 pub mod output;

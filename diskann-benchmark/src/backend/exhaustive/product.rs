@@ -26,7 +26,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        dispatcher::{FailureScore, MatchScore},
+        benchmark::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
