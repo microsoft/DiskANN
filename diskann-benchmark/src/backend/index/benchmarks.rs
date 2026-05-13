@@ -47,7 +47,7 @@ use crate::{
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
     inputs::graph_index::{
-        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase, SearchPhaseKind,
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase,
     },
     utils::{
         self,
@@ -453,14 +453,18 @@ impl<S> Strategy<S> {
 
 /// Execute a topk search with a custom per-query search function, collecting timing and recall.
 ///
-/// Encapsulates the outer thread/run/L loops, the per-rep timing harness, per-query latency
+/// This function properly creates tokio runtimes with the specified thread counts to accurately
+/// measure performance under different concurrency levels. Each thread count is benchmarked
+/// independently with its own runtime to avoid misleading single-threaded measurements.
+///
+/// Encapsulates the thread/run/L loops, the per-rep timing harness, per-query latency
 /// collection, and [`SearchResults`] construction. The caller supplies only the actual
 /// per-query search as a closure `search_fn(knn_params, query, output) -> Result<()>`.
 fn run_topk_timed(
     topk: &crate::inputs::graph_index::TopkSearchPhase,
     queries: &Matrix<f32>,
     groundtruth: &Matrix<u32>,
-    mut search_fn: impl FnMut(
+    search_fn: impl Fn(
         diskann::graph::search::Knn,
         &[f32],
         &mut Vec<diskann::neighbor::Neighbor<u32>>,
@@ -469,6 +473,11 @@ fn run_topk_timed(
     let mut all_results = Vec::new();
 
     for threads in &topk.num_threads {
+        // Create a tokio runtime with the specified number of threads.
+        // This ensures that searches are actually executed with the desired concurrency level,
+        // not just recorded with that thread count while running serially.
+        let rt = utils::tokio::runtime(threads.get())?;
+
         for run in &topk.runs {
             for search_l in &run.search_l {
                 let knn_params =
@@ -485,26 +494,29 @@ fn run_topk_timed(
                     let search_start = Instant::now();
                     let mut per_query_latencies = Vec::with_capacity(queries.nrows());
 
-                    for query_idx in 0..queries.nrows() {
-                        let query = queries.row(query_idx);
-                        let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
+                    rt.block_on(async {
+                        for query_idx in 0..queries.nrows() {
+                            let query = queries.row(query_idx);
+                            let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
 
-                        let query_start = Instant::now();
-                        search_fn(knn_params, query, &mut output)?;
-                        per_query_latencies.push(query_start.elapsed().as_micros() as u64);
+                            let query_start = Instant::now();
+                            search_fn(knn_params, query, &mut output)?;
+                            per_query_latencies.push(query_start.elapsed().as_micros() as u64);
 
-                        let gt = groundtruth.row(query_idx);
-                        let mut matches = 0;
-                        for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
-                            if i >= gt.len() {
-                                break;
+                            let gt = groundtruth.row(query_idx);
+                            let mut matches = 0;
+                            for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
+                                if i >= gt.len() {
+                                    break;
+                                }
+                                if gt.contains(&neighbor.id) {
+                                    matches += 1;
+                                }
                             }
-                            if gt.contains(&neighbor.id) {
-                                matches += 1;
-                            }
+                            all_recalls.push(matches);
                         }
-                        all_recalls.push(matches);
-                    }
+                        Ok::<(), anyhow::Error>(())
+                    })?;
 
                     let elapsed: MicroSeconds = search_start.elapsed().into();
                     let elapsed_secs = elapsed.as_seconds();
@@ -582,7 +594,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        "topk + determinant-diversity"
+        plugins::DeterminantDiversity::as_str()
     }
 
     fn run(
@@ -591,11 +603,11 @@ where
         phase: &SearchPhase,
         _strategy: &Strategy<common::FullPrecision>,
     ) -> anyhow::Result<AggregatedSearchResults> {
-        let (topk, power, eta) = plugins::DeterminantDiversity::get(phase)?;
+        let (topk, params) = plugins::DeterminantDiversity::get(phase)?;
 
         let strategy = common::FullPrecision;
         let context = DefaultContext;
-        let det_div = post_processor::DeterminantDiversity::new(power, eta);
+        let det_div = post_processor::DeterminantDiversity::new(params.power, params.eta);
 
         let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
             &topk.queries,
@@ -626,7 +638,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        SearchPhaseKind::Topk.as_str()
+        plugins::Topk::as_str()
     }
 
     fn run(
@@ -669,7 +681,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        SearchPhaseKind::Range.as_str()
+        plugins::Range::as_str()
     }
 
     fn run(
@@ -713,7 +725,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        SearchPhaseKind::TopkBetaFilter.as_str()
+        plugins::TopkBetaFilter::as_str()
     }
 
     fn run(
@@ -772,7 +784,7 @@ where
     }
 
     fn kind(&self) -> &'static str {
-        SearchPhaseKind::TopkMultihopFilter.as_str()
+        plugins::TopkMultihopFilter::as_str()
     }
 
     fn run(

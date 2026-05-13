@@ -155,11 +155,50 @@ impl Topk {
             .ok()
             .is_some_and(|topk| topk.post_processor.is_none())
     }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk"
+    }
 }
 
 /// A search plugin for determinant-diversity top-k post-processing.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity;
+
+/// Parameters for determinant-diversity post-processing.
+///
+/// This struct encapsulates the validated parameters needed for determinant-diversity
+/// reranking. The parameters are validated at parse time to ensure correct values.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeterminantDiversityParams {
+    /// The power parameter controlling relevance vs. diversity trade-off.
+    ///
+    /// Higher values prefer relevance over diversity.
+    /// Must be > 0.0.
+    pub power: f32,
+    /// The ridge regularization parameter for numerical stability.
+    ///
+    /// Higher values provide more numerical robustness but bias toward relevance.
+    /// Must be >= 0.0.
+    pub eta: f32,
+}
+
+impl DeterminantDiversityParams {
+    /// Create new determinant-diversity parameters with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `power <= 0.0` or `eta < 0.0`.
+    pub(crate) fn new(power: f32, eta: f32) -> anyhow::Result<Self> {
+        if power <= 0.0 {
+            anyhow::bail!("determinant-diversity power must be > 0.0, got: {}", power);
+        }
+        if eta < 0.0 {
+            anyhow::bail!("determinant-diversity eta must be >= 0.0, got: {}", eta);
+        }
+        Ok(Self { power, eta })
+    }
+}
 
 impl DeterminantDiversity {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
@@ -170,11 +209,16 @@ impl DeterminantDiversity {
             .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
     }
 
-    pub(crate) fn get(phase: &SearchPhase) -> anyhow::Result<(&TopkSearchPhase, f32, f32)> {
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + determinant-diversity"
+    }
+
+    pub(crate) fn get(phase: &SearchPhase) -> anyhow::Result<(&TopkSearchPhase, DeterminantDiversityParams)> {
         let topk = phase.as_topk()?;
         match topk.post_processor.as_ref() {
             Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => {
-                Ok((topk, *power, *eta))
+                let params = DeterminantDiversityParams::new(*power, *eta)?;
+                Ok((topk, params))
             }
             _ => Err(anyhow::anyhow!(
                 "determinant-diversity plugin selected for non determinant-diversity input",
@@ -191,6 +235,10 @@ impl Range {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_range().is_ok()
     }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "range"
+    }
 }
 
 /// A search plugin for beta-filtered search.
@@ -201,6 +249,10 @@ impl TopkBetaFilter {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_beta_filter().is_ok()
     }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + beta filter"
+    }
 }
 
 /// A search plugin for multi-hop filtered search.
@@ -210,5 +262,9 @@ pub(crate) struct TopkMultihopFilter;
 impl TopkMultihopFilter {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
         phase.as_topk_multihop_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + multihop filter"
     }
 }
