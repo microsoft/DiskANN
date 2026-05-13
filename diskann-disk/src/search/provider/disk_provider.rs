@@ -17,6 +17,7 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use diskann::{
+    error::IntoANNResult,
     graph::{
         self,
         glue::{
@@ -507,7 +508,7 @@ where
 #[derive(Clone)]
 struct DiskSearchScratchArgs<'a, ProviderFactory> {
     graph_degree: usize,
-    dim: usize,
+    pq_dim: usize,
     num_pq_chunks: usize,
     num_pq_centers: usize,
     vertex_factory: &'a ProviderFactory,
@@ -525,7 +526,7 @@ where
     fn try_create(args: &DiskSearchScratchArgs<ProviderFactory>) -> Result<Self, Self::Error> {
         let pq_scratch = PQScratch::new(
             args.graph_degree,
-            args.dim,
+            args.pq_dim,
             args.num_pq_chunks,
             args.num_pq_centers,
         )?;
@@ -627,7 +628,7 @@ where
             scratch_pool,
             &DiskSearchScratchArgs {
                 graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
-                dim: provider.graph_header.metadata().dims,
+                pq_dim: provider.pq_data.get_dim(),
                 num_pq_chunks: provider.pq_data.get_num_chunks(),
                 num_pq_centers: provider.pq_data.get_num_centers(),
                 vertex_factory: vertex_provider_factory,
@@ -635,9 +636,9 @@ where
             },
         )?;
 
-        scratch
-            .pq_scratch
-            .set(provider.graph_header.metadata().dims, query)?;
+        // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
+        let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
+        scratch.pq_scratch.set(&f32_query)?;
         let start_vertex_id = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();
@@ -887,7 +888,7 @@ where
         let pq_data = disk_index_reader.get_pq_data();
         let scratch_pool_args = DiskSearchScratchArgs {
             graph_degree: graph_header.max_degree::<Data::VectorDataType>()?,
-            dim: graph_header.metadata().dims,
+            pq_dim: pq_data.get_dim(),
             num_pq_chunks: pq_data.get_num_chunks(),
             num_pq_centers: pq_data.get_num_centers(),
             vertex_factory: &vertex_provider_factory,

@@ -103,6 +103,14 @@ pub struct DegreeStats {
     pub cnt_less_than_two: usize, // Number of vertices with degree less than 2
 }
 
+#[cfg(test)]
+crate::test::cmp::verbose_eq!(DegreeStats {
+    max_degree,
+    avg_degree,
+    min_degree,
+    cnt_less_than_two,
+});
+
 /// Statistics collected during a search operation.
 ///
 /// This struct provides detailed metrics about the search process, including
@@ -2491,9 +2499,13 @@ where
         }
     }
 
-    pub fn get_degree_stats<NA>(&self, accessor: &mut NA) -> impl SendFuture<ANNResult<DegreeStats>>
+    pub fn get_degree_stats<NA, Itr>(
+        &self,
+        accessor: &mut NA,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<DegreeStats>>
     where
-        for<'a> &'a DP: IntoIterator<Item = DP::InternalId, IntoIter: Send>,
+        Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
         NA: AsNeighbor<Id = DP::InternalId>,
     {
         async move {
@@ -2504,7 +2516,7 @@ where
             let mut total_live_points = 0;
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            for id in &self.data_provider {
+            for id in itr {
                 total_live_points += 1;
                 accessor.get_neighbors(id, &mut neighbors).await?;
                 let pool_size = neighbors.len();
@@ -2517,6 +2529,17 @@ where
             }
 
             let total_f32 = total as f32;
+
+            // protecting against the divide by zero below.
+            if total_live_points == 0 {
+                return Ok(DegreeStats {
+                    max_degree: 0,
+                    avg_degree: 0.0,
+                    min_degree: 0,
+                    cnt_less_than_two: 0,
+                });
+            }
+
             Ok(DegreeStats {
                 max_degree: u32::try_from(max_degree_usize)?,
                 avg_degree: total_f32 / total_live_points as f32,
@@ -3163,4 +3186,31 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_label_provider_on_visit_default() {
+        #[derive(Debug)]
+        struct BasicValidation;
+
+        impl QueryLabelProvider<u32> for BasicValidation {
+            fn is_match(&self, id: u32) -> bool {
+                id.is_multiple_of(2)
+            }
+        }
+
+        let filter = BasicValidation;
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(0, 1.0)),
+            QueryVisitDecision::Accept(_)
+        ));
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(1, 1.0)),
+            QueryVisitDecision::Reject
+        ));
+    }
 }
