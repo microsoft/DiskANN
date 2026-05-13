@@ -74,6 +74,18 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
+      - name: Mount high-speed NVMe SSD
+        shell: bash
+        run: |
+          sudo mkdir -p nvme
+          sudo lsblk
+          sudo mkfs.ext4 /dev/nvme0n1
+          sudo mount /dev/nvme0n1 nvme
+          sudo chmod 777 nvme
+          mkdir -p nvme/diskann_rust nvme/baseline
+          ln -s nvme/diskann_rust diskann_rust
+          ln -s nvme/baseline baseline
+
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:
