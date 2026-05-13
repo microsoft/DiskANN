@@ -57,7 +57,7 @@ pub trait Benchmark: 'static {
     ) -> anyhow::Result<Self::Output>;
 }
 
-/// Successful matches from [`DispatchRule`] will return `MatchScores`.
+/// Successful matches from [`Benchmark::try_match`] will return `MatchScores`.
 ///
 /// A lower numerical value indicates a better match for purposes of overload resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,7 +69,7 @@ impl std::fmt::Display for MatchScore {
     }
 }
 
-/// Successful matches from [`DispatchRule`] will return `FailureScores`.
+/// Successful matches from [`Benchmark::try_match`] will return `FailureScores`.
 ///
 /// A lower numerical value indicates a better match, which can help when compiling a
 /// list of considered and rejected candidates.

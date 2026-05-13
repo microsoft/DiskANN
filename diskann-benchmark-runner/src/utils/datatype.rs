@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// An enum representation for common DiskANN data types.
 ///
-/// [`DispatchRule]`s are defined for each type here and it's corresponding [`Type`].
+/// See also: [`AsDataType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
@@ -54,13 +54,30 @@ impl std::fmt::Display for DataType {
     }
 }
 
+/// Associate a primitive type `T` with a [`DataType`] enum variant.
 pub trait AsDataType: 'static {
+    /// The [`DataType`] this type is associated with.
     const DATA_TYPE: DataType;
 
+    /// Return `true` only if `data_type == Self::DATA_TYPE`.
     fn is_match(data_type: DataType) -> bool {
         data_type == Self::DATA_TYPE
     }
 
+    /// Return a [`std::fmt::Display`] compatible struct describing the match with `data_type`.
+    /// ```
+    /// use diskann_benchmark_runner::utils::datatype::{DataType, AsDataType};
+    ///
+    /// // Matched data type.
+    /// let desc = f32::describe(DataType::Float32);
+    /// assert!(desc.is_match());
+    /// assert_eq!(desc.to_string(), "successful match");
+    ///
+    /// // Mismatched data type.
+    /// let desc = f32::describe(DataType::Float16);
+    /// assert!(!desc.is_match());
+    /// assert_eq!(desc.to_string(), "expected \"float32\" but found \"float16\"");
+    /// ```
     fn describe(data_type: DataType) -> Describe {
         if data_type == Self::DATA_TYPE {
             Describe(DescribeInner::Match)
@@ -73,10 +90,12 @@ pub trait AsDataType: 'static {
     }
 }
 
+/// A [`std::fmt::Display`] compatible result for [`AsDataType::describe`].
 #[derive(Debug, Clone, Copy)]
 pub struct Describe(DescribeInner);
 
 impl Describe {
+    /// Return `true` is the data type match was successful.
     pub fn is_match(&self) -> bool {
         matches!(self.0, DescribeInner::Match)
     }
