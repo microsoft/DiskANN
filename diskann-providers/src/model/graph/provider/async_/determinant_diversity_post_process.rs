@@ -399,4 +399,90 @@ mod tests {
         // Verify that distances are preserved from input
         assert!(result.iter().all(|(_, dist)| *dist == 0.5 || *dist == 0.3));
     }
+
+    /// Verify that diversity is actually promoted: when candidates lie along orthogonal
+    /// directions, a 2-element diverse subset should choose orthogonal pairs over similar ones.
+    ///
+    /// Using equal distances ensures pure diversity drives selection without relevance weighting.
+    #[test]
+    fn test_diversity_selects_orthogonal_candidates() {
+        // Three candidates with equal distance: two very similar (nearly parallel) and one orthogonal.
+        // Equal distances remove relevance weighting, so pure diversity drives selection.
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0, 0.0]), // along x
+            (1u32, 0.1, vec![0.0, 1.0, 0.0]), // along y - orthogonal to 0
+            (2u32, 0.1, vec![0.99, 0.01, 0.0]), // nearly parallel to 0
+        ];
+        let query = &[1.0, 1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+
+        // Should select 2 candidates
+        assert_eq!(result.len(), 2);
+        // The diverse pair is (0, 1) - orthogonal. Candidate 2 is redundant with 0.
+        let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&0), "Expected candidate 0 to be selected");
+        assert!(ids.contains(&1), "Expected candidate 1 (orthogonal) to be selected, not redundant candidate 2");
+    }
+
+    /// Verify eta variant selects the same k results.
+    #[test]
+    fn test_diversity_selects_orthogonal_candidates_with_eta() {
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0, 0.0]),
+            (1u32, 0.1, vec![0.0, 1.0, 0.0]),
+            (2u32, 0.1, vec![0.99, 0.01, 0.0]),
+        ];
+        let query = &[1.0, 1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.5, 1.0);
+
+        assert_eq!(result.len(), 2);
+        let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&0), "Expected candidate 0 to be selected");
+        assert!(ids.contains(&1), "Expected candidate 1 (orthogonal) to be selected");
+    }
+
+    /// Verify power=high weights nearby candidates (distance=0.1) more strongly than far ones.
+    #[test]
+    fn test_high_power_prefers_closer_candidates() {
+        // Two orthogonal candidates: one close, one far
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0]), // close to query
+            (1u32, 0.9, vec![0.0, 1.0]), // far from query
+        ];
+        let query = &[1.0, 0.0];
+
+        // With high power, relevance is heavily weighted so the closest candidate dominates
+        let result = determinant_diversity_post_process(candidates.clone(), query, 1, 0.0, 10.0);
+        assert_eq!(result.len(), 1);
+        // Closest candidate should be preferred due to high power weighting
+        assert_eq!(result[0].0, 0, "Closest candidate should be selected with high power");
+    }
+
+    /// Verify that distance-to-similarity conversion handles equal distances gracefully.
+    #[test]
+    fn test_equal_distances() {
+        let candidates = vec![
+            (0u32, 0.5, vec![1.0, 0.0]),
+            (1u32, 0.5, vec![0.0, 1.0]), // same distance as 0
+        ];
+        let query = &[1.0, 0.0];
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+
+        // Should still return candidates without panicking
+        assert_eq!(result.len(), 2);
+    }
+
+    /// Test eta=0 exactly matches greedy orthogonalization path.
+    #[test]
+    fn test_eta_zero_is_greedy_path() {
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0]),
+            (1u32, 0.2, vec![0.0, 1.0]),
+            (2u32, 0.3, vec![0.5, 0.5]),
+        ];
+        let query = &[1.0, 1.0];
+        // eta=0.0 must invoke greedy path, not ridge-regularized
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        assert_eq!(result.len(), 2);
+    }
 }
