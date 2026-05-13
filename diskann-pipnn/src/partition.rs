@@ -3,31 +3,15 @@
  * Licensed under the MIT license.
  */
 
-//! Randomized Ball Carving (RBC) partitioning.
+//! Randomized Ball Carving (RBC) partitioning — iterative, parallel at every level.
 //!
-//! Recursively partitions the dataset into overlapping clusters:
-//! - Sample a fraction of points as leaders
-//! - Assign each point to its `fanout` nearest leaders (creating overlap)
-//! - Merge undersized clusters
-//! - Recurse on oversized clusters
+//! Recursively partitions the dataset into overlapping clusters using an iterative
+//! work-queue approach. All oversized clusters at each level are processed in parallel.
 
 use diskann::utils::VectorRepr;
 use rand::prelude::IndexedRandom;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use rayon::prelude::*;
-
-/// Maximum recursion depth to prevent stack overflow.
-const MAX_DEPTH: usize = 30;
-
-/// Compute the number of leaders to sample for a partition level, capped by leader_cap.
-/// The paper recommends ~1000 as a practical upper bound; larger values increase
-/// partition GEMM cost without improving quality.
-#[inline]
-fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
-    ((n as f64 * p_samp).ceil() as usize)
-        .clamp(2, leader_cap)
-        .min(n)
-}
 
 /// A leaf partition containing indices into the original dataset.
 ///
@@ -51,12 +35,724 @@ pub struct PartitionConfig {
     pub leader_cap: usize,
 }
 
-/// Quantized version of partition_assign using Hamming distance on 1-bit data.
-/// Pre-extracts leader u64 data for cache locality.
-fn partition_assign_quantized(
+
+/// Compute the number of leaders to sample, capped by leader_cap.
+#[inline]
+fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
+    ((n as f64 * p_samp).ceil() as usize)
+        .clamp(2, leader_cap)
+        .min(n)
+}
+
+/// A cluster that needs further partitioning.
+struct WorkItem {
+    indices: Vec<u32>,
+    level: usize,
+    seed: u64,
+}
+
+/// Partition the dataset into overlapping leaves.
+///
+/// Uses an iterative work-queue: each round processes all oversized clusters in parallel,
+/// producing new work items for the next round. Completed leaves are pushed to a shared
+/// result vec. No recursion, parallel at every level.
+// Allow: callers wrap this in `pool.install(|| ...)`, so parallel work uses the correct pool.
+#[allow(clippy::disallowed_methods)]
+pub fn partition<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    npoints: usize,
+    config: &PartitionConfig,
+    seed: u64,
+) -> Vec<Leaf> {
+    let initial_indices: Vec<u32> = (0..npoints as u32).collect();
+
+    if npoints <= config.c_max {
+        return vec![Leaf {
+            indices: initial_indices,
+        }];
+    }
+
+    let nl0 = sample_num_leaders(npoints, config.p_samp, config.leader_cap);
+    tracing::info!(npoints, leaders = nl0, ndims, "Partition start");
+
+    let mut leaves: Vec<Leaf> = Vec::new();
+    let mut work = vec![WorkItem {
+        indices: initial_indices,
+        level: 0,
+        seed,
+    }];
+
+    let mut iteration = 0;
+    while !work.is_empty() {
+        iteration += 1;
+        assert!(iteration <= 50, "partition exceeded 50 iterations");
+
+        let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
+            .into_par_iter()
+            .map(|item| partition_one_level(data, ndims, config, item))
+            .collect();
+
+        let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
+        let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
+        let mut next_work = Vec::with_capacity(total_work);
+        leaves.reserve(total_leaves);
+        for (wi, lv) in results {
+            next_work.extend(wi);
+            leaves.extend(lv);
+        }
+        work = next_work;
+    }
+
+    // Global merge of sub-c_min leaves across all work items / levels.
+    // Eliminates the bug where per-call `merge_small` would leave one
+    // < c_min remainder per partition_one_level call (10s of thousands of
+    // tiny leaves at deep BFS levels in the prior implementation).
+    let leaves = global_merge_small(leaves, config.c_min, config.c_max);
+
+    leaves
+}
+
+/// Quantized partition variant using Hamming distance.
+#[allow(clippy::disallowed_methods)]
+pub fn partition_quantized(
     qdata: &crate::quantize::QuantizedData,
-    points: &[usize],
-    leaders: &[usize],
+    npoints: usize,
+    config: &PartitionConfig,
+    seed: u64,
+) -> Vec<Leaf> {
+    let initial_indices: Vec<u32> = (0..npoints as u32).collect();
+
+    if npoints <= config.c_max {
+        return vec![Leaf {
+            indices: initial_indices,
+        }];
+    }
+
+    let mut leaves: Vec<Leaf> = Vec::new();
+    let mut work = vec![WorkItem {
+        indices: initial_indices,
+        level: 0,
+        seed,
+    }];
+
+    let mut iteration = 0;
+    while !work.is_empty() {
+        iteration += 1;
+        assert!(iteration <= 50, "quantized partition exceeded 50 iterations");
+
+        let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
+            .into_par_iter()
+            .map(|item| partition_one_level_quantized(qdata, config, item))
+            .collect();
+
+        let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
+        let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
+        let mut next_work = Vec::with_capacity(total_work);
+        leaves.reserve(total_leaves);
+        for (wi, lv) in results {
+            next_work.extend(wi);
+            leaves.extend(lv);
+        }
+        work = next_work;
+    }
+
+    let leaves = global_merge_small(leaves, config.c_min, config.c_max);
+
+    tracing::info!(total_leaves = leaves.len(), levels = iteration, "Partition complete (quantized)");
+    leaves
+}
+
+/// Process one cluster: assign to leaders, emit oversized clusters as new work
+/// items and the rest (including under-c_min) as leaves. Cross-work-item small
+/// leaves are then combined by a single global `global_merge_small` pass at
+/// the end of `partition()` — replaces the per-call `merge_small` which left
+/// one < c_min remainder per work item (58K+ tiny leaves at deep levels).
+fn partition_one_level<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    config: &PartitionConfig,
+    item: WorkItem,
+) -> (Vec<WorkItem>, Vec<Leaf>) {
+    let n = item.indices.len();
+    debug_assert!(n > config.c_max);
+
+    let fanout = config
+        .fanout
+        .get(item.level)
+        .copied()
+        .unwrap_or(1)
+        .min(n);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
+
+    // Deterministic seed derived from parent: no syscall, reproducible.
+    let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let leaders: Vec<u32> = item
+        .indices
+        .choose_multiple(&mut rng, num_leaders)
+        .copied()
+        .collect();
+
+    // Assign each point to its `fanout` nearest leaders → per-leader clusters.
+    let clusters = assign_to_leaders(data, ndims, &item.indices, &leaders, fanout, config.metric);
+
+    let mut next_work = Vec::new();
+    let mut finished_leaves = Vec::new();
+    for cluster in clusters {
+        if cluster.is_empty() {
+            continue;
+        }
+        if cluster.len() <= config.c_max {
+            finished_leaves.push(Leaf { indices: cluster });
+        } else {
+            next_work.push(WorkItem {
+                indices: cluster,
+                level: item.level + 1,
+                seed,
+            });
+        }
+    }
+    (next_work, finished_leaves)
+}
+
+/// Quantized version of partition_one_level.
+fn partition_one_level_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    config: &PartitionConfig,
+    item: WorkItem,
+) -> (Vec<WorkItem>, Vec<Leaf>) {
+    let n = item.indices.len();
+    debug_assert!(n > config.c_max);
+
+    let fanout = config
+        .fanout
+        .get(item.level)
+        .copied()
+        .unwrap_or(1)
+        .min(n);
+    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
+
+    // Deterministic seed derived from parent: no syscall, reproducible.
+    let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
+
+    let stride = (n / num_leaders).max(1);
+    let leaders: Vec<u32> = (0..num_leaders)
+        .map(|i| item.indices[i * stride])
+        .collect();
+
+    let clusters = assign_to_leaders_quantized(qdata, &item.indices, &leaders, fanout);
+
+    let mut next_work = Vec::new();
+    let mut finished_leaves = Vec::new();
+    for cluster in clusters {
+        if cluster.is_empty() {
+            continue;
+        }
+        if cluster.len() <= config.c_max {
+            finished_leaves.push(Leaf { indices: cluster });
+        } else {
+            next_work.push(WorkItem {
+                indices: cluster,
+                level: item.level + 1,
+                seed,
+            });
+        }
+    }
+    (next_work, finished_leaves)
+}
+
+// ─── Thread-local stripe buffers ─────────────────────────────────────────────
+
+use std::cell::RefCell;
+
+/// Reusable per-thread buffers for partition stripe processing.
+/// Avoids per-stripe alloc + memset that accounted for ~9% of partition time.
+struct StripeBuffers {
+    p_data: Vec<f32>,
+    dots: Vec<f32>,
+}
+
+impl StripeBuffers {
+    fn new() -> Self {
+        Self {
+            p_data: Vec::new(),
+            dots: Vec::new(),
+        }
+    }
+}
+
+thread_local! {
+    static STRIPE_BUFS: RefCell<StripeBuffers> = RefCell::new(StripeBuffers::new());
+}
+
+// ─── Assignment ──────────────────────────────────────────────────────────────
+
+/// Assign each point to its `fanout` nearest leaders using native SIMD distance.
+/// Point-by-point: no large temporary matrix, works directly on native type T.
+/// All indices are u32 global IDs. Returns per-leader clusters as Vec<Vec<u32>>.
+fn assign_to_leaders<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    points: &[u32],
+    leaders: &[u32],
+    fanout: usize,
+    metric: diskann_vector::distance::Metric,
+) -> Vec<Vec<u32>> {
+    let np = points.len();
+    let nl = leaders.len();
+    let num_assign = fanout.min(nl);
+
+    use diskann_vector::distance::Metric;
+
+    // Extract leader data into contiguous f32 array.
+    let mut l_data = vec![0.0f32; nl * ndims];
+    for (i, &idx) in leaders.iter().enumerate() {
+        let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
+        T::as_f32_into(src, &mut l_data[i * ndims..(i + 1) * ndims]).expect("f32 conversion");
+    }
+
+    // Precompute leader norms for L2/Cosine.
+    let l_norms: Vec<f32> = match metric {
+        Metric::L2 => l_data
+            .chunks_exact(ndims)
+            .map(|row| row.iter().map(|v| v * v).sum())
+            .collect(),
+        Metric::Cosine => l_data
+            .chunks_exact(ndims)
+            .map(|row| row.iter().map(|v| v * v).sum::<f32>().sqrt())
+            .collect(),
+        Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+    };
+
+    // Flat assignments.
+    let mut assignments = vec![0u32; np * num_assign];
+
+    // 16MB dots output fits in cache for the top-k scan.
+    let stripe: usize =
+        ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(1, np);
+
+    // Small clusters: run single-threaded (no rayon overhead).
+    // Large clusters: parallel stripes.
+    // Uses thread-local buffers to avoid per-stripe alloc + memset.
+    let process_stripe = |(stripe_idx, assign_chunk): (usize, &mut [u32])| {
+        STRIPE_BUFS.with(|cell| {
+            let mut bufs = cell.borrow_mut();
+            let start = stripe_idx * stripe;
+            let end = (start + stripe).min(np);
+            let sn = end - start;
+            let stripe_points = &points[start..end];
+
+            // Ensure buffers are large enough (only zeroes on first use / growth).
+            let pd_len = sn * ndims;
+            if bufs.p_data.len() < pd_len {
+                bufs.p_data.resize(pd_len, 0.0);
+            }
+            let dots_len = sn * nl;
+            if bufs.dots.len() < dots_len {
+                bufs.dots.resize(dots_len, 0.0);
+            }
+
+            // Destructure to allow simultaneous mutable borrows of different fields.
+            let StripeBuffers {
+                ref mut p_data,
+                ref mut dots,
+                ..
+            } = *bufs;
+
+            // Gather stripe to f32 (overwrites p_data — prior contents don't matter).
+            let p_data = &mut p_data[..pd_len];
+            for (i, &idx) in stripe_points.iter().enumerate() {
+                let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
+                T::as_f32_into(src, &mut p_data[i * ndims..(i + 1) * ndims])
+                    .expect("f32 conversion");
+            }
+
+            // GEMM: dots[i * nl + j] = dot(point_i, leader_j).
+            // faer uses Accum::Replace — overwrites output, no pre-zero needed.
+            let dots = &mut dots[..dots_len];
+            crate::gemm::sgemm_abt(p_data, sn, ndims, &l_data, nl, dots);
+
+            // Fused distance + top-k: compute distance AND track top-k in single pass.
+            // Keeps hot top-k array in registers. Extra memory pass for separate
+            // distance array was benchmarked and found 23% slower due to bandwidth.
+            debug_assert!(num_assign <= 16, "top-k tracker limited to 16");
+            let mut top: [(u32, f32); 16] = [(u32::MAX, f32::MAX); 16];
+
+            for i in 0..sn {
+                let dot_row = &dots[i * nl..(i + 1) * nl];
+
+                for t in top[..num_assign].iter_mut() {
+                    *t = (u32::MAX, f32::MAX);
+                }
+                let threshold_idx = num_assign - 1;
+
+                match metric {
+                    Metric::CosineNormalized => {
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 16;
+                            unsafe {
+                                let one = _mm512_set1_ps(1.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 16;
+                                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                                    let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
+                                    let d = _mm512_sub_ps(one, dots);
+                                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
+                                    if mask != 0 {
+                                        let mut d_arr = [0.0f32; 16];
+                                        _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1;
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for j in (chunks * 16)..nl {
+                                    let d = 1.0 - *dot_row.get_unchecked(j);
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 8;
+                            unsafe {
+                                let one = _mm256_set1_ps(1.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 8;
+                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                    let d = _mm256_sub_ps(one, dots);
+                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
+                                    if mask != 0 {
+                                        let mut d_arr = [0.0f32; 8];
+                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask as u32;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1;
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for j in (chunks * 8)..nl {
+                                    let d = 1.0 - *dot_row.get_unchecked(j);
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(not(target_arch = "x86_64"))]
+                        {
+                            for j in 0..nl {
+                                let d = 1.0 - unsafe { *dot_row.get_unchecked(j) };
+                                if d < top[threshold_idx].1 {
+                                    top[threshold_idx] = (j as u32, d);
+                                    let mut t = threshold_idx;
+                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                        top.swap(t, t - 1);
+                                        t -= 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Metric::Cosine => {
+                        let pi_sqrt: f32 = p_data[i * ndims..(i + 1) * ndims]
+                            .iter()
+                            .map(|v| v * v)
+                            .sum::<f32>()
+                            .sqrt();
+                        for j in 0..nl {
+                            let dot = unsafe { *dot_row.get_unchecked(j) };
+                            let denom = pi_sqrt * l_norms[j];
+                            let cos = if denom > 0.0 { dot / denom } else { 0.0 };
+                            let d = 1.0 - cos;
+                            if d < top[threshold_idx].1 {
+                                top[threshold_idx] = (j as u32, d);
+                                let mut t = threshold_idx;
+                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                    top.swap(t, t - 1);
+                                    t -= 1;
+                                }
+                            }
+                        }
+                    }
+                    Metric::L2 => {
+                        let pi: f32 = p_data[i * ndims..(i + 1) * ndims]
+                            .iter()
+                            .map(|v| v * v)
+                            .sum();
+                        // Process 16 leaders at a time using AVX-512: compute
+                        // distances in SIMD, only drop to scalar for the rare
+                        // lanes that beat the current threshold.
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 16;
+                            let remainder = nl % 16;
+                            unsafe {
+                                let pi_v = _mm512_set1_ps(pi);
+                                let two = _mm512_set1_ps(2.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 16;
+                                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                                    let norms = _mm512_loadu_ps(l_norms.as_ptr().add(base));
+                                    let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
+                                    // d = pi + norms - 2*dots
+                                    let d = _mm512_add_ps(pi_v, _mm512_fnmadd_ps(two, dots, norms));
+                                    // mask = lanes where d < threshold
+                                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
+                                    if mask != 0 {
+                                        // Extract passing lanes to scalar for top-k insertion.
+                                        // Typically 0-2 lanes pass out of 16.
+                                        let mut d_arr = [0.0f32; 16];
+                                        _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1; // clear lowest bit
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Handle remainder with scalar loop.
+                                for j in (chunks * 16)..nl {
+                                    let dot = *dot_row.get_unchecked(j);
+                                    let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                        {
+                            use std::arch::x86_64::*;
+                            let chunks = nl / 8;
+                            unsafe {
+                                let pi_v = _mm256_set1_ps(pi);
+                                let two = _mm256_set1_ps(2.0);
+                                for chunk in 0..chunks {
+                                    let base = chunk * 8;
+                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                    let norms = _mm256_loadu_ps(l_norms.as_ptr().add(base));
+                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                    // d = pi + norms - 2*dots
+                                    let two_dots = _mm256_mul_ps(two, dots);
+                                    let d = _mm256_add_ps(pi_v, _mm256_sub_ps(norms, two_dots));
+                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
+                                    if mask != 0 {
+                                        let mut d_arr = [0.0f32; 8];
+                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                        let mut m = mask as u32;
+                                        while m != 0 {
+                                            let lane = m.trailing_zeros() as usize;
+                                            m &= m - 1;
+                                            let j = base + lane;
+                                            let dist = d_arr[lane];
+                                            if dist < top[threshold_idx].1 {
+                                                top[threshold_idx] = (j as u32, dist);
+                                                let mut t = threshold_idx;
+                                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                                    top.swap(t, t - 1);
+                                                    t -= 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                for j in (chunks * 8)..nl {
+                                    let dot = *dot_row.get_unchecked(j);
+                                    let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #[cfg(not(target_arch = "x86_64"))]
+                        {
+                            for j in 0..nl {
+                                let dot = unsafe { *dot_row.get_unchecked(j) };
+                                let d = pi + unsafe { *l_norms.get_unchecked(j) } - 2.0 * dot;
+                                if d < top[threshold_idx].1 {
+                                    top[threshold_idx] = (j as u32, d);
+                                    let mut t = threshold_idx;
+                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                        top.swap(t, t - 1);
+                                        t -= 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Metric::InnerProduct => {
+                        for j in 0..nl {
+                            let d = -(unsafe { *dot_row.get_unchecked(j) });
+                            if d < top[threshold_idx].1 {
+                                top[threshold_idx] = (j as u32, d);
+                                let mut t = threshold_idx;
+                                while t > 0 && top[t].1 < top[t - 1].1 {
+                                    top.swap(t, t - 1);
+                                    t -= 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
+                for k in 0..num_assign {
+                    out[k] = top[k].0;
+                }
+            }
+        });
+    };
+
+    if np <= stripe {
+        // Single stripe — run inline, no rayon.
+        process_stripe((0, &mut assignments));
+    } else {
+        // Multiple stripes — parallel.
+        #[allow(clippy::disallowed_methods)]
+        assignments
+            .par_chunks_mut(stripe * num_assign)
+            .enumerate()
+            .for_each(process_stripe);
+    }
+
+    // Aggregate into per-leader clusters using global point IDs. For large
+    // np, the serial scatter (np × num_assign pushes into per-leader Vecs,
+    // each growing via realloc) is a real serial tail in the partition wall.
+    // Measured ~100ms at np=1M nl=1000 on EPYC WSL — small fraction at 16t
+    // but a real chunk of level-1 wall. Parallelize via per-thread partial
+    // clusters + 2-phase merge: each thread scatters its chunk into local
+    // Vecs, then a parallel join concatenates per-leader.
+    if np >= 100_000 {
+        // Parallel path: split points into N_THREAD chunks, each thread
+        // builds local partial clusters. Then for each leader, concatenate
+        // its slices across threads in parallel (per-leader work is
+        // independent, no atomics needed).
+        let n_threads = rayon::current_num_threads().max(1);
+        let chunk_size = (np + n_threads - 1) / n_threads;
+
+        let partials: Vec<Vec<Vec<u32>>> = (0..n_threads)
+            .into_par_iter()
+            .map(|t| {
+                let start = t * chunk_size;
+                let end = ((t + 1) * chunk_size).min(np);
+                let mut local: Vec<Vec<u32>> = (0..nl)
+                    .map(|_| Vec::with_capacity(((end - start) * num_assign + nl - 1) / nl))
+                    .collect();
+                for i in start..end {
+                    let pt = points[i];
+                    let row = &assignments[i * num_assign..(i + 1) * num_assign];
+                    for &leader_local in row {
+                        local[leader_local as usize].push(pt);
+                    }
+                }
+                local
+            })
+            .collect();
+
+        // Sum per-leader sizes once so each final Vec is allocated with
+        // exact capacity (no realloc churn).
+        let mut sizes = vec![0usize; nl];
+        for partial in &partials {
+            for (li, v) in partial.iter().enumerate() {
+                sizes[li] += v.len();
+            }
+        }
+
+        let mut clusters: Vec<Vec<u32>> = sizes
+            .par_iter()
+            .enumerate()
+            .map(|(li, &sz)| {
+                let mut out = Vec::with_capacity(sz);
+                for partial in &partials {
+                    out.extend_from_slice(&partial[li]);
+                }
+                out
+            })
+            .collect();
+        // Borrow-checker workaround: par_iter().map returns Vec in order.
+        // Move out (clusters already owned).
+        let _ = &mut clusters;
+        clusters
+    } else {
+        let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
+        for (i, pt) in points.iter().enumerate() {
+            let row = &assignments[i * num_assign..(i + 1) * num_assign];
+            for &leader_local in row {
+                clusters[leader_local as usize].push(*pt);
+            }
+        }
+        clusters
+    }
+}
+
+/// Quantized assignment using Hamming distance.
+fn assign_to_leaders_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    points: &[u32],
+    leaders: &[u32],
     fanout: usize,
 ) -> Vec<Vec<u32>> {
     let np = points.len();
@@ -64,18 +760,19 @@ fn partition_assign_quantized(
     let num_assign = fanout.min(nl);
     let u64s = qdata.u64s_per_vec();
 
-    // Pre-extract leader data into contiguous cache-friendly array.
+    // Pre-extract leader data.
     let mut leader_data: Vec<u64> = vec![0u64; nl * u64s];
     for (i, &idx) in leaders.iter().enumerate() {
-        leader_data[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx));
+        leader_data[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx as usize));
     }
 
     let mut assignments = vec![0u32; np * num_assign];
 
-    // Adaptive stripe: limit per-stripe memory to ~16 MB, matching the FP path.
+    // 16MB stripe for cache efficiency.
     let stripe: usize = ((16 * 1024 * 1024)
         / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
-    .clamp(256, 32_768);
+    .clamp(256, np);
+
     #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(stripe * num_assign)
@@ -85,10 +782,9 @@ fn partition_assign_quantized(
             let end = (start + stripe).min(np);
             let sn = end - start;
 
-            // Pre-extract point data for this stripe.
             let mut point_data: Vec<u64> = vec![0u64; sn * u64s];
             for i in 0..sn {
-                let src = qdata.get_u64(points[start + i]);
+                let src = qdata.get_u64(points[start + i] as usize);
                 point_data[i * u64s..(i + 1) * u64s].copy_from_slice(src);
             }
 
@@ -97,21 +793,13 @@ fn partition_assign_quantized(
             let pd_ptr = point_data.as_ptr();
 
             for i in 0..sn {
-                // SAFETY: `pd_ptr` points to `point_data` which has `sn * u64s` elements;
-                // `i < sn` so `i * u64s` is within bounds.
+                // SAFETY: bounds checked by construction.
                 let pt_base = unsafe { pd_ptr.add(i * u64s) };
-
-                // Compute Hamming distance to all leaders + build buf in one pass.
                 buf.clear();
                 for j in 0..nl {
-                    // SAFETY: `ld_ptr` points to `leader_data` which has `nl * u64s` elements;
-                    // `j < nl` so `j * u64s` is within bounds.
                     let ld_base = unsafe { ld_ptr.add(j * u64s) };
                     let mut h = 0u32;
                     for k in 0..u64s {
-                        // SAFETY: Both `pt_base` and `ld_base` point to contiguous
-                        // `u64s`-length slices within `point_data` and `leader_data`
-                        // respectively; `k < u64s` so the offsets are within bounds.
                         unsafe {
                             h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones();
                         }
@@ -132,1217 +820,113 @@ fn partition_assign_quantized(
         });
 
     let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
-    for i in 0..np {
+    for (i, pt) in points.iter().enumerate() {
         let row = &assignments[i * num_assign..(i + 1) * num_assign];
-        for &li in row {
-            clusters[li as usize].push(i as u32);
+        for &leader_local in row {
+            clusters[leader_local as usize].push(*pt);
         }
     }
     clusters
 }
 
-/// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
-/// extract top-k assignments without materializing the full N x L distance matrix.
-/// Peak memory: stripe * L * 4 bytes (~64MB) instead of N * L * 4 bytes.
-/// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
-/// extract top-k assignments without materializing the full N x L distance matrix.
-fn partition_assign<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    points: &[usize],
-    leaders: &[usize],
-    fanout: usize,
-    metric: diskann_vector::distance::Metric,
-) -> Vec<Vec<u32>> {
-    let np = points.len();
-    let nl = leaders.len();
-    let num_assign = fanout.min(nl);
+// ─── Global Merge of Small Leaves ────────────────────────────────────────────
 
-    use diskann_vector::distance::Metric;
+/// Combine sub-c_min leaves into c_min/c_max-sized leaves via a HashSet buffer
+/// that deduplicates overlapping point IDs. Big leaves (>= c_min) pass through
+/// untouched. The final remainder, if still < c_min, is appended to the most
+/// recent big leaf when it fits, otherwise emitted as a small tail leaf.
+fn global_merge_small(leaves: Vec<Leaf>, c_min: usize, c_max: usize) -> Vec<Leaf> {
+    let (mut good, small): (Vec<Leaf>, Vec<Leaf>) =
+        leaves.into_iter().partition(|l| l.indices.len() >= c_min);
 
-    // Extract leader data (shared, stays in cache), converting T -> f32.
-    let mut l_data = vec![0.0f32; nl * ndims];
-    for (i, &idx) in leaders.iter().enumerate() {
-        let src = &data[idx * ndims..(idx + 1) * ndims];
-        let dst = &mut l_data[i * ndims..(i + 1) * ndims];
-        T::as_f32_into(src, dst).expect("f32 conversion");
+    if small.is_empty() {
+        return good;
     }
-    // Precompute leader norms.
-    // L2 needs squared norms; Cosine needs sqrt norms; CosineNormalized/IP need none.
-    let l_norms: Vec<f32> = match metric {
-        Metric::L2 => {
-            let mut norms = vec![0.0f32; nl];
-            for i in 0..nl {
-                let row = &l_data[i * ndims..(i + 1) * ndims];
-                let mut norm = 0.0f32;
-                for &v in row {
-                    norm += v * v;
-                }
-                norms[i] = norm;
-            }
-            norms
+
+    let mut buf = std::collections::HashSet::<u32>::with_capacity(c_max);
+    for leaf in small {
+        if buf.len() + leaf.indices.len() > c_max && buf.len() >= c_min {
+            good.push(Leaf {
+                indices: buf.drain().collect(),
+            });
         }
-        Metric::Cosine => {
-            let mut norms = vec![0.0f32; nl];
-            for i in 0..nl {
-                let row = &l_data[i * ndims..(i + 1) * ndims];
-                let mut norm = 0.0f32;
-                for &v in row {
-                    norm += v * v;
-                }
-                norms[i] = norm.sqrt();
-            }
-            norms
-        }
-        Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
-    };
-
-    // Flat assignments: assignments[i * num_assign .. (i+1) * num_assign]
-    let mut assignments = vec![0u32; np * num_assign];
-
-    // Fused parallel stripes: GEMM + distance + top-k in one pass.
-    // Adaptive stripe size: limit per-stripe GEMM output to ~16 MB.
-    // Smaller stripes reduce concurrent memory from ~1.4 GB (8 threads × 90 MB)
-    // to ~350 MB (8 threads × 22 MB), cutting partition peak RSS by ~1 GB.
-    // Partition is <5% of total build time, so the throughput cost is negligible.
-    let stripe: usize =
-        ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(256, 16_384);
-    // Lint: Using `ParallelIterator::for_each`. The caller (`parallel_partition`)
-    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
-    #[allow(clippy::disallowed_methods)]
-    assignments
-        .par_chunks_mut(stripe * num_assign)
-        .enumerate()
-        .for_each(|(stripe_idx, assign_chunk)| {
-            let start = stripe_idx * stripe;
-            let end = (start + stripe).min(np);
-            let sn = end - start;
-            let stripe_points = &points[start..end];
-
-            let mut p_data = vec![0.0f32; sn * ndims];
-            for (i, &idx) in stripe_points.iter().enumerate() {
-                let src = &data[idx * ndims..(idx + 1) * ndims];
-                let dst = &mut p_data[i * ndims..(i + 1) * ndims];
-                T::as_f32_into(src, dst).expect("f32 conversion");
-            }
-
-            let mut dots = vec![0.0f32; sn * nl];
-            crate::gemm::sgemm_abt(&p_data, sn, ndims, &l_data, nl, &mut dots);
-
-            let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
-            for i in 0..sn {
-                let dot_row = &dots[i * nl..(i + 1) * nl];
-
-                buf.clear();
-                match metric {
-                    Metric::CosineNormalized => {
-                        // Pre-normalized: dist = 1 - dot(a, b)
-                        for (j, &dot_val) in dot_row.iter().enumerate() {
-                            buf.push((j as u32, (1.0 - dot_val).max(0.0)));
-                        }
-                    }
-                    Metric::Cosine => {
-                        // Unnormalized: dist = 1 - dot(a,b)/(||a||*||b||)
-                        let mut pi = 0.0f32;
-                        let row = &p_data[i * ndims..(i + 1) * ndims];
-                        for &v in row {
-                            pi += v * v;
-                        }
-                        let pi_sqrt = pi.sqrt();
-                        for (j, &dot_val) in dot_row.iter().enumerate() {
-                            let denom = pi_sqrt * l_norms[j];
-                            let cos_sim = if denom > 0.0 { dot_val / denom } else { 0.0 };
-                            buf.push((j as u32, (1.0 - cos_sim).max(0.0)));
-                        }
-                    }
-                    Metric::L2 => {
-                        let mut pi = 0.0f32;
-                        let row = &p_data[i * ndims..(i + 1) * ndims];
-                        for &v in row {
-                            pi += v * v;
-                        }
-                        for (j, &dot_val) in dot_row.iter().enumerate() {
-                            let d = (pi + l_norms[j] - 2.0 * dot_val).max(0.0);
-                            buf.push((j as u32, d));
-                        }
-                    }
-                    Metric::InnerProduct => {
-                        for (j, &dot_val) in dot_row.iter().enumerate() {
-                            buf.push((j as u32, -dot_val));
-                        }
-                    }
-                }
-
-                if num_assign > 0 && num_assign < buf.len() {
-                    buf.select_nth_unstable_by(num_assign - 1, |a, b| {
-                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-
-                let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
-                for k in 0..num_assign {
-                    out[k] = buf[k].0;
-                }
-            }
-        });
-
-    // Aggregate into per-leader clusters.
-    let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
-    for i in 0..np {
-        let row = &assignments[i * num_assign..(i + 1) * num_assign];
-        for &li in row {
-            clusters[li as usize].push(i as u32);
-        }
-    }
-    clusters
-}
-
-/// Merge clusters smaller than c_min by combining them until they reach c_max.
-/// Deduplicates indices via HashSet (overlapping leaves from fanout > 1).
-fn merge_small(clusters: Vec<Vec<u32>>, c_min: usize, c_max: usize) -> Vec<Vec<u32>> {
-    let mut result: Vec<Vec<u32>> = Vec::new();
-    let mut buf = std::collections::HashSet::<u32>::new();
-
-    for c in clusters {
-        if c.is_empty() {
-            continue;
-        }
-        if c.len() >= c_min {
-            result.push(c);
-        } else {
-            if buf.len() + c.len() >= c_max {
-                result.push(buf.drain().collect());
-            }
-            buf.extend(c);
+        buf.extend(leaf.indices);
+        if buf.len() >= c_min {
+            good.push(Leaf {
+                indices: buf.drain().collect(),
+            });
         }
     }
     if !buf.is_empty() {
-        result.push(buf.into_iter().collect());
-    }
-
-    result
-}
-
-/// Merge undersized quantized clusters into the nearest large cluster.
-///
-/// Computes majority-vote bitwise centroids for both small and large clusters
-/// (closest 1-bit analogue to the FP path's f32 centroid), then finds the
-/// nearest large cluster by Hamming distance between centroids.
-fn merge_small_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    mut clusters: Vec<Vec<u32>>,
-    c_min: usize,
-) -> Vec<Vec<u32>> {
-    let mut large: Vec<Vec<u32>> = Vec::new();
-    let mut smalls: Vec<Vec<u32>> = Vec::new();
-    for c in clusters.drain(..) {
-        if c.len() < c_min && !c.is_empty() { smalls.push(c); }
-        else if !c.is_empty() { large.push(c); }
-    }
-    if smalls.is_empty() || large.is_empty() {
-        if large.is_empty() { return smalls; }
-        return large;
-    }
-
-    let u64s = qdata.u64s_per_vec();
-
-    // Compute majority-vote bitwise centroid for each large cluster.
-    // For each u64 word and each bit position, set the bit if >50% of points have it set.
-    let large_centroids: Vec<Vec<u64>> = large.iter().map(|c| {
-        let half = c.len() / 2;
-        let mut centroid = vec![0u64; u64s];
-        let mut counts = vec![0u32; u64s * 64];
-        for &idx in c {
-            let bits = qdata.get_u64(idx as usize);
-            for (w, &word) in bits.iter().enumerate() {
-                let mut b = word;
-                while b != 0 {
-                    let bit = b.trailing_zeros() as usize;
-                    counts[w * 64 + bit] += 1;
-                    b &= b - 1;
+        let remainder: Vec<u32> = buf.into_iter().collect();
+        if remainder.len() < c_min {
+            // Try to attach to the last big leaf if it fits.
+            if let Some(last) = good.last_mut() {
+                if last.indices.len() + remainder.len() <= c_max {
+                    last.indices.extend(remainder);
+                    return good;
                 }
             }
         }
-        for (w, cw) in centroid.iter_mut().enumerate() {
-            for bit in 0..64 {
-                if counts[w * 64 + bit] > half as u32 {
-                    *cw |= 1u64 << bit;
-                }
-            }
-        }
-        centroid
-    }).collect();
-
-    for small in smalls {
-        // Compute small cluster centroid.
-        let half = small.len() / 2;
-        let mut small_centroid = vec![0u64; u64s];
-        let mut counts = vec![0u32; u64s * 64];
-        for &idx in &small {
-            let bits = qdata.get_u64(idx as usize);
-            for (w, &word) in bits.iter().enumerate() {
-                let mut b = word;
-                while b != 0 {
-                    let bit = b.trailing_zeros() as usize;
-                    counts[w * 64 + bit] += 1;
-                    b &= b - 1;
-                }
-            }
-        }
-        for (w, cw) in small_centroid.iter_mut().enumerate() {
-            for bit in 0..64 {
-                if counts[w * 64 + bit] > half as u32 {
-                    *cw |= 1u64 << bit;
-                }
-            }
-        }
-
-        // Find nearest large cluster by centroid-to-centroid Hamming distance.
-        let nearest = large_centroids.iter().enumerate()
-            .map(|(i, lc)| {
-                let d = crate::quantize::QuantizedData::hamming_u64(&small_centroid, lc);
-                (i, d)
-            })
-            .min_by_key(|&(_, d)| d)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        large[nearest].extend(small);
+        good.push(Leaf {
+            indices: remainder,
+        });
     }
-    large
+
+    good
 }
 
-/// Merge undersized clusters into the nearest large cluster by centroid distance.
-///
-/// Paper (arXiv:2602.21247): "Merge undersized clusters into the nearest
-/// (by centroid) appropriately-sized cluster."
-fn merge_small_into_nearest<T: VectorRepr>(
-    data: &[T],
-    ndims: usize,
-    mut clusters: Vec<Vec<u32>>,
-    c_min: usize,
-) -> Vec<Vec<u32>> {
-    let mut large: Vec<Vec<u32>> = Vec::new();
-    let mut smalls: Vec<Vec<u32>> = Vec::new();
 
-    for c in clusters.drain(..) {
-        if c.len() < c_min && !c.is_empty() {
-            smalls.push(c);
-        } else if !c.is_empty() {
-            large.push(c);
-        }
-    }
-
-    if smalls.is_empty() || large.is_empty() {
-        if large.is_empty() {
-            return smalls;
-        }
-        return large;
-    }
-
-    // Compute centroids for large clusters, converting T -> f32 per point.
-    let centroids: Vec<Vec<f32>> = large
-        .iter()
-        .map(|c| {
-            let mut centroid = vec![0.0f32; ndims];
-            let inv = 1.0 / c.len() as f32;
-            let mut point_buf = vec![0.0f32; ndims];
-            for &idx in c {
-                let idx = idx as usize;
-                T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
-                    .expect("f32 conversion");
-                for (cv, &pv) in centroid.iter_mut().zip(point_buf.iter()) {
-                    *cv += pv;
-                }
-            }
-            for cv in centroid.iter_mut() {
-                *cv *= inv;
-            }
-            centroid
-        })
-        .collect();
-
-    // For each small cluster, compute its centroid and find nearest large cluster.
-    let mut point_buf = vec![0.0f32; ndims];
-    for small in smalls {
-        let mut rep_buf = vec![0.0f32; ndims];
-        let inv = 1.0 / small.len() as f32;
-        for &idx in &small {
-            let idx = idx as usize;
-            T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf)
-                .expect("f32 conversion");
-            for d in 0..ndims { rep_buf[d] += point_buf[d]; }
-        }
-        for d in 0..ndims { rep_buf[d] *= inv; }
-        let nearest = centroids
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let mut dist = 0.0f32;
-                for d in 0..ndims {
-                    // SAFETY: Both `rep_buf` and `c` have exactly `ndims` elements
-                    // (allocated as `vec![0.0f32; ndims]`), and `d < ndims`.
-                    let diff = unsafe { *rep_buf.get_unchecked(d) - *c.get_unchecked(d) };
-                    dist += diff * diff;
-                }
-                (i, dist)
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        large[nearest].extend(small);
-    }
-
-    large
-}
-
-/// Partition the dataset using Randomized Ball Carving.
-///
-/// `data` is row-major: npoints_global x ndims.
-/// `indices` are the global indices of the points to partition.
-pub fn partition<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    indices: &[usize],
-    config: &PartitionConfig,
-    level: usize,
-    rng: &mut impl Rng,
-) -> Vec<Leaf> {
-    let n = indices.len();
-
-    if n <= config.c_max {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-
-    if level >= MAX_DEPTH {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-
-    let fanout = config
-        .fanout
-        .get(level)
-        .copied()
-        .unwrap_or(1)
-        .min(n);
-
-    let mut num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
-    // If too few leaders for the fanout, re-sample with a much larger rate
-    // so the partition actually splits instead of assigning every point to every leader.
-    if num_leaders < fanout * 8 {
-        num_leaders = sample_num_leaders(n, 0.1, config.leader_cap);
-    }
-    let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
-
-    // Fused GEMM + assignment (avoids materializing full distance matrix).
-    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
-
-    // Map local indices back to global (u32).
-    let clusters: Vec<Vec<u32>> = clusters_local
-        .into_iter()
-        .map(|local_cluster| {
-            local_cluster
-                .into_iter()
-                .map(|li| indices[li as usize] as u32)
-                .collect()
-        })
-        .collect();
-
-    // Merge undersized clusters by combining them until they reach c_max.
-    let merged_clusters = merge_small(clusters, config.c_min, config.c_max);
-
-    let sub_seeds: Vec<u64> = merged_clusters.iter().map(|_| rng.random()).collect();
-
-    let results: Vec<Vec<Leaf>> = merged_clusters
-        .into_par_iter()
-        .zip(sub_seeds.into_par_iter())
-        .map(|(cluster, sub_seed)| {
-            if cluster.len() <= config.c_max {
-                vec![Leaf { indices: cluster }]
-            } else {
-                let cluster_usize: Vec<usize> = cluster.iter().map(|&i| i as usize).collect();
-                let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
-                partition(data, ndims, &cluster_usize, config, level + 1, &mut sub_rng)
-            }
-        })
-        .collect();
-
-    results.into_iter().flatten().collect()
-}
-
-/// Partition using parallelism at the top level.
-/// Prints timing breakdown for the top-level operations.
-pub fn parallel_partition<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    indices: &[usize],
-    config: &PartitionConfig,
-    seed: u64,
-) -> Vec<Leaf> {
-    let n = indices.len();
-
-    if n <= config.c_max {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let fanout = config
-        .fanout
-        .first()
-        .copied()
-        .unwrap_or(1)
-        .min(n);
-
-    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
-    let leaders: Vec<usize> = indices
-        .choose_multiple(&mut rng, num_leaders)
-        .copied()
-        .collect();
-
-    let t0 = std::time::Instant::now();
-    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
-    let assign_time = t0.elapsed();
-
-    let t1 = std::time::Instant::now();
-    let clusters: Vec<Vec<u32>> = clusters_local
-        .into_iter()
-        .map(|local_cluster| {
-            local_cluster
-                .into_iter()
-                .map(|li| indices[li as usize] as u32)
-                .collect()
-        })
-        .collect();
-    let map_time = t1.elapsed();
-
-    tracing::debug!(
-        assign_secs = assign_time.as_secs_f64(),
-        map_secs = map_time.as_secs_f64(),
-        num_leaders = num_leaders,
-        fanout = fanout,
-        "top-level partition assign"
-    );
-
-    // Merge undersized clusters by combining them until they reach c_max.
-    let merged_clusters = merge_small(clusters, config.c_min, config.c_max);
-
-    let need_recurse = merged_clusters
-        .iter()
-        .filter(|c| c.len() > config.c_max)
-        .count();
-    let total_in_recurse: usize = merged_clusters
-        .iter()
-        .filter(|c| c.len() > config.c_max)
-        .map(|c| c.len())
-        .sum();
-    tracing::debug!(
-        num_clusters = merged_clusters.len(),
-        need_recurse = need_recurse,
-        total_in_recurse = total_in_recurse,
-        "partition merge"
-    );
-
-    // Generate sub-seeds for parallel recursion.
-    let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
-
-    // Recurse in parallel. Each cluster is either a leaf or needs further splitting.
-    // Lint: Using `ParallelIterator::collect`. The caller (`build_internal` / `build_internal_sq`)
-    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
-    let t2 = std::time::Instant::now();
-    #[allow(clippy::disallowed_methods)]
-    let results: Vec<Vec<Leaf>> = merged_clusters
-        .par_iter()
-        .zip(sub_seeds.par_iter())
-        .map(|(cluster, sub_seed)| {
-            if cluster.len() <= config.c_max {
-                vec![Leaf {
-                    indices: cluster.clone(),
-                }]
-            } else {
-                // Convert u32 back to usize for the recursive call.
-                let cluster_usize: Vec<usize> =
-                    cluster.iter().map(|&i| i as usize).collect();
-                let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
-                partition(data, ndims, &cluster_usize, config, 1, &mut sub_rng)
-            }
-        })
-        .collect();
-
-    tracing::debug!(
-        recursion_secs = t2.elapsed().as_secs_f64(),
-        "partition recursion complete"
-    );
-    results.into_iter().flatten().collect()
-}
-
-/// Quantized version of parallel_partition using Hamming distance on 1-bit data.
-pub fn parallel_partition_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    indices: &[usize],
-    config: &PartitionConfig,
-    seed: u64,
-) -> Vec<Leaf> {
-    let n = indices.len();
-    if n <= config.c_max {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let fanout = config
-        .fanout
-        .first()
-        .copied()
-        .unwrap_or(1)
-        .min(n);
-
-    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
-    let leaders: Vec<usize> = indices
-        .choose_multiple(&mut rng, num_leaders)
-        .copied()
-        .collect();
-
-    let t0 = std::time::Instant::now();
-    let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
-    let assign_time = t0.elapsed();
-
-    let t1 = std::time::Instant::now();
-    let clusters: Vec<Vec<u32>> = clusters_local
-        .into_iter()
-        .map(|local_cluster| {
-            local_cluster
-                .into_iter()
-                .map(|li| indices[li as usize] as u32)
-                .collect()
-        })
-        .collect();
-    let map_time = t1.elapsed();
-
-    tracing::debug!(
-        assign_secs = assign_time.as_secs_f64(),
-        map_secs = map_time.as_secs_f64(),
-        num_leaders = num_leaders,
-        fanout = fanout,
-        "top-level partition assign (quantized)"
-    );
-
-    // Merge undersized clusters by combining them until they reach c_max.
-    let merged_clusters = merge_small(clusters, config.c_min, config.c_max);
-
-    let need_recurse = merged_clusters
-        .iter()
-        .filter(|c| c.len() > config.c_max)
-        .count();
-    tracing::debug!(
-        num_clusters = merged_clusters.len(),
-        need_recurse = need_recurse,
-        "partition merge (quantized)"
-    );
-
-    let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
-
-    // Lint: Using `ParallelIterator::collect`. The caller (`build_internal_sq_impl`)
-    // invokes this inside a `rayon::ThreadPool::install` scope, so work runs in the correct pool.
-    let t2 = std::time::Instant::now();
-    #[allow(clippy::disallowed_methods)]
-    let results: Vec<Vec<Leaf>> = merged_clusters
-        .par_iter()
-        .zip(sub_seeds.par_iter())
-        .map(|(cluster, sub_seed)| {
-            if cluster.len() <= config.c_max {
-                vec![Leaf {
-                    indices: cluster.clone(),
-                }]
-            } else {
-                // Convert u32 back to usize for the recursive call.
-                let cluster_usize: Vec<usize> =
-                    cluster.iter().map(|&i| i as usize).collect();
-                let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
-                partition_quantized_recursive(qdata, &cluster_usize, config, 1, &mut sub_rng)
-            }
-        })
-        .collect();
-
-    tracing::debug!(
-        recursion_secs = t2.elapsed().as_secs_f64(),
-        "partition recursion complete (quantized)"
-    );
-    results.into_iter().flatten().collect()
-}
-
-fn partition_quantized_recursive(
-    qdata: &crate::quantize::QuantizedData,
-    indices: &[usize],
-    config: &PartitionConfig,
-    level: usize,
-    rng: &mut impl Rng,
-) -> Vec<Leaf> {
-    let n = indices.len();
-    if n <= config.c_max {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-    if level >= MAX_DEPTH {
-        return vec![Leaf {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-        }];
-    }
-
-    let fanout = config
-        .fanout
-        .get(level)
-        .copied()
-        .unwrap_or(1)
-        .min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
-
-    let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
-
-    let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
-    let clusters: Vec<Vec<u32>> = clusters_local
-        .into_iter()
-        .map(|lc| lc.into_iter().map(|li| indices[li as usize] as u32).collect())
-        .collect();
-
-    // Merge undersized clusters by combining them until they reach c_max.
-    let merged = merge_small(clusters, config.c_min, config.c_max);
-
-    let sub_seeds: Vec<u64> = merged.iter().map(|_| rng.random()).collect();
-
-    let results: Vec<Vec<Leaf>> = merged
-        .into_par_iter()
-        .zip(sub_seeds.into_par_iter())
-        .map(|(cluster, sub_seed)| {
-            if cluster.len() <= config.c_max {
-                vec![Leaf { indices: cluster }]
-            } else {
-                let cluster_usize: Vec<usize> = cluster.iter().map(|&i| i as usize).collect();
-                let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
-                partition_quantized_recursive(qdata, &cluster_usize, config, level + 1, &mut sub_rng)
-            }
-        })
-        .collect();
-
-    results.into_iter().flatten().collect()
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diskann_vector::distance::Metric;
-    use rand::{Rng, SeedableRng};
-
-    fn gen_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        (0..npoints * ndims)
-            .map(|_| rng.random_range(-1.0f32..1.0f32))
-            .collect()
-    }
 
     #[test]
-    fn test_partition_small_dataset() {
-        let data: Vec<f32> = (0..20).map(|i| i as f32).collect();
-        let indices: Vec<usize> = (0..10).collect();
-        let config = PartitionConfig {
-            c_max: 10,
-            c_min: 3,
-            p_samp: 0.5,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
+    fn test_partition_basic() {
+        let npoints = 1000;
+        let ndims = 8;
+        let data: Vec<f32> = {
+            use rand::{Rng, SeedableRng};
+            let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+            (0..npoints * ndims).map(|_| rng.random::<f32>()).collect()
         };
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
-
-        assert_eq!(leaves.len(), 1);
-        assert_eq!(leaves[0].indices.len(), 10);
-    }
-
-    #[test]
-    fn test_partition_needs_splitting() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..200)
-            .map(|_| rand::Rng::random_range(&mut rng, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..100).collect();
         let config = PartitionConfig {
-            c_max: 20,
-            c_min: 5,
-            p_samp: 0.1,
-            fanout: vec![3, 2],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-
-        let mut rng2 = rand::rngs::StdRng::seed_from_u64(123);
-        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng2);
-
-        assert!(
-            leaves.len() > 1,
-            "expected multiple leaves, got {}",
-            leaves.len()
-        );
-
-        for leaf in &leaves {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf too large: {}",
-                leaf.indices.len()
-            );
-        }
-
-        let total: usize = leaves.iter().map(|l| l.indices.len()).sum();
-        assert!(
-            total >= indices.len(),
-            "total assignments {} < original count {}",
-            total,
-            indices.len()
-        );
-    }
-
-    #[test]
-    fn test_parallel_partition() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..2000)
-            .map(|_| rand::Rng::random_range(&mut rng, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..1000).collect();
-        let config = PartitionConfig {
-            c_max: 50,
-            c_min: 10,
-            p_samp: 0.05,
-            fanout: vec![5, 3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-
-        let leaves = parallel_partition(&data, 2, &indices, &config, 42);
-
-        assert!(leaves.len() > 1);
-        for leaf in &leaves {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf too large: {}",
-                leaf.indices.len()
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_overlap() {
-        // With fanout > 1, each point is assigned to multiple leaders,
-        // so the total assignments across all leaves should exceed the
-        // original point count (overlap).
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let npoints = 500;
-        let ndims = 4;
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 100,
-            c_min: 20,
-            p_samp: 0.05,
-            fanout: vec![3, 2], // fanout > 1 creates overlap
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-
-        let total_in_leaves: usize = leaves.iter().map(|l| l.indices.len()).sum();
-        assert!(
-            total_in_leaves >= npoints,
-            "total in leaves ({}) should be >= npoints ({})",
-            total_in_leaves,
-            npoints
-        );
-    }
-
-    #[test]
-    fn test_partition_respects_c_max() {
-        // All leaves must have at most c_max elements.
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let npoints = 300;
-        let ndims = 4;
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 40,
-            c_min: 10,
-            p_samp: 0.1,
-            fanout: vec![5, 2],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 99);
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has size {} > c_max {}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_single_point() {
-        let data = vec![1.0f32, 2.0];
-        let indices = vec![0usize];
-        let config = PartitionConfig {
-            c_max: 10,
-            c_min: 1,
-            p_samp: 0.5,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
-        assert_eq!(leaves.len(), 1, "single point should produce 1 leaf");
-        assert_eq!(
-            leaves[0].indices.len(),
-            1,
-            "leaf should contain exactly 1 point"
-        );
-        assert_eq!(leaves[0].indices[0], 0, "leaf should contain index 0");
-    }
-
-    #[test]
-    fn test_partition_two_points() {
-        let data = vec![0.0f32, 0.0, 10.0, 10.0];
-        let indices = vec![0, 1];
-        let config = PartitionConfig {
-            c_max: 5,
-            c_min: 1,
-            p_samp: 0.5,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
-        assert_eq!(
-            leaves.len(),
-            1,
-            "two points with c_max=5 should produce 1 leaf"
-        );
-        assert_eq!(
-            leaves[0].indices.len(),
-            2,
-            "leaf should contain both points"
-        );
-    }
-
-    #[test]
-    fn test_partition_all_identical() {
-        // All identical vectors should still partition without crashing.
-        let npoints = 100;
-        let ndims = 4;
-        let data = vec![42.0f32; npoints * ndims];
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 20,
-            c_min: 5,
-            p_samp: 0.1,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty(), "should produce at least one leaf");
-        let total: usize = leaves.iter().map(|l| l.indices.len()).sum();
-        assert!(
-            total >= npoints,
-            "total in leaves ({}) should be >= npoints ({})",
-            total,
-            npoints
-        );
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has {} elements > c_max={}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_high_fanout() {
-        // fanout > npoints should still work (clamped to num_leaders).
-        let npoints = 20;
-        let ndims = 4;
-        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 5,
-            c_min: 2,
-            p_samp: 0.5,
-            fanout: vec![100], // much larger than npoints
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(
-            !leaves.is_empty(),
-            "high fanout should still produce leaves"
-        );
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has {} elements > c_max={}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_multi_level_fanout() {
-        // Multi-level fanout vec![4,2] should work and produce valid leaves.
-        let npoints = 200;
-        let ndims = 4;
-        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 30,
-            c_min: 8,
+            c_max: 64,
+            c_min: 16,
             p_samp: 0.1,
             fanout: vec![4, 2],
             metric: diskann_vector::distance::Metric::L2,
             leader_cap: 1000,
         };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(
-            leaves.len() > 1,
-            "multi-level fanout should produce multiple leaves"
-        );
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has {} elements > c_max={}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
+        let leaves = partition(&data, ndims, npoints, &config, 123);
+
+        // All points should appear at least once (overlapping partitions).
+        let mut seen = vec![false; npoints];
+        for leaf in &leaves {
+            assert!(leaf.indices.len() <= config.c_max, "leaf too large");
+            for &idx in &leaf.indices {
+                seen[idx as usize] = true;
+            }
         }
+        assert!(seen.iter().all(|&s| s), "some points missing");
     }
 
     #[test]
-    fn test_partition_c_min_equals_c_max() {
-        // c_min == c_max is a valid (if unusual) configuration.
-        let npoints = 100;
-        let ndims = 4;
-        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 30,
-            c_min: 30,
-            p_samp: 0.1,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty(), "c_min == c_max should produce leaves");
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has {} elements > c_max={}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_large_p_samp() {
-        // p_samp=1.0 means sample all points as leaders.
+    fn test_partition_small_dataset() {
         let npoints = 50;
         let ndims = 4;
-        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 10,
-            c_min: 3,
-            p_samp: 1.0,
-            fanout: vec![3],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty(), "p_samp=1.0 should produce leaves");
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "leaf {} has {} elements > c_max={}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-        }
-    }
-
-    #[test]
-    fn test_partition_quantized() {
-        // Quantized partition should produce valid leaves with same constraints.
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let npoints = 300;
-        let ndims = 64; // must be multiple of 64 for u64 alignment
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
-            .collect();
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 80,
-            c_min: 20,
-            p_samp: 0.05,
-            fanout: vec![3, 2],
-            metric: diskann_vector::distance::Metric::L2,
-            leader_cap: 1000,
-        };
-
-        let (shift, inverse_scale) = {
-            use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-            use diskann_utils::views::MatrixView;
-            let dm = MatrixView::try_from(data.as_slice(), npoints, ndims).unwrap();
-            let q = ScalarQuantizationParameters::default().train(dm);
-            let s = q.scale();
-            (q.shift().to_vec(), if s == 0.0 { 1.0 } else { 1.0 / s })
-        };
-        let qdata = crate::quantize::quantize_1bit(&data, npoints, ndims, &shift, inverse_scale);
-        let leaves = parallel_partition_quantized(&qdata, &indices, &config, 42);
-
-        assert!(!leaves.is_empty(), "no leaves produced");
-        for (i, leaf) in leaves.iter().enumerate() {
-            assert!(
-                leaf.indices.len() <= config.c_max,
-                "quantized leaf {} has size {} > c_max {}",
-                i,
-                leaf.indices.len(),
-                config.c_max
-            );
-            // All indices should be valid.
-            for &idx in &leaf.indices {
-                assert!((idx as usize) < npoints, "index {} out of range", idx);
-            }
-        }
-    }
-
-    #[test]
-    fn test_partition_cosine_normalized() {
-        // Pre-normalized vectors on the unit circle.
-        let npoints = 200;
-        let ndims = 8;
-        let mut data = gen_data(npoints, ndims, 42);
-        for i in 0..npoints {
-            let row = &mut data[i * ndims..(i + 1) * ndims];
-            let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for v in row.iter_mut() {
-                    *v /= norm;
-                }
-            }
-        }
-        let indices: Vec<usize> = (0..npoints).collect();
+        let data: Vec<f32> = vec![1.0; npoints * ndims];
         let config = PartitionConfig {
             c_max: 64,
-            c_min: 16,
-            p_samp: 0.1,
-            fanout: vec![4],
-            metric: Metric::CosineNormalized,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty());
-        let total: usize = leaves.iter().map(|l| l.indices.len()).sum();
-        // With fanout=4, total assignments > npoints due to overlap.
-        assert!(total >= npoints);
-        for leaf in &leaves {
-            assert!(leaf.indices.len() <= config.c_max);
-        }
-    }
-
-    #[test]
-    fn test_partition_cosine_unnormalized() {
-        // Vectors with varying norms — cosine should normalize internally.
-        let npoints = 100;
-        let ndims = 4;
-        let data = gen_data(npoints, ndims, 99);
-        let indices: Vec<usize> = (0..npoints).collect();
-        let config = PartitionConfig {
-            c_max: 32,
             c_min: 8,
             p_samp: 0.1,
             fanout: vec![3],
-            metric: Metric::Cosine,
+            metric: diskann_vector::distance::Metric::L2,
             leader_cap: 1000,
         };
-        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
-        assert!(!leaves.is_empty());
-        for leaf in &leaves {
-            assert!(leaf.indices.len() <= config.c_max);
-        }
-    }
-
-    #[test]
-    fn test_partition_zero_norm_vectors() {
-        // Mix of zero-norm and normal vectors — should not panic.
-        let mut data = gen_data(50, 4, 42);
-        // Set first 5 vectors to all zeros.
-        for v in data[..20].iter_mut() {
-            *v = 0.0;
-        }
-        let indices: Vec<usize> = (0..50).collect();
-        let config = PartitionConfig {
-            c_max: 16,
-            c_min: 4,
-            p_samp: 0.2,
-            fanout: vec![2],
-            metric: Metric::Cosine,
-            leader_cap: 1000,
-        };
-        let leaves = parallel_partition(&data, 4, &indices, &config, 42);
-        assert!(!leaves.is_empty());
-        // Zero-norm vectors should appear in at least one leaf.
-        let all_indices: std::collections::HashSet<u32> = leaves
-            .iter()
-            .flat_map(|l| l.indices.iter().copied())
-            .collect();
-        for i in 0u32..5 {
-            assert!(
-                all_indices.contains(&i),
-                "zero-norm point {} missing from all leaves",
-                i
-            );
-        }
+        let leaves = partition(&data, ndims, npoints, &config, 0);
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].indices.len(), npoints);
     }
 }

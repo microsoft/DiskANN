@@ -548,6 +548,8 @@ impl PiPNNInmemConfig {
             final_prune: self.final_prune,
             alpha: parent.alpha,
             num_threads: parent.num_threads,
+            leader_cap: 1000,
+            saturate_after_prune: true,
         }
     }
 }

@@ -16,7 +16,6 @@ pub mod gemm;
 pub mod hash_prune;
 pub mod leaf_build;
 pub mod partition;
-pub mod partition_v2;
 pub mod profile;
 pub mod quantize;
 

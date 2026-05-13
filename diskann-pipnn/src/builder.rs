@@ -570,7 +570,7 @@ fn build_internal_sq_impl(
             metric: config.metric,
             leader_cap: config.leader_cap,
         };
-        let leaves = crate::partition_v2::partition_quantized(
+        let leaves = crate::partition::partition_quantized(
             &qdata,
             npoints,
             &partition_config,
@@ -660,6 +660,19 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 ) -> PiPNNResult<PiPNNGraph> {
     let t_total = Instant::now();
 
+    // Report which SIMD tier the hand-written kernels in partition/leaf_build/
+    // hash_prune were compiled with. AVX-512 needs `target-cpu=cascadelake`
+    // (or +avx512f), AVX2 is enabled by `target-cpu=x86-64-v3` (set in
+    // `.cargo/config.toml` by default). Anything below AVX2 falls back to scalar.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    eprintln!("SIMD: AVX-512 (compile-time)");
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f"), target_feature = "avx2"))]
+    eprintln!("SIMD: AVX2 (compile-time)");
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f"), not(target_feature = "avx2")))]
+    eprintln!("SIMD: scalar (compile-time)");
+    #[cfg(not(target_arch = "x86_64"))]
+    eprintln!("SIMD: scalar (non-x86)");
+
     // Compute medoid once upfront.
     let medoid = find_medoid(data, npoints, ndims);
 
@@ -697,9 +710,9 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         };
 
         let leaves = if let Some(ref q) = qdata {
-            crate::partition_v2::partition_quantized(q, npoints, &partition_config, seed)
+            crate::partition::partition_quantized(q, npoints, &partition_config, seed)
         } else {
-            crate::partition_v2::partition(data, ndims, npoints, &partition_config, seed)
+            crate::partition::partition(data, ndims, npoints, &partition_config, seed)
         };
         partition_secs += t1.elapsed().as_secs_f64();
 

@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 
 use diskann::utils::VectorRepr;
-use diskann_vector::distance::{DistanceProvider, Metric, SquaredL2};
+use diskann_vector::distance::SquaredL2;
 use diskann_vector::PureDistanceFunction;
 
 /// Thread-local reusable buffers for leaf building.
@@ -349,15 +349,24 @@ pub fn build_leaf_with_buffers<T: VectorRepr>(
         T::as_f32_into(src, dst).expect("f32 conversion");
     }
 
-    // Compute norms into reused buffer.
-    let norms_sq = &mut bufs.norms_sq[..n];
-    for i in 0..n {
-        let row = &local_data[i * ndims..(i + 1) * ndims];
-        let mut norm = 0.0f32;
-        for &v in row.iter() {
-            norm += v * v;
+    // Compute norms only for metrics that use them: L2 needs squared norms,
+    // Cosine needs sqrt norms. CosineNormalized (pre-normalized data) and
+    // InnerProduct skip this entirely — saves an extra pass over `local_data`
+    // (~384 KB per leaf at d=384) which would otherwise contend for L2/L3.
+    let needs_norms = matches!(
+        metric,
+        diskann_vector::distance::Metric::L2 | diskann_vector::distance::Metric::Cosine
+    );
+    if needs_norms {
+        let norms_sq = &mut bufs.norms_sq[..n];
+        for i in 0..n {
+            let row = &local_data[i * ndims..(i + 1) * ndims];
+            let mut norm = 0.0f32;
+            for &v in row.iter() {
+                norm += v * v;
+            }
+            norms_sq[i] = norm;
         }
-        norms_sq[i] = norm;
     }
 
     // GEMM: dots = local_data * local_data^T
@@ -425,104 +434,6 @@ pub fn build_leaf_with_buffers<T: VectorRepr>(
     let seen = &mut bufs.seen[..n * n];
     seen.fill(false);
     make_bidirected_edges(&local_edges, dist_matrix, n, indices, seen)
-}
-
-/// Build a leaf using direct pairwise SIMD distance — no GEMM, no f32 conversion.
-///
-/// Computes distances directly on native T (f16) data using DiskANN's SIMD distance
-/// functions. Eliminates: f16→f32 gather, norm computation, n×n GEMM, distance matrix
-/// conversion, and separate extract_knn pass. Fuses distance computation with top-k
-/// tracking for each point.
-///
-/// This approach is faster than GEMM for low-dimensional data (d≤128) because:
-/// - No f16→f32 conversion (6.8% of build)
-/// - No n×n matrix allocation (64KB per 128-point leaf)
-/// - Distance + top-k fused in one pass per row
-/// - SIMD distance on f16 uses F16C internally (same throughput as f32 GEMM)
-pub fn build_leaf_direct<T: VectorRepr + diskann_vector::distance::DistanceProvider<T>>(
-    data: &[T],
-    ndims: usize,
-    indices: &[usize],
-    k: usize,
-    metric: Metric,
-    dist_fn: &diskann_vector::distance::Distance<T, T>,
-) -> Vec<Edge> {
-    let n = indices.len();
-    if n <= 1 {
-        return Vec::new();
-    }
-    let actual_k = k.min(n - 1);
-
-    // Compute top-k nearest for each point using direct distance.
-    let mut local_edges: Vec<(usize, usize, f32)> = Vec::with_capacity(n * actual_k);
-    let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
-
-    for i in 0..n {
-        let a = &data[indices[i] * ndims..(indices[i] + 1) * ndims];
-
-        // Reset top-k.
-        for t in top[..actual_k].iter_mut() {
-            *t = (u32::MAX, f32::MAX);
-        }
-        let threshold_idx = actual_k - 1;
-
-        for j in 0..n {
-            if j == i {
-                continue;
-            }
-            let b = &data[indices[j] * ndims..(indices[j] + 1) * ndims];
-            let d = dist_fn.call(a, b);
-            if d < top[threshold_idx].1 {
-                top[threshold_idx] = (j as u32, d);
-                for t in (1..actual_k).rev() {
-                    if top[t].1 < top[t - 1].1 {
-                        top.swap(t, t - 1);
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        for t in 0..actual_k {
-            local_edges.push((i, top[t].0 as usize, top[t].1));
-        }
-    }
-
-    // Create bidirected edges. For symmetric metrics, we need the reverse distance.
-    // Recompute for the reverse edge (cheaper than storing n×n matrix).
-    let mut edges = Vec::with_capacity(local_edges.len() * 2);
-    // Use a simple HashSet-like dedup via sorted insert to a small buffer.
-    // For n≤256 and k≤3, the edge count is small enough for a flat scan.
-    let mut seen_set: Vec<(usize, usize)> = Vec::with_capacity(local_edges.len() * 2);
-
-    for &(src_local, dst_local, dist) in &local_edges {
-        let src_global = indices[src_local];
-        let dst_global = indices[dst_local];
-
-        if !seen_set.contains(&(src_local, dst_local)) {
-            seen_set.push((src_local, dst_local));
-            edges.push(Edge {
-                src: src_global,
-                dst: dst_global,
-                distance: dist,
-            });
-        }
-        if !seen_set.contains(&(dst_local, src_local)) {
-            seen_set.push((dst_local, src_local));
-            // Compute reverse distance.
-            let b = &data[dst_global * ndims..(dst_global + 1) * ndims];
-            let a = &data[src_global * ndims..(src_global + 1) * ndims];
-            let rev_dist = dist_fn.call(b, a);
-            edges.push(Edge {
-                src: dst_global,
-                dst: src_global,
-                distance: rev_dist,
-            });
-        }
-    }
-
-    edges
 }
 
 /// Build a leaf using 1-bit quantized vectors with Hamming distance.

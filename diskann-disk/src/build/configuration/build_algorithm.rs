@@ -109,6 +109,8 @@ impl BuildAlgorithm {
                 final_prune: *final_prune,
                 alpha,
                 num_threads,
+                leader_cap: 1000,
+                saturate_after_prune: true,
             }),
             _ => None,
         }
