@@ -16,6 +16,7 @@ The library supports the following algorithmic features
 - Real-time updates (using [IP-DiskANN](https://arxiv.org/abs/2502.13826)) that support stable recall under long update streams -- no merges, rebuilds, patches needed.
 - A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
 - Choice of memory tiers to allow operation at different price-performance points. 
+- Vector search interfaces that allow pagination, range filters (e.g., dist<0.5), [diversity aware](https://arxiv.org/abs/2602.08742) top-k search.
 - Hooks to allow attribute filters (predicate) processsing along with vector search.
 
 ## Getting Started
@@ -36,6 +37,7 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 
 
 Older C++ code is retained on the `cpp_main` branch, and implements the following papers, but is not actively developed or maintained.
+This was the second rewrite of DiskANN algorithms.
 
 [![DiskANN Paper](https://img.shields.io/badge/Paper-NeurIPS%3A_DiskANN-blue)](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf)
 [![DiskANN Paper](https://img.shields.io/badge/Paper-Arxiv%3A_Fresh--DiskANN-blue)](https://arxiv.org/abs/2105.09613)
