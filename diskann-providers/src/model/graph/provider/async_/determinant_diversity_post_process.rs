@@ -46,6 +46,7 @@
 //! The algorithm is based on diversity-promoting ranking methods for nearest neighbor search,
 //! as used in approximate nearest neighbor indices like DiskANN.
 
+use diskann_utils::views::Matrix;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
 pub fn determinant_diversity_post_process<Id: Copy>(
@@ -130,15 +131,22 @@ fn greedy_orthogonal_select<Id: Copy>(
         return Vec::new();
     }
 
-    let mut residuals = Vec::with_capacity(n);
+    let dim = candidates[0].2.len();
+
+    // Use a contiguous Matrix allocation for residuals instead of Vec<Vec<f32>>.
+    // This reduces the number of heap allocations from O(n) to O(1) and improves
+    // cache locality when accessing residuals sequentially during orthogonalization.
+    let mut residuals = Matrix::new(0.0f32, n, dim);
     let mut norms_sq = Vec::with_capacity(n);
 
-    for (_, distance_to_query, v) in &candidates {
+    for (i, (_, distance_to_query, v)) in candidates.iter().enumerate() {
         let scale =
             distance_to_similarity(*distance_to_query, distance_range).powf(power) * inv_sqrt_eta;
-        let residual: Vec<f32> = v.iter().map(|&x| x * scale).collect();
-        let norm_sq = dot_product(&residual, &residual);
-        residuals.push(residual);
+        let row = residuals.row_mut(i);
+        for (r, &x) in row.iter_mut().zip(v.iter()) {
+            *r = x * scale;
+        }
+        let norm_sq = dot_product(residuals.row(i), residuals.row(i));
         norms_sq.push(norm_sq);
     }
 
@@ -175,13 +183,14 @@ fn greedy_orthogonal_select<Id: Copy>(
         }
 
         let inv_norm_sq = 1.0 / best_norm_sq;
-        let r_star_copy = residuals[selected_index].clone();
+        // Clone selected row before mutable iteration over remaining rows.
+        let r_star_copy: Vec<f32> = residuals.row(selected_index).to_vec();
 
         for i in 0..n {
             if !available[i] {
                 projections[i] = 0.0;
             } else {
-                projections[i] = dot_product(&residuals[i], &r_star_copy) * inv_norm_sq;
+                projections[i] = dot_product(residuals.row(i), &r_star_copy) * inv_norm_sq;
             }
         }
 
@@ -191,7 +200,7 @@ fn greedy_orthogonal_select<Id: Copy>(
             }
 
             let projection = projections[i];
-            for (residual, &star) in residuals[i].iter_mut().zip(r_star_copy.iter()) {
+            for (residual, &star) in residuals.row_mut(i).iter_mut().zip(r_star_copy.iter()) {
                 *residual -= projection * star;
             }
 
