@@ -89,29 +89,39 @@ pub fn determinant_diversity_post_process<Id: Copy>(
         (min_distance, max_distance)
     };
 
-    if determinant_diversity_eta > 0.0 {
-        post_process_with_eta_f32(
-            candidates,
-            k,
-            determinant_diversity_eta,
-            determinant_diversity_power,
-            distance_range,
-        )
+    // For eta=0, the inv_sqrt_eta factor is 1.0 (greedy orthogonalization without regularization).
+    // For eta>0, the factor scales residuals for ridge-regularized determinant computation.
+    let inv_sqrt_eta = if determinant_diversity_eta > 0.0 {
+        1.0 / determinant_diversity_eta.sqrt()
     } else {
-        post_process_greedy_orthogonalization_f32(
-            candidates,
-            k,
-            determinant_diversity_power,
-            distance_range,
-        )
-    }
+        1.0
+    };
+
+    greedy_orthogonal_select(
+        candidates,
+        k,
+        determinant_diversity_power,
+        inv_sqrt_eta,
+        distance_range,
+    )
 }
 
-fn post_process_with_eta_f32<Id: Copy>(
+/// Core greedy selection algorithm for Determinant-Diversity.
+///
+/// Iteratively selects the candidate with the largest residual norm after projecting
+/// out previously selected candidates. The `inv_sqrt_eta` parameter controls the
+/// ridge-regularization scaling:
+///
+/// - `inv_sqrt_eta = 1.0`: exact greedy orthogonalization (eta=0 case)
+/// - `inv_sqrt_eta = 1/sqrt(eta)`: ridge-regularized variant for numerical stability
+///
+/// This unified implementation replaces two nearly-identical functions that only
+/// differed in whether the scale factor included the eta term.
+fn greedy_orthogonal_select<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
     k: usize,
-    eta: f32,
     power: f32,
+    inv_sqrt_eta: f32,
     distance_range: (f32, f32),
 ) -> Vec<(Id, f32)> {
     let n = candidates.len();
@@ -120,7 +130,6 @@ fn post_process_with_eta_f32<Id: Copy>(
         return Vec::new();
     }
 
-    let inv_sqrt_eta = 1.0 / eta.sqrt();
     let mut residuals = Vec::with_capacity(n);
     let mut norms_sq = Vec::with_capacity(n);
 
@@ -187,94 +196,6 @@ fn post_process_with_eta_f32<Id: Copy>(
             }
 
             norms_sq[i] = (norms_sq[i] - projection * projection * best_norm_sq).max(0.0);
-        }
-    }
-
-    selected
-        .iter()
-        .map(|&idx| {
-            let (id, dist, _) = &candidates[idx];
-            (*id, *dist)
-        })
-        .collect()
-}
-
-fn post_process_greedy_orthogonalization_f32<Id: Copy>(
-    candidates: Vec<(Id, f32, Vec<f32>)>,
-    k: usize,
-    power: f32,
-    distance_range: (f32, f32),
-) -> Vec<(Id, f32)> {
-    let n = candidates.len();
-    let k = k.min(n);
-    if k == 0 {
-        return Vec::new();
-    }
-
-    let mut residuals = Vec::with_capacity(n);
-    let mut norms_sq = Vec::with_capacity(n);
-
-    for (_, distance_to_query, v) in &candidates {
-        let scale = distance_to_similarity(*distance_to_query, distance_range).powf(power);
-        let residual: Vec<f32> = v.iter().map(|&x| x * scale).collect();
-        let norm_sq = dot_product(&residual, &residual);
-        residuals.push(residual);
-        norms_sq.push(norm_sq);
-    }
-
-    let mut available = vec![true; n];
-    let mut selected = Vec::with_capacity(k);
-    let mut projections = vec![0.0f32; n];
-
-    for _ in 0..k {
-        let best = available
-            .iter()
-            .enumerate()
-            .filter(|&(_, &avail)| avail)
-            .max_by(|(i, _), (j, _)| {
-                norms_sq[*i]
-                    .partial_cmp(&norms_sq[*j])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-        let Some((best_index, _)) = best else {
-            break;
-        };
-
-        let best_norm_sq = norms_sq[best_index];
-        selected.push(best_index);
-        available[best_index] = false;
-
-        if selected.len() == k {
-            break;
-        }
-
-        if best_norm_sq <= 0.0 {
-            continue;
-        }
-
-        let inv_norm_sq_star = 1.0 / best_norm_sq;
-        let r_star_copy = residuals[best_index].clone();
-
-        for j in 0..n {
-            if !available[j] {
-                projections[j] = 0.0;
-            } else {
-                projections[j] = dot_product(&residuals[j], &r_star_copy) * inv_norm_sq_star;
-            }
-        }
-
-        for j in 0..n {
-            if !available[j] {
-                continue;
-            }
-
-            let projection = projections[j];
-            for (residual, &star) in residuals[j].iter_mut().zip(r_star_copy.iter()) {
-                *residual -= projection * star;
-            }
-
-            norms_sq[j] = (norms_sq[j] - projection * projection * best_norm_sq).max(0.0);
         }
     }
 
