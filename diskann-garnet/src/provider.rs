@@ -790,12 +790,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
             Err(e) => return future::ready(Err(e)),
         };
 
-        // Mark the ID free in the FSM.
-        if let Err(e) = self.fsm.mark_free(context, id) {
-            return future::ready(Err(e.into()));
-        };
-
-        // Delete all the data associated with the vector.
+        // Delete mappings, so vector will no longer be returned.
         let mut ok = true;
         ok &= self.callbacks.delete_iid(&context.term(Term::ExtMap), id);
         ok &= self.callbacks.delete_eid(&context.term(Term::IntMap), gid);
@@ -805,14 +800,23 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
             .callbacks
             .delete_eid(&context.term(Term::Attributes), gid);
 
-        // NOTE: Commented out until DiskANN fixes accessing neighbor data post-delete.
-        //ok &= self.callbacks.delete_iid(context.term(Term::Neighbors), id);
+        // TODO: inplace_delete needs access to neighbors. Delete these once that bug is fixed.
+        // See https://github.com/microsoft/DiskANN/issues/1153.
+        // ok &= self
+        //     .callbacks
+        //     .delete_iid(&context.term(Term::Neighbors), id);
+
         ok &= self.callbacks.delete_iid(&context.term(Term::Vector), id);
 
         // It is not an error to fail deleting quantized terms; they may not exist yet.
         let _: bool = self
             .callbacks
             .delete_iid(&context.term(Term::Quantized), id);
+
+        // Mark the ID free in the FSM.
+        if let Err(e) = self.fsm.mark_free(context, id) {
+            return future::ready(Err(e.into()));
+        };
 
         if !ok {
             return future::ready(Err(GarnetError::Delete.into()));
@@ -826,7 +830,7 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         _context: &Self::Context,
         _id: Self::InternalId,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        // This is a no-op since we just do hard deletes.
+        // This is a no-op since DiskANN never calls this anyway.
         future::ready(Ok(()))
     }
 
@@ -1101,7 +1105,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<DynamicAccessor<'a, T>, &[T], GarnetId
         for n in candidates {
             let id = match accessor.provider.to_external_id(accessor.context, n.id) {
                 Ok(id) => id,
-                Err(e) => return future::ready(Err(e)),
+                Err(_) => continue, // Can't read the mapping; skip.
             };
 
             if output.push(id, n.distance).is_full() {
