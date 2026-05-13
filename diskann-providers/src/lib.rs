@@ -14,6 +14,8 @@ pub mod model;
 
 pub mod common;
 
+pub mod post_processor;
+
 pub mod index;
 
 pub mod storage;
