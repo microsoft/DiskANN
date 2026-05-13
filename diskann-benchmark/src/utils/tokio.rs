@@ -12,9 +12,3 @@ pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-/// Create a multi-threaded runtime with the specified number of threads.
-pub(crate) fn runtime(num_threads: usize) -> anyhow::Result<tokio::runtime::Runtime> {
-    Ok(tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_threads)
-        .build()?)
-}

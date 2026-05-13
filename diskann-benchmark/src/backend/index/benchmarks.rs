@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{io::Write, num::NonZeroUsize, sync::Arc, time::Instant};
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
     graph::SampleableForStart,
@@ -18,7 +18,7 @@ use diskann_benchmark_core::{
 use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
-    utils::{datatype, MicroSeconds},
+    utils::datatype,
     Benchmark, Checkpoint,
 };
 use diskann_providers::{
@@ -42,7 +42,7 @@ use super::{
 use crate::{
     backend::index::{
         post_processor,
-        result::{AggregatedSearchResults, BuildResult, SearchResults},
+        result::{AggregatedSearchResults, BuildResult},
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
@@ -451,133 +451,77 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
-/// Execute a topk search with a custom per-query search function, collecting timing and recall.
-///
-/// This function properly creates tokio runtimes with the specified thread counts to accurately
-/// measure performance under different concurrency levels. Each thread count is benchmarked
-/// independently with its own runtime to avoid misleading single-threaded measurements.
-///
-/// Encapsulates the thread/run/L loops, the per-rep timing harness, per-query latency
-/// collection, and [`SearchResults`] construction. The caller supplies only the actual
-/// per-query search as a closure `search_fn(knn_params, query, output) -> Result<()>`.
-fn run_topk_timed(
-    topk: &crate::inputs::graph_index::TopkSearchPhase,
-    queries: &Matrix<f32>,
-    groundtruth: &Matrix<u32>,
-    search_fn: impl Fn(
-        diskann::graph::search::Knn,
-        &[f32],
-        &mut Vec<diskann::neighbor::Neighbor<u32>>,
-    ) -> anyhow::Result<()>,
-) -> anyhow::Result<Vec<SearchResults>> {
-    let mut all_results = Vec::new();
+struct DeterminantDiversityKnn {
+    index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
+    queries: Arc<Matrix<f32>>,
+    strategy: benchmark_core::search::graph::Strategy<common::FullPrecision>,
+    post_processor: post_processor::DeterminantDiversity,
+}
 
-    for threads in &topk.num_threads {
-        // Create a tokio runtime with the specified number of threads.
-        // This ensures that searches are actually executed with the desired concurrency level,
-        // not just recorded with that thread count while running serially.
-        let rt = utils::tokio::runtime(threads.get())?;
+impl DeterminantDiversityKnn {
+    fn new(
+        index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
+        queries: Arc<Matrix<f32>>,
+        strategy: benchmark_core::search::graph::Strategy<common::FullPrecision>,
+        post_processor: post_processor::DeterminantDiversity,
+    ) -> anyhow::Result<Arc<Self>> {
+        strategy.length_compatible(queries.nrows())?;
+        Ok(Arc::new(Self {
+            index,
+            queries,
+            strategy,
+            post_processor,
+        }))
+    }
+}
 
-        for run in &topk.runs {
-            for search_l in &run.search_l {
-                let knn_params =
-                    diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+impl benchmark_core::search::Search for DeterminantDiversityKnn
+where
+    common::FullPrecision: for<'a, 'b> glue::SearchStrategy<
+        FullPrecisionProvider<f32>,
+        &'a [f32],
+        SearchAccessor<'b>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
+    >,
+{
+    type Id = u32;
+    type Parameters = diskann::graph::search::Knn;
+    type Output = benchmark_core::search::graph::knn::Metrics;
 
-                let mut all_recalls = Vec::new();
-                let mut qps = Vec::with_capacity(topk.reps.get());
-                let mut search_latencies = Vec::with_capacity(topk.reps.get());
-                let mut mean_latencies = Vec::with_capacity(topk.reps.get());
-                let mut p90_latencies = Vec::with_capacity(topk.reps.get());
-                let mut p99_latencies = Vec::with_capacity(topk.reps.get());
-
-                for _ in 0..topk.reps.get() {
-                    let search_start = Instant::now();
-                    let mut per_query_latencies = Vec::with_capacity(queries.nrows());
-
-                    rt.block_on(async {
-                        for query_idx in 0..queries.nrows() {
-                            let query = queries.row(query_idx);
-                            let mut output: Vec<diskann::neighbor::Neighbor<u32>> = Vec::new();
-
-                            let query_start = Instant::now();
-                            search_fn(knn_params, query, &mut output)?;
-                            per_query_latencies.push(query_start.elapsed().as_micros() as u64);
-
-                            let gt = groundtruth.row(query_idx);
-                            let mut matches = 0;
-                            for (i, neighbor) in output.iter().take(run.recall_k).enumerate() {
-                                if i >= gt.len() {
-                                    break;
-                                }
-                                if gt.contains(&neighbor.id) {
-                                    matches += 1;
-                                }
-                            }
-                            all_recalls.push(matches);
-                        }
-                        Ok::<(), anyhow::Error>(())
-                    })?;
-
-                    let elapsed: MicroSeconds = search_start.elapsed().into();
-                    let elapsed_secs = elapsed.as_seconds();
-                    qps.push(if elapsed_secs > 0.0 {
-                        queries.nrows() as f64 / elapsed_secs
-                    } else {
-                        0.0
-                    });
-
-                    per_query_latencies.sort_unstable();
-                    let len = per_query_latencies.len();
-                    let p90_idx = ((len as f64 * 0.90).ceil() as usize)
-                        .saturating_sub(1)
-                        .min(len.saturating_sub(1));
-                    let p99_idx = ((len as f64 * 0.99).ceil() as usize)
-                        .saturating_sub(1)
-                        .min(len.saturating_sub(1));
-                    let mean = if len > 0 {
-                        per_query_latencies.iter().sum::<u64>() as f64 / len as f64
-                    } else {
-                        0.0
-                    };
-
-                    search_latencies.push(elapsed);
-                    mean_latencies.push(mean);
-                    p90_latencies.push(MicroSeconds::new(
-                        *per_query_latencies.get(p90_idx).unwrap_or(&0),
-                    ));
-                    p99_latencies.push(MicroSeconds::new(
-                        *per_query_latencies.get(p99_idx).unwrap_or(&0),
-                    ));
-                }
-
-                let avg_recall = all_recalls.iter().sum::<usize>() as f32
-                    / (queries.nrows() * run.recall_k * topk.reps.get()) as f32;
-
-                all_results.push(SearchResults {
-                    num_tasks: threads.get(),
-                    search_n: run.search_n,
-                    search_l: *search_l,
-                    qps,
-                    search_latencies,
-                    mean_latencies,
-                    p90_latencies,
-                    p99_latencies,
-                    recall: utils::recall::RecallMetrics {
-                        recall_k: run.recall_k,
-                        recall_n: run.search_n,
-                        num_queries: queries.nrows(),
-                        average: avg_recall as f64,
-                        minimum: *all_recalls.iter().min().unwrap_or(&0),
-                        maximum: *all_recalls.iter().max().unwrap_or(&0),
-                    },
-                    mean_cmps: 0.0,
-                    mean_hops: 0.0,
-                });
-            }
-        }
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
     }
 
-    Ok(all_results)
+    fn id_count(&self, parameters: &Self::Parameters) -> benchmark_core::search::IdCount {
+        benchmark_core::search::IdCount::Fixed(parameters.k_value())
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &Self::Parameters,
+        buffer: &mut O,
+        index: usize,
+    ) -> diskann::ANNResult<Self::Output>
+    where
+        O: diskann::graph::SearchOutputBuffer<Self::Id> + Send,
+    {
+        let context = DefaultContext;
+        let stats = self
+            .index
+            .search_with(
+                *parameters,
+                self.strategy.get(index)?,
+                self.post_processor,
+                &context,
+                self.queries.row(index),
+                buffer,
+            )
+            .await?;
+
+        Ok(benchmark_core::search::graph::knn::Metrics::new(
+            stats.cmps,
+            stats.hops,
+        ))
+    }
 }
 
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
@@ -605,24 +549,20 @@ where
     ) -> anyhow::Result<AggregatedSearchResults> {
         let (topk, params) = plugins::DeterminantDiversity::get(phase)?;
 
-        let strategy = common::FullPrecision;
-        let context = DefaultContext;
-        let det_div = post_processor::DeterminantDiversity::new(params.power, params.eta);
-
         let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
             &topk.queries,
         ))?);
         let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
 
-        let results = run_topk_timed(topk, &queries, &groundtruth, |params, query, output| {
-            utils::tokio::block_on(async {
-                index
-                    .search_with(params, &strategy, det_div, &context, query, output)
-                    .await
-            })
-            .map(|_| ())
-            .map_err(anyhow::Error::from)
-        })?;
+        let knn = DeterminantDiversityKnn::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
+            post_processor::DeterminantDiversity::new(params.power, params.eta),
+        )?;
+
+        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+        let results = search::knn::run(&knn, &groundtruth, steps)?;
 
         Ok(AggregatedSearchResults::Topk(results))
     }
