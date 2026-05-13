@@ -92,8 +92,8 @@ check needed in the macro path.
 - Primitive `bool` support via `Value::Bool`, including nested `Vec<bool>` round-trips
 - Tempfile isolation in tests (`tempfile::tempdir()`) to ensure cleanup of artifacts and manifest
 - Light/heavy error split on load path
-- `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush
-  errors via `save::Result<Handle>`
+- `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush errors via `save::Result<Handle>`
+- Compile-time `const` assertion in `src/lib.rs` that rejects targets where `usize::BITS != 64`.
 
 ## Remaining Work
 
@@ -139,12 +139,6 @@ in the dependencies.
 ### Missing Primitive Impls
 
 - `Option<T>` — no support yet. Needs a convention (omitted field? explicit null variant?)
-
-### Platform-Dependent Types
-
-`usize` and `isize` are platform-dependent (32-bit vs 64-bit). Saving them to a manifest
-that may be loaded on a different platform could silently truncate. Needs a policy — either
-forbid them in manifests or define a canonical wire width.
 
 ### ContextInner Generalization
 

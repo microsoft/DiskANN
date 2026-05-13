@@ -12,6 +12,16 @@ pub use version::Version;
 pub mod load;
 pub mod save;
 
+// Canonical wire width for `usize` and `isize` in manifests is 64 bits. Saving a value
+// on a 64-bit platform and loading it on a 32-bit platform (or vice versa) could silently
+// truncate values that exceed `u32::MAX` / `i32::MAX`. We therefore require a 64-bit
+// platform at compile time. Loaders still range-check at runtime, but this check ensures
+// the saver never emits values that the canonical width cannot represent.
+const _: () = assert!(
+    usize::BITS == 64,
+    "diskann-record requires a 64-bit target: usize/isize MUST be 64 bits wide !!",
+);
+
 /// Return `true` if `s` is a reserved string for purposes of saving and loading.
 #[doc(hidden)]
 pub const fn is_reserved(s: &str) -> bool {
