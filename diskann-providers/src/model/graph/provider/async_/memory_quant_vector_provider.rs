@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::{ArcSwap, Guard};
-#[cfg(test)]
 use diskann::utils::VectorRepr;
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNResult, error::IntoANNResult};
 #[cfg(test)]
 use diskann_quantization::CompressInto;
 use diskann_utils::object_pool::ObjectPool;
@@ -88,12 +87,12 @@ impl MemoryQuantVectorProviderAsync {
     /// Create a query computer for the provided query vector.
     pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer>
     where
-        T: Copy + Into<f32>,
+        T: VectorRepr,
     {
         QueryComputer::new(
             self.pq_chunk_table.clone(),
             self.metric,
-            query,
+            &T::as_f32(query).into_ann_result()?,
             Some(self.vec_pool.clone()),
         )
     }

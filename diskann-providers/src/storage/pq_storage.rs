@@ -17,7 +17,10 @@ use rand::Rng;
 use tracing::info;
 
 use crate::{
-    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, accum_row_inplace, pq::METADATA_SIZE},
+    model::{
+        FixedChunkPQTable, NUM_PQ_CENTROIDS,
+        pq::{METADATA_SIZE, accum_row_inplace},
+    },
     utils::{gen_random_slice, read_bin_from, write_bin_from},
 };
 

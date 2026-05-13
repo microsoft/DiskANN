@@ -48,14 +48,12 @@ impl<T> TableIP<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
 {
-    pub(crate) fn new<U>(
+    /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
+    pub(crate) fn new(
         parent: T,
-        query: &[U],
+        query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
-    ) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    ) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent, pool);
         object.populate(query)?;
         Ok(object)
@@ -73,17 +71,10 @@ where
         }
     }
 
-    fn populate<U: Into<f32> + Copy>(&mut self, query: &[U]) -> ANNResult<()> {
-        // Ensure that the query has the expected length.
-        //
-        // Alignment means that the size of `query` gets increased ...
-        // This makes is VERY hard to do error checking on dimension propagation.
-        assert!(self.parent.get_dim() <= query.len());
-        let local_query: Vec<f32> = query.iter().map(|x| (*x).into()).collect();
-
+    fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
         // Compute the partial distances into the lookup-table.
         self.parent
-            .populate_chunk_inner_products(&local_query, &mut self.lookup_table)
+            .populate_chunk_inner_products(query, &mut self.lookup_table)
     }
 
     /// Compute the distance between a PQ code that the query provided to the most recent
@@ -118,27 +109,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
-    use diskann_vector::Half;
     use rand::SeedableRng;
-    use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_ip<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
-        // RNG
+    #[test]
+    fn test_ip() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x2e767adc3d5d630f);
 
         for dim in [12, 15, 128] {
@@ -164,7 +140,7 @@ mod tests {
 
                     // Basic `TableIP`
                     test_utils::test_ip_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             TableIP::new(table, query, None).unwrap()
                         },
                         &table,

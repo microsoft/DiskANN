@@ -6,6 +6,7 @@
 use std::{
     io::{Seek, SeekFrom, Write},
     mem::size_of,
+    num::NonZeroUsize,
     sync::atomic::AtomicBool,
     vec,
 };
@@ -19,6 +20,7 @@ use diskann::{
 use diskann_quantization::{
     CompressInto,
     product::{BasicTableView, TransposedTable, train::TrainQuantizer},
+    views::{ChunkOffsets, ChunkOffsetsView},
 };
 use diskann_utils::{
     io::Metadata,
@@ -102,12 +104,11 @@ where
         );
     }
 
-    let mut chunk_offsets: Vec<usize> = vec![0; parameters.num_pq_chunks() + 1];
-    calculate_chunk_offsets(
-        parameters.dim(),
-        parameters.num_pq_chunks(),
-        &mut chunk_offsets,
-    );
+    let dim = NonZeroUsize::new(parameters.dim())
+        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+    let num_chunks = NonZeroUsize::new(parameters.num_pq_chunks())
+        .ok_or_else(|| ANNError::log_pq_error("num_pq_chunks must be non-zero"))?;
+    let chunk_offsets = ChunkOffsets::partition(dim, num_chunks).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -119,8 +120,7 @@ where
             .train(
                 MatrixView::try_from(train_data, parameters.num_train(), parameters.dim())
                     .bridge_err()?,
-                diskann_quantization::views::ChunkOffsetsView::new(chunk_offsets.as_slice())
-                    .bridge_err()?,
+                chunk_offsets.as_view(),
                 diskann_quantization::Parallelism::Rayon,
                 &random_provider,
                 &diskann_quantization::cancel::DontCancel,
@@ -133,7 +133,7 @@ where
     pq_storage.write_pivot_data(
         &full_pivot_data,
         Some(&centroid),
-        &chunk_offsets,
+        chunk_offsets.as_slice(),
         parameters.num_centers(),
         parameters.dim(),
         storage_provider,
@@ -189,8 +189,10 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
         .map(|x| (*x).into())
         .collect::<Vec<f32>>();
 
-    // Calculate the chunk offsets
-    calculate_chunk_offsets(parameters.dim(), parameters.num_pq_chunks(), offsets);
+    // Calculate the chunk offsets, filling the caller-owned buffer.
+    let dim = NonZeroUsize::new(parameters.dim())
+        .ok_or_else(|| ANNError::log_pq_error("dim must be non-zero"))?;
+    let chunk_offsets_view = ChunkOffsetsView::partition_into(dim, offsets).bridge_err()?;
 
     let trainer = diskann_quantization::product::train::LightPQTrainingParameters::new(
         parameters.num_centers(),
@@ -222,7 +224,7 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
                     parameters.dim(),
                 )
                 .bridge_err()?,
-                diskann_quantization::views::ChunkOffsetsView::new(offsets).bridge_err()?,
+                chunk_offsets_view,
                 diskann_quantization::Parallelism::Rayon,
                 &rng_builder,
                 &cancelation,
@@ -234,35 +236,6 @@ pub fn generate_pq_pivots_from_membuf<T: Copy + Into<f32>>(
 
     full_pivot_data.copy_from_slice(&trained);
     Ok(())
-}
-
-/// Gets all instances of a chunk from the training data for all records in the training data.  Each vector in the
-/// training dataset is divided into chunks and the PQ algorithm handles each vector chunk individually.  This method
-/// gets the same chunk from each vector in the training data and creates a new vector out of all of them.
-///
-/// # Example
-/// See tests for examples
-#[inline]
-pub fn get_chunk_from_training_data(
-    train_data: &[f32],
-    num_train: usize,
-    raw_vector_dim: usize,
-    chunk_size: usize,
-    chunk_offset: usize,
-) -> Vec<f32> {
-    let mut result: Vec<f32> = vec![0.0; num_train * chunk_size];
-
-    result
-        // group empty result data into chunks of chunk_size
-        .chunks_mut(chunk_size)
-        .enumerate()
-        // for each chunk, copy the chunk from the training data into the result vector
-        .for_each(|(chunk_number, result_chunk)| {
-            let train_data_start = chunk_number * raw_vector_dim + chunk_offset;
-            let train_data_end = train_data_start + chunk_size;
-            result_chunk.copy_from_slice(&train_data[train_data_start..train_data_end]);
-        });
-    result
 }
 
 /// Calculates the centroid if needed and moves the train_data to to the centroid
@@ -311,36 +284,7 @@ pub fn move_train_data_by_centroid(
     }
 }
 
-/// Calculate the number of chunks for the product quantization algorithm.  Returns a vector of offsets where
-/// each offset corresponds to a chunk based on the index of the chunk in the vector.
-///
-/// # Arguments
-/// * `dimensions` Number of dimensions of the input data
-/// * `num_pq_chunks` - Number of chunks that will be used in the PQ calculation.  Each vector will be split into these
-///   number of chunks and each chunk will be compressed down to one byte.
-/// * `offsets` - An output vector of offsets, where the size is equal to the number of pq chunks + 1.
-#[inline]
-pub fn calculate_chunk_offsets(dimensions: usize, num_pq_chunks: usize, offsets: &mut [usize]) {
-    // Calculate each chunk's offset
-    // If we have 8 dimension and 3 chunks then offsets would be [0,3,6,8]
-    let mut chunk_offset: usize = 0;
-    offsets[0] = chunk_offset;
-    for chunk_index in 0..num_pq_chunks {
-        chunk_offset += dimensions / num_pq_chunks;
-        if chunk_index < (dimensions % num_pq_chunks) {
-            chunk_offset += 1;
-        }
-        offsets[chunk_index + 1] = chunk_offset;
-    }
-}
-
-pub fn calculate_chunk_offsets_auto(dimensions: usize, num_pq_chunks: usize) -> Vec<usize> {
-    let mut offsets = vec![0; num_pq_chunks + 1];
-    calculate_chunk_offsets(dimensions, num_pq_chunks, offsets.as_mut_slice());
-    offsets
-}
-
-/// Add the row `y` to every row in `x`.
+/// Add `y` to every row of `x`.
 ///
 /// # Panics
 ///
@@ -638,6 +582,29 @@ mod pq_test {
         },
         utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
     };
+
+    /// Test helper: Gets all instances of a chunk from the training data for all records
+    /// in the training data. Each vector in the training dataset is divided into chunks
+    /// and the PQ algorithm handles each vector chunk individually. This helper gets the
+    /// same chunk from each vector in the training data and returns it as a flat vector.
+    fn get_chunk_from_training_data(
+        train_data: &[f32],
+        num_train: usize,
+        raw_vector_dim: usize,
+        chunk_size: usize,
+        chunk_offset: usize,
+    ) -> Vec<f32> {
+        let mut result: Vec<f32> = vec![0.0; num_train * chunk_size];
+        result
+            .chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_number, result_chunk)| {
+                let train_data_start = chunk_number * raw_vector_dim + chunk_offset;
+                let train_data_end = train_data_start + chunk_size;
+                result_chunk.copy_from_slice(&train_data[train_data_start..train_data_end]);
+            });
+        result
+    }
 
     #[test]
     fn test_move_train_data_by_centroid() {
@@ -1012,9 +979,12 @@ mod pq_test {
 
         // Pre-emptively construct an offset view to compare mismatched slices.
         // We want to check that the difference in the mismatched chunks is small.
-        let mut offsets = vec![0; num_pq_chunks + 1];
-        calculate_chunk_offsets(train_dim, num_pq_chunks, &mut offsets);
-        let offset_view = diskann_quantization::views::ChunkOffsetsView::new(&offsets).unwrap();
+        let chunk_offsets = ChunkOffsets::partition(
+            NonZeroUsize::new(train_dim).unwrap(),
+            NonZeroUsize::new(num_pq_chunks).unwrap(),
+        )
+        .unwrap();
+        let offset_view = chunk_offsets.as_view();
         let full_data =
             MatrixView::try_from(full_data_vector.as_slice(), num_train, train_dim).unwrap();
         let pivot_view =

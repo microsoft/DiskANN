@@ -41,6 +41,11 @@ impl PQData {
         &self.pq_pivot_table
     }
 
+    /// Return the logical dimension of the original (pre-quantization) vectors.
+    pub fn get_dim(&self) -> usize {
+        self.pq_pivot_table.dim()
+    }
+
     /// Return the number of chunks in the underlying PQ schema.
     pub fn get_num_chunks(&self) -> usize {
         self.pq_pivot_table.nchunks()

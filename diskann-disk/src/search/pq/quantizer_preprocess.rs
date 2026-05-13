@@ -21,7 +21,6 @@ pub fn quantizer_preprocess(
     id_to_calculate_pq_distance: &[u32],
 ) -> ANNResult<()> {
     let table = pq_data.pq_table();
-    let dim = table.dim();
     let expected_len = table.ncenters() * table.nchunks();
     let dst = diskann_utils::views::MutMatrixView::try_from(
         &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
@@ -38,13 +37,13 @@ pub fn quantizer_preprocess(
         // as L2 until a more thorough evaluation can be made.
         Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
             table.process_into::<diskann_quantization::distances::SquaredL2>(
-                &pq_scratch.rotated_query[..dim],
+                &pq_scratch.query_scratch,
                 dst,
             );
         }
         Metric::InnerProduct => {
             table.process_into::<diskann_quantization::distances::InnerProduct>(
-                &pq_scratch.rotated_query[..dim],
+                &pq_scratch.query_scratch,
                 dst,
             );
         }

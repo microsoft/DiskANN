@@ -49,14 +49,12 @@ impl<T> TableL2<T>
 where
     T: Deref<Target = FixedChunkPQTable>,
 {
-    pub(crate) fn new<U>(
+    /// Caller must ensure `query.len() == parent.get_dim()` (validated by `QueryComputer::new`).
+    pub(crate) fn new(
         parent: T,
-        query: &[U],
+        query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
-    ) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    ) -> ANNResult<Self> {
         let mut object = Self::new_unpopulated(parent, pool);
         object.populate(query)?;
         Ok(object)
@@ -74,17 +72,10 @@ where
         }
     }
 
-    fn populate<U: Into<f32> + Copy>(&mut self, query: &[U]) -> ANNResult<()> {
-        // Ensure that the query has the expected length.
-        //
-        // Alignment means that the size of `query` gets increased ...
-        // This makes is VERY hard to do error checking on dimension propagation.
-        assert!(self.parent.get_dim() <= query.len());
-        let local_query: Vec<f32> = query.iter().map(|x| (*x).into()).collect();
-
+    fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
         // Compute the partial distances into the lookup-table.
         self.parent
-            .populate_chunk_distances(&local_query, &mut self.lookup_table)
+            .populate_chunk_distances(query, &mut self.lookup_table)
     }
 
     /// Compute the distance between a PQ code that the query provided to the most recent
@@ -119,24 +110,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
-    use diskann_vector::Half;
     use rand::SeedableRng;
-    use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
-    #[rstest]
-    fn test_l2<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
-        _marker: PhantomData<T>,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_l2() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
         for dim in [12, 17, 100, 101] {
             for pq_chunks in [1, 17, 19, 20] {
@@ -155,8 +134,6 @@ mod tests {
                     let table = test_utils::seed_pivot_table(config);
                     let num_trials = 10;
 
-                    // RNG
-
                     let errors = test_utils::RelativeAndAbsolute {
                         relative: 5e-7,
                         absolute: 0.0,
@@ -164,7 +141,7 @@ mod tests {
 
                     // Basic `TableL2`
                     test_utils::test_l2_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             TableL2::new(table, query, None).unwrap()
                         },
                         &table,
