@@ -13,7 +13,7 @@ This repo offers the following Provider implementations as illustrative examples
 The provider for [Cosmos DB NoSQL Vector Search](https://learn.microsoft.com/en-us/azure/cosmos-db/vector-search) is not included here but documented in the [VLDB'25 paper](https://www.vldb.org/pvldb/vol18/p5166-upreti.pdf). 
 
 The library supports the following algorithmic features
-- Real-time updates (using [IP-DiskANN](https://arxiv.org/abs/2502.13826)) that support stable recall under long update streams -- no merges, rebuilds, patches needed.
+- Real-time updates (using logic from [IP-DiskANN](https://arxiv.org/abs/2502.13826) and [Fresh-DiskANN](https://arxiv.org/abs/2105.09613)) that support stable recall under long update streams -- no merges, rebuilds, patches needed.
 - A diverse set of distance functions and quantizers (PQ, MinMax, Scalar, Spherical) implemented for x86 and aarch64.
 - Choice of memory tiers to allow operation at different price-performance points. 
 - Vector search interfaces that allow pagination, range filters (e.g., dist<0.5), [diversity aware](https://arxiv.org/abs/2602.08742) top-k search.
