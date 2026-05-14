@@ -62,8 +62,8 @@ pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
 /// A lending, asynchronous iterator over the elements of a flat index.
 ///
 /// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
-/// only implement `FlatIterator` can be wrapped in [`Iterated`] to obtain an
-/// [`OnElementsUnordered`] implementation automatically.
+/// only implement `FlatIterator` can be wrapped in [`Iterated`] to obtain a
+/// default [`DistancesUnordered`] implementation.
 pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
     /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
     type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>>
@@ -472,7 +472,7 @@ mod tests {
 
     /// `Element<'a> = &'a [f32]`, but `next()` returns `Err(Boom(id))` exactly
     /// once after `fail_after` successful yields. Used to verify error
-    /// propagation through [`Iterated::on_elements_unordered`].
+    /// propagation through [`Iterated`]'s [`DistancesUnordered`] impl.
     struct Failing<'a> {
         store: &'a Store,
         cursor: usize,

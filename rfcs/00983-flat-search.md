@@ -4,7 +4,7 @@
 |------------------|--------------------------------|
 | **Authors**      | Aditya Krishnan, Alex Razumov, Dongliang Wu                |
 | **Created**      | 2026-04-24                     |
-| **Updated**      | 2026-05-05                     |
+| **Updated**      | 2026-05-14                     |
 
 ## 1. Motivation
 
@@ -22,18 +22,17 @@ stuffing the algorithm or the backend through the `Accessor` trait surface.
 
 ### 1.3 Goals
 
-1. Define a streaming access primitive — `OnElementsUnordered` — that mirrors the role
-   `Accessor` plays for graph search but exposes a callback-driven scan instead of
-   random access.
+1. Define a fused iterate-and-score primitive — `flat::DistancesUnordered<T>` — that
+   mirrors the role `Accessor` plays for graph search but exposes a sequential
+   scan-and-score operation instead of random access.
 2. Provide flat-search algorithm implementations built on the new primitives, so consumers can use this against their own providers / backends. 
 3. Expose support for diferent distance computers and post-processing like re-ranking _out-of-the-box_ without having to reimplement these for the flat search path.  
 
 ## 2. Proposal
 
-The flat-search infrastructure is built on a small sequence of traits. The only traits a
-backend *must* implement are `OnElementsUnordered` and its subtrait
-`flat::DistancesUnordered<T>`. A `flat::SearchStrategy` then instantiates them per
-query.
+The flat-search infrastructure is built on a small sequence of traits. The only trait a
+backend *must* implement is `flat::DistancesUnordered<T>`. A `flat::SearchStrategy`
+then instantiates per-query visitors that implement it.
 
 An opt-in `FlatIterator` trait plus the `Iterated<I>` adapter exist for
 convenience for backends that naturally expose element-at-a-time iteration.
@@ -67,50 +66,34 @@ both graph and flat search can share common components as much as possible:
 
    - **`provider::DistancesUnordered<T>: Accessor + BuildQueryComputer<T>`** — drives
      the scan via the random-access `Accessor` machinery. Used by graph search.
-   - **`flat::DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T>`** —
-     drives the scan via the new sequential `OnElementsUnordered` primitive. This primitive 
-     is used by flat search. More on it below.
+   - **`flat::DistancesUnordered<T>: HasId + BuildQueryComputer<T>`** — a
+     self-contained fused iterate-and-score trait used by flat search. Backends
+     implement the entire scan-and-score loop in a single method. More on it below.
 
 ### 2.2 Core traits for flat search
-At the very core is the `OnElementsUnordered` trait, which is simply an API to implement 
-a callback on the entire index. Implementations choose iteration order, prefetching, and
-any bulk reads if they want; algorithms see only `(Id, ElementRef)` pairs.
+
+The single required trait for flat search is `flat::DistancesUnordered<T>`. It fuses
+iteration and scoring into one method: implementations drive an entire scan over their
+underlying data, scoring each element with the supplied query computer and invoking a
+callback with `(id, distance)` pairs. Implementations choose iteration order,
+prefetching, and any bulk reads; algorithms see only `(Id, f32)` pairs.
 
 ```rust
-pub trait OnElementsUnordered: HasId + HasElementRef + Send + Sync {
-    type Error: StandardError;
+pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
+    type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    fn on_elements_unordered<F>(&mut self, f: F) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        F: Send + for<'a> FnMut(Self::Id, <Self as HasElementRef>::ElementRef<'a>);
-}
-```
-
-`Id` and `ElementRef<'a>` come from the shared `HasId` / `HasElementRef` traits, so a
-type that implements `Accessor` and `OnElementsUnordered` exposes the same id and
-element types to both subsystems.
-
-For computing distance with a query specifically, we define a sub-trait of the above - `flat::DistancesUnordered<T>`.
-
-```rust
-pub trait DistancesUnordered<T>: OnElementsUnordered + BuildQueryComputer<T> {
     fn distances_unordered<F>(
         &mut self,
         computer: &<Self as BuildQueryComputer<T>>::QueryComputer,
         f: F,
-    ) -> impl SendFuture<Result<(), <Self as OnElementsUnordered>::Error>>
+    ) -> impl SendFuture<Result<(), Self::Error>>
     where
-        F: Send + FnMut(<Self as HasId>::Id, f32),
-    {
-        // default delegates to on_elements_unordered + evaluate_similarity
-    }
+        F: Send + FnMut(<Self as HasId>::Id, f32);
 }
 ```
-The default implementation loops `on_elements_unordered` and calls `computer.evaluate_similarity` on each element;
-backends that can fuse retrieval and scoring can override it.
 
 `DistancesUnordered<T>` is scoped to a single query. We introduce a strategy that is the per-call
-constructor that hands the algorithm a freshly-bound visitor. It is stateless,
+constructor that hands the algorithm a freshly-bound visitor. It is meant to be stateless,
 cheap to construct, and lives only for the duration of one search. 
 
 ```rust
@@ -208,7 +191,7 @@ columns dip into.
         │                                                                │
         ▼                                                                ▼
   ExpandBeam<T> visitor                                       DistancesUnordered<T> visitor
-  (Accessor + BuildQueryComputer<T>)                          (OnElementsUnordered + BuildQueryComputer<T>)
+  (Accessor + BuildQueryComputer<T>)                          (HasId + BuildQueryComputer<T>)
         │                                                                │
         │                  BuildQueryComputer<T>                         │
         ├─────────────────►::build_query_computer ◄──────────────────────┤
@@ -249,9 +232,9 @@ pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
 }
 ```
 
-`Iterated<I>` wraps any `FlatIterator` and implements `OnElementsUnordered` (and
-`DistancesUnordered<T>` by inheritance, when the inner type implements
-`BuildQueryComputer<T>`) by looping over `next()` and reborrowing each element.
+`Iterated<I>` wraps any `FlatIterator` and implements `DistancesUnordered<T>` (when
+the inner type also implements `BuildQueryComputer<T>`) by looping over `next()`,
+reborrowing each element, and scoring it with the supplied query computer.
 
 ## Trade-offs
 
@@ -274,7 +257,7 @@ An alternative is to make `next()` yield a *batch* instead of a single vector re
 
 ### Intra-query parallelism 
 
-The current design of `OnElementsUnordered` does not allow an implementation to exploit parallelism within a query; since the trait requires a `&mut self`. Especially for a flat index, some implementations might want to parallelize within the scan for a query. Arguably we will need a more complex extension of this architecture to support this. 
+The current design of `DistancesUnordered` does not allow an implementation to exploit parallelism within a query; since the trait requires a `&mut self`. Especially for a flat index, some implementations might want to parallelize within the scan for a query. Arguably we will need a more complex extension of this architecture to support this. 
 
 ## Future Work
 - Support for other flat-search algorithms like - filtered, range and diverse flat algorithms as additional methods on `FlatIndex`.
