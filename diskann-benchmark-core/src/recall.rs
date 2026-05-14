@@ -20,7 +20,8 @@ pub struct RecallMetrics {
     pub recall_n: usize,
     /// The number of queries.
     pub num_queries: usize,
-    /// The average recall across all queries.
+    /// The average recall across queries with non-empty groundtruth.
+    /// Queries with zero groundtruth results are excluded from the average.
     pub average: f64,
 }
 
@@ -617,6 +618,46 @@ mod tests {
             }
             let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
             assert!((recall.average - 0.6).abs() < 1e-10);
+        }
+
+        // Mixed zero and non-zero groundtruth rows: verify denominator uses only non-zero rows.
+        // 5 queries with groundtruth [1, 2, 3, 4, 5] (all match → recall = 1.0 each)
+        // 5 queries with empty groundtruth [] (excluded from average)
+        // Expected average = (5 * 1.0) / 5 = 1.0
+        {
+            let mut groundtruth: Vec<Vec<u32>> = Vec::new();
+            // First 5 rows: non-empty groundtruth
+            for _ in 0..5 {
+                groundtruth.push((1..=5).collect());
+            }
+            // Last 5 rows: empty groundtruth
+            for _ in 0..5 {
+                groundtruth.push(vec![]);
+            }
+            
+            let mut results = Matrix::<u32>::new(0, 10, 10);
+            for i in 0..10 {
+                for (j, v) in (1u32..=10).enumerate() {
+                    results[(i, j)] = v;
+                }
+            }
+            
+            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+            assert_eq!(recall.num_queries, 10);
+            // Average should be 1.0 (only 5 non-zero queries count)
+            assert!((recall.average - 1.0).abs() < 1e-10);
+        }
+
+        // All queries have zero groundtruth: should return average = 0.0 (not NaN/inf).
+        {
+            let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
+            let results = Matrix::<u32>::new(0, 10, 10);
+            
+            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+            assert_eq!(recall.num_queries, 10);
+            assert_eq!(recall.average, 0.0);
+            assert!(!recall.average.is_nan());
+            assert!(!recall.average.is_infinite());
         }
 
         // Distance Row Mismatch
