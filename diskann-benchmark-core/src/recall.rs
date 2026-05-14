@@ -570,18 +570,18 @@ mod tests {
             ));
         }
 
-        // Not enough groundtruth - dynamic
+        // Not enough groundtruth - dynamic: unlike the fixed-size matrix case, dynamic
+        // (variable-length) groundtruth rows with fewer than recall_k entries are valid
+        // and represent filtered queries with limited results. Recall is computed using
+        // the available entries (this_recall_k = gt_row.len().min(recall_k)).
         {
-            let groundtruth: Vec<_> = (0..10).map(|_| vec![0; 5]).collect();
+            let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
             let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
-            let err_allow_insufficient_results =
-                knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
-            assert!(matches!(
-                err_allow_insufficient_results,
-                ComputeRecallError::NotEnoughGroundTruth(..)
-            ));
+            // Should succeed: each row uses this_recall_k = min(5, 10) = 5
+            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+            assert_eq!(recall.num_queries, 10);
+            let recall_allow = knn(&groundtruth, None, &results, 10, 10, true).unwrap();
+            assert_eq!(recall_allow.num_queries, 10);
         }
 
         // Distance Row Mismatch
