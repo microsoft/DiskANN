@@ -38,7 +38,7 @@ Output: `Vec<Vec<u32>>` adjacency lists, handed to the existing disk writer. PQ 
 
 ### Problem statement
 
-Vamana's per-point cost scales linearly with point count, making 10M+ full builds the bottleneck:
+Vamana full builds at 10M+ are the bottleneck:
 
 | Dataset | Vamana build |
 |---|---:|
@@ -60,7 +60,7 @@ On BigANN 10M, 16 threads:
 | 6–12 GB | disk-edges | ~126s | 358s |
 | 3–6 GB | merged-shards | ~332s | ~358s (partitioned) |
 
-**Neither algorithm uses surplus RAM to build faster.** PiPNN's wall-clock is bottlenecked by HashPrune + GEMM; extra RAM headroom past the working set doesn't help (more memory *channels* / bandwidth does, but that's a hardware property, not a budget knob). The honest framing: PiPNN trades a higher *minimum* RAM budget for a substantially faster build at that budget. Validation: see **M6**.
+**Neither algorithm converts surplus RAM into faster builds.** PiPNN's wall-clock is bottlenecked by HashPrune + GEMM; once the working set fits, more RAM doesn't help. PiPNN trades a higher *minimum* RAM budget for a faster build at that budget. Validation: see **M4**.
 
 ### Hybrid update model (Stage 2 direction)
 
@@ -77,7 +77,7 @@ This is why we don't need PiPNN to support `insert(point)` — the disk format i
 - **Stage 1 (this RFC).** Land PiPNN as an alternative builder for the disk-index full-build path (initial builds *and* rebuilds), behind a `pipnn` Cargo feature. Vamana stays default.
 - **Stage 2 (separate proposal, gated by Stage-1 milestones).** Retire Vamana's full-build path; keep Vamana for in-memory incremental inserts.
 
-**In-memory PiPNN build is not in any stage.** The in-mem path exists for streaming construction — exactly what PiPNN's batch design cannot do. See "Out of scope" below.
+In-memory PiPNN build is not in any stage — see "Out of scope".
 
 ### Goals (Stage 1)
 
@@ -85,13 +85,13 @@ This is why we don't need PiPNN to support `insert(point)` — the disk format i
 2. **Disk-format compatibility** — byte-identical to Vamana's output; search/PQ/storage layouts unchanged.
 3. **API backward compatibility** — `DiskIndexBuilder`, `IndexConfiguration`, JSON schema all stay additive.
 4. **Feature parity for the full-build role** — deliver the Vamana disk-build capabilities PiPNN still lacks (quantization, label filters).
-5. **Documented memory mitigation** — a three-tier build path that brings PiPNN's peak RSS to or under Vamana's at a documented build-time cost.
+5. **Memory mitigation** — a three-tier build path that brings PiPNN's peak RSS to or under Vamana's at a documented build-time cost.
 
 ## Proposal
 
 ### Workspace structure
 
-Add a crate `diskann-pipnn` depending on `diskann`, `diskann-linalg`, `diskann-vector`, `diskann-quantization`, `diskann-utils`. **It does NOT depend on `diskann-disk`** — that would form a cycle with the consumer-side feature gate. Data flows one-way: PiPNN produces `Vec<Vec<u32>>`, `diskann-disk` consumes it behind its `pipnn` feature.
+Add a crate `diskann-pipnn` depending on `diskann`, `diskann-linalg`, `diskann-vector`, `diskann-quantization`, `diskann-utils`. **It does not depend on `diskann-disk`** — that would form a cycle with the consumer-side feature gate.
 
 ```text
 diskann, diskann-linalg, diskann-quantization, diskann-vector, diskann-utils
@@ -123,11 +123,11 @@ pub enum BuildAlgorithm {
 }
 ```
 
-`DiskIndexBuildParameters` gains a `build_algorithm` field defaulting to `Vamana`. The JSON config gains an optional `build_algorithm` block.
+`DiskIndexBuildParameters` gains a `build_algorithm` field; JSON config gains an optional `build_algorithm` block.
 
-**`num_threads` is not a RAM knob.** Per-thread overhead is small (~16–20 MB/thread: stripe buffers + leaf-build scratch). Use `build_ram_limit_gb` to bound RAM.
+**`num_threads` is not a RAM knob.** Per-thread overhead is ~16–20 MB (stripe + leaf-build scratch). Use `build_ram_limit_gb` to bound RAM.
 
-**Feature-flag deserialization applies to JSON configs only, not index files.** An index file built by either algorithm loads with or without the `pipnn` feature. A JSON config with `"algorithm": "PiPNN"` fed to a binary built without the feature fails fast with `unknown variant 'PiPNN'`. Configs that omit `build_algorithm` parse identically across feature builds — not a backward-compat regression.
+**Feature-flag deserialization is config-only, not index-file.** Index files built by either algorithm load with or without the `pipnn` feature. A JSON config naming `"algorithm": "PiPNN"` fed to a binary built without the feature fails fast with `unknown variant 'PiPNN'`; configs that omit `build_algorithm` parse identically across feature builds.
 
 ### Builder dispatch
 
@@ -139,7 +139,7 @@ match build_parameters.build_algorithm() {
 }
 ```
 
-The PiPNN branch produces `Vec<Vec<u32>>` via `diskann_pipnn::builder::build_typed`, then hands it to the existing `DiskIndexWriter`. PQ training and disk-sector layout are reused.
+The PiPNN branch produces `Vec<Vec<u32>>` via `diskann_pipnn::builder::build_typed` and hands it to the existing `DiskIndexWriter`.
 
 ### Compatibility
 
@@ -151,18 +151,15 @@ The PiPNN branch produces `Vec<Vec<u32>>` via `diskann_pipnn::builder::build_typ
 | Public Rust types | additive only (new field with default) |
 | Benchmark JSON config | additive only (new optional field) |
 
-A search-only consumer cannot tell which builder produced the index.
-
 ### Feature gating
 
-- `diskann-disk` gains a `pipnn` Cargo feature. Default features do **not** include it.
-- With the feature off: `BuildAlgorithm::PiPNN` does not exist at the type level. No runtime branch, no extra binary size, no `diskann-pipnn` dependency.
+`diskann-disk` gains a `pipnn` Cargo feature, off by default. With it off, `BuildAlgorithm::PiPNN` does not exist at the type level — no runtime branch, no `diskann-pipnn` dependency.
 
 ## Trade-offs
 
 ### Batch-only (algorithmic, not implementation)
 
-The PiPNN paper "eliminates search from graph-building" — partition first, then one batched GEMM per leaf. The batching advantage **requires knowing leaf membership before computing distances**; at batch size 1, PiPNN reduces to per-point distance work no faster than Vamana's greedy insert. Two phases (partition, leaf k-NN) are batch-by-design; HashPrune and final RobustPrune happen to be online, but you've already paid for the batch phases by the time you reach them. This is why Vamana keeps the incremental role.
+The PiPNN paper "eliminates search from graph-building" — partition first, then one batched GEMM per leaf. The batching advantage **requires knowing leaf membership before computing distances**; at batch size 1, PiPNN reduces to per-point distance work no faster than Vamana's greedy insert. Two phases (partition, leaf k-NN) are batch-by-design; HashPrune and final RobustPrune happen to be online, but you've already paid for the batch phases by the time you reach them.
 
 ### Memory vs. build speed
 
@@ -172,7 +169,7 @@ PiPNN holds more working memory than Vamana — dominated by the **HashPrune res
 |---|---:|---:|
 | Peak RSS | 10.8 GB | 6.3 GB |
 
-The +4.5 GB delta is the working set the algorithm needs, not a bug. Mitigation via the three-tier build (dispatched by the existing `build_ram_limit_gb` knob):
+Mitigation via the three-tier build (dispatched by the existing `build_ram_limit_gb` knob):
 
 | Strategy | Peak RSS | Build | Recall@10 L=50 | Trigger |
 |---|---:|---:|---:|---|
@@ -192,7 +189,7 @@ Disk-edges matches Vamana's RAM at ~3× the build speed. Merged-shards uses *les
 
 ### Algorithm risks
 
-Recall depends on partition overlap (`fanout`) and reservoir size (`l_max`). Parameter space is larger than Vamana's `R`/`L_build`. Stage 1 mitigates by keeping Vamana as default and shipping reference parameter sets per workload class.
+Recall depends on partition overlap (`fanout`) and reservoir size (`l_max`) — a larger parameter space than Vamana's `R`/`L_build`. Mitigation: keep Vamana as default and ship reference parameter sets per workload class.
 
 ## Benchmark Results
 
@@ -264,13 +261,13 @@ Telemetry (per-phase timing + RSS via existing OTel tracer), permanent docs repl
 
 ### Deferred to Stage 2
 
-- **Hybrid update model validation.** End-to-end validation of the Stage-2 loop — PiPNN build → incremental Vamana inserts → recall-decay curve → PiPNN rebuild — belongs with the Stage-2 proposal that actually adopts the hybrid model. Stage 1 exercises only the full-build path. The disk-format-compatibility check (Vamana's in-mem insert path reading a PiPNN-produced graph) is a one-shot sanity test that can run at Stage 2 entry.
+- **Hybrid update model validation.** The Stage-2 loop (PiPNN build → incremental Vamana inserts → recall decay → rebuild) belongs with the Stage-2 proposal that adopts the model.
 
-- **Checkpoint / resume.** Vamana's streaming checkpoint design doesn't fit PiPNN's batch phases. Useful boundaries (partition output, post-extract) would need a different scheme, and operational value is lower (PiPNN's BigANN-10M build is ~80s). Defer until Stage 2 reveals the production rebuild cadence.
+- **Checkpoint / resume.** Vamana's streaming checkpoint design doesn't fit PiPNN's batch phases, and operational value is lower (PiPNN's BigANN-10M build is ~80s).
 
 ### Out of scope: not part of any stage
 
-- **In-memory PiPNN build.** The in-mem `DiskANNIndex` exists for streaming construction — exactly what PiPNN can't do efficiently. Building one from PiPNN adjacency lists is mechanically possible but offers no incremental capability and would force `diskann-pipnn` to depend on the in-mem graph crate. If a non-streaming in-mem consumer ever needs PiPNN's speed: build to disk, then load.
+- **In-memory PiPNN build.** The in-mem `DiskANNIndex` exists for streaming construction, which PiPNN can't do efficiently. If a non-streaming in-mem consumer ever wants PiPNN's speed: build to disk, then load.
 - **Build-time PQ distance kernel.** Not used by Vamana in production today.
 - **PiPNN incremental insert/delete API.** The hybrid update model (Vamana inserts on the in-memory graph, PiPNN for full rebuilds) removes the need.
 - **Frozen-point semantics.** PiPNN writes the medoid as the single frozen start point — already byte-compatible with Vamana's default.
