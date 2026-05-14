@@ -634,14 +634,14 @@ mod tests {
             for _ in 0..5 {
                 groundtruth.push(vec![]);
             }
-            
+
             let mut results = Matrix::<u32>::new(0, 10, 10);
             for i in 0..10 {
                 for (j, v) in (1u32..=10).enumerate() {
                     results[(i, j)] = v;
                 }
             }
-            
+
             let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
             assert_eq!(recall.num_queries, 10);
             // Average should be 1.0 (only 5 non-zero queries count)
@@ -652,7 +652,7 @@ mod tests {
         {
             let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
             let results = Matrix::<u32>::new(0, 10, 10);
-            
+
             let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
             assert_eq!(recall.num_queries, 10);
             assert_eq!(recall.average, 0.0);
