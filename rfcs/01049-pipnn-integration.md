@@ -99,15 +99,21 @@ Because both algorithms produce the same disk format, switching between "fresh P
 
 ### Workspace structure
 
-Add a new crate, `diskann-pipnn`, that depends on the existing `diskann`, `diskann-disk`, `diskann-linalg`, `diskann-vector`, `diskann-quantization`, and `diskann-utils` crates. PiPNN lives outside `diskann-disk` so the core disk path has no compile-time dependency on PiPNN; the disk builder takes a typed `BuildAlgorithm` and only depends on PiPNN behind a feature flag.
+Add a new crate, `diskann-pipnn`, that depends on the existing `diskann`, `diskann-linalg`, `diskann-vector`, `diskann-quantization`, and `diskann-utils` crates. **`diskann-pipnn` does not depend on `diskann-disk`.** The PiPNN builder produces a plain `Vec<Vec<u32>>` adjacency list (defined in terms of core types from `diskann`), and `diskann-disk` consumes that output behind its own `pipnn` Cargo feature. This is intentional: a `diskann-pipnn → diskann-disk → [feature] diskann-pipnn` edge would form a dependency cycle. Keeping the data-flow direction one-way (PiPNN produces, disk consumes) means PiPNN never imports any disk-layout symbols and the feature gate sits cleanly on the consumer side.
 
 ```text
-diskann/                    # core types, traits, search
-diskann-disk/               # disk index layout, builder, search
-  └── feature "pipnn"       # opt-in dependency on diskann-pipnn
+diskann/                    # core types, traits, search    ←┐ used by both
+diskann-linalg/             # GEMM/SVD                       ├─ shared deps
+diskann-quantization/       # PQ/SQ training                 ├─ (no edges
+diskann-vector/             # vector representations         ├─  to either
+diskann-utils/              # threading, file I/O            ←┘  builder)
+
 diskann-pipnn/              # new: PiPNN builder
-diskann-linalg/             # GEMM/SVD (used by both Vamana and PiPNN)
-diskann-quantization/       # PQ/SQ training (used by both)
+   ↑ produces Vec<Vec<u32>>
+   │
+diskann-disk/               # disk index layout, builder, search
+  └── feature "pipnn"       # opt-in: takes Vec<Vec<u32>> from diskann-pipnn
+                            # and hands it to DiskIndexWriter
 ```
 
 ### `BuildAlgorithm` enum
@@ -384,6 +390,8 @@ Validate the Stage-2 hybrid loop end-to-end.
 ### Deferred to Stage 2
 
 - **Checkpoint / resume (was M2).** Vamana's checkpoint/resume is a *streaming* mechanism — it relies on the per-point incremental insert order to define natural checkpoint boundaries. PiPNN's batch design has no equivalent monotonic insertion sequence: partition output, per-leaf GEMM, and HashPrune merge are all coarse-grained whole-phase artifacts rather than fine-grained incremental progress. A useful PiPNN checkpoint scheme would therefore *not* mirror Vamana's; it would need new design choices about which phase boundaries to materialize, at what granularity, and whether the cost-benefit justifies the extra disk I/O. Empirically, PiPNN's full BigANN-10M build runs in ~80 s, so the operational value of resuming a partially completed build is materially lower than for Vamana's multi-hour rebuilds. We defer checkpoint design until Stage 2, when the production rebuild cadence and observed failure modes will tell us whether it is needed and what shape it should take.
+
+  *Note on determinism for any future checkpoint validation:* PiPNN is a parallel algorithm (rayon-parallel partition, leaf-build GEMM, and HashPrune merge), so byte-identical output across runs — and therefore across "resumed vs. never-interrupted" runs — is **not** a free property. It would require extra determinism work (fixed thread schedule, deterministic reduction order in the HashPrune reservoir, seeded LSH hyperplanes). The right validation criterion for a resumed build is **recall parity with a non-resumed build**, not byte-identical adjacency lists.
 
 ### Out of scope (intentionally not on this list)
 
