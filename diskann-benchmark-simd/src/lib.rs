@@ -555,6 +555,14 @@ where
         _: diskann_benchmark_runner::Checkpoint<'_>,
         mut output: &mut dyn diskann_benchmark_runner::Output,
     ) -> anyhow::Result<Self::Output> {
+        if input.arch != A::ARCH {
+            anyhow::bail!(
+                "architecture mismatch: input requested {:?}, but kernel implementation requires {:?}",
+                input.arch,
+                A::ARCH
+            );
+        }
+
         let arch = A::try_new()?;
         writeln!(output, "{}", input)?;
         let results = self.run_benchmark(input, arch)?;

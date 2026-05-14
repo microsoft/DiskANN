@@ -95,7 +95,7 @@ pub trait AsDataType: 'static {
 pub struct Describe(DescribeInner);
 
 impl Describe {
-    /// Return `true` is the data type match was successful.
+    /// Return `true` if the data type match was successful.
     pub fn is_match(&self) -> bool {
         matches!(self.0, DescribeInner::Match)
     }
