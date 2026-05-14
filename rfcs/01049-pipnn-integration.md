@@ -5,11 +5,11 @@
 | **Authors** | Weiyao Luo |
 | **Contributors** | DiskANN team |
 | **Created** | 2026-05-11 |
-| **Updated** | 2026-05-11 |
+| **Updated** | 2026-05-14 |
 
 ## Summary
 
-Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, arXiv:2602.21247) as a second graph-construction algorithm for DiskANN's disk index. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default and the only algorithm supported for incremental inserts; PiPNN is the proposed faster path for full rebuilds.
+Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) as a second graph-construction algorithm for DiskANN's disk index. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default and the only algorithm supported for incremental inserts; PiPNN is the proposed faster path for full rebuilds.
 
 ## Motivation
 
@@ -17,11 +17,19 @@ Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, arXiv:2602.21247) as a seco
 
 DiskANN currently builds the disk index with a single algorithm — **Vamana** (`diskann-disk/src/build/builder/`). Vamana incrementally inserts each point into a graph, running a greedy search + `RobustPrune` for each insertion, producing the on-disk format documented in `diskann-disk/src/storage/`.
 
-**PiPNN** (Pick-in-Partitions Nearest Neighbors, arXiv:2602.21247) is a partition-based **batch** graph builder, in contrast to Vamana's **incremental** insert + prune. The construction has four phases:
+Clients today update indexes in three main ways:
+
+1. **Incremental** — continuously insert and delete vectors in an existing in-memory graph (Vamana's per-point greedy-search + `RobustPrune` path). The disk index itself is not mutated in place.
+2. **Full rebuild** — rebuild the entire graph from scratch on a static snapshot, producing an immutable disk index.
+3. **Partitioned full rebuild** — split points into N clusters, build N separate graphs in parallel, then stitch them together with a lightweight merge step to bound peak build-time memory (Vamana's `build_merged_vamana_index` path).
+
+PiPNN, as proposed here, is a faster substitute for paths (2) and (3). Path (1) remains Vamana's responsibility for the foreseeable future (see "PiPNN is algorithmically batch-only" below).
+
+**PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) is a partition-based **batch** graph builder, in contrast to Vamana's **incremental** insert + prune. The construction has four phases:
 
 1. **Partition** — Randomized Ball Carving (RBC) recursively splits the dataset into small *overlapping* leaf clusters. Each point lands in `fanout` of its nearest cluster leaders at every recursion level, so every point appears in multiple leaves. Recursion stops when a cluster fits a configured leaf-size cap (`c_max`, typically 256–1024 points).
-2. **Local k-NN per leaf** — For each leaf, compute the full pairwise distance matrix in one batched GEMM call, then extract each point's `leaf_k` nearest neighbors inside the leaf. GEMM batching is the source of most of PiPNN's wall-clock advantage over per-point greedy search.
-3. **HashPrune merge** — Edges from all leaves are merged into a per-point reservoir of bounded size (`l_max`, ~64–128). The pruner is keyed by an LSH **angular bucket** of each candidate neighbor: at most one candidate per bucket is retained, and on collision the closer candidate wins. This produces a diverse short-list per point using O(`l_max`) memory per node and O(1) amortized insert work.
+2. **Local k-NN per leaf** — For each leaf, compute the full pairwise distance matrix as a single batched GEMM (an N×N intra-leaf computation, where N ≈ `c_max`), then extract each point's `leaf_k` nearest neighbors inside the leaf. This is structurally different from a flat scan (1×N query against the whole dataset, e.g. work item [#1036](https://github.com/microsoft/DiskANN/issues/1036)) — every column of the GEMM contributes to every row's top-k, so the cost is amortized across `c_max²` distance evaluations. GEMM batching is the source of most of PiPNN's wall-clock advantage over per-point greedy search.
+3. **HashPrune merge** — Edges from all leaves are merged into a per-point reservoir of bounded size (`l_max`, ~64–128). The pruner is keyed by an LSH **angular bucket** of each candidate neighbor: at most one candidate per bucket is retained, and on collision the closer candidate wins. This produces a diverse short-list per point using O(`l_max`) memory per node and O(1) amortized insert work. The merge stage is naturally streamable — edges can be fed in chunks (either generated all at once and replayed from disk, or generated leaf-batch-by-leaf-batch interleaved with HashPrune inserts) to bound peak RAM; see M5 below.
 4. **Optional final prune** — A single RobustPrune-style pass (same algorithm Vamana uses, with a configurable `alpha`) applies geometric occlusion to the HashPrune candidates. Used when the workload benefits from explicit graph diversification.
 
 The output is `Vec<Vec<u32>>` adjacency lists in the same shape Vamana produces, then handed to the existing disk-layout writer. PQ training and search-side data structures are unchanged.
@@ -40,15 +48,37 @@ Vamana's incremental design scales linearly in points × per-insert search cost,
 
 Frequent rebuilds (driven by data churn or parameter sweeps) and full rebuilds at 10M-scale and above are the bottleneck. PiPNN's offline benchmarks at matching recall budgets complete the same builds **up to 6.3× faster** while writing the same disk format (full numbers in the Benchmark Results section). This RFC proposes landing PiPNN so teams can opt into faster builds and so we can collect production-relevant signal on whether PiPNN can eventually replace Vamana's full-rebuild path.
 
+#### Concrete trade-off hypothesis
+
+To make the comparison precise rather than headline-only, we frame Stage-1 validation around a fixed-resource hypothesis:
+
+> Given a worker with fixed CPU cores, RAM budget, and SSD throughput, PiPNN delivers higher index-build throughput (vectors per minute per worker) than Vamana at matching recall, *provided* its working set fits within the RAM budget. When the RAM budget is below PiPNN's one-shot working set, the three-tier dispatch (disk-edges, then merged-shards) keeps PiPNN within or below Vamana's RAM footprint at a documented build-time cost.
+
+Concretely, on BigANN 10M with the same 16-thread / NVMe worker:
+
+| RAM budget | PiPNN strategy | PiPNN build | Vamana build |
+|---:|---|---:|---:|
+| ≥ ~12 GB | one-shot | 80–133s | 358s |
+| 6–12 GB | disk-edges | ~126s | 358s |
+| 3–6 GB | merged-shards | ~332s | 358s (partitioned: similar) |
+| < 3 GB | merged-shards w/ smaller shards | further degrades | further degrades |
+
+Two important things this table is **not** claiming:
+
+- **PiPNN does not auto-scale build time downward when given more RAM than its working set needs.** PiPNN's wall-clock is dominated by HashPrune inserts + leaf-build GEMM. Once the dataset, HashPrune reservoir, and per-thread buffers fit comfortably in RAM, additional RAM headroom does not buy faster builds. (More memory *channels* / higher bandwidth do help, but that is a hardware property, not a budget knob.)
+- **Vamana also does not have a "use more RAM to build faster" mode** — its peak RSS is largely set by the dataset + working graph, and giving it more RAM headroom past that does not accelerate the per-insert greedy search.
+
+So the honest framing is: PiPNN trades a higher minimum RAM budget for a substantially faster build at that budget. Neither algorithm currently converts surplus RAM into faster builds; both convert surplus RAM into "no pressure to use the chunked/shard fallbacks."
+
 #### Hybrid update model (Stage 2 direction)
 
-Vamana and PiPNN write the same on-disk graph format, so a graph built by either algorithm can be *read* (and incrementally edited) by either. We exploit this for the production update story:
+Vamana and PiPNN write the same on-disk graph format, so a graph built by either algorithm can be loaded by the same search code and, once loaded into memory, can be incrementally edited by Vamana. We exploit this for the production update story:
 
-- **Bulk / full rebuild → PiPNN.** When data churn is large enough to justify a full rebuild, PiPNN is used because it is several times faster than Vamana at this job.
-- **Incremental insert → Vamana.** Between full rebuilds, individual inserts use Vamana's existing greedy-search + RobustPrune insert path. PiPNN's batch design has no natural single-point-insert API and we do not plan to build one.
-- **Quality decay → trigger PiPNN rebuild.** When recall on the live graph degrades past a configured threshold (driven by accumulated incremental inserts), the system schedules a PiPNN full rebuild from the current dataset snapshot.
+- **Bulk / full rebuild → PiPNN.** When a full rebuild is needed, PiPNN is used because it is several times faster than Vamana at this job.
+- **Incremental insert → in-memory Vamana.** Between full rebuilds, individual inserts use Vamana's existing greedy-search + RobustPrune insert path **on the in-memory graph** (`diskann::graph::index::DiskANNIndex`). The on-disk index file is not mutated in place — the standing convention is that a refreshed disk index is produced by a full rebuild from the current dataset snapshot. PiPNN's batch design has no natural single-point-insert API and we do not plan to build one.
+- **Triggers for a full PiPNN rebuild.** A rebuild is scheduled in response to operationally meaningful events, not just gradual recall drift. The expected triggers include: (a) embedding-model rotation (vectors are no longer comparable to existing ones), (b) schema/parameter retuning (`R`, `L`, `pq_chunks`, distance metric, quantization), (c) large batch inserts that exceed what the in-memory incremental path is sized for, and (d) periodic safety rebuilds on a cadence that depends on observed graph health. DiskANN's existing claim that incremental updates keep recall healthy still holds; PiPNN does not change that, it just makes the eventual rebuild cheaper.
 
-Because both algorithms produce the same disk format, switching between "fresh PiPNN build" and "Vamana-edited delta" is transparent to search-side consumers. This answers "should PiPNN implement incremental inserts?" — no, we keep Vamana for that, and use the disk index format as the integration point.
+Because both algorithms produce the same disk format, switching between "fresh PiPNN build" and "Vamana-edited in-mem graph reloaded from a fresh disk build" is transparent to search-side consumers. This answers "should PiPNN implement incremental inserts?" — no, we keep Vamana's in-memory insert path for that, and use the disk index format as the integration point between rebuilds.
 
 #### Two-stage rollout
 
@@ -104,6 +134,7 @@ pub enum BuildAlgorithm {
         final_prune: bool,           // optional RobustPrune final pass
         leader_cap: usize,           // hard cap on leaders per level
         saturate_after_prune: bool,
+        num_threads: usize,          // 0 = all logical CPUs (matches Vamana)
     },
 }
 ```
@@ -112,7 +143,9 @@ pub enum BuildAlgorithm {
 
 `DiskIndexBuildParameters` gains a `build_algorithm: BuildAlgorithm` field and a constructor pair: `new` (defaults to Vamana, no PiPNN dep) and `new_with_algorithm` (explicit). The JSON schema for benchmark configs gains an optional `build_algorithm` block that, when present, deserializes via `#[serde(tag = "algorithm")]` into one of the variants above.
 
-**Deserialization behavior when the `pipnn` feature is disabled**: because `BuildAlgorithm::PiPNN` is gated by `#[cfg(feature = "pipnn")]`, a binary built without the feature does not see that variant. A JSON config containing `"algorithm": "PiPNN"` fed to such a binary fails at parse time with a serde error along the lines of `unknown variant 'PiPNN', expected 'Vamana'`. This is a clear, fail-fast diagnostic — not a backward-compatibility regression. Configs that omit `build_algorithm` (or set `"algorithm": "Vamana"`) parse identically across feature combinations. Documentation alongside the config schema will call this out so users know that PiPNN configs require a PiPNN-enabled build.
+**`num_threads`.** Like Vamana, PiPNN accepts `num_threads` as a build-time parameter (default `0` = all logical CPUs). Thread count has a small, bounded effect on peak RSS: each worker holds thread-local stripe buffers in the partition phase (~`stripe_kb`, typically 16 MB) and thread-local leaf-build scratch (~`c_max² × 4 B`, ≈ 256 KB at `c_max=256`). Total per-thread overhead is ~16–20 MB; at 48 threads this is ~960 MB of incremental resident set on top of the dataset and HashPrune reservoir, which dominate the peak. We do not consider `num_threads` a memory-budget knob — to bound RAM, use `build_ram_limit_gb` (see Memory mitigation).
+
+**Deserialization behavior when the `pipnn` feature is disabled — scope:** this affects only **JSON configs**, not the index files themselves. Because PiPNN and Vamana write byte-identical disk formats, an index *file* built by either algorithm is loaded by the same search code and does not require the `pipnn` feature at load time. The restriction below applies to the *build-time configuration* that selects which algorithm to invoke. Because `BuildAlgorithm::PiPNN` is gated by `#[cfg(feature = "pipnn")]`, a binary built without the feature does not see that variant. A JSON config containing `"algorithm": "PiPNN"` fed to such a binary fails at parse time with a serde error along the lines of `unknown variant 'PiPNN', expected 'Vamana'`. This is a clear, fail-fast diagnostic — not a backward-compatibility regression. Configs that omit `build_algorithm` (or set `"algorithm": "Vamana"`) parse identically across feature combinations. Documentation alongside the config schema will call this out so users know that PiPNN configs require a PiPNN-enabled build.
 
 ### Builder dispatch
 
@@ -160,7 +193,7 @@ Since the produced graph and PQ/SQ artifacts are byte-identical in format, a sea
 
 ### PiPNN is algorithmically batch-only
 
-This is a property of the algorithm, not of our implementation. The PiPNN paper (arXiv:2602.21247) is explicit that the design departs from incremental methods by "eliminating search from the graph-building process altogether": instead of running a greedy search for each new point's neighbors, PiPNN partitions the dataset, then computes neighbors for all points within each leaf as a single batched operation. The paper describes no per-point insertion algorithm and reports no streaming results. The framing throughout is "fast one-shot construction on a static dataset."
+This is a property of the algorithm, not of our implementation. The PiPNN paper ([arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) is explicit that the design departs from incremental methods by "eliminating search from the graph-building process altogether": instead of running a greedy search for each new point's neighbors, PiPNN partitions the dataset, then computes neighbors for all points within each leaf as a single batched operation. The paper describes no per-point insertion algorithm and reports no streaming results. The framing throughout is "fast one-shot construction on a static dataset."
 
 Where this batch assumption is load-bearing:
 
@@ -268,7 +301,7 @@ The foundation that ships first.
 - **Compatibility:** PiPNN-built indexes are read by the existing search pipeline unchanged (the on-disk format is identical) and produce recall numbers within the tolerances the existing disk-index test suite enforces.
 - **CI:** benchmark binary runs with `--features pipnn` on a small smoke test (SIFT-1M).
 
-M1–M5 close the feature-parity gaps; M6–M8 are validation and operational readiness.
+M1, M3–M5 close the feature-parity gaps in Stage 1; M6–M8 are validation and operational readiness. Checkpoint/resume (previously M2) is deferred to Stage 2 — see "Deferred to Stage 2" below for the rationale.
 
 ### M1 — Feature parity: in-memory build / search
 
@@ -277,13 +310,6 @@ Vamana supports both a **disk-resident** build/search path (via `diskann-disk`) 
 - **Scope:** expose `diskann_pipnn::build_typed` output (`Vec<Vec<u32>>`) as a populated in-memory `DiskANNIndex` so callers can build + search without touching disk.
 - **API:** add `diskann_pipnn::build_into_inmem_index(...)` returning an in-memory index that is read by the existing `DiskANNIndex::search` path unchanged.
 - **Validation:** in-mem search recall on Enron 1M with PiPNN-built graph matches the disk-build + load round-trip recall within noise.
-
-### M2 — Feature parity: checkpoint / resume
-
-- **Scope:** add checkpoint/resume to the PiPNN build pipeline using the existing `CheckpointManager` / `ChunkingConfig` infrastructure in `diskann-disk/src/build/chunking/`.
-- **Boundaries:** natural checkpoint points are partition output (`Vec<Leaf>`), per-leaf HashPrune flush, post-extract graph.
-- **Behavior:** matches Vamana's — a killed build resumes from the last checkpoint instead of starting over.
-- **Validation:** kill-and-resume test on BigANN 10M at three different checkpoint phases; final graph byte-identical to a non-interrupted build given the same seeds.
 
 ### M3 — Feature parity: quantized vector support
 
@@ -308,7 +334,7 @@ PiPNN-built graphs already work with the existing search-time filter pipeline (`
 
 Implement two memory-constrained PiPNN paths and select among them via the existing `build_ram_limit_gb` knob.
 
-- **Disk-edges:** HashPrune reservoirs spill to disk between leaf batches when `MemoryBudget` is below a threshold (currently ~8 GB for 10M-scale workloads).
+- **Disk-edges:** today's prototype generates all leaf edges first, spills them to disk, then streams chunks back into HashPrune. An alternative we plan to evaluate is to interleave the two — write partition metadata to disk and run leaf-build + HashPrune in chunks (build edges for the first N leaves' points, flush their adjacency lists, then move on). Both variants bound the resident HashPrune reservoir; the second avoids the full edge-set materialization at the cost of a second pass over the partition.
 - **Merged-shards:** per-shard graphs built independently then merged, mirroring Vamana's `build_merged_vamana_index` pipeline at `diskann-disk/src/build/builder/build.rs:327`. The existing shard merger is reused.
 - **Dispatch:** inside `build_inmem_pipnn_index()` — no new public parameter.
 - **Validation:** at `build_ram_limit_gb=4`, the PiPNN-merged path on BigANN 10M produces peak RSS ≤ 4 GB and recall within 1% of one-shot PiPNN.
@@ -337,6 +363,10 @@ Validate the Stage-2 hybrid loop end-to-end.
 - **Documentation:** replace experimental notes in `CLAUDE.md` with a permanent doc covering recommended parameters per workload class (dim × scale × metric).
 - **Runbook:** failure modes (OOM under one-shot, partition timeout, `l_max` saturation), diagnosis, recovery.
 - **Defaults:** parameter recommendations baked into the JSON config builder so users don't hand-tune for common cases.
+
+### Deferred to Stage 2
+
+- **Checkpoint / resume (was M2).** Vamana's checkpoint/resume is a *streaming* mechanism — it relies on the per-point incremental insert order to define natural checkpoint boundaries. PiPNN's batch design has no equivalent monotonic insertion sequence: partition output, per-leaf GEMM, and HashPrune merge are all coarse-grained whole-phase artifacts rather than fine-grained incremental progress. A useful PiPNN checkpoint scheme would therefore *not* mirror Vamana's; it would need new design choices about which phase boundaries to materialize, at what granularity, and whether the cost-benefit justifies the extra disk I/O. Empirically, PiPNN's full BigANN-10M build runs in ~80 s, so the operational value of resuming a partially completed build is materially lower than for Vamana's multi-hour rebuilds. We defer checkpoint design until Stage 2, when the production rebuild cadence and observed failure modes will tell us whether it is needed and what shape it should take.
 
 ### Out of scope (intentionally not on this list)
 
