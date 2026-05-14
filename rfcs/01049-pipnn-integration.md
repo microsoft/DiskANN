@@ -9,7 +9,7 @@
 
 ## Summary
 
-Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) as a second graph-construction algorithm for DiskANN's disk index. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default and the only algorithm supported for incremental inserts; PiPNN is the proposed faster path for full rebuilds.
+Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) as a second graph-construction algorithm for DiskANN's **disk index full-rebuild path**. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default for disk builds and the only algorithm supported for in-memory incremental inserts. In-memory PiPNN build is explicitly out of scope: DiskANN's in-mem path exists to support streaming construction, which PiPNN's batch algorithm cannot do efficiently.
 
 ## Motivation
 
@@ -84,15 +84,19 @@ Because both algorithms produce the same disk format, switching between "fresh P
 
 #### Two-stage rollout
 
-- **Stage 1 (this RFC):** Land PiPNN behind a build-algorithm selector. Vamana stays default; PiPNN is opt-in. Stage 1 has explicit milestones (in Future Work) that gate readiness for Stage 2.
-- **Stage 2 (separate proposal, conditional on Stage 1 milestones):** Retire the Vamana **full-rebuild** path. Vamana remains the implementation for incremental inserts via the hybrid model above.
+- **Stage 1 (this RFC):** Land PiPNN as an alternative builder for the **disk index full-rebuild path only**, behind a build-algorithm selector. Vamana stays default; PiPNN is opt-in. Stage 1 has explicit milestones (in Future Work) that gate readiness for Stage 2.
+- **Stage 2 (separate proposal, conditional on Stage 1 milestones):** Retire the Vamana **disk-index full-rebuild** path. Vamana remains the implementation for incremental inserts on the in-memory graph via the hybrid model above.
 
-### Goals
+In-memory PiPNN build/search is **not part of any stage**. DiskANN's in-memory `DiskANNIndex` path exists primarily to support streaming (per-point) index construction, which is exactly the use case PiPNN's batch algorithm does not address (see "PiPNN is algorithmically batch-only"). Replacing or extending the in-memory builder with PiPNN would offer no incremental capability and duplicate the disk path's value. We therefore list it under unstaged future work rather than as a Stage 1 / Stage 2 milestone.
 
-1. **Algorithm-level pluggability**: introduce a build-algorithm selector to the build pipeline that routes between Vamana (existing) and PiPNN (new). Existing build sites continue to default to Vamana with no behavior change.
+### Goals (Stage 1)
+
+Stage 1 is scoped to the **disk index full-rebuild path**. In-memory index construction is explicitly out of scope.
+
+1. **Algorithm-level pluggability for the disk builder**: introduce a build-algorithm selector to the disk-index build pipeline that routes between Vamana (existing) and PiPNN (new). Existing build sites continue to default to Vamana with no behavior change.
 2. **Disk format compatibility**: the PiPNN-built index is byte-compatible with Vamana-built indexes on disk — search, PQ, and storage layouts are unchanged. This is the foundation for the hybrid update model.
 3. **Public API compatibility**: the disk-index public API surface (`DiskIndexBuilder::new`, `IndexConfiguration`, `DiskIndexWriter`, JSON config schema) remains backward-compatible. PiPNN configuration is added under a new tagged enum variant.
-4. **Feature-parity milestones**: deliver the Vamana capabilities PiPNN needs for a full-rebuild role in production (see Future Work below).
+4. **Feature-parity milestones (disk path only)**: deliver the Vamana disk-build capabilities PiPNN needs for a full-rebuild role in production (see Future Work below).
 5. **Documented memory mitigation**: provide a configuration knob (three-tier build) that brings PiPNN's peak RSS to or below Vamana's at the cost of build time.
 
 ## Proposal
@@ -298,7 +302,7 @@ PiPNN beats Vamana on recall at every L on the 384d Enron 10M workload, at parit
 
 ## Future Work
 
-The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M1, M3–M9 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel. M2 (checkpoint/resume) is intentionally absent; see "Deferred to Stage 2" below.
+The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's disk-index full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M3–M9 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel. M1 (in-memory build/search) and M2 (checkpoint/resume) are intentionally absent — see "Out of scope: not part of any stage" and "Deferred to Stage 2" below.
 
 ### M0 — Skeleton integration
 
@@ -310,14 +314,6 @@ The foundation that ships first.
 - **CI:** benchmark binary runs with `--features pipnn` on a small smoke test (SIFT-1M).
 
 M1, M3–M5 close the feature-parity gaps in Stage 1; M6–M9 are validation and operational readiness. Checkpoint/resume (previously M2) is deferred to Stage 2 — see "Deferred to Stage 2" below for the rationale.
-
-### M1 — Feature parity: in-memory build / search
-
-Vamana supports both a **disk-resident** build/search path (via `diskann-disk`) and an **in-memory only** path (via `diskann::graph::index::DiskANNIndex`). PiPNN today only produces graphs handed to `DiskIndexWriter`; an in-mem-only consumer that wants PiPNN's speed has no entry point.
-
-- **Scope:** expose `diskann_pipnn::build_typed` output (`Vec<Vec<u32>>`) as a populated in-memory `DiskANNIndex` so callers can build + search without touching disk.
-- **API:** add `diskann_pipnn::build_into_inmem_index(...)` returning an in-memory index that is read by the existing `DiskANNIndex::search` path unchanged.
-- **Validation:** in-mem search recall on Enron 1M with PiPNN-built graph matches the disk-build + load round-trip recall within noise.
 
 ### M3 — Feature parity: quantized vector support
 
@@ -393,13 +389,16 @@ Validate the Stage-2 hybrid loop end-to-end.
 
   *Note on determinism for any future checkpoint validation:* PiPNN is a parallel algorithm (rayon-parallel partition, leaf-build GEMM, and HashPrune merge), so byte-identical output across runs — and therefore across "resumed vs. never-interrupted" runs — is **not** a free property. It would require extra determinism work (fixed thread schedule, deterministic reduction order in the HashPrune reservoir, seeded LSH hyperplanes). The right validation criterion for a resumed build is **recall parity with a non-resumed build**, not byte-identical adjacency lists.
 
-### Out of scope (intentionally not on this list)
+### Out of scope: not part of any stage
 
+These are explicitly *not* on a Stage 1 or Stage 2 roadmap. They may be revisited if a future workload demands them, but they are not gating items for either stage.
+
+- **In-memory PiPNN build / in-memory index population (was M1).** DiskANN's in-memory `DiskANNIndex` exists primarily to support streaming per-point construction and online inserts — which is exactly what PiPNN's batch design cannot do efficiently (see "PiPNN is algorithmically batch-only"). Building a `DiskANNIndex` from PiPNN-produced adjacency lists is mechanically possible (the data structures are compatible) but offers no incremental capability, duplicates the disk path's value, and would force `diskann-pipnn` to take a runtime dependency on the in-mem graph crate. We defer indefinitely; if a non-streaming in-mem consumer ever needs PiPNN's build speed, the simpler answer is "build to disk, then load."
 - **Build-time PQ distance kernel.** Not used by Vamana in production paths today; deferred indefinitely.
 - **PiPNN incremental insert API.** The hybrid model (PiPNN rebuild + Vamana inserts) removes the need.
 - **PiPNN incremental delete API.** Same reason.
 - **Frozen-point semantics differences.** PiPNN writes the dataset medoid as the single frozen start point, same as Vamana's default. Already byte-compatible; no work required.
-- **Multi-vector index support.** Out of scope for Stage 1; revisit only if a production workload requires it.
+- **Multi-vector index support.** Revisit only if a production workload requires it.
 
 ## References
 
