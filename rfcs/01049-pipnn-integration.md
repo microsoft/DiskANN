@@ -232,7 +232,7 @@ PiPNN beats Vamana on recall at every L at parity QPS — and 6.3× faster build
 
 ## Future Work — Stage-1 Milestones
 
-These are gating items for Stage 2. M0 ships in this RFC; M3–M9 are follow-on work, parallelizable where dependencies allow. **M1** (in-memory build) and **M2** (checkpoint/resume) are intentionally absent — see "Out of scope" and "Deferred to Stage 2".
+These are gating items for Stage 2. M0 ships in this RFC; M3–M7 and M9 are follow-on work, parallelizable where dependencies allow. **M1** (in-memory build), **M2** (checkpoint/resume), and **M8** (hybrid update model) are intentionally absent — see "Out of scope" and "Deferred to Stage 2". Stage 1 is strictly about build-from-scratch and full rebuilds with PiPNN; no hybrid behavior is exercised or validated here.
 
 ### M0 — Skeleton integration (this RFC)
 Crate, `BuildAlgorithm` enum, dispatch behind `pipnn` Cargo feature. JSON config gains optional `build_algorithm`. CI smoke test (SIFT-1M) with `--features pipnn`.
@@ -259,13 +259,12 @@ Validates the **trade-off hypothesis** from the Problem Statement.
 ### M7 — Production validation: recall × QPS × dimensionality
 End-to-end on the full workload mix. Datasets: BigANN, Enron, plus one production-representative. Scales 10M and 100M (billion if hardware permits). Metrics `squared_l2` and `cosine_normalized`. **Pass:** per cell, PiPNN recall@K within ±1% of Vamana's at matching QPS, or higher QPS at matching recall.
 
-### M8 — Hybrid update model validation
-PiPNN build → N incremental Vamana inserts → measure recall decay → trigger PiPNN rebuild → confirm recall restored. Output: a recommended "quality decay threshold" for production rebuild triggers. Also confirms Vamana's in-mem insert path reads PiPNN graphs correctly.
-
 ### M9 — Operational readiness
 Telemetry (per-phase timing + RSS via existing OTel tracer), permanent docs replacing experimental `CLAUDE.md` notes, runbook (OOM, partition timeout, `l_max` saturation), default parameter recommendations per workload class.
 
 ### Deferred to Stage 2
+
+- **Hybrid update model validation (was M8).** End-to-end validation of the Stage-2 loop — PiPNN build → incremental Vamana inserts → recall-decay curve → PiPNN rebuild — belongs with the Stage-2 proposal that actually adopts the hybrid model. Stage 1 only exercises the full-build path, so there is no in-production hybrid behavior to characterize yet. The disk-format-compatibility check (Vamana's in-mem insert path reading a PiPNN-produced graph) is a one-shot sanity test that can be performed at Stage 2 entry; it does not need to gate Stage 1.
 
 - **Checkpoint / resume.** Vamana's streaming checkpoint design doesn't fit PiPNN's batch phases. Useful boundaries (partition output, post-extract) would need a different scheme, and operational value is lower (PiPNN's BigANN-10M build is ~80s). Defer until Stage 2 reveals the production rebuild cadence.
 
