@@ -70,6 +70,8 @@ Two important things this table is **not** claiming:
 
 So the honest framing is: PiPNN trades a higher minimum RAM budget for a substantially faster build at that budget. Neither algorithm currently converts surplus RAM into faster builds; both convert surplus RAM into "no pressure to use the chunked/shard fallbacks."
 
+The numbers above are from initial benchmarks on a single workload and configuration. A dedicated experiment to validate this hypothesis across RAM budgets and worker shapes is part of Stage 1 — see **M6 — Fixed-resource trade-off validation** in Future Work below.
+
 #### Hybrid update model (Stage 2 direction)
 
 Vamana and PiPNN write the same on-disk graph format, so a graph built by either algorithm can be loaded by the same search code and, once loaded into memory, can be incrementally edited by Vamana. We exploit this for the production update story:
@@ -290,7 +292,7 @@ PiPNN beats Vamana on recall at every L on the 384d Enron 10M workload, at parit
 
 ## Future Work
 
-The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M1–M8 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel.
+The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M1, M3–M9 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel. M2 (checkpoint/resume) is intentionally absent; see "Deferred to Stage 2" below.
 
 ### M0 — Skeleton integration
 
@@ -301,7 +303,7 @@ The foundation that ships first.
 - **Compatibility:** PiPNN-built indexes are read by the existing search pipeline unchanged (the on-disk format is identical) and produce recall numbers within the tolerances the existing disk-index test suite enforces.
 - **CI:** benchmark binary runs with `--features pipnn` on a small smoke test (SIFT-1M).
 
-M1, M3–M5 close the feature-parity gaps in Stage 1; M6–M8 are validation and operational readiness. Checkpoint/resume (previously M2) is deferred to Stage 2 — see "Deferred to Stage 2" below for the rationale.
+M1, M3–M5 close the feature-parity gaps in Stage 1; M6–M9 are validation and operational readiness. Checkpoint/resume (previously M2) is deferred to Stage 2 — see "Deferred to Stage 2" below for the rationale.
 
 ### M1 — Feature parity: in-memory build / search
 
@@ -339,9 +341,24 @@ Implement two memory-constrained PiPNN paths and select among them via the exist
 - **Dispatch:** inside `build_inmem_pipnn_index()` — no new public parameter.
 - **Validation:** at `build_ram_limit_gb=4`, the PiPNN-merged path on BigANN 10M produces peak RSS ≤ 4 GB and recall within 1% of one-shot PiPNN.
 
-### M6 — Production validation: recall × QPS × dimensionality matrix
+### M6 — Fixed-resource trade-off validation
 
-End-to-end validation on the full production workload mix.
+This milestone validates the **concrete trade-off hypothesis** stated in the Problem Statement: under a fixed worker shape (CPU cores, RAM budget, SSD throughput), PiPNN delivers higher build throughput than Vamana at matching recall when its working set fits, and remains competitive (via the three-tier dispatch in M5) when it does not. The output of this milestone is the evidence behind the per-budget recommendation in the Stage-1 deployment guide.
+
+- **Fixed worker shape per run.** Lock CPU cores (e.g. 16), SSD model/throughput, and a RAM ceiling enforced via cgroups (`memory.max`) so the build *cannot* exceed it. RAM-budget sweep on BigANN 10M: `{3, 6, 8, 12, 16, 24, 32}` GB at minimum. Include at least one row each for Enron 10M (higher dim, larger reservoir) and a 100M-scale dataset (one budget per algorithm sufficient to fit).
+- **Algorithm × strategy cells.** For each RAM budget, run: Vamana one-shot, Vamana partitioned, PiPNN one-shot (if fits), PiPNN disk-edges, PiPNN merged-shards. Skip cells whose minimum working set exceeds the budget — those count as "OOM, not supported at this budget" and are part of the result, not a gap.
+- **Metrics captured per cell.** Wall-clock build time, peak RSS (via heaptrack or `/usr/bin/time -v`), CPU utilization (`pidstat`), SSD bytes read/written, recall@K at L=50/100/L_target, and queries-per-second at matching recall. Throughput reported as **vectors per minute per worker** so different worker shapes compare directly.
+- **Hypotheses to confirm or falsify.**
+  1. PiPNN's wall-clock advantage over Vamana persists across all RAM budgets where its working set fits (one-shot or disk-edges variant).
+  2. PiPNN's merged-shards path matches or beats Vamana's partitioned-rebuild at the same RAM ceiling on build time *and* recall.
+  3. Neither algorithm reduces build time when given RAM headroom past its working-set requirement (validates the "surplus RAM doesn't buy speed" claim).
+  4. PiPNN's per-thread overhead is bounded as stated (~16–20 MB/thread) and `num_threads` is not a hidden RAM knob.
+- **Out-of-budget behavior.** Each (algorithm × budget) cell that cannot complete is recorded as such — explicit "PiPNN one-shot not supported at 6 GB on BigANN 10M" is a valid result, not a failed experiment.
+- **Pass criterion for Stage 2 readiness.** A documented matrix where each budget has a clearly-better algorithm (or "tie") at matching recall, with no surprise cells that contradict the Problem Statement's hypothesis. Surprises must be either reproduced and explained, or treated as Stage-1 blockers.
+
+### M7 — Production validation: recall × QPS × dimensionality matrix
+
+End-to-end validation on the full production workload mix (independent of the resource matrix in M6).
 
 - **Datasets:** at minimum three families (BigANN, Enron, plus one production-representative).
 - **Scales:** 10M and 100M; one billion-scale sample if hardware permits.
@@ -349,7 +366,7 @@ End-to-end validation on the full production workload mix.
 - **Pass criterion:** for each (dataset, scale, metric) cell, PiPNN recall@K is within Vamana's recall ±1% at matching QPS, *or* higher QPS at matching recall.
 - **Out-of-band cells** are documented as "PiPNN not yet recommended for X" rather than blocking Stage 2 entirely.
 
-### M7 — Production validation: hybrid update model
+### M8 — Production validation: hybrid update model
 
 Validate the Stage-2 hybrid loop end-to-end.
 
@@ -357,7 +374,7 @@ Validate the Stage-2 hybrid loop end-to-end.
 - **Output:** a recommended "quality decay threshold" for production rebuild triggers, derived from the measured decay curve.
 - **Disk-format compatibility test:** confirm Vamana's incremental-insert path reads PiPNN-produced graphs correctly. This is the load-bearing compatibility check for the hybrid model.
 
-### M8 — Operational readiness
+### M9 — Operational readiness
 
 - **Telemetry:** emit per-phase timing and peak RSS via the existing OpenTelemetry tracer, comparable to Vamana's spans.
 - **Documentation:** replace experimental notes in `CLAUDE.md` with a permanent doc covering recommended parameters per workload class (dim × scale × metric).
