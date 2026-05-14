@@ -16,13 +16,13 @@ use std::{
 };
 
 use diskann_utils::future::SendFuture;
-use diskann_vector::distance::Metric;
+use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
     ANNError, always_escalate,
     error::{Infallible, RankedError, ToRanked, TransientError},
-    flat::{DistancesUnordered, OnElementsUnordered, SearchStrategy},
+    flat::{DistancesUnordered, SearchStrategy},
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
     provider::{self, BuildQueryComputer, ExecutionContext, HasElementRef, HasId, NoopGuard},
@@ -205,7 +205,7 @@ impl TransientError<InvalidId> for TransientGetError {
     }
 }
 
-/// Two-tier error for [`Visitor::on_elements_unordered`]: a critical [`InvalidId`]
+/// Two-tier error for [`Visitor::distances_unordered`]: a critical [`InvalidId`]
 /// or a recoverable [`TransientGetError`].
 #[derive(Debug)]
 pub enum AccessError {
@@ -336,12 +336,16 @@ impl BuildQueryComputer<&[f32]> for Visitor<'_> {
     }
 }
 
-impl OnElementsUnordered for Visitor<'_> {
+impl DistancesUnordered<&[f32]> for Visitor<'_> {
     type Error = AccessError;
 
-    fn on_elements_unordered<F>(&mut self, mut f: F) -> impl SendFuture<Result<(), Self::Error>>
+    fn distances_unordered<F>(
+        &mut self,
+        computer: &Self::QueryComputer,
+        mut f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
     where
-        F: Send + for<'a> FnMut(Self::Id, <Self as HasElementRef>::ElementRef<'a>),
+        F: Send + FnMut(Self::Id, f32),
     {
         async move {
             for (i, vector) in self.provider.items.iter().enumerate() {
@@ -352,14 +356,13 @@ impl OnElementsUnordered for Visitor<'_> {
                     return Err(AccessError::Transient(TransientGetError::new(id)));
                 }
                 self.get_element.increment();
-                f(id, vector.as_slice());
+                let dist = computer.evaluate_similarity(vector.as_slice());
+                f(id, dist);
             }
             Ok(())
         }
     }
 }
-
-impl DistancesUnordered<&[f32]> for Visitor<'_> {}
 
 //////////////
 // Strategy //

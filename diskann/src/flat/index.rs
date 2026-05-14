@@ -31,7 +31,7 @@ pub struct SearchStats {
 /// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
 ///
 /// The provider is owned by the index. The index is constructed once at process startup and
-/// shared across requests; per-query state lives in the [`crate::flat::OnElementsUnordered`]
+/// shared across requests; per-query state lives in the [`crate::flat::DistancesUnordered`]
 /// implementation that the [`SearchStrategy`] produces.
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {

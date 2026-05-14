@@ -18,7 +18,6 @@
 //! | :------------------------------------       | :----------------------------------------- |:--------- |
 //! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
 //! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
-//! | [`crate::provider::Accessor`]               | [`OnElementsUnordered`]                    | No        |
 //! | [`crate::provider::DistancesUnordered`]     | [`DistancesUnordered`]                     | No        |
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
 //! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |
@@ -32,7 +31,7 @@ pub mod iterator;
 pub mod strategy;
 
 pub use index::{FlatIndex, SearchStats};
-pub use iterator::{DistancesUnordered, FlatIterator, Iterated, OnElementsUnordered};
+pub use iterator::{DistancesUnordered, FlatIterator, Iterated};
 pub use strategy::SearchStrategy;
 
 #[cfg(test)]
