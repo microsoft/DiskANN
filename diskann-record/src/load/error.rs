@@ -72,6 +72,13 @@ pub enum Kind {
     MissingField,
     TypeMismatch,
     UnknownVersion,
+    /// Wire format has a `$variant` tag but the target type is not an enum.
+    UnexpectedVariant,
+    /// Target type is an enum but the wire format has no `$variant` tag.
+    MissingVariant,
+    /// The wire format's `$variant` tag does not match any known variant of the
+    /// target enum.
+    UnknownVariant,
 }
 
 impl Kind {
@@ -81,6 +88,9 @@ impl Kind {
             Self::MissingField => "missing field",
             Self::TypeMismatch => "type mismatch",
             Self::UnknownVersion => "unknown version",
+            Self::UnexpectedVariant => "unexpected variant tag on non-enum record",
+            Self::MissingVariant => "missing variant tag on enum record",
+            Self::UnknownVariant => "unknown variant",
         }
     }
 }

@@ -126,6 +126,7 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
             {
                 // TODO: Handle invaiants that only one of our reserved words are present.
                 let mut version: Option<Version> = None;
+                let mut variant: Option<Cow<'a, str>> = None;
                 let mut handle_name: Option<String> = None;
                 let mut fields: HashMap<Cow<'a, str>, Value<'a>> = HashMap::new();
 
@@ -133,6 +134,9 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
                     match key.as_ref() {
                         "$version" => {
                             version = Some(map.next_value()?);
+                        }
+                        "$variant" => {
+                            variant = Some(map.next_value()?);
                         }
                         "$handle" => {
                             handle_name = Some(map.next_value()?);
@@ -150,7 +154,11 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
 
                 if let Some(version) = version {
                     let record = Record { record: fields };
-                    return Ok(Value::Object(Versioned { record, version }));
+                    return Ok(Value::Object(Versioned {
+                        record,
+                        version,
+                        variant,
+                    }));
                 }
 
                 Err(de::Error::custom(
@@ -176,12 +184,10 @@ pub struct Record<'a> {
 }
 
 impl<'a> Record<'a> {
-    pub fn from_iter<I>(itr: I) -> Self
-    where
-        I: IntoIterator<Item = (Cow<'a, str>, Value<'a>)>,
-    {
+    /// Construct an empty record. Useful for unit enum variants.
+    pub fn empty() -> Self {
         Self {
-            record: itr.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+            record: HashMap::new(),
         }
     }
 
@@ -207,21 +213,44 @@ impl<'a> Record<'a> {
     }
 }
 
+impl<'a> FromIterator<(Cow<'a, str>, Value<'a>)> for Record<'a> {
+    fn from_iter<I: IntoIterator<Item = (Cow<'a, str>, Value<'a>)>>(itr: I) -> Self {
+        Self {
+            record: itr.into_iter().collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Versioned<'a> {
     #[serde(flatten)]
     record: Record<'a>,
     #[serde(rename = "$version")]
     version: Version,
+    #[serde(
+        rename = "$variant",
+        default,
+        skip_serializing_if = "Option::is_none",
+        borrow
+    )]
+    variant: Option<Cow<'a, str>>,
 }
 
 impl<'a> Versioned<'a> {
-    pub(crate) fn new(record: Record<'a>, version: Version) -> Self {
-        Self { record, version }
+    pub(crate) fn new(record: Record<'a>, version: Version, variant: Option<Cow<'a, str>>) -> Self {
+        Self {
+            record,
+            version,
+            variant,
+        }
     }
 
     pub(crate) fn version(&self) -> Version {
         self.version
+    }
+
+    pub(crate) fn variant(&self) -> Option<&str> {
+        self.variant.as_deref()
     }
 
     pub(crate) fn record(&self) -> &Record<'a> {

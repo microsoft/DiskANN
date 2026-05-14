@@ -143,6 +143,7 @@ impl<'a> Context<'a> {
                     inner: self.inner,
                     record: versioned.record(),
                     version: versioned.version(),
+                    variant: versioned.variant(),
                 };
                 Some(object)
             }
@@ -195,11 +196,17 @@ pub struct Object<'a> {
     inner: &'a ContextInner,
     record: &'a save::Record<'a>,
     version: Version,
+    variant: Option<&'a str>,
 }
 
 impl<'a> Object<'a> {
     pub fn version(&self) -> Version {
         self.version
+    }
+
+    /// Return the variant tag for enum-shaped records, or `None` for structs.
+    pub fn variant(&self) -> Option<&'a str> {
+        self.variant
     }
 
     pub fn field<T>(&self, key: &str) -> Result<T>

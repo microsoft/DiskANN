@@ -12,6 +12,8 @@ pub use context::Context;
 mod error;
 pub use error::{Error, Result};
 
+use std::borrow::Cow;
+
 use crate::Version;
 
 pub fn save_to_disk<T>(
@@ -31,6 +33,15 @@ where
 pub trait Save {
     const VERSION: Version;
     fn save(&self, context: Context<'_>) -> Result<Record<'_>>;
+
+    /// Return the variant tag for enum types. Default: `None` (struct).
+    ///
+    /// Enum implementations must return `Some(variant_name)` for every variant.
+    /// The framework writes this into the manifest as `$variant` and enforces on
+    /// load that the tag's presence matches the corresponding [`Load::IS_ENUM`].
+    fn variant(&self) -> Option<Cow<'_, str>> {
+        None
+    }
 }
 
 /// Save anything!
@@ -44,7 +55,8 @@ where
 {
     fn save(&self, context: Context<'_>) -> Result<Value<'_>> {
         let record = self.save(context)?;
-        let versioned = Versioned::new(record, T::VERSION);
+        let variant = <Self as Save>::variant(self);
+        let versioned = Versioned::new(record, T::VERSION, variant);
         Ok(Value::Object(versioned))
     }
 }
@@ -133,6 +145,17 @@ impl std::fmt::Display for Serializing {
     }
 }
 
+/// Build a [`Record`] from a list of fields.
+///
+/// Two forms are supported:
+///
+/// * `save_fields!(self, context, [a, b, c])` reads each field as `self.a`,
+///   `self.b`, etc. Use this from `Save::save` for plain structs.
+/// * `save_fields!(context, [a, b, c])` reads each field from a local binding of
+///   the same name. Use this inside enum match arms where the variant's payload
+///   has already been destructured into local bindings. Those bindings are
+///   assumed to be references (which is automatic when matching against `&self`);
+///   for an owned local, take a reference explicitly first.
 #[macro_export]
 macro_rules! save_fields {
     ($me:ident, $context:ident, [$($field:ident),+ $(,)?]) => {{
@@ -143,6 +166,23 @@ macro_rules! save_fields {
                         ::std::borrow::Cow::Borrowed(stringify!($field)),
                         <_ as $crate::save::Saveable>::save(
                             &$me.$field,
+                            $context.clone()
+                        ).map_err(|err| {
+                            err.context($crate::save::Serializing(stringify!($field)))
+                        })?
+                    ),
+                )+
+            ]
+        )
+    }};
+    ($context:ident, [$($field:ident),+ $(,)?]) => {{
+        $crate::save::Record::from_iter(
+            [
+                $(
+                    (
+                        ::std::borrow::Cow::Borrowed(stringify!($field)),
+                        <_ as $crate::save::Saveable>::save(
+                            $field,
                             $context.clone()
                         ).map_err(|err| {
                             err.context($crate::save::Serializing(stringify!($field)))

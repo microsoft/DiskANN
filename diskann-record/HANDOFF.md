@@ -71,15 +71,17 @@ Everything is by-reference into the deserialized `Value` tree ("parse once, prob
 ### Macros
 
 - `save_fields!(self, context, [x, y, inner])` — saves named fields, wraps errors with
-  field name context.
+  field name context. Inside an enum match arm (where the variant's payload has been
+  destructured), drop the first argument: `save_fields!(context, [weights])` reads from
+  the local bindings.
 - `load_fields!(object, [x, y, inner, vector: Handle])` — loads named fields with optional
-  type annotations when inference fails.
+  type annotations when inference fails. Works identically for structs and enum variants.
 
 ### Reserved Keys
 
-Keys starting with `$` are reserved for infrastructure (`$version`, `$handle`). Since Rust
-identifiers can't start with `$`, the `save_fields!` macro is inherently safe — no runtime
-check needed in the macro path.
+Keys starting with `$` are reserved for infrastructure (`$version`, `$variant`,
+`$handle`). Since Rust identifiers can't start with `$`, the `save_fields!` macro is
+inherently safe — no runtime check needed in the macro path.
 
 ## What Works
 
@@ -95,6 +97,13 @@ check needed in the macro path.
 - Light/heavy error split on load path
 - `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush errors via `save::Result<Handle>`
 - Compile-time `const` assertion in `src/lib.rs` that rejects targets where `usize::BITS != 64`.
+- Enum support via internally-tagged objects (`$variant` alongside `$version`). Save side
+  exposes `Save::variant() -> Option<Cow<'_, str>>` (default `None` = struct), and
+  `save_fields!` has a two-argument form (`save_fields!(context, [...])`) for use inside
+  enum match arms after destructuring. Load side adds `Load::IS_ENUM` (default `false`)
+  plus `Object::variant()`. The blanket `Loadable` impl strictly enforces tag presence:
+  loading a tagged record as a struct yields `UnexpectedVariant`, loading an untagged
+  record as an enum yields `MissingVariant`.
 
 ## Remaining Work
 
@@ -120,9 +129,14 @@ a JSON array of integers).
 
 ### Enum Support
 
-No framework-level approach for enums yet. This is a significant gap for real-world usage
-(e.g., `DistanceMetric`, `QuantizationType`). Needs a convention for how enum variants map
-to the `Value` tree — likely a discriminant field pattern.
+Unit and struct variants are supported via the internally-tagged representation
+described above. Tuple variants are *not* directly supported: rename the payload
+field(s) to a struct variant, or bind to a local before constructing the record.
+Multi-field tuple variants are intentionally out of scope — name your fields.
+
+Open follow-ups: derive macro support for the `variant()` / `IS_ENUM` boilerplate,
+and a clearer error for the `UnknownVariant` case (currently a light error with the
+string `"unknown variant"` and no embedded name).
 
 ### SemVer Version Dispatch
 
