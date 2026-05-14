@@ -24,7 +24,7 @@ This takes one of several forms:
 * Trait objects (spherical quantization in `iface.rs`)
 * Enum matching (PQ)
 
-While this is the righ decision to avoid an absolute code explosion, it leads to an unfortunate composability problem.
+While this is the right decision to avoid an absolute code explosion, it leads to an unfortunate composability problem.
 Take for example the quantization approach taken in #1050 (adding quantization to `diskann-garnet`).
 Here, an inner distance computations (using one of the type-erasure approaches outlined above) need to be composed with a small unwrapping layer.
 For `diskann-garnet` specifically, this unwrapping layer reifies the type of raw byte slices (translates from `&[u8]` to the type needed by the inner computer).
@@ -156,7 +156,7 @@ fn level_2_factory(op: Op) -> Box<dyn Fn(f32, f32) -> f32> {
         {
             // The key difference here is that we have the **concrete** type of `f` rather
             // than a type erased object (function pointer).
-            Box::new(|x, y| f(2.0 * x, 2.0 * y))
+            Box::new(move |x, y| f.call(2.0 * x, 2.0 * y))
         }
     }
 
