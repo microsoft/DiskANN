@@ -232,23 +232,23 @@ PiPNN beats Vamana on recall at every L at parity QPS — and 6.3× faster build
 
 ## Future Work — Stage-1 Milestones
 
-These are gating items for Stage 2. M0 ships in this RFC; M3–M7 and M9 are follow-on work, parallelizable where dependencies allow. **M1** (in-memory build), **M2** (checkpoint/resume), and **M8** (hybrid update model) are intentionally absent — see "Out of scope" and "Deferred to Stage 2". Stage 1 is strictly about build-from-scratch and full rebuilds with PiPNN; no hybrid behavior is exercised or validated here.
+Stage 1 covers build-from-scratch and full rebuilds with PiPNN. M0 ships in this RFC; M1–M6 are follow-on work, parallelizable where dependencies allow.
 
 ### M0 — Skeleton integration (this RFC)
 Crate, `BuildAlgorithm` enum, dispatch behind `pipnn` Cargo feature. JSON config gains optional `build_algorithm`. CI smoke test (SIFT-1M) with `--features pipnn`.
 
-### M3 — Quantization parity
+### M1 — Quantization parity
 Extend PiPNN beyond `SQ1` to `SQ_2/4/8`, reusing the trained `ScalarQuantizer`. **Pass:** SQ_8 recall within 0.5% of FP on BigANN 10M and Enron 10M.
 
-### M4 — Label-filtered indexes
+### M2 — Label-filtered indexes
 Run filter benchmark configs with `BuildAlgorithm::PiPNN`; confirm filter-recall within ±1% of Vamana. Partition may need label-aware leaf assignment for high-cardinality labels.
 
-### M5 — Three-tier memory dispatch
+### M3 — Three-tier memory dispatch
 Implement and validate the disk-edges + merged-shards paths selected by `build_ram_limit_gb`. **Pass:** at `build_ram_limit_gb=4`, PiPNN-merged on BigANN 10M has peak RSS ≤ 4 GB and recall within 1% of one-shot.
 
 Two disk-edges variants are on the table: (i) materialize all leaf edges then stream HashPrune (current prototype), or (ii) interleave leaf-build + HashPrune in chunks. The second avoids full edge-set materialization at the cost of a second partition pass.
 
-### M6 — Fixed-resource trade-off validation
+### M4 — Fixed-resource trade-off validation
 Validates the **trade-off hypothesis** from the Problem Statement.
 
 - **Setup.** Lock CPU/SSD on a fixed worker; enforce RAM via cgroups. Sweep RAM `{3, 6, 8, 12, 16, 24, 32}` GB on BigANN 10M; include rows for Enron 10M and a 100M-scale dataset.
@@ -256,25 +256,25 @@ Validates the **trade-off hypothesis** from the Problem Statement.
 - **Metrics.** Wall-clock, peak RSS, CPU util, SSD bytes, recall@K, QPS — reported as **vectors/min/worker** for cross-shape comparison.
 - **Pass.** Documented matrix with a clearly-better algorithm (or tie) per budget at matching recall. Surprises are Stage-1 blockers.
 
-### M7 — Production validation: recall × QPS × dimensionality
+### M5 — Production validation: recall × QPS × dimensionality
 End-to-end on the full workload mix. Datasets: BigANN, Enron, plus one production-representative. Scales 10M and 100M (billion if hardware permits). Metrics `squared_l2` and `cosine_normalized`. **Pass:** per cell, PiPNN recall@K within ±1% of Vamana's at matching QPS, or higher QPS at matching recall.
 
-### M9 — Operational readiness
+### M6 — Operational readiness
 Telemetry (per-phase timing + RSS via existing OTel tracer), permanent docs replacing experimental `CLAUDE.md` notes, runbook (OOM, partition timeout, `l_max` saturation), default parameter recommendations per workload class.
 
 ### Deferred to Stage 2
 
-- **Hybrid update model validation (was M8).** End-to-end validation of the Stage-2 loop — PiPNN build → incremental Vamana inserts → recall-decay curve → PiPNN rebuild — belongs with the Stage-2 proposal that actually adopts the hybrid model. Stage 1 only exercises the full-build path, so there is no in-production hybrid behavior to characterize yet. The disk-format-compatibility check (Vamana's in-mem insert path reading a PiPNN-produced graph) is a one-shot sanity test that can be performed at Stage 2 entry; it does not need to gate Stage 1.
+- **Hybrid update model validation.** End-to-end validation of the Stage-2 loop — PiPNN build → incremental Vamana inserts → recall-decay curve → PiPNN rebuild — belongs with the Stage-2 proposal that actually adopts the hybrid model. Stage 1 exercises only the full-build path. The disk-format-compatibility check (Vamana's in-mem insert path reading a PiPNN-produced graph) is a one-shot sanity test that can run at Stage 2 entry.
 
 - **Checkpoint / resume.** Vamana's streaming checkpoint design doesn't fit PiPNN's batch phases. Useful boundaries (partition output, post-extract) would need a different scheme, and operational value is lower (PiPNN's BigANN-10M build is ~80s). Defer until Stage 2 reveals the production rebuild cadence.
 
-  *Determinism note:* PiPNN is rayon-parallel — byte-identical output across runs is not free (would need fixed thread schedule, deterministic reductions, seeded LSH). For any future resumed-build test, the right validation criterion is **recall parity**, not byte-identity.
+  *Determinism note:* PiPNN is rayon-parallel — byte-identical output across runs is not free (would need fixed thread schedule, deterministic reductions, seeded LSH). The right validation criterion for any future resumed-build test is **recall parity**, not byte-identity.
 
 ### Out of scope: not part of any stage
 
-- **In-memory PiPNN build (was M1).** The in-mem `DiskANNIndex` exists for streaming construction — exactly what PiPNN can't do efficiently. Building one from PiPNN adjacency lists is mechanically possible but offers no incremental capability and would force `diskann-pipnn` to depend on the in-mem graph crate. If a non-streaming in-mem consumer ever needs PiPNN's speed: build to disk, then load.
+- **In-memory PiPNN build.** The in-mem `DiskANNIndex` exists for streaming construction — exactly what PiPNN can't do efficiently. Building one from PiPNN adjacency lists is mechanically possible but offers no incremental capability and would force `diskann-pipnn` to depend on the in-mem graph crate. If a non-streaming in-mem consumer ever needs PiPNN's speed: build to disk, then load.
 - **Build-time PQ distance kernel.** Not used by Vamana in production today.
-- **PiPNN incremental insert/delete API.** Hybrid model removes the need.
+- **PiPNN incremental insert/delete API.** The hybrid update model (Vamana inserts on the in-memory graph, PiPNN for full rebuilds) removes the need.
 - **Frozen-point semantics.** PiPNN writes the medoid as the single frozen start point — already byte-compatible with Vamana's default.
 - **Multi-vector index support.** Revisit only if a production workload requires it.
 
