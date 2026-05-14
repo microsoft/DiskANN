@@ -34,7 +34,7 @@ impl<A, const GROUP: usize>
 where
     A: Architecture,
     F32Kernel<GROUP>: Kernel<A>,
-    layouts::BlockTransposed<half::f16, GROUP>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left>
+    layouts::BlockTransposedLayout<half::f16, GROUP>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left>
         + layouts::Layout<Element = half::f16>,
     layouts::RowMajor<half::f16>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right>
         + layouts::Layout<Element = half::f16>,

@@ -32,46 +32,46 @@ pub(super) fn register_inputs(
 // Enum types //
 ////////////////
 
-/// The two distance operations exposed by `QueryComputer`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Operation {
-    Chamfer,
-    MaxSim,
-}
-
-impl std::fmt::Display for Operation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let st = match self {
-            Self::Chamfer => "chamfer",
-            Self::MaxSim => "max_sim",
-        };
-        write!(f, "{}", st)
-    }
-}
-
-/// Which implementation tier to benchmark.
+/// Which kernel to benchmark.
+///
+/// Mirrors `diskann-benchmark-simd`'s `Arch` enum: kebab-case serialization,
+/// one variant per supported ISA plus `Reference` (fallback) and `Auto`
+/// (host-portable). Marked `#[non_exhaustive]` so experimental kernels can
+/// add variants without breaking JSON configs.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Implementation {
-    Optimized,
+#[non_exhaustive]
+pub(crate) enum Arch {
+    #[serde(rename = "x86-64-v4")]
+    #[allow(non_camel_case_types)]
+    X86_64_V4,
+    #[serde(rename = "x86-64-v3")]
+    #[allow(non_camel_case_types)]
+    X86_64_V3,
+    Neon,
+    Scalar,
     Reference,
+    /// Auto-dispatch to the host's best supported arch (calls `QueryComputer::new`).
+    Auto,
 }
 
-impl std::fmt::Display for Implementation {
+impl std::fmt::Display for Arch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let st = match self {
-            Self::Optimized => "optimized",
+            Self::X86_64_V4 => "x86-64-v4",
+            Self::X86_64_V3 => "x86-64-v3",
+            Self::Neon => "neon",
+            Self::Scalar => "scalar",
             Self::Reference => "reference",
+            Self::Auto => "auto",
         };
         write!(f, "{}", st)
     }
 }
 
-/// One benchmark configuration: a single (operation, shape) measurement.
+/// One benchmark configuration: a single shape measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Run {
-    pub(crate) operation: Operation,
     pub(crate) num_query_vectors: NonZeroUsize,
     pub(crate) num_doc_vectors: NonZeroUsize,
     pub(crate) dim: NonZeroUsize,
@@ -87,7 +87,7 @@ pub(crate) struct Run {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct MultiVectorOp {
     pub(crate) element_type: DataType,
-    pub(crate) implementation: Implementation,
+    pub(crate) arch: Arch,
     pub(crate) runs: Vec<Run>,
 }
 
@@ -105,7 +105,6 @@ impl CheckDeserialization for MultiVectorOp {
 
 impl Example for MultiVectorOp {
     fn example() -> Self {
-        const NUM_QUERY_VECTORS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
         const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
         const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
         const LOOPS_PER_MEASUREMENT: NonZeroUsize = NonZeroUsize::new(200).unwrap();
@@ -113,16 +112,14 @@ impl Example for MultiVectorOp {
 
         let runs = vec![
             Run {
-                operation: Operation::Chamfer,
-                num_query_vectors: NUM_QUERY_VECTORS,
+                num_query_vectors: NonZeroUsize::new(32).unwrap(),
                 num_doc_vectors: NUM_DOC_VECTORS,
                 dim: DIM,
                 loops_per_measurement: LOOPS_PER_MEASUREMENT,
                 num_measurements: NUM_MEASUREMENTS,
             },
             Run {
-                operation: Operation::MaxSim,
-                num_query_vectors: NUM_QUERY_VECTORS,
+                num_query_vectors: NonZeroUsize::new(64).unwrap(),
                 num_doc_vectors: NUM_DOC_VECTORS,
                 dim: DIM,
                 loops_per_measurement: LOOPS_PER_MEASUREMENT,
@@ -132,7 +129,7 @@ impl Example for MultiVectorOp {
 
         Self {
             element_type: DataType::Float32,
-            implementation: Implementation::Optimized,
+            arch: Arch::Auto,
             runs,
         }
     }
@@ -149,7 +146,7 @@ impl std::fmt::Display for MultiVectorOp {
         writeln!(f, "Multi-Vector Operation\n")?;
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "element type", self.element_type)?;
-        write_field!(f, "implementation", self.implementation)?;
+        write_field!(f, "arch", self.arch)?;
         write_field!(f, "number of runs", self.runs.len())?;
         Ok(())
     }

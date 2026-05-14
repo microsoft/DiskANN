@@ -244,18 +244,6 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 #[derive(Debug, Clone, Copy)]
 pub struct Defaulted;
 
-/// An initializer argument to [`NewOwned`] that invokes the wrapped closure for each
-/// element.
-///
-/// # Example
-/// ```
-/// use diskann_quantization::multi_vector::{Init, Mat, Standard};
-/// let mut n = 0;
-/// let mat = Mat::new(Standard::<i32>::new(1, 4).unwrap(), Init(|| { n += 1; n })).unwrap();
-/// assert_eq!(mat.as_slice(), &[1, 2, 3, 4]);
-/// ```
-pub struct Init<F>(pub F);
-
 /// Create a new [`Mat`] cloned from a view.
 pub trait NewCloned: ReprOwned {
     /// Clone the contents behind `v`, returning a new owning [`Mat`].
@@ -526,22 +514,6 @@ where
     }
 }
 
-// SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
-// initialized by it is non-null and properly aligned to the underlying type.
-unsafe impl<T, F> NewOwned<Init<F>> for Standard<T>
-where
-    T: Copy,
-    F: FnMut() -> T,
-{
-    type Error = crate::error::Infallible;
-    fn new_owned(self, mut init: Init<F>) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = (0..self.num_elements()).map(|_| (init.0)()).collect();
-
-        // SAFETY: By construction, `b` has length `self.num_elements()`.
-        Ok(unsafe { self.box_to_mat(b) })
-    }
-}
-
 // SAFETY: This checks that the slice has the correct length, which is all that is
 // required for [`Repr`].
 unsafe impl<T> NewRef<T> for Standard<T>
@@ -740,6 +712,22 @@ impl<T: NewCloned> Clone for Mat<T> {
 }
 
 impl<T: Copy> Mat<Standard<T>> {
+    /// Create a new matrix by invoking `f` once per element in row-major order.
+    ///
+    /// # Example
+    /// ```
+    /// use diskann_quantization::multi_vector::{Mat, Standard};
+    /// let mut n = 0;
+    /// let mat = Mat::from_fn(Standard::<i32>::new(1, 4).unwrap(), || { n += 1; n });
+    /// assert_eq!(mat.as_slice(), &[1, 2, 3, 4]);
+    /// ```
+    pub fn from_fn<F: FnMut() -> T>(repr: Standard<T>, mut f: F) -> Self {
+        let b: Box<[T]> = (0..repr.num_elements()).map(|_| f()).collect();
+
+        // SAFETY: By construction, `b` has length `repr.num_elements()`.
+        unsafe { repr.box_to_mat(b) }
+    }
+
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1796,17 +1784,13 @@ mod tests {
     }
 
     #[test]
-    fn test_standard_new_owned_with_init() {
+    fn test_standard_from_fn() {
         let mut counter: i32 = 0;
-        let m = Mat::new(
-            Standard::<i32>::new(2, 3).unwrap(),
-            Init(|| {
-                let v = counter;
-                counter += 1;
-                v
-            }),
-        )
-        .unwrap();
+        let m = Mat::from_fn(Standard::<i32>::new(2, 3).unwrap(), || {
+            let v = counter;
+            counter += 1;
+            v
+        });
 
         assert_eq!(m.as_slice(), &[0, 1, 2, 3, 4, 5]);
     }

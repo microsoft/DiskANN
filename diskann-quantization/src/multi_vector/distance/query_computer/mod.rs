@@ -43,6 +43,16 @@ pub struct QueryComputer<T: Copy> {
 }
 
 impl<T: Copy> QueryComputer<T> {
+    /// Wrap any [`DynQueryComputer<T>`] implementation as a `QueryComputer<T>`.
+    ///
+    /// This is the public seam for experimental kernels: implement
+    /// [`DynQueryComputer<T>`] on a custom struct, then wrap it here so the
+    /// existing [`QueryComputer::max_sim`] / [`QueryComputer::chamfer`] veneer
+    /// works against it.
+    pub fn from_dyn(inner: Box<dyn DynQueryComputer<T>>) -> Self {
+        Self { inner }
+    }
+
     /// Number of logical (non-padded) query vectors.
     #[inline]
     pub fn nrows(&self) -> usize {
@@ -88,8 +98,27 @@ impl<T: Copy> QueryComputer<T> {
     }
 }
 
-trait DynQueryComputer<T: Copy>: std::fmt::Debug + Send + Sync {
+/// Object-safe interface for "anything that can compute MaxSim for a [`QueryComputer<T>`]".
+///
+/// The library's own architecture-dispatched path implements this on the
+/// internal `Prepared<A, Q>` carriers. External crates implement it on their
+/// own structs and wrap via [`QueryComputer::from_dyn`].
+///
+/// # Contract
+///
+/// - [`compute_max_sim`](Self::compute_max_sim) is only invoked by
+///   [`QueryComputer::max_sim`], which has already asserted
+///   `scores.len() == self.nrows()` and short-circuited the zero-doc case.
+///   Implementations may rely on `scores.len() == self.nrows()` and
+///   `doc.num_vectors() > 0`.
+/// - Implementations must populate all `nrows()` entries of `scores`.
+///   [`QueryComputer::chamfer`] sums every entry, so leaving any trailing
+///   slot unwritten would silently corrupt the result.
+pub trait DynQueryComputer<T: Copy>: std::fmt::Debug + Send + Sync {
+    /// Compute MaxSim into `scores`. See trait-level docs for the contract.
     fn compute_max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]);
+
+    /// Number of query rows.
     fn nrows(&self) -> usize;
 }
 
@@ -287,4 +316,38 @@ mod tests {
 
     test_matches_fallback!(f32, f32, 1e-10, "f32 ");
     test_matches_fallback!(f16, half::f16, 1e-10, "f16 ");
+
+    // ============================================================
+    // from_dyn: wrap a trivial custom DynQueryComputer.
+    // ============================================================
+    #[derive(Debug)]
+    struct ConstantComputer {
+        nrows: usize,
+        value: f32,
+    }
+
+    impl DynQueryComputer<f32> for ConstantComputer {
+        fn compute_max_sim(&self, _doc: MatRef<'_, Standard<f32>>, scores: &mut [f32]) {
+            for s in scores.iter_mut() {
+                *s = self.value;
+            }
+        }
+        fn nrows(&self) -> usize {
+            self.nrows
+        }
+    }
+
+    #[test]
+    fn from_dyn_wraps_custom_impl() {
+        let computer = QueryComputer::<f32>::from_dyn(Box::new(ConstantComputer {
+            nrows: 3,
+            value: -1.5,
+        }));
+        assert_eq!(computer.nrows(), 3);
+
+        let doc = make_mat(&[1.0f32, 0.0, 0.0, 1.0], 2, 2);
+        let mut scores = vec![0.0f32; 3];
+        computer.max_sim(doc, &mut scores);
+        assert_eq!(scores, vec![-1.5, -1.5, -1.5]);
+    }
 }

@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn multi_vector_integration() {
-        let path = example_directory().join("multi-vector-test.json");
+        let path = example_directory().join("multi-vector.json");
         let tempdir = tempfile::tempdir().unwrap();
         let output_path = tempdir.path().join("output.json");
         assert!(!output_path.exists());
@@ -843,7 +843,7 @@ mod tests {
     #[test]
     #[cfg(feature = "multi-vector")]
     fn multi_vector_check_verify() {
-        let input_path = example_directory().join("multi-vector-test.json");
+        let input_path = example_directory().join("multi-vector.json");
         let tolerance_path = project_directory()
             .join("perf_test_inputs")
             .join("multi-vector-tolerance.json");

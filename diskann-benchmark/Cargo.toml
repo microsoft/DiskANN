@@ -63,7 +63,7 @@ scalar-quantization = []
 # Enable minmax-quantization based algorithms
 minmax-quantization = []
 
-# Enable multi-vector distance benchmarks (Chamfer / MaxSim)
+# Enable multi-vector MaxSim distance benchmarks
 multi-vector = []
 
 # Enable Disk Index benchmarks
