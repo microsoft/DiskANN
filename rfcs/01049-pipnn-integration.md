@@ -9,7 +9,7 @@
 
 ## Summary
 
-Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) as a second graph-construction algorithm for DiskANN's **disk index full-rebuild path**. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default for disk builds and the only algorithm supported for in-memory incremental inserts. In-memory PiPNN build is explicitly out of scope: DiskANN's in-mem path exists to support streaming construction, which PiPNN's batch algorithm cannot do efficiently.
+Add **PiPNN** (Pick-in-Partitions Nearest Neighbors, [arXiv:2602.21247](https://arxiv.org/abs/2602.21247)) as a second graph-construction algorithm for **DiskANN's disk-index full-build path** — both initial builds from a fresh dataset and full rebuilds that replace an existing index. PiPNN produces a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on the workloads we have measured. Vamana remains the default for disk builds and the only algorithm supported for in-memory incremental inserts. In-memory PiPNN build is explicitly out of scope: DiskANN's in-mem path exists to support streaming construction, which PiPNN's batch algorithm cannot do efficiently.
 
 ## Motivation
 
@@ -46,7 +46,7 @@ Vamana's incremental design scales linearly in points × per-insert search cost,
 | BigANN 10M (10M × 128, fp16, squared_l2) | 358s |
 | Enron 10M (10M × 384, fp16, cosine_normalized) | 844s |
 
-Frequent rebuilds (driven by data churn or parameter sweeps) and full rebuilds at 10M-scale and above are the bottleneck. PiPNN's offline benchmarks at matching recall budgets complete the same builds **up to 6.3× faster** while writing the same disk format (full numbers in the Benchmark Results section). This RFC proposes landing PiPNN so teams can opt into faster builds and so we can collect production-relevant signal on whether PiPNN can eventually replace Vamana's full-rebuild path.
+Initial builds at 10M-scale and above, and the frequent full rebuilds that follow them (driven by data churn or parameter sweeps), are the bottleneck. PiPNN's offline benchmarks at matching recall budgets complete the same builds **up to 6.3× faster** while writing the same disk format (full numbers in the Benchmark Results section). This RFC proposes landing PiPNN so teams can opt into faster builds and so we can collect production-relevant signal on whether PiPNN can eventually replace Vamana's full-build path (initial builds and rebuilds alike).
 
 #### Concrete trade-off hypothesis
 
@@ -84,19 +84,19 @@ Because both algorithms produce the same disk format, switching between "fresh P
 
 #### Two-stage rollout
 
-- **Stage 1 (this RFC):** Land PiPNN as an alternative builder for the **disk index full-rebuild path only**, behind a build-algorithm selector. Vamana stays default; PiPNN is opt-in. Stage 1 has explicit milestones (in Future Work) that gate readiness for Stage 2.
-- **Stage 2 (separate proposal, conditional on Stage 1 milestones):** Retire the Vamana **disk-index full-rebuild** path. Vamana remains the implementation for incremental inserts on the in-memory graph via the hybrid model above.
+- **Stage 1 (this RFC):** Land PiPNN as an alternative builder for the **disk-index full-build path** — covering both initial builds (no prior index) and full rebuilds (replacing an existing index) — behind a build-algorithm selector. Vamana stays default; PiPNN is opt-in. Stage 1 has explicit milestones (in Future Work) that gate readiness for Stage 2.
+- **Stage 2 (separate proposal, conditional on Stage 1 milestones):** Retire the Vamana **disk-index full-build** path (initial builds and rebuilds). Vamana remains the implementation for incremental inserts on the in-memory graph via the hybrid model above.
 
 In-memory PiPNN build/search is **not part of any stage**. DiskANN's in-memory `DiskANNIndex` path exists primarily to support streaming (per-point) index construction, which is exactly the use case PiPNN's batch algorithm does not address (see "PiPNN is algorithmically batch-only"). Replacing or extending the in-memory builder with PiPNN would offer no incremental capability and duplicate the disk path's value. We therefore list it under unstaged future work rather than as a Stage 1 / Stage 2 milestone.
 
 ### Goals (Stage 1)
 
-Stage 1 is scoped to the **disk index full-rebuild path**. In-memory index construction is explicitly out of scope.
+Stage 1 is scoped to the **disk-index full-build path** — both initial builds (no prior index) and full rebuilds (replacing an existing index). In-memory index construction is explicitly out of scope.
 
 1. **Algorithm-level pluggability for the disk builder**: introduce a build-algorithm selector to the disk-index build pipeline that routes between Vamana (existing) and PiPNN (new). Existing build sites continue to default to Vamana with no behavior change.
 2. **Disk format compatibility**: the PiPNN-built index is byte-compatible with Vamana-built indexes on disk — search, PQ, and storage layouts are unchanged. This is the foundation for the hybrid update model.
 3. **Public API compatibility**: the disk-index public API surface (`DiskIndexBuilder::new`, `IndexConfiguration`, `DiskIndexWriter`, JSON config schema) remains backward-compatible. PiPNN configuration is added under a new tagged enum variant.
-4. **Feature-parity milestones (disk path only)**: deliver the Vamana disk-build capabilities PiPNN needs for a full-rebuild role in production (see Future Work below).
+4. **Feature-parity milestones (disk path only)**: deliver the Vamana disk-build capabilities PiPNN needs to take over both initial builds and full rebuilds in production (see Future Work below).
 5. **Documented memory mitigation**: provide a configuration knob (three-tier build) that brings PiPNN's peak RSS to or below Vamana's at the cost of build time.
 
 ## Proposal
@@ -302,7 +302,7 @@ PiPNN beats Vamana on recall at every L on the 384d Enron 10M workload, at parit
 
 ## Future Work
 
-The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's disk-index full-rebuild path). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M3–M9 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel. M1 (in-memory build/search) and M2 (checkpoint/resume) are intentionally absent — see "Out of scope: not part of any stage" and "Deferred to Stage 2" below.
+The Stage 1 milestones below are gating items for Stage 2 (retiring Vamana's disk-index full-build path — initial builds and rebuilds). Each must be addressed before that proposal is credible. M0 is the foundation shipped by this RFC; M3–M9 are deferred to follow-on work and ordered by dependency, not strict calendar sequence — some can run in parallel. M1 (in-memory build/search) and M2 (checkpoint/resume) are intentionally absent — see "Out of scope: not part of any stage" and "Deferred to Stage 2" below.
 
 ### M0 — Skeleton integration
 
