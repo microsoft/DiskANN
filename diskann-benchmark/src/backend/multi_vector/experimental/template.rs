@@ -9,7 +9,7 @@
 //! `Kernel<A>` impl to your target ISA, and add an `Arch` variant + a
 //! `register_regression` call to wire it up.
 //!
-//! # The 6-step workflow
+//! # The 5-step workflow
 //!
 //! 1. **Add an [`Arch`](crate::inputs::multi_vector::Arch) variant** for your
 //!    experimental kernel (e.g. `X86_64_V4_Wide`). The `#[non_exhaustive]`
@@ -28,7 +28,9 @@
 //!    `library_kernels.rs` (e.g. `match_arch_x86_64!`) for your new variant.
 //! 5. **Add a `RunBenchmark<Marker>` impl + `register_regression` call.** Use
 //!    `Kernel::<Marker, T>::new()` as the registered benchmark entry.
-//! 6. **Validate under Miri.** See the section below.
+//!
+//! Then validate under Miri before treating the kernel as correct — see the
+//! section below.
 //!
 //! # Validating under Miri (REQUIRED)
 //!
