@@ -584,6 +584,41 @@ mod tests {
             assert_eq!(recall_allow.num_queries, 10);
         }
 
+        // Dynamic groundtruth with fewer entries: verify correct recall values.
+        // groundtruth has 5 entries per row: [1, 2, 3, 4, 5].
+        // results has 10 entries per row: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].
+        // With recall_k=10, this_recall_k = min(5, 10) = 5. All 5 groundtruth
+        // entries appear in the results, so recall = 5/5 = 1.0.
+        {
+            let gt_row: Vec<u32> = (1..=5).collect();
+            let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
+            let mut results = Matrix::<u32>::new(0, 10, 10);
+            for i in 0..10 {
+                for (j, v) in (1u32..=10).enumerate() {
+                    results[(i, j)] = v;
+                }
+            }
+            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+            assert!((recall.average - 1.0).abs() < 1e-10);
+        }
+
+        // Dynamic groundtruth with partial match: 3 of 5 groundtruth entries appear in results.
+        // recall = 3/5 = 0.6 per query.
+        {
+            // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
+            let gt_row: Vec<u32> = (1..=5).collect();
+            let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
+            let mut results = Matrix::<u32>::new(0, 10, 10);
+            let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
+            for i in 0..10 {
+                for (j, &v) in res_row.iter().enumerate() {
+                    results[(i, j)] = v;
+                }
+            }
+            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+            assert!((recall.average - 0.6).abs() < 1e-10);
+        }
+
         // Distance Row Mismatch
         {
             let groundtruth = Matrix::<u32>::new(0, 10, 10);
