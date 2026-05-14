@@ -471,7 +471,16 @@ where
         let queries: Arc<Matrix<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+        // compute the maximum value of k used in any search
+        let max_k = topk
+            .runs
+            .iter()
+            .map(|run| run.recall_k)
+            .max()
+            .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
         let knn = benchmark_core::search::graph::KNN::new(
             index.clone(),
@@ -695,10 +704,19 @@ where
 
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
-    let layered = bigann::WithData::new(managed, data, queries, |path| {
-        Ok(Box::new(datafiles::load_groundtruth(datafiles::BinFile(
-            path,
-        ))?))
+    // compute the maximum value of k used in any search
+    let max_k = topk
+        .runs
+        .iter()
+        .map(|run| run.recall_k)
+        .max()
+        .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+
+    let layered = bigann::WithData::new(managed, data, queries, move |path| {
+        Ok(Box::new(datafiles::load_groundtruth(
+            datafiles::BinFile(path),
+            Some(max_k),
+        )?))
     });
 
     Ok(layered)

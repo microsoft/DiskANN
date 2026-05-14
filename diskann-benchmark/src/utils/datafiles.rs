@@ -95,7 +95,7 @@ impl ConvertingLoad for f32 {
 }
 
 /// Load a groundtruth set from disk and return the  result as a row-major matrix.
-pub(crate) fn load_groundtruth(path: BinFile<'_>) -> anyhow::Result<Matrix<u32>> {
+pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::Result<Matrix<u32>> {
     let provider = diskann_providers::storage::FileStorageProvider;
     let mut file = provider
         .open_reader(&path.0.to_string_lossy())
@@ -114,6 +114,17 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>) -> anyhow::Result<Matrix<u32>>
     let mut groundtruth = Matrix::<u32>::new(0, num_points, dim);
     let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
     file.read_exact(groundtruth_slice)?;
+
+    if let Some(expected_k) = k {
+        if groundtruth.ncols() != expected_k {
+            return Err(anyhow::anyhow!(
+                "Each row of groundtruth must have length {} (got {})",
+                expected_k,
+                groundtruth.ncols()
+            ));
+        }
+    }
+
     Ok(groundtruth)
 }
 

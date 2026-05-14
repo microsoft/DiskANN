@@ -22,10 +22,6 @@ pub struct RecallMetrics {
     pub num_queries: usize,
     /// The average recall across all queries.
     pub average: f64,
-    /// The minimum observed recall (max possible value: `recall_n`).
-    pub minimum: usize,
-    /// The maximum observed recall (max possible value: `recall_k`).
-    pub maximum: usize,
 }
 
 #[derive(Debug, Error)]
@@ -186,8 +182,8 @@ where
         }
     }
 
-    // The actual recall computation for fixed-size groundtruth
-    let mut recall_values: Vec<usize> = Vec::new();
+    // The actual recall computation for groundtruth
+    let mut recall_values: Vec<f64> = Vec::new();
     let mut this_groundtruth = HashSet::new();
     let mut this_results = HashSet::new();
 
@@ -198,26 +194,22 @@ where
         }
 
         let gt_row = groundtruth.row(i);
-        if gt_row.len() < recall_k {
-            return Err(ComputeRecallError::NotEnoughGroundTruth(
-                gt_row.len(),
-                recall_k,
-            ));
-        }
+        // groundtruth does not have to be fixed-size, so we compute recall_k for this row based on its gt length
+        let this_recall_k = gt_row.len().min(recall_k);
 
         // Populate the groundtruth using the top-k
         this_groundtruth.clear();
-        this_groundtruth.extend(gt_row.iter().take(recall_k).cloned());
+        this_groundtruth.extend(gt_row.iter().take(this_recall_k).cloned());
 
         // If we have distances, then continue to append distances as long as the distance
         // value is constant
         if let Some(distances) = groundtruth_distances
-            && recall_k > 0
+            && this_recall_k > 0
         {
             let distances_row = distances.row(i);
-            if distances_row.len() > recall_k - 1 && gt_row.len() > recall_k - 1 {
-                let last_distance = distances_row[recall_k - 1];
-                for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(recall_k) {
+            if distances_row.len() > this_recall_k - 1 && gt_row.len() > this_recall_k - 1 {
+                let last_distance = distances_row[this_recall_k - 1];
+                for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
                     if *d == last_distance {
                         this_groundtruth.insert(g.clone());
                     } else {
@@ -235,27 +227,28 @@ where
             .iter()
             .filter(|i| this_results.contains(i))
             .count()
-            .min(recall_k);
+            .min(this_recall_k);
 
-        recall_values.push(r);
+        // recall is the number of correct results in the top n, divided by k (not n), or 0 if there are no groundtruth results for this query
+        let recall = if this_recall_k > 0 {
+            (r as f64) / (this_recall_k as f64)
+        } else {
+            0.0
+        };
+
+        recall_values.push(recall);
     }
 
-    // Perform post-processing
-    let total: usize = recall_values.iter().sum();
-    let minimum = recall_values.iter().min().unwrap_or(&0);
-    let maximum = recall_values.iter().max().unwrap_or(&0);
-
-    // We explicitly check that each groundtruth row has at least `recall_k` elements.
-    let div = recall_k * nrows;
-    let average = (total as f64) / (div as f64);
+    // Compute the average recall
+    let total: f64 = recall_values.iter().sum();
+    let div = recall_values.len();
+    let average = (total) / (div as f64);
 
     Ok(RecallMetrics {
         recall_k,
         recall_n,
         num_queries: nrows,
         average,
-        minimum: *minimum,
-        maximum: *maximum,
     })
 }
 
