@@ -310,7 +310,7 @@ input as an associated type. Registering a benchmark via `Registry::register` wi
 automatically register the associated input.
 
 At run time, the front end will discover benchmarks in the input JSON file and use the tag
-string in the "contents" field to select the correct input deserializer. Benchmarks will
+string in the `type` field to select the correct input deserializer. Benchmarks will
 be matched to inputs using `Benchmark::try_match`, with the best candidate being selected
 to be run.
 
@@ -459,7 +459,7 @@ method. This function creates a new snapshot every time it is invoked, so benchm
 need to worry about redundant data.
 
 The argument `output: &mut dyn diskann_benchmark_runner::Output` is a dynamic type where
-all output should be written too. Additionally, it provides a
+all output should be written to. Additionally, it provides a
 [`ProgressDrawTarget`](https://docs.rs/indicatif/latest/indicatif/struct.ProgressDrawTarget.html)
 for use with [indicatif](https://docs.rs/indicatif/latest/indicatif/index.html) progress bars.
 This supports output redirection for integration tests and piping to files.
@@ -483,7 +483,7 @@ returning a better match score.
 
 When the registry cannot find any matching method for an input, it begins a process of
 finding the "nearest misses" by inspecting and ranking methods based on their `FailureScore`.
-Benchmarks can opt-in to this process by returning meaning `FailureScores` when an input is
+Benchmarks can opt-in to this process by returning meaningful `FailureScores` when an input is
 close, but not quite right.
 
 **Benchmark Description and Failure Description**

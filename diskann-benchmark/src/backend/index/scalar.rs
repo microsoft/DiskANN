@@ -14,7 +14,8 @@ pub(super) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<(
         use crate::backend::index::search::plugins::Topk;
 
         // NOTE: This benchmark is heavily monomorphized. Each `(NBITS, T)` pair
-        // generates a full `Registry` impl via the `impl_sq_build!` macro in `mod imp`,
+        // generates a full `Benchmark` impl/build path for
+        // `ScalarQuantized<NBITS, T>` via the `impl_sq_build!` macro in `mod imp`,
         // which materially impacts compile time. We intentionally keep the registered
         // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
         // `example/scalar.json`.

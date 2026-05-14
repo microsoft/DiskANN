@@ -39,8 +39,8 @@
 //!
 //! fn main() -> anyhow::Result<()> {
 //!     let mut registry = registry::Registry::new();
-//!     // registry.register::<MyBenchmark>("my-bench");
-//!     // registry.register_regression::<MyRegressionBenchmark>("my-regression");
+//!     // registry.register("my-bench", MyBenchmark::default())?;
+//!     // registry.register_regression("my-regression", MyRegressionBenchmark::default())?;
 //!
 //!     let app = App::parse();
 //!     let mut output = diskann_benchmark_runner::output::default();

@@ -39,7 +39,7 @@ impl RegisteredBenchmark {
     }
 }
 
-/// A collection of registered benchmarks.
+/// A collection of registered inputs and benchmarks.
 pub struct Registry {
     // Inputs keyed by their tag type.
     inputs: HashMap<&'static str, Box<dyn input::DynInput>>,
@@ -406,13 +406,13 @@ mod tests {
         };
     }
 
-    // For the types below, `A` and `B` have distinct tags, but `A2`'s tag conflicts with `A2`.
+    // For the types below, `A` and `B` have distinct tags, but `A2`'s tag conflicts with `A`.
     input!(A, "type-a");
     input!(B, "type-b");
     input!(A2, "type-a");
 
     #[test]
-    fn test_name_conflicts() {
+    fn test_tag_conflicts() {
         let mut registry = Registry::new();
         registry.register_input::<A>().unwrap();
         registry.register_input::<B>().unwrap();
