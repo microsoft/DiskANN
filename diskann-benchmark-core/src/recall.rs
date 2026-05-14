@@ -244,7 +244,11 @@ where
 
     // Compute the average recall
     let total: f64 = recall_values.iter().sum();
-    let average = (total) / (num_nonzero as f64);
+    let average = if num_nonzero == 0 {
+        0.0
+    } else {
+        total / (num_nonzero as f64)
+    };
 
     Ok(RecallMetrics {
         recall_k,
