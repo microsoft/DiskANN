@@ -85,7 +85,11 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     );
     benchmarks.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new().search(plugins::Topk),
+        FullPrecision::<u8>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range)
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter),
     );
     benchmarks.register(
         "graph-index-full-precision-i8",

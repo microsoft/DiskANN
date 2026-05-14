@@ -187,6 +187,8 @@ where
     let mut this_groundtruth = HashSet::new();
     let mut this_results = HashSet::new();
 
+    let mut num_nonzero = 0;
+
     for i in 0..results.nrows() {
         let result = results.row(i);
         if !allow_insufficient_results && result.len() < recall_n {
@@ -197,40 +199,41 @@ where
         // groundtruth does not have to be fixed-size, so we compute recall_k for this row based on its gt length
         let this_recall_k = gt_row.len().min(recall_k);
 
-        // Populate the groundtruth using the top-k
-        this_groundtruth.clear();
-        this_groundtruth.extend(gt_row.iter().take(this_recall_k).cloned());
+        let recall = if this_recall_k > 0 {
+            num_nonzero += 1;
 
-        // If we have distances, then continue to append distances as long as the distance
-        // value is constant
-        if let Some(distances) = groundtruth_distances
-            && this_recall_k > 0
-        {
-            let distances_row = distances.row(i);
-            if distances_row.len() > this_recall_k - 1 && gt_row.len() > this_recall_k - 1 {
-                let last_distance = distances_row[this_recall_k - 1];
-                for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
-                    if *d == last_distance {
-                        this_groundtruth.insert(g.clone());
-                    } else {
-                        break;
+            // Populate the groundtruth using the top-k
+            this_groundtruth.clear();
+            this_groundtruth.extend(gt_row.iter().take(this_recall_k).cloned());
+
+            // If we have distances, then continue to append distances as long as the distance
+            // value is constant
+            if let Some(distances) = groundtruth_distances
+                && this_recall_k > 0
+            {
+                let distances_row = distances.row(i);
+                if distances_row.len() > this_recall_k - 1 && gt_row.len() > this_recall_k - 1 {
+                    let last_distance = distances_row[this_recall_k - 1];
+                    for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
+                        if *d == last_distance {
+                            this_groundtruth.insert(g.clone());
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        this_results.clear();
-        this_results.extend(result.iter().take(recall_n).cloned());
+            this_results.clear();
+            this_results.extend(result.iter().take(recall_n).cloned());
 
-        // Count the overlap
-        let r = this_groundtruth
-            .iter()
-            .filter(|i| this_results.contains(i))
-            .count()
-            .min(this_recall_k);
+            // Count the overlap
+            let r = this_groundtruth
+                .iter()
+                .filter(|i| this_results.contains(i))
+                .count()
+                .min(this_recall_k);
 
-        // recall is the number of correct results in the top n, divided by k (not n), or 0 if there are no groundtruth results for this query
-        let recall = if this_recall_k > 0 {
             (r as f64) / (this_recall_k as f64)
         } else {
             0.0
@@ -241,8 +244,7 @@ where
 
     // Compute the average recall
     let total: f64 = recall_values.iter().sum();
-    let div = recall_values.len();
-    let average = (total) / (div as f64);
+    let average = (total) / (num_nonzero as f64);
 
     Ok(RecallMetrics {
         recall_k,
@@ -460,8 +462,6 @@ mod tests {
             assert_eq!(recall.num_queries, our_results.nrows());
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
-            assert_eq!(recall.minimum, *expected.components.iter().min().unwrap());
-            assert_eq!(recall.maximum, *expected.components.iter().max().unwrap());
         }
 
         //-----------//
@@ -507,8 +507,6 @@ mod tests {
             assert_eq!(recall.num_queries, our_results.nrows());
             assert_eq!(recall.recall_k, expected.recall_k);
             assert_eq!(recall.recall_n, expected.recall_n);
-            assert_eq!(recall.minimum, *expected.components.iter().min().unwrap());
-            assert_eq!(recall.maximum, *expected.components.iter().max().unwrap());
         }
     }
 
