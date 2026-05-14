@@ -268,8 +268,6 @@ Telemetry (per-phase timing + RSS via existing OTel tracer), permanent docs repl
 
 - **Checkpoint / resume.** Vamana's streaming checkpoint design doesn't fit PiPNN's batch phases. Useful boundaries (partition output, post-extract) would need a different scheme, and operational value is lower (PiPNN's BigANN-10M build is ~80s). Defer until Stage 2 reveals the production rebuild cadence.
 
-  *Determinism note:* PiPNN is rayon-parallel — byte-identical output across runs is not free (would need fixed thread schedule, deterministic reductions, seeded LSH). The right validation criterion for any future resumed-build test is **recall parity**, not byte-identity.
-
 ### Out of scope: not part of any stage
 
 - **In-memory PiPNN build.** The in-mem `DiskANNIndex` exists for streaming construction — exactly what PiPNN can't do efficiently. Building one from PiPNN adjacency lists is mechanically possible but offers no incremental capability and would force `diskann-pipnn` to depend on the in-mem graph crate. If a non-streaming in-mem consumer ever needs PiPNN's speed: build to disk, then load.
