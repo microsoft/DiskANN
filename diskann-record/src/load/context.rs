@@ -178,6 +178,10 @@ impl<'a> Context<'a> {
         }
     }
 
+    pub fn is_null(&self) -> bool {
+        matches!(self.value, save::Value::Null)
+    }
+
     pub(crate) fn as_handle(&self) -> Option<&save::Handle> {
         match self.value {
             save::Value::Handle(handle) => Some(handle),

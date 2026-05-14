@@ -103,6 +103,19 @@ impl Loadable<'_> for bool {
     }
 }
 
+impl<'a, T> Loadable<'a> for Option<T>
+where
+    T: Loadable<'a>,
+{
+    fn load(context: Context<'a>) -> Result<Self> {
+        if context.is_null() {
+            Ok(None)
+        } else {
+            T::load(context).map(Some)
+        }
+    }
+}
+
 impl<'a, T> Loadable<'a> for Vec<T>
 where
     T: Loadable<'a>,

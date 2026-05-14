@@ -15,6 +15,7 @@ use crate::{Number, Version};
 
 #[derive(Debug)]
 pub enum Value<'a> {
+    Null,
     Bool(bool),
     Number(Number),
     String(Cow<'a, str>),
@@ -27,6 +28,7 @@ pub enum Value<'a> {
 impl Serialize for Value<'_> {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         match self {
+            Self::Null => ser.serialize_none(),
             Self::Bool(b) => ser.serialize_bool(*b),
             Self::Number(n) => n.serialize(ser),
             Self::String(s) => ser.serialize_str(s),
@@ -50,6 +52,21 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("a valid Value")
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Value<'a>, E> {
+                Ok(Value::Null)
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<Value<'a>, E> {
+                Ok(Value::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Value<'a>, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Value::deserialize(deserializer)
             }
 
             fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value<'a>, E> {

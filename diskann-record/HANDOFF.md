@@ -90,6 +90,7 @@ check needed in the macro path.
 - Version tagging in manifest (`$version` alongside fields)
 - Custom serde for `Value`, `Number`, `Handle` (plain JSON output)
 - Primitive `bool` support via `Value::Bool`, including nested `Vec<bool>` round-trips
+- `Option<T>` support via an explicit `Value::Null` variant
 - Tempfile isolation in tests (`tempfile::tempdir()`) to ensure cleanup of artifacts and manifest
 - Light/heavy error split on load path
 - `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush errors via `save::Result<Handle>`
@@ -135,10 +136,6 @@ just equality.
 `save::ContextInner` currently uses raw file names as-is. The RFC envisions UUID-based
 naming to prevent collisions (e.g., `{uuid}-{user_name}.bin`). The `uuid` crate is not yet
 in the dependencies.
-
-### Missing Primitive Impls
-
-- `Option<T>` — no support yet. Needs a convention (omitted field? explicit null variant?)
 
 ### ContextInner Generalization
 

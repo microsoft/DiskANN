@@ -52,6 +52,8 @@ mod tests {
         inner: Inner,
         // We write this as a binary file.
         vector: Vec<u8>,
+        nickname: Option<String>,
+        absent: Option<String>,
     }
 
     #[derive(Debug, PartialEq)]
@@ -59,12 +61,19 @@ mod tests {
         z: usize,
         w: Vec<i8>,
         flags: Vec<bool>,
+        maybe_count: Option<u32>,
+        maybe_missing: Option<u32>,
+        sparse: Vec<Option<i32>>,
     }
 
     impl save::Save for Inner {
         const VERSION: Version = Version::new(0, 0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
-            Ok(save_fields!(self, context, [z, w, flags]))
+            Ok(save_fields!(
+                self,
+                context,
+                [z, w, flags, maybe_count, maybe_missing, sparse]
+            ))
         }
     }
 
@@ -77,7 +86,11 @@ mod tests {
             let mut io = context.write("auxiliary.bin");
             io.write_all(&self.vector).map_err(save::Error::new)?;
 
-            let mut record = save_fields!(self, context, [x, y, enabled, inner]);
+            let mut record = save_fields!(
+                self,
+                context,
+                [x, y, enabled, inner, nickname, absent]
+            );
             record.insert("vector", io.finish()?);
             Ok(record)
         }
@@ -86,7 +99,18 @@ mod tests {
     impl load::Load<'_> for Test {
         const VERSION: Version = Version::new(0, 0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
-            load_fields!(object, [x, y, enabled, inner, vector: save::Handle]);
+            load_fields!(
+                object,
+                [
+                    x,
+                    y,
+                    enabled,
+                    inner,
+                    nickname: Option<String>,
+                    absent: Option<String>,
+                    vector: save::Handle,
+                ]
+            );
 
             let mut io = object.read(&vector)?;
             let mut vector = Vec::new();
@@ -98,6 +122,8 @@ mod tests {
                 enabled,
                 inner,
                 vector,
+                nickname,
+                absent,
             })
         }
 
@@ -109,8 +135,25 @@ mod tests {
     impl load::Load<'_> for Inner {
         const VERSION: Version = Version::new(0, 0, 0);
         fn load(object: load::Object<'_>) -> load::Result<Self> {
-            load_fields!(object, [z, w, flags]);
-            Ok(Self { z, w, flags })
+            load_fields!(
+                object,
+                [
+                    z,
+                    w,
+                    flags,
+                    maybe_count: Option<u32>,
+                    maybe_missing: Option<u32>,
+                    sparse: Vec<Option<i32>>,
+                ]
+            );
+            Ok(Self {
+                z,
+                w,
+                flags,
+                maybe_count,
+                maybe_missing,
+                sparse,
+            })
         }
 
         fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
@@ -124,6 +167,9 @@ mod tests {
             z: 10,
             w: vec![-1, -2, -3],
             flags: vec![true, false, true],
+            maybe_count: Some(42),
+            maybe_missing: None,
+            sparse: vec![Some(1), None, Some(-3), None],
         };
 
         let t = Test {
@@ -132,6 +178,8 @@ mod tests {
             enabled: true,
             inner,
             vector: vec![0, 1, 2, 3, 4, 5],
+            nickname: Some("friend".into()),
+            absent: None,
         };
 
         // Keep the TempDir guard alive for the full round trip; Drop removes the

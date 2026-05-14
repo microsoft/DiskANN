@@ -96,6 +96,18 @@ impl Saveable for bool {
     }
 }
 
+impl<T> Saveable for Option<T>
+where
+    T: Saveable,
+{
+    fn save(&self, context: Context<'_>) -> Result<Value<'_>> {
+        match self {
+            None => Ok(Value::Null),
+            Some(t) => t.save(context),
+        }
+    }
+}
+
 macro_rules! save_number {
     ($T:ty) => {
         impl Saveable for $T {
