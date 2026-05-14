@@ -8,8 +8,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
 };
 
