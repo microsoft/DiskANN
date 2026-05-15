@@ -8,8 +8,7 @@ use std::collections::{hash_map::Entry, HashMap};
 use thiserror::Error;
 
 use crate::{
-    benchmark::{self, Benchmark, Regression},
-    dispatcher::{FailureScore, MatchScore},
+    benchmark::{self, Benchmark, FailureScore, MatchScore, Regression},
     input, Any, Checkpoint, Input, Output,
 };
 

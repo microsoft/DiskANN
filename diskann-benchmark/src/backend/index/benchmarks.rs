@@ -16,9 +16,9 @@ use diskann_benchmark_core::{
     streaming::{executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore},
     output::Output,
-    utils::datatype,
+    utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
 use diskann_providers::{
@@ -169,14 +169,14 @@ impl<T> Benchmark for FullPrecision<T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
+        + diskann::graph::SampleableForStart
+        + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        let score = datatype::Type::<T>::try_match(input.source.data_type());
+        let score = utils::match_data_type::<T>(*input.source.data_type());
         if self.plugins.is_match(&input.search_phase) {
             score
         } else {
@@ -192,17 +192,11 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&IndexOperation>,
     ) -> std::fmt::Result {
-        use diskann_benchmark_runner::dispatcher::{Description, Why};
-
         match input {
             Some(arg) => {
-                let data_type = arg.source.data_type();
-                if datatype::Type::<T>::try_match(data_type).is_err() {
-                    writeln!(
-                        f,
-                        "Data/Query Type: {}",
-                        Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
-                    )?;
+                let desc = T::describe(*arg.source.data_type());
+                if !desc.is_match() {
+                    writeln!(f, "Data/Query Type: {}", desc)?;
                 }
 
                 if !self.plugins.is_match(&arg.search_phase) {
@@ -216,12 +210,7 @@ where
                 Ok(())
             }
             None => {
-                writeln!(
-                    f,
-                    "Data/Query Type: {}",
-                    Description::<datatype::DataType, datatype::Type<T>>::new()
-                )?;
-
+                writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
                 writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
             }
         }
@@ -307,14 +296,14 @@ impl<T> Benchmark for DynamicFullPrecision<T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
+        + diskann::graph::SampleableForStart
+        + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        datatype::Type::<T>::try_match(&input.build.data_type)
+        utils::match_data_type::<T>(input.build.data_type)
     }
 
     fn description(
@@ -322,7 +311,10 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&DynamicIndexRun>,
     ) -> std::fmt::Result {
-        datatype::Type::<T>::description(f, input.map(|f| f.build.data_type).as_ref())
+        match input {
+            Some(i) => write!(f, "{}", T::describe(i.build.data_type)),
+            None => write!(f, "{}", T::DATA_TYPE),
+        }
     }
 
     fn run(
