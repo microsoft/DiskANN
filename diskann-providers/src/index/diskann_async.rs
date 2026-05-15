@@ -436,25 +436,16 @@ pub(crate) mod tests {
         Q: Copy + std::fmt::Debug + Send + Sync,
     {
         assert!(max_candidates <= groundtruth.len());
-        let mut state = index
-            .start_paged_search(strategy, &parameters.context, query, parameters.search_l)
+        let mut search = index
+            .paged_search(strategy, &parameters.context, query, parameters.search_l)
             .await
             .unwrap();
 
-        let mut buffer = vec![Neighbor::<u32>::default(); parameters.search_k];
         let mut iter = 0;
         let mut seen = 0;
         while !groundtruth.is_empty() {
-            let count = index
-                .next_search_results::<S, Q>(
-                    &parameters.context,
-                    &mut state,
-                    parameters.search_k,
-                    &mut buffer,
-                )
-                .await
-                .unwrap();
-            for (i, b) in buffer.iter().enumerate().take(count) {
+            let page = search.next_page(parameters.search_k).await.unwrap();
+            for (i, b) in page.iter().enumerate() {
                 let m = is_match(groundtruth, *b, 0.01);
                 match m {
                     None => {
@@ -469,7 +460,7 @@ pub(crate) mod tests {
                             b,
                             iter,
                             i,
-                            &buffer[i..],
+                            &page[i..],
                         );
                     }
                     Some(j) => groundtruth.remove(j),

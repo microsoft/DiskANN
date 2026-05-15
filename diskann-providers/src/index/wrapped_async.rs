@@ -13,7 +13,7 @@ use diskann::{
             Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
             MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
-        index::{DegreeStats, PagedSearchState, PartitionedNeighbors, SearchState},
+        index::{DegreeStats, PartitionedNeighbors},
         search_output_buffer,
     },
     neighbor::Neighbor,
@@ -339,59 +339,51 @@ where
         )
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn start_paged_search<S, T>(
-        &self,
+    /// Begin a paged search over the index (synchronous wrapper).
+    ///
+    /// Returns a [`PagedSearch`] handle. See
+    /// [`graph::index::PagedSearch::next_page`] for retrieving results.
+    pub fn paged_search<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
+    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        T: Copy + Send + 'a,
     {
-        self.handle.block_on(
-            self.inner
-                .start_paged_search(strategy, context, query, l_value),
-        )
+        let inner = self
+            .handle
+            .block_on(self.inner.paged_search(strategy, context, query, l_value))?;
+        Ok(PagedSearch {
+            handle: self.handle.clone(),
+            inner,
+        })
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn start_paged_search_with_init_ids<S, T>(
-        &self,
+    /// Begin a paged search with explicit initial seed IDs (synchronous wrapper).
+    pub fn paged_search_with_init_ids<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-        init_ids: Option<&[DP::InternalId]>,
-    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
+        init_ids: Option<&'a [DP::InternalId]>,
+    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        T: Copy + Send + 'a,
     {
-        self.handle.block_on(
+        let inner = self.handle.block_on(
             self.inner
-                .start_paged_search_with_init_ids(strategy, context, query, l_value, init_ids),
-        )
-    }
-
-    pub fn next_search_results<S, T>(
-        &self,
-        context: &DP::Context,
-        search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-        k: usize,
-        result_output: &mut [Neighbor<DP::InternalId>],
-    ) -> ANNResult<usize>
-    where
-        S: SearchStrategy<DP, T>,
-    {
-        self.handle.block_on(self.inner.next_search_results(
-            context,
-            search_state,
-            k,
-            result_output,
-        ))
+                .paged_search_with_init_ids(strategy, context, query, l_value, init_ids),
+        )?;
+        Ok(PagedSearch {
+            handle: self.handle.clone(),
+            inner,
+        })
     }
 
     pub fn count_reachable_nodes<NA>(
@@ -413,6 +405,28 @@ where
     {
         self.handle
             .block_on(self.inner.get_degree_stats(accessor, itr))
+    }
+}
+
+/// Synchronous wrapper around [`graph::index::PagedSearch`] that owns a tokio runtime handle.
+///
+/// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
+/// blocks the current thread to drive the underlying async search forward.
+pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
+    handle: tokio::runtime::Handle,
+    inner: graph::index::PagedSearch<'a, DP, S, T>,
+}
+
+impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+where
+    DP: DataProvider,
+    S: SearchStrategy<DP, T>,
+{
+    /// Returns the next page of at most `k` nearest-neighbor results.
+    ///
+    /// Blocks the current thread. Returns an empty `Vec` when the search is exhausted.
+    pub fn next_page(&mut self, k: usize) -> ANNResult<Vec<Neighbor<DP::InternalId>>> {
+        self.handle.block_on(self.inner.next_page(k))
     }
 }
 

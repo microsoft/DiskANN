@@ -137,34 +137,6 @@ pub struct PartitionedNeighbors<I> {
     pub deleted: Vec<I>,
 }
 
-/// Placeholder for extra state.
-///
-/// The contents of the search state are designed for the synchronous index.
-/// However, use cases in the asynchronous index require some extra state.
-///
-/// This placeholder is used in the synchronous code-paths.
-pub struct NoExtraState;
-
-/// Represents the state of the pagged search.
-/// It can be used to do paged search by doing multiple `nextSearchResults()` queries.
-///
-/// Generic extra state can be included to facilitate extra use-cases.
-/// However, this extra state **must** be '`static' as we do not know how long the search
-/// state will live for.
-#[derive(Debug)]
-pub struct SearchState<VectorIdType: VectorId, ExtraState: 'static = NoExtraState> {
-    /// Scratch space for query processing.
-    pub scratch: SearchScratch<VectorIdType>,
-    /// The computed search results ready to be returned in `nextSearchResults()` query
-    pub computed_result: Vec<Neighbor<VectorIdType>>,
-    /// The index of the next result to be returned.
-    pub next_result_index: usize,
-    /// The search computes results in the multiple of `search_param_l`.
-    pub search_param_l: usize,
-    /// Any extra data needed by down-stream implementations.
-    pub extra: ExtraState,
-}
-
 /// Edge pending submission for multi-insert.
 #[derive(Debug)]
 struct PendingEdge<I> {
@@ -203,16 +175,6 @@ where
 /// A `Result` that indicates an error, but returns a value of type `T` on both the `Ok`
 /// and `Err` paths.
 type BatchResult<T> = Result<T, (T, ANNError)>;
-
-/// State used during by paged search to perform multiple, consecutive searches over the index.
-///
-/// Type parameters:
-///
-/// * `DP`: The type of the [`DataProvider`].
-/// * `S`: The type of the [`SearchStrategy`].
-/// * `C`: The type of `S`'s [`BuildQueryComputer`] computer. This exists as a separate
-///   type parameter because the type of the query computer depends on the type of the query.
-pub type PagedSearchState<DP, S, C> = SearchState<<DP as DataProvider>::InternalId, (S, C)>;
 
 impl<DP> DiskANNIndex<DP>
 where
@@ -2280,34 +2242,42 @@ where
     // Paged Search //
     //////////////////
 
-    pub fn start_paged_search<S, T>(
-        &self,
+    /// Begin a paged search over the index.
+    ///
+    /// Returns a [`PagedSearch`] handle whose [`next_page`](PagedSearch::next_page) method
+    /// yields successive pages of nearest-neighbor results.
+    pub fn paged_search<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        T: Copy + Send + 'a,
     {
         async move {
-            self.start_paged_search_with_init_ids(strategy, context, query, l_value, None)
+            self.paged_search_with_init_ids(strategy, context, query, l_value, None)
                 .await
         }
     }
 
-    pub fn start_paged_search_with_init_ids<S, T>(
-        &self,
+    /// Begin a paged search with explicit initial seed IDs.
+    ///
+    /// This is the same as [`paged_search`](Self::paged_search) but allows the caller to
+    /// provide custom starting points for the graph traversal.
+    pub fn paged_search_with_init_ids<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-        init_ids: Option<&[DP::InternalId]>,
-    ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
+        init_ids: Option<&'a [DP::InternalId]>,
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        T: Copy + Send + 'a,
     {
         async move {
             let (computer, scratch) = {
@@ -2350,118 +2320,17 @@ where
                 (computer, scratch)
             };
 
-            ANNResult::Ok(SearchState {
+            ANNResult::Ok(PagedSearch {
+                index: self,
+                context,
                 scratch,
                 computed_result: vec![Neighbor::default(); l_value],
                 next_result_index: l_value,
                 search_param_l: l_value,
-                extra: (strategy, computer),
+                strategy,
+                computer,
+                _query: std::marker::PhantomData,
             })
-        }
-    }
-
-    pub fn next_search_results<S, T>(
-        &self,
-        context: &DP::Context,
-        search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-        k: usize,
-        result_output: &mut [Neighbor<DP::InternalId>],
-    ) -> impl SendFuture<ANNResult<usize>>
-    where
-        S: SearchStrategy<DP, T>,
-    {
-        async move {
-            if k > search_state.search_param_l {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be less than or equal to search_param_l".to_string(),
-                ));
-            }
-            if k == 0 {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be greater than 0".to_string(),
-                ));
-            }
-            if result_output.len() < k {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "The size of result_output should be greater than or equal to k".to_string(),
-                ));
-            }
-
-            let copy_to_output =
-                |search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-                 count: usize,
-                 result_output: &mut [Neighbor<DP::InternalId>],
-                 result_output_offset: usize| {
-                    result_output[result_output_offset..result_output_offset + count]
-                        .copy_from_slice(
-                            &search_state.computed_result[search_state.next_result_index
-                                ..search_state.next_result_index + count],
-                        );
-                    search_state.next_result_index += count;
-                };
-
-            let used_computed_result_count: usize = cmp::min(
-                k,
-                search_state.computed_result.len() - search_state.next_result_index,
-            );
-            if used_computed_result_count > 0 {
-                copy_to_output(
-                    search_state,
-                    used_computed_result_count,
-                    result_output,
-                    0, // result_output_offset
-                );
-
-                if used_computed_result_count == k {
-                    return ANNResult::Ok(k);
-                }
-            }
-
-            let start_points = {
-                let mut accessor = search_state
-                    .extra
-                    .0
-                    .search_accessor(&self.data_provider, context)
-                    .into_ann_result()?;
-
-                let start_ids = accessor.starting_points().await?;
-                self.search_internal(
-                    None, // beam_width
-                    &start_ids,
-                    &mut accessor,
-                    &search_state.extra.1,
-                    &mut search_state.scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
-
-                start_ids
-            };
-
-            let (mut candidates, total_considered) = self
-                .filter_search_candidates(&start_points, k, &mut search_state.scratch.best)
-                .await?;
-            search_state.scratch.best.drain_best(total_considered);
-
-            let computed_result_count = candidates.len();
-            search_state.computed_result.clear();
-            search_state.computed_result.append(&mut candidates);
-
-            search_state.next_result_index = 0;
-            if computed_result_count != search_state.search_param_l {
-                search_state.computed_result.truncate(computed_result_count);
-            }
-
-            let leftover_results = cmp::min(k - used_computed_result_count, computed_result_count);
-
-            copy_to_output(
-                search_state,
-                leftover_results, // count of results to copy
-                result_output,
-                used_computed_result_count, // result_output_offset
-            );
-
-            ANNResult::Ok(used_computed_result_count + leftover_results)
         }
     }
 
@@ -3186,6 +3055,135 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
+}
+
+//////////////////
+// Paged Search //
+//////////////////
+
+/// A paged search handle that owns all search state internally.
+///
+/// Created by [`DiskANNIndex::paged_search`] or
+/// [`DiskANNIndex::paged_search_with_init_ids`]. Each call to
+/// [`next_page`](Self::next_page) resumes the graph search and returns the next page of
+/// nearest-neighbor results. Returns an empty `Vec` when the search is exhausted.
+///
+/// # Type Parameters
+///
+/// * `'idx` — lifetime of the borrowed [`DiskANNIndex`].
+/// * `'ctx` — lifetime of the borrowed [`DataProvider::Context`].
+/// * `DP` — the [`DataProvider`] type.
+/// * `S` — the [`SearchStrategy`] type.
+/// * `T` — the original query type (carried only for trait-bound resolution).
+#[derive(Debug)]
+pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
+    index: &'a DiskANNIndex<DP>,
+    context: &'a DP::Context,
+    scratch: SearchScratch<DP::InternalId>,
+    computed_result: Vec<Neighbor<DP::InternalId>>,
+    next_result_index: usize,
+    search_param_l: usize,
+    strategy: S,
+    computer: S::QueryComputer,
+    // Note:
+    _query: std::marker::PhantomData<fn(T) -> T>,
+}
+
+impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+where
+    DP: DataProvider,
+    S: SearchStrategy<DP, T>,
+{
+    /// Returns the next page of at most `k` nearest-neighbor results.
+    ///
+    /// Results across pages are non-overlapping and ordered by non-decreasing distance.
+    /// When the search is exhausted, returns an empty `Vec`.
+    pub fn next_page(
+        &mut self,
+        k: usize,
+    ) -> impl SendFuture<ANNResult<Vec<Neighbor<DP::InternalId>>>> {
+        async move {
+            if k > self.search_param_l {
+                return ANNResult::Err(ANNError::log_paged_search_error(
+                    "k should be less than or equal to search_param_l".to_string(),
+                ));
+            }
+            if k == 0 {
+                return ANNResult::Err(ANNError::log_paged_search_error(
+                    "k should be greater than 0".to_string(),
+                ));
+            }
+
+            let mut result = Vec::with_capacity(k);
+
+            // Drain any already-computed results first.
+            let available = self
+                .computed_result
+                .len()
+                .saturating_sub(self.next_result_index);
+            let from_cache = cmp::min(k, available);
+            if from_cache > 0 {
+                result.extend_from_slice(
+                    &self.computed_result
+                        [self.next_result_index..self.next_result_index + from_cache],
+                );
+                self.next_result_index += from_cache;
+
+                if result.len() == k {
+                    return ANNResult::Ok(result);
+                }
+            }
+
+            // Resume graph search to fill the next batch.
+            let start_points = {
+                let mut accessor = self
+                    .strategy
+                    .search_accessor(&self.index.data_provider, self.context)
+                    .into_ann_result()?;
+
+                let start_ids = accessor.starting_points().await?;
+                self.index
+                    .search_internal(
+                        None, // beam_width
+                        &start_ids,
+                        &mut accessor,
+                        &self.computer,
+                        &mut self.scratch,
+                        &mut NoopSearchRecord::new(),
+                    )
+                    .await?;
+
+                start_ids
+            };
+
+            let (mut candidates, total_considered) = self
+                .index
+                .filter_search_candidates(&start_points, k, &mut self.scratch.best)
+                .await?;
+            self.scratch.best.drain_best(total_considered);
+
+            let computed_result_count = candidates.len();
+            self.computed_result.clear();
+            self.computed_result.append(&mut candidates);
+
+            self.next_result_index = 0;
+            if computed_result_count != self.search_param_l {
+                self.computed_result.truncate(computed_result_count);
+            }
+
+            let remaining_need = k - result.len();
+            let leftover = cmp::min(remaining_need, computed_result_count);
+            if leftover > 0 {
+                result.extend_from_slice(
+                    &self.computed_result
+                        [self.next_result_index..self.next_result_index + leftover],
+                );
+                self.next_result_index += leftover;
+            }
+
+            ANNResult::Ok(result)
+        }
+    }
 }
 
 #[cfg(test)]
