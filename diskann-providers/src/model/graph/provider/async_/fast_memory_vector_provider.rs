@@ -46,6 +46,10 @@ pub struct FastMemoryVectorProviderAsync<Data: GraphDataType> {
     // because the Mutex is never held across an await.
     write_locks: Vec<Mutex<()>>,
 
+    /// The metric used by `distance`. Retained so save/load can round-trip it;
+    /// `distance` itself is opaque and cannot be inverted back to a `Metric`.
+    metric: Metric,
+
     // The distance object used to compare two vector representations.
     distance: <Data::VectorDataType as VectorRepr>::Distance,
 
@@ -76,6 +80,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
             max_vectors,
             vectors,
             write_locks,
+            metric,
             distance: Data::VectorDataType::distance(metric, Some(dim)),
             num_get_calls: TestCallCount::default(),
             prefetch_cache_line_level: prefetch_cache_line_level.unwrap_or_default(),
@@ -327,6 +332,85 @@ impl<Data: GraphDataType> storage::bin::GetData for FastMemoryVectorProviderAsyn
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+
+/// On-disk filename used for the vector blob inside the manifest directory.
+///
+/// The current contract is "one vector store per manifest". Once we support
+/// multiple sibling vector stores in the same manifest (e.g. full-precision +
+/// quantized), this will need parent-scoped naming.
+const VECTORS_ARTIFACT: &str = "vectors.bin";
+
+impl<Data> diskann_record::save::Save for FastMemoryVectorProviderAsync<Data>
+where
+    Data: GraphDataType,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        // `metric` is required to reconstruct the opaque `distance` on load.
+        // The prefetch tunables are part of the provider's configured state and
+        // are round-tripped so loaders observe the same behaviour as savers.
+        let mut record = diskann_record::save_fields!(
+            self,
+            context,
+            [metric, prefetch_cache_line_level, prefetch_lookahead]
+        );
+        let mut writer = context.write(VECTORS_ARTIFACT)?;
+        {
+            let shim = crate::storage::SingleUseWriteProvider::new(VECTORS_ARTIFACT, &mut writer);
+            self.save_to_bin(&shim, VECTORS_ARTIFACT)
+                .map_err(diskann_record::save::Error::new)?;
+        }
+        let handle = writer.finish()?;
+        record.insert("vectors", handle)?;
+        Ok(record)
+    }
+}
+
+impl<Data> diskann_record::load::Load<'_> for FastMemoryVectorProviderAsync<Data>
+where
+    Data: GraphDataType,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(
+            object,
+            [
+                metric: Metric,
+                prefetch_cache_line_level: PrefetchCacheLineLevel,
+                prefetch_lookahead: usize,
+                vectors: diskann_record::save::Handle,
+            ]
+        );
+        let mut reader = object.read(&vectors)?;
+        let shim = crate::storage::SingleUseReadProvider::new(VECTORS_ARTIFACT, &mut reader)
+            .map_err(diskann_record::load::Error::new)?;
+        Self::load_from_bin(
+            &shim,
+            VECTORS_ARTIFACT,
+            metric,
+            Some(prefetch_cache_line_level),
+            Some(prefetch_lookahead),
+        )
+        .map_err(diskann_record::load::Error::new)
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroUsize, sync::Arc};
@@ -503,5 +587,85 @@ mod tests {
         let reloaded = Provider::load_with(&storage, &ctx).await.unwrap();
 
         check_providers_equal(&provider, &reloaded);
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    type TestVectorProvider = FastMemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+
+    fn round_trip_helper(provider: &TestVectorProvider) -> TestVectorProvider {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
+            .expect("save_to_disk");
+        diskann_record::load::load_from_disk::<TestVectorProvider>(&manifest, dir.path())
+            .expect("load_from_disk")
+    }
+
+    #[test]
+    fn fast_memory_vector_provider_round_trips_default_initialised() {
+        let provider = TestVectorProvider::new(4, 3, Metric::L2, None, None);
+        let restored = round_trip_helper(&provider);
+        check_providers_equal(&provider, &restored);
+    }
+
+    #[test]
+    fn fast_memory_vector_provider_round_trips_populated() {
+        let provider = TestVectorProvider::new(5, 4, Metric::L2, None, None);
+        // SAFETY: Single-threaded test, no aliasing of mutable slices.
+        unsafe {
+            for i in 0..provider.total() {
+                let row: Vec<f32> = (0..provider.dim())
+                    .map(|j| ((i * 17 + j * 3) as f32) * 0.125)
+                    .collect();
+                provider.set_vector_sync(i, &row).unwrap();
+            }
+        }
+        let restored = round_trip_helper(&provider);
+        check_providers_equal(&provider, &restored);
+    }
+
+    #[test]
+    fn fast_memory_vector_provider_round_trips_with_singleton_dim() {
+        let provider = TestVectorProvider::new(7, 1, Metric::L2, None, None);
+        // SAFETY: Single-threaded test, no aliasing of mutable slices.
+        unsafe {
+            for i in 0..provider.total() {
+                provider.set_vector_sync(i, &[i as f32 + 0.5]).unwrap();
+            }
+        }
+        let restored = round_trip_helper(&provider);
+        check_providers_equal(&provider, &restored);
+    }
+
+    #[test]
+    fn fast_memory_vector_provider_round_trips_preserves_metric() {
+        // Metric must be carried through the manifest because `distance` cannot
+        // be inverted back to a `Metric` value.
+        let provider = TestVectorProvider::new(3, 2, Metric::Cosine, None, None);
+        let restored = round_trip_helper(&provider);
+        assert_eq!(provider.metric, restored.metric);
+        check_providers_equal(&provider, &restored);
+    }
+
+    #[test]
+    fn fast_memory_vector_provider_round_trips_preserves_prefetch_tunables() {
+        // Non-default prefetch tunables round-trip exactly through the manifest.
+        let provider = TestVectorProvider::new(
+            3,
+            2,
+            Metric::L2,
+            Some(PrefetchCacheLineLevel::CacheLine4),
+            Some(42),
+        );
+        let restored = round_trip_helper(&provider);
+        assert_eq!(
+            provider.prefetch_cache_line_level,
+            restored.prefetch_cache_line_level
+        );
+        assert_eq!(provider.prefetch_lookahead, restored.prefetch_lookahead);
+        check_providers_equal(&provider, &restored);
     }
 }

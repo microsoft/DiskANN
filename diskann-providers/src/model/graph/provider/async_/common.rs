@@ -563,6 +563,63 @@ impl diskann_record::load::Load<'_> for NoDeletes {
     }
 }
 
+/// Stable wire names for [`PrefetchCacheLineLevel`] variants.
+const PREFETCH_CACHE_LINE_4: &str = "CacheLine4";
+const PREFETCH_CACHE_LINE_8: &str = "CacheLine8";
+const PREFETCH_CACHE_LINE_16: &str = "CacheLine16";
+const PREFETCH_CACHE_LINE_ALL: &str = "All";
+
+impl diskann_record::save::Save for PrefetchCacheLineLevel {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        _context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save::Record::empty())
+    }
+
+    fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
+        Some(
+            match self {
+                Self::CacheLine4 => PREFETCH_CACHE_LINE_4,
+                Self::CacheLine8 => PREFETCH_CACHE_LINE_8,
+                Self::CacheLine16 => PREFETCH_CACHE_LINE_16,
+                Self::All => PREFETCH_CACHE_LINE_ALL,
+            }
+            .into(),
+        )
+    }
+}
+
+impl diskann_record::load::Load<'_> for PrefetchCacheLineLevel {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+    const IS_ENUM: bool = true;
+
+    fn load(
+        object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        let variant = object
+            .variant()
+            .ok_or(diskann_record::load::error::Kind::MissingVariant)?;
+        match variant {
+            PREFETCH_CACHE_LINE_4 => Ok(Self::CacheLine4),
+            PREFETCH_CACHE_LINE_8 => Ok(Self::CacheLine8),
+            PREFETCH_CACHE_LINE_16 => Ok(Self::CacheLine16),
+            PREFETCH_CACHE_LINE_ALL => Ok(Self::All),
+            other => Err(diskann_record::load::Error::message(format!(
+                "unknown PrefetchCacheLineLevel variant: {other:?}"
+            ))),
+        }
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
