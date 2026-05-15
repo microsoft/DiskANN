@@ -26,7 +26,7 @@ pub trait Benchmark: 'static {
     ///
     /// In the case of ties, the winner is chosen using an unspecified tie-breaking procedure.
     ///
-    /// On failure, returns `Err(FailureScore)`. In the [`crate::registry::Benchmarks`]
+    /// On failure, returns `Err(FailureScore)`. In the [`crate::Registry`]
     /// registry, [`FailureScore`]s will be used to rank the "nearest misses". Implementations
     /// are encouraged to generate ranked [`FailureScore`]s to assist in user level debugging.
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore>;
@@ -90,7 +90,7 @@ impl std::fmt::Display for FailureScore {
 /// The semantics of pass or failure are left solely to the discretion of the [`Regression`]
 /// implementation.
 ///
-/// See: [`register_regression`](crate::registry::Benchmarks::register_regression).
+/// See: [`register_regression`](crate::Registry::register_regression).
 pub trait Regression: Benchmark<Output: for<'a> Deserialize<'a>> {
     /// The tolerance [`Input`] associated with this regression check.
     type Tolerances: Input + 'static;

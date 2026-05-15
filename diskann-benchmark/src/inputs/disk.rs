@@ -27,13 +27,6 @@ use crate::{
 
 as_input!(DiskIndexOperation);
 
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<DiskIndexOperation>()?;
-    Ok(())
-}
-
 ///////////
 // Input //
 ///////////

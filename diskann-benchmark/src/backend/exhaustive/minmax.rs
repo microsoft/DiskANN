@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "minmax-exhaustive-search";
 
@@ -11,17 +11,19 @@ crate::utils::stub_impl!("minmax-quantization", inputs::exhaustive::MinMax);
 
 // MinMax - requires feature "minmax-quantization"
 #[cfg(feature = "minmax-quantization")]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register(NAME, imp::MinMaxQ::<1>);
-    benchmarks.register(NAME, imp::MinMaxQ::<2>);
-    benchmarks.register(NAME, imp::MinMaxQ::<4>);
-    benchmarks.register(NAME, imp::MinMaxQ::<8>);
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register(NAME, imp::MinMaxQ::<1>)?;
+    registry.register(NAME, imp::MinMaxQ::<2>)?;
+    registry.register(NAME, imp::MinMaxQ::<4>)?;
+    registry.register(NAME, imp::MinMaxQ::<8>)?;
+
+    Ok(())
 }
 
 // Stub implementation
 #[cfg(not(feature = "minmax-quantization"))]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    imp::register(NAME, benchmarks)
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    imp::register(NAME, registry)
 }
 
 /////////////
