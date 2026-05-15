@@ -97,6 +97,7 @@ inherently safe — no runtime check needed in the macro path.
 - Light/heavy error split on load path
 - `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush errors via `save::Result<Handle>`
 - Compile-time `const` assertion in `src/lib.rs` that rejects targets where `usize::BITS != 64`.
+- Propagate light errors for duplicate filenames/creation failure, manifest finish, attempting to write to reserved  keys, missing files on `load`, out-of-range values for numerics (light errors)
 - Enum support via internally-tagged objects (`$variant` alongside `$version`). Save side
   exposes `Save::variant() -> Option<Cow<'_, str>>` (default `None` = struct), and
   `save_fields!` has a two-argument form (`save_fields!(context, [...])`) for use inside
@@ -106,19 +107,6 @@ inherently safe — no runtime check needed in the macro path.
   record as an enum yields `MissingVariant`.
 
 ## Remaining Work
-
-### Error Handling Cleanup
-
-Several places still use `unwrap()` or `panic!()` instead of proper error propagation:
-
-- `save::context.rs` — `File::create_new` and file dedup panic on failure
-- `save::context.rs` — `ContextInner::finish()` has unwraps on file creation and
-  serialization
-- `load::context.rs` — `ContextInner::read()` panics on missing file key
-  (`panic!("this should return an error instead")`)
-- `load::mod.rs` — `load_number!` macro uses `.unwrap()` on `TryFrom` — should return a
-  precision/overflow error
-- `save::value.rs` — `Record::insert` panics on reserved keys instead of returning an error
 
 ### Value::Bytes Wiring
 

@@ -34,20 +34,27 @@ impl ContextInner {
         Context { inner: self }
     }
 
-    pub(super) fn write(&self, key: &str) -> Writer<'_> {
+    pub(super) fn write(&self, key: &str) -> Result<Writer<'_>> {
         // TODO: Proper disambiguation - making UUIDs etc.
-        let mut files = self.files.lock().unwrap();
-        if files.insert(key.into()) {
-            let full = self.dir.join(key);
-            let file = std::fs::File::create_new(full).unwrap();
-            Writer {
-                io: BufWriter::new(file),
-                name: key.into(),
-                _lifetime: std::marker::PhantomData,
-            }
-        } else {
-            panic!("you done goofed!");
+        let mut files = self
+            .files
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if !files.insert(key.into()) {
+            return Err(Error::message(format!(
+                "file name {:?} has already been registered with this save context",
+                key,
+            )));
         }
+        let full = self.dir.join(key);
+        let file = std::fs::File::create_new(&full).map_err(|err| {
+            Error::new(err).context(format!("while creating new file {}", full.display()))
+        })?;
+        Ok(Writer {
+            io: BufWriter::new(file),
+            name: key.into(),
+            _lifetime: std::marker::PhantomData,
+        })
     }
 
     pub fn finish(self, value: Value<'_>) -> Result<()> {
@@ -59,15 +66,27 @@ impl ContextInner {
             )));
         }
 
-        let files = self.files.into_inner().unwrap();
+        let files = self
+            .files
+            .into_inner()
+            .unwrap_or_else(|poison| poison.into_inner());
         let f = Final {
             files: files.iter().map(|k| &**k).collect(),
             value: &value,
         };
 
-        let buffer = std::fs::File::create(&temp).unwrap();
-        serde_json::to_writer_pretty(buffer, &f).unwrap();
-        std::fs::rename(&temp, &self.metadata).unwrap();
+        let buffer = std::fs::File::create(&temp).map_err(|err| {
+            Error::new(err).context(format!("while creating temp manifest file {}", temp))
+        })?;
+        serde_json::to_writer_pretty(buffer, &f)
+            .map_err(|err| Error::new(err).context("while serializing manifest to JSON"))?;
+        std::fs::rename(&temp, &self.metadata).map_err(|err| {
+            Error::new(err).context(format!(
+                "while renaming temp manifest {} to final path {}",
+                temp,
+                self.metadata.display()
+            ))
+        })?;
         Ok(())
     }
 }
@@ -78,7 +97,7 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    pub fn write(&self, key: &str) -> Writer<'_> {
+    pub fn write(&self, key: &str) -> Result<Writer<'_>> {
         self.inner.write(key)
     }
 }

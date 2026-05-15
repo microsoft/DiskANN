@@ -140,7 +140,7 @@ macro_rules! load_number {
         impl Loadable<'_> for $T {
             fn load(context: Context<'_>) -> Result<Self> {
                 match context.as_number() {
-                    Some(n) => Ok(n.try_into().unwrap()),
+                    Some(n) => n.try_into().map_err(|_| error::Kind::NumberOutOfRange.into()),
                     None => Err((error::Kind::TypeMismatch).into()),
                 }
             }

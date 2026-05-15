@@ -79,6 +79,12 @@ pub enum Kind {
     /// The wire format's `$variant` tag does not match any known variant of the
     /// target enum.
     UnknownVariant,
+    /// A numeric value in the manifest does not fit in the requested Rust type
+    /// (either out of range or would lose precision).
+    NumberOutOfRange,
+    /// A `$handle` references a file name that is not registered in the
+    /// manifest's `files` set.
+    MissingFile,
 }
 
 impl Kind {
@@ -91,6 +97,8 @@ impl Kind {
             Self::UnexpectedVariant => "unexpected variant tag on non-enum record",
             Self::MissingVariant => "missing variant tag on enum record",
             Self::UnknownVariant => "unknown variant",
+            Self::NumberOutOfRange => "number out of range for target type",
+            Self::MissingFile => "handle references a file not present in the manifest",
         }
     }
 }

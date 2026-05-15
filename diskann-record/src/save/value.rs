@@ -11,7 +11,7 @@ use serde::{
     ser::SerializeStruct,
 };
 
-use crate::{Number, Version};
+use crate::{Number, Version, save::Error};
 
 #[derive(Debug)]
 pub enum Value<'a> {
@@ -191,17 +191,21 @@ impl<'a> Record<'a> {
         self.record.get(key)
     }
 
-    pub fn insert<K, V>(&mut self, key: K, value: V) -> Option<Value<'a>>
+    pub fn insert<K, V>(&mut self, key: K, value: V) -> crate::save::Result<Option<Value<'a>>>
     where
         K: Into<Cow<'a, str>>,
         V: Into<Value<'a>>,
     {
         let key = key.into();
         if crate::is_reserved(&key) {
-            panic!("key is reserved - need better error handling");
+            return Err(Error::message(format!(
+                "record key {:?} is reserved (keys starting with `$` are reserved for the \
+                 save/load framework)",
+                key,
+            )));
         }
 
-        self.record.insert(key, value.into())
+        Ok(self.record.insert(key, value.into()))
     }
 }
 

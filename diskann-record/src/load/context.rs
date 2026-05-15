@@ -50,11 +50,16 @@ impl ContextInner {
     pub(super) fn read(&self, key: &str) -> Result<Reader<'_>> {
         let key_as_path: &Path = key.as_ref();
         if !self.files.contains(key_as_path) {
-            panic!("this should return an error instead");
+            return Err(Error::from(error::Kind::MissingFile).context(format!(
+                "handle references file {:?} which is not registered in the manifest",
+                key,
+            )));
         }
 
         let full = self.dir.join(key);
-        let file = std::fs::File::open(full).unwrap();
+        let file = std::fs::File::open(&full).map_err(|err| {
+            Error::new(err).context(format!("while opening artifact file {}", full.display()))
+        })?;
         let reader = Reader {
             io: BufReader::new(file),
             _lifetime: std::marker::PhantomData,
