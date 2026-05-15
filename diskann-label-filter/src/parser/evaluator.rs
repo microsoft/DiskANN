@@ -50,8 +50,20 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                             false
                         }
                     }
-                    CompareOp::In(arr) => arr.contains(&field_val),
-                    CompareOp::Nin(arr) => !arr.contains(&field_val),
+                    CompareOp::In(arr) => {
+                        if let Value::Array(field_arr) = field_val {
+                            field_arr.iter().any(|v| arr.contains(v))
+                        } else {
+                            arr.contains(&field_val)
+                        }
+                    }
+                    CompareOp::Nin(arr) => {
+                        if let Value::Array(field_arr) = field_val {
+                            field_arr.iter().all(|v| !arr.contains(v))
+                        } else {
+                            !arr.contains(&field_val)
+                        }
+                    }
                 }
             } else {
                 false // Field not found
@@ -107,9 +119,7 @@ mod tests {
         assert!(!eval_query_expr(&ast, &label));
     }
     #[test]
-    #[ignore] // TODO: $in operator removed - need to redesign test
     fn test_in_with_array_field() {
-        // $in with array field value - NO LONGER SUPPORTED
         let label = json!({"tags": ["a", "b", "c"]});
         let filter = json!({"tags": {"$in": ["b", "x"]}});
         let ast = parse_query_filter(&filter).expect("Failed to parse filter");
@@ -117,9 +127,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: $nin operator removed - need to redesign test
     fn test_nin_with_array_field() {
-        // $nin with array field value - NO LONGER SUPPORTED
         let label = json!({"tags": ["a", "b", "c"]});
         let filter = json!({"tags": {"$nin": ["x", "y"]}});
         let ast = parse_query_filter(&filter).expect("Failed to parse filter");

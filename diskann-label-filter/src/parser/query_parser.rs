@@ -474,9 +474,7 @@ mod tests {
                 panic!("Expected NOT, got {:?}", and_exprs[1]);
             }
 
-            // Third branch: Implicit AND of d IN [4,5,6] and e = "test"
-            // COMMENTED OUT: $in operator is no longer supported
-            /*
+
             if let ASTExpr::And(implicit_and) = &and_exprs[2] {
                 assert_eq!(implicit_and.len(), 2);
 
@@ -506,7 +504,7 @@ mod tests {
             } else {
                 panic!("Expected implicit AND, got {:?}", and_exprs[2]);
             }
-            */
+
         } else {
             panic!("Expected AND, got {:?}", ast);
         }

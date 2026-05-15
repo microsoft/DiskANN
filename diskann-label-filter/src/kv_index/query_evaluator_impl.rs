@@ -168,6 +168,13 @@ where
 
                     Ok(result)
                 }
+                CompareOp::In(_) | CompareOp::Nin(_) => {
+                    // IN/NIN operations require scanning multiple values and combining results
+                    Err(QueryError::unsupported(
+                        "IN/NIN",
+                        "IN/NIN are not supported by the current inverted index spec",
+                    ))
+                }
             },
         }
     }
@@ -600,6 +607,40 @@ mod tests {
         match result {
             Err(QueryError::UnsupportedOperation { operation, .. }) => {
                 assert_eq!(operation, "NE");
+            }
+            _ => panic!("Expected UnsupportedOperation error"),
+        }
+    }
+
+    #[test]
+    fn test_evaluate_query_in_unsupported() {
+        let index = make_index();
+        let expr = ASTExpr::Compare {
+            field: "field".to_string(),
+            op: CompareOp::In(vec![json!(1), json!(2)]),
+        };
+        let result = index.evaluate_query(&expr);
+        assert!(result.is_err());
+        match result {
+            Err(QueryError::UnsupportedOperation { operation, .. }) => {
+                assert_eq!(operation, "IN/NIN");
+            }
+            _ => panic!("Expected UnsupportedOperation error"),
+        }
+    }
+
+    #[test]
+    fn test_evaluate_query_nin_unsupported() {
+        let index = make_index();
+        let expr = ASTExpr::Compare {
+            field: "field".to_string(),
+            op: CompareOp::Nin(vec![json!(1), json!(2)]),
+        };
+        let result = index.evaluate_query(&expr);
+        assert!(result.is_err());
+        match result {
+            Err(QueryError::UnsupportedOperation { operation, .. }) => {
+                assert_eq!(operation, "IN/NIN");
             }
             _ => panic!("Expected UnsupportedOperation error"),
         }

@@ -311,6 +311,24 @@ mod tests {
         let result = mapper.visit(&expr);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not supported"));
+
+        // Test In operation (not supported)
+        let expr = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::In(vec![Value::String("electronics".to_string()), Value::String("books".to_string())]),
+        };
+        let result = mapper.visit(&expr);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
+
+        // Test Nin operation (not supported)
+        let expr = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::Nin(vec![Value::String("electronics".to_string()), Value::String("books".to_string())]),
+        };
+        let result = mapper.visit(&expr);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
     }
 
     #[test]

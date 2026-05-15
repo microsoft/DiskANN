@@ -50,8 +50,8 @@ impl fmt::Display for CompareOp {
             CompareOp::Lte(_) => write!(f, "<="),
             CompareOp::Gt(_) => write!(f, ">"),
             CompareOp::Gte(_) => write!(f, ">="),
-            CompareOp::In(_) => write!(f, "in"),
-            CompareOp::Nin(_) => write!(f, "not in"),
+            CompareOp::In(_) => write!(f, " in "),
+            CompareOp::Nin(_) => write!(f, " not in "),
         }
     }
 }
@@ -241,6 +241,20 @@ mod tests {
         };
 
         assert_eq!(expr.to_string(), "age>30");
+
+        // Test In operator
+        let expr_in = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::In(vec![json!("electronics"), json!("books")]),
+        };
+        assert_eq!(expr_in.to_string(), "category in [\"electronics\", \"books\"]");
+
+        // Test Nin operator
+        let expr_nin = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::Nin(vec![json!("electronics"), json!("books")]),
+        };
+        assert_eq!(expr_nin.to_string(), "category not in [\"electronics\", \"books\"]");
 
         // Test AND expression
         let and_expr = ASTExpr::And(vec![
