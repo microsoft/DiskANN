@@ -957,11 +957,13 @@ dependencies = [
  "approx",
  "cfg-if",
  "criterion",
+ "diskann-record",
  "diskann-wide",
  "half",
  "iai-callgrind",
  "rand 0.9.4",
  "rand_distr",
+ "tempfile",
 ]
 
 [[package]]
