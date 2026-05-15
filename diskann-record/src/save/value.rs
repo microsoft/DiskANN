@@ -40,76 +40,68 @@ impl Serialize for Value<'_> {
     }
 }
 
-impl<'de, 'a> Deserialize<'de> for Value<'a> {
+impl<'de> Deserialize<'de> for Value<'static> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct Inner<'a>(std::marker::PhantomData<&'a ()>);
+        struct Inner;
 
-        impl<'de, 'a> Visitor<'de> for Inner<'a> {
-            type Value = Value<'a>;
+        impl<'de> Visitor<'de> for Inner {
+            type Value = Value<'static>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("a valid Value")
             }
 
-            fn visit_unit<E: de::Error>(self) -> Result<Value<'a>, E> {
+            fn visit_unit<E: de::Error>(self) -> Result<Value<'static>, E> {
                 Ok(Value::Null)
             }
 
-            fn visit_none<E: de::Error>(self) -> Result<Value<'a>, E> {
+            fn visit_none<E: de::Error>(self) -> Result<Value<'static>, E> {
                 Ok(Value::Null)
             }
 
-            fn visit_some<D>(self, deserializer: D) -> Result<Value<'a>, D::Error>
+            fn visit_some<D>(self, deserializer: D) -> Result<Value<'static>, D::Error>
             where
                 D: Deserializer<'de>,
             {
                 Value::deserialize(deserializer)
             }
 
-            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value<'a>, E> {
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Value<'static>, E> {
                 Ok(Value::Bool(v))
             }
 
-            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value<'a>, E> {
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Value<'static>, E> {
                 Ok(Value::Number(Number::U64(v)))
             }
 
-            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value<'a>, E> {
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Value<'static>, E> {
                 Ok(Value::Number(Number::I64(v)))
             }
 
-            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value<'a>, E> {
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value<'static>, E> {
                 Ok(Value::Number(Number::F64(v)))
             }
 
-            fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Value<'a>, E> {
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'static>, E> {
                 Ok(Value::String(Cow::Owned(v.to_owned())))
             }
 
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Value<'a>, E> {
-                Ok(Value::String(Cow::Owned(v.to_owned())))
-            }
-
-            fn visit_string<E: de::Error>(self, v: String) -> Result<Value<'a>, E> {
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Value<'static>, E> {
                 Ok(Value::String(Cow::Owned(v)))
             }
 
-            fn visit_borrowed_bytes<E: de::Error>(self, v: &'de [u8]) -> Result<Value<'a>, E> {
+            fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Value<'static>, E> {
                 Ok(Value::Bytes(Cow::Owned(v.to_owned())))
             }
 
-            fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Value<'a>, E> {
-                Ok(Value::Bytes(Cow::Owned(v.to_owned())))
-            }
-
-            fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Value<'a>, E> {
+            fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Value<'static>, E> {
                 Ok(Value::Bytes(Cow::Owned(v)))
             }
 
-            fn visit_seq<A>(self, mut seq: A) -> Result<Value<'a>, A::Error>
+            fn visit_seq<A>(self, mut seq: A) -> Result<Value<'static>, A::Error>
             where
                 A: SeqAccess<'de>,
             {
@@ -120,18 +112,18 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
                 Ok(Value::Array(values))
             }
 
-            fn visit_map<A>(self, mut map: A) -> Result<Value<'a>, A::Error>
+            fn visit_map<A>(self, mut map: A) -> Result<Value<'static>, A::Error>
             where
                 A: MapAccess<'de>,
             {
                 // TODO: Handle invaiants that only one of our reserved words are present.
                 let mut version: Option<Version> = None;
-                let mut variant: Option<Cow<'a, str>> = None;
+                let mut variant: Option<Cow<'static, str>> = None;
                 let mut handle_name: Option<String> = None;
-                let mut fields: HashMap<Cow<'a, str>, Value<'a>> = HashMap::new();
+                let mut fields: HashMap<Cow<'static, str>, Value<'static>> = HashMap::new();
 
-                while let Some(key) = map.next_key::<Cow<'a, str>>()? {
-                    match key.as_ref() {
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
                         "$version" => {
                             version = Some(map.next_value()?);
                         }
@@ -143,7 +135,7 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
                         }
                         _ => {
                             let value = map.next_value()?;
-                            fields.insert(key, value);
+                            fields.insert(Cow::Owned(key), value);
                         }
                     }
                 }
@@ -167,7 +159,7 @@ impl<'de, 'a> Deserialize<'de> for Value<'a> {
             }
         }
 
-        deserializer.deserialize_any(Inner(std::marker::PhantomData))
+        deserializer.deserialize_any(Inner)
     }
 }
 

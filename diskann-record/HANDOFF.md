@@ -169,13 +169,6 @@ The current design has clean seams for this — `Writer::finish() -> Handle` and
 - Consider preserving field ordering (`HashMap` loses insertion order —
   `IndexMap` or `Vec<(K, V)>` would preserve it for human-readable JSON)
 
-### Value Deserialize Cleanup
-
-The `Deserialize` impl for `Value<'a>` still carries a `PhantomData<&'a ()>` even though
-it always produces `Cow::Owned`. Could be simplified to impl directly for `Value<'static>`.
-`visit_borrowed_str`/`visit_borrowed_bytes` always clone — can be removed (serde falls
-through to `visit_str`/`visit_bytes`).
-
 ### Derive Macros
 
 The RFC envisions `#[derive(Save)]` and `#[derive(Load)]` to eliminate boilerplate. The
