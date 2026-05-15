@@ -573,7 +573,7 @@ mod tests {
 
         // Not enough groundtruth - dynamic: unlike the fixed-size matrix case, dynamic
         // (variable-length) groundtruth rows with fewer than recall_k entries are valid
-        // and represent queries with limited results (e.g. filtered queries). Recall is 
+        // and represent queries with limited results (e.g. filtered queries). Recall is
         // computed using the available entries (this_recall_k = gt_row.len().min(recall_k)).
         {
             let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
