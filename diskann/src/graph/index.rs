@@ -3085,7 +3085,7 @@ pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
     search_param_l: usize,
     strategy: S,
     computer: S::QueryComputer,
-    // Note:
+    // Note: The use of `fn` here is so
     _query: std::marker::PhantomData<fn(T) -> T>,
 }
 
