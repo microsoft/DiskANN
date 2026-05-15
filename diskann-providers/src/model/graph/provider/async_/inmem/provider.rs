@@ -730,6 +730,85 @@ where
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// NOTE: Sub-providers are saved through the same `Context`, so artifact filenames must
+// not collide. Today `FastMemoryVectorProviderAsync` writes `vectors.bin` and
+// `SimpleNeighborProviderAsync` writes `graph.bin`. This is sufficient for the
+// `FullPrecisionProvider<T, NoStore, NoDeletes>` shape used by current tests. When a
+// non-`NoStore` aux vector store is wired in, both `U` and `V` would attempt to write
+// `vectors.bin` and `Context::write` would reject the second call. At that point we
+// will need parent-scoped artifact names (e.g. UUIDs --> TODO).
+
+impl<U, V, D, Ctx> diskann_record::save::Save for DefaultProvider<U, V, D, Ctx>
+where
+    U: diskann_record::save::Save,
+    V: diskann_record::save::Save,
+    D: diskann_record::save::Save,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [
+                base_vectors,
+                aux_vectors,
+                neighbor_provider,
+                deleted,
+                metric,
+                start_points,
+            ]
+        ))
+    }
+}
+
+impl<'a, U, V, D, Ctx> diskann_record::load::Load<'a> for DefaultProvider<U, V, D, Ctx>
+where
+    U: diskann_record::load::Load<'a>,
+    V: diskann_record::load::Load<'a>,
+    D: diskann_record::load::Load<'a>,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        object: diskann_record::load::Object<'a>,
+    ) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(
+            object,
+            [
+                base_vectors: U,
+                aux_vectors: V,
+                neighbor_provider: SimpleNeighborProviderAsync<u32>,
+                deleted: D,
+                metric: Metric,
+                start_points: StartPoints,
+            ]
+        );
+        Ok(Self {
+            base_vectors,
+            aux_vectors,
+            neighbor_provider,
+            deleted,
+            metric,
+            start_points,
+            context: std::marker::PhantomData,
+        })
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'a>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -838,5 +917,98 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    use crate::model::graph::provider::async_::inmem::FullPrecisionStore;
+
+    type TestProvider =
+        DefaultProvider<FullPrecisionStore<f32>, NoStore, NoDeletes, DefaultContext>;
+
+    fn build_full_precision_provider(
+        max_points: usize,
+        frozen_points: usize,
+        dim: usize,
+        max_degree: u32,
+    ) -> TestProvider {
+        DefaultProvider::<_, _, _, DefaultContext>::new_empty(
+            DefaultProviderParameters {
+                max_points,
+                frozen_points: NonZeroUsize::new(frozen_points).unwrap(),
+                dim,
+                metric: Metric::L2,
+                prefetch_lookahead: None,
+                max_degree,
+                prefetch_cache_line_level: None,
+            },
+            CreateFullPrecision::<f32>::new(dim, None),
+            NoStore,
+            NoDeletes,
+        )
+        .unwrap()
+    }
+
+    fn populate_provider(provider: &TestProvider, dim: usize) {
+        let total = provider.total_points();
+        for i in 0..total as u32 {
+            let v: Vec<f32> = (0..dim).map(|j| (i as f32) * 10.0 + j as f32).collect();
+            provider.base_vectors.set_element(&i, &v).unwrap();
+            let neighbors: Vec<u32> =
+                (0..3).map(|j| (i + j + 1) % total as u32).collect();
+            provider
+                .neighbor_provider
+                .set_neighbors_sync(i as usize, &neighbors)
+                .unwrap();
+        }
+    }
+
+    fn assert_providers_match(left: &TestProvider, right: &TestProvider) {
+        assert_eq!(left.metric, right.metric);
+        assert_eq!(left.start_points.range(), right.start_points.range());
+        assert_eq!(left.total_points(), right.total_points());
+
+        for i in 0..left.total_points() {
+            // SAFETY: Single-threaded test; no concurrent mutation of either provider.
+            unsafe {
+                let a = left.base_vectors.get_vector_sync(i);
+                let b = right.base_vectors.get_vector_sync(i);
+                assert_eq!(a, b, "base_vectors differ at {i}");
+            }
+
+            let mut a = AdjacencyList::new();
+            let mut b = AdjacencyList::new();
+            left.neighbor_provider.get_neighbors_sync(i, &mut a).unwrap();
+            right.neighbor_provider.get_neighbors_sync(i, &mut b).unwrap();
+            assert_eq!(a, b, "adjacency list at {i} differs");
+        }
+    }
+
+    fn round_trip_helper(provider: &TestProvider) -> TestProvider {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
+            .expect("save_to_disk");
+        diskann_record::load::load_from_disk::<TestProvider>(&manifest, dir.path())
+            .expect("load_from_disk")
+    }
+
+    #[test]
+    fn default_provider_round_trips_populated() {
+        let dim = 4;
+        let provider = build_full_precision_provider(5, 1, dim, 8);
+        populate_provider(&provider, dim);
+        let restored = round_trip_helper(&provider);
+        assert_providers_match(&provider, &restored);
+    }
+
+    #[test]
+    fn default_provider_round_trips_default_initialised() {
+        let dim = 3;
+        let provider = build_full_precision_provider(4, 1, dim, 6);
+        let restored = round_trip_helper(&provider);
+        assert_providers_match(&provider, &restored);
     }
 }
