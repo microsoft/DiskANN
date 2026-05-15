@@ -173,8 +173,25 @@ fn parse_query_filter_with_depth(
                                 ));
                             }
                         }
-                        "$in" | "$nin" => {
-                            return Err(QueryFilterError::UnsupportedComparisonOperator(op.clone()))
+                        "$in" => {
+                            if let Some(arr) = val.as_array() {
+                                CompareOp::In(arr.clone())
+                            } else {
+                                return Err(QueryFilterError::InvalidValueType(
+                                    "array".to_string(),
+                                    val.to_string(),
+                                ));
+                            }
+                        }
+                        "$nin" => {
+                            if let Some(arr) = val.as_array() {
+                                CompareOp::Nin(arr.clone())
+                            } else {
+                                return Err(QueryFilterError::InvalidValueType(
+                                    "array".to_string(),
+                                    val.to_string(),
+                                ));
+                            }
                         }
                         _ => {
                             return Err(QueryFilterError::UnsupportedComparisonOperator(op.clone()))

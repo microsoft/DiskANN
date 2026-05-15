@@ -35,6 +35,10 @@ pub enum CompareOp {
     Gt(f64), // $gt
     /// Greater than or equal comparison, only valid for numeric values
     Gte(f64), // $gte
+    /// In comparison, value must be in the provided array
+    In(Vec<Value>), // $in
+    /// Not in comparison, value must not be in the provided array
+    Nin(Vec<Value>), // $nin
 }
 
 impl fmt::Display for CompareOp {
@@ -46,6 +50,8 @@ impl fmt::Display for CompareOp {
             CompareOp::Lte(_) => write!(f, "<="),
             CompareOp::Gt(_) => write!(f, ">"),
             CompareOp::Gte(_) => write!(f, ">="),
+            CompareOp::In(_) => write!(f, "in"),
+            CompareOp::Nin(_) => write!(f, "not in"),
         }
     }
 }
@@ -189,6 +195,14 @@ impl ASTVisitor for PrintVisitor {
             CompareOp::Lte(num) => num.to_string(),
             CompareOp::Gt(num) => num.to_string(),
             CompareOp::Gte(num) => num.to_string(),
+            CompareOp::In(arr) => {
+                let items: Vec<String> = arr.iter().map(Self::value_to_string).collect();
+                format!("[{}]", items.join(", "))
+            }
+            CompareOp::Nin(arr) => {
+                let items: Vec<String> = arr.iter().map(Self::value_to_string).collect();
+                format!("[{}]", items.join(", "))
+            }
         };
 
         format!("{}{}{}", field, op, value_str)

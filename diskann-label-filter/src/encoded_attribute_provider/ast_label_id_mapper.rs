@@ -116,6 +116,14 @@ impl ASTVisitor for ASTLabelIdMapper {
                 tracing::warn!(">= Not supported ");
                 None
             }
+            CompareOp::In(_arr) => {
+                tracing::warn!("IN Not supported ");
+                None
+            }
+            CompareOp::Nin(_arr) => {
+                tracing::warn!("NOT IN Not supported ");
+                None
+            }
         };
 
         if let Some(attribute) = label_or_none {

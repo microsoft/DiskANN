@@ -50,6 +50,8 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                             false
                         }
                     }
+                    CompareOp::In(arr) => arr.contains(&field_val),
+                    CompareOp::Nin(arr) => !arr.contains(&field_val),
                 }
             } else {
                 false // Field not found
