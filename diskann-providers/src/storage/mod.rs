@@ -8,6 +8,11 @@ pub use storage_provider::{
     DynWriteProvider, StorageReadProvider, StorageWriteProvider, WriteProviderWrapper, WriteSeek,
 };
 
+mod record_shim;
+pub use record_shim::{
+    ReadSeek, SingleUseReadProvider, SingleUseReader, SingleUseWriteProvider, SingleUseWriter,
+};
+
 #[cfg(any(test, feature = "virtual_storage"))]
 mod virtual_storage_provider;
 #[cfg(any(test, feature = "virtual_storage"))]
