@@ -26,15 +26,15 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, Benchmark, CheckDeserialization, Checker, Input,
+    Any, Benchmark, CheckDeserialization, Checker, Input, Registry,
 };
 
 ////////////////
 // Public API //
 ////////////////
 
-pub fn register(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    register_benchmarks_impl(dispatcher)
+pub fn register(registry: &mut Registry) -> anyhow::Result<()> {
+    Ok(register_benchmarks_impl(registry)?)
 }
 
 ///////////
@@ -301,105 +301,108 @@ impl std::fmt::Display for CheckResult {
 // Benchmark Registration //
 ////////////////////////////
 
-fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
+fn register_benchmarks_impl(
+    registry: &mut diskann_benchmark_runner::Registry,
+) -> Result<(), diskann_benchmark_runner::RegistryError> {
     // x86-64-v4
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, i8, i8>::new(),
-        );
+        )?;
     }
 
     // x86-64-v3
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, i8, i8>::new(),
-        );
+        )?;
     }
 
     // aarch64-neon
     #[cfg(target_arch = "aarch64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, i8, i8>::new(),
-        );
+        )?;
     }
 
     // scalar
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-scalar",
         Kernel::<diskann_wide::arch::Scalar, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-scalar",
         Kernel::<diskann_wide::arch::Scalar, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-scalar",
         Kernel::<diskann_wide::arch::Scalar, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-scalar",
         Kernel::<diskann_wide::arch::Scalar, i8, i8>::new(),
-    );
+    )?;
 
     // reference
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-reference",
         Kernel::<Reference, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-reference",
         Kernel::<Reference, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-reference",
         Kernel::<Reference, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-reference",
         Kernel::<Reference, i8, i8>::new(),
-    );
+    )?;
+    Ok(())
 }
 
 //////////////
