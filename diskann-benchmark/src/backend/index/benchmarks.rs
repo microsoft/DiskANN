@@ -464,12 +464,7 @@ where
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
         // compute the maximum value of k used in any search
-        let max_k = topk
-            .runs
-            .iter()
-            .map(|run| run.recall_k)
-            .max()
-            .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+        let max_k = topk.max_k();
 
         let groundtruth =
             datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
@@ -658,10 +653,8 @@ fn full_precision_streaming<T>(
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
-    let topk = match &input.search_phase {
-        SearchPhase::Topk(topk) => topk,
-        _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
-    };
+    let topk = input.search_phase.as_topk()?;
+
     let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(&input.build.data))?;
@@ -697,12 +690,7 @@ where
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
     // compute the maximum value of k used in any search
-    let max_k = topk
-        .runs
-        .iter()
-        .map(|run| run.recall_k)
-        .max()
-        .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+    let max_k = topk.max_k();
 
     let layered = bigann::WithData::new(managed, data, queries, move |path| {
         Ok(Box::new(datafiles::load_groundtruth(

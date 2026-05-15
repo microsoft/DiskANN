@@ -376,10 +376,14 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let topk = phase.as_topk()?;
 
+            // compute the maximum value of k used in any search
+            let max_k = topk.max_k();
+
             let queries: Arc<Matrix<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+            let groundtruth =
+                datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
             let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
 
@@ -516,7 +520,7 @@ mod imp {
             ))?);
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+                datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
             let steps =
                 search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);

@@ -131,7 +131,7 @@ mod imp {
                 f32::converting_load(datafiles::BinFile(&input.search.queries), input.data_type)?;
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), None)?;
 
             let search_progress = make_progress_bar(
                 "running search",

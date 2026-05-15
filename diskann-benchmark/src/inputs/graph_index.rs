@@ -128,6 +128,12 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
+impl TopkSearchPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+}
+
 impl CheckDeserialization for TopkSearchPhase {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         // Check the validity of the input files.
