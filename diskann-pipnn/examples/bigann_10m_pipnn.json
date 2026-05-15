@@ -1,0 +1,46 @@
+{
+  "search_directories": ["datasets"],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Build",
+          "data_type": "float16",
+          "data": "bigann_10m_fp16.bin",
+          "distance": "squared_l2",
+          "dim": 128,
+          "max_degree": 64,
+          "l_build": 64,
+          "num_threads": 16,
+          "build_ram_limit_gb": 200.0,
+          "num_pq_chunks": 64,
+          "quantization_type": "FP",
+          "build_algorithm": {
+            "algorithm": "PiPNN",
+            "c_max": 256,
+            "c_min": 16,
+            "p_samp": 0.005,
+            "fanout": [10, 3],
+            "leaf_k": 3,
+            "replicas": 1,
+            "l_max": 64,
+            "num_hash_planes": 12,
+            "final_prune": false
+          },
+          "save_path": "target/tmp/bigann_10m_pipnn_index"
+        },
+        "search_phase": {
+          "queries": "bigann_query_fp16.bin",
+          "groundtruth": "bigann_10m_gt.bin",
+          "num_threads": 16,
+          "beam_width": 4,
+          "search_list": [50, 100],
+          "recall_at": 10,
+          "is_flat_search": false,
+          "distance": "squared_l2"
+        }
+      }
+    }
+  ]
+}

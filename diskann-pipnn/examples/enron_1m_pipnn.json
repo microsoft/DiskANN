@@ -1,0 +1,46 @@
+{
+  "search_directories": ["datasets"],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Build",
+          "data_type": "float16",
+          "data": "enron_fp16.bin",
+          "distance": "cosine_normalized",
+          "dim": 384,
+          "max_degree": 64,
+          "l_build": 64,
+          "num_threads": 16,
+          "build_ram_limit_gb": 200.0,
+          "num_pq_chunks": 192,
+          "quantization_type": "FP",
+          "build_algorithm": {
+            "algorithm": "PiPNN",
+            "c_max": 256,
+            "c_min": 16,
+            "p_samp": 0.005,
+            "fanout": [8, 3],
+            "leaf_k": 2,
+            "replicas": 1,
+            "l_max": 64,
+            "num_hash_planes": 14,
+            "final_prune": false
+          },
+          "save_path": "target/tmp/enron_1m_pipnn_index"
+        },
+        "search_phase": {
+          "queries": "enron_query_fp16.bin",
+          "groundtruth": "enron_gt.bin",
+          "num_threads": 16,
+          "beam_width": 4,
+          "search_list": [50, 100],
+          "recall_at": 10,
+          "is_flat_search": false,
+          "distance": "cosine_normalized"
+        }
+      }
+    }
+  ]
+}
