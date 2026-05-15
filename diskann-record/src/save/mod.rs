@@ -135,6 +135,22 @@ macro_rules! save_number {
 
 save_number!(usize, u64, u32, u16, u8, i64, i32, i16, i8, f32, f64);
 
+// NonZero* primitives serialize as their inner numeric type. Loaders reject zero.
+macro_rules! save_nonzero {
+    ($T:ty) => {
+        impl Saveable for $T {
+            fn save(&self, _: Context<'_>) -> Result<Value<'_>> {
+                Ok(Value::Number(self.get().into()))
+            }
+        }
+    };
+    ($($Ts:ty),+ $(,)?) => {
+        $(save_nonzero!($Ts);)+
+    }
+}
+
+save_nonzero!(std::num::NonZeroU32, std::num::NonZeroU64, std::num::NonZeroUsize);
+
 #[derive(Debug, Clone, Copy)]
 #[doc(hidden)]
 pub struct Serializing(pub &'static str);

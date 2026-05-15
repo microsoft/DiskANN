@@ -152,3 +152,20 @@ macro_rules! load_number {
 }
 
 load_number!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
+
+// NonZero* primitives are loaded by deserializing the inner numeric type and then
+// validating it is non-zero. A zero value produces a `NumberOutOfRange` light error.
+macro_rules! load_nonzero {
+    ($T:ty, $Inner:ty) => {
+        impl Loadable<'_> for $T {
+            fn load(context: Context<'_>) -> Result<Self> {
+                let inner: $Inner = context.load()?;
+                <$T>::new(inner).ok_or_else(|| error::Kind::NumberOutOfRange.into())
+            }
+        }
+    };
+}
+
+load_nonzero!(std::num::NonZeroU32, u32);
+load_nonzero!(std::num::NonZeroU64, u64);
+load_nonzero!(std::num::NonZeroUsize, usize);

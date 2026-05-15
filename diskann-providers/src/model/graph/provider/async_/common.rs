@@ -477,6 +477,92 @@ impl Default for TestCallCount {
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+
+impl diskann_record::save::Save for StartPoints {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(self, context, [start, end]))
+    }
+}
+
+impl diskann_record::load::Load<'_> for StartPoints {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(object, [start: u32, end: u32]);
+        Ok(Self { start, end })
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
+impl diskann_record::save::Save for NoStore {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        _context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save::Record::empty())
+    }
+}
+
+impl diskann_record::load::Load<'_> for NoStore {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Ok(Self)
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
+impl diskann_record::save::Save for NoDeletes {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        _context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save::Record::empty())
+    }
+}
+
+impl diskann_record::load::Load<'_> for NoDeletes {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Ok(Self)
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -507,5 +593,48 @@ mod tests {
                 msg
             );
         }
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    fn round_trip_helper<T>(value: &T) -> T
+    where
+        T: diskann_record::save::Saveable + for<'a> diskann_record::load::Loadable<'a>,
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(value, dir.path(), &manifest)
+            .expect("save_to_disk");
+        diskann_record::load::load_from_disk::<T>(&manifest, dir.path())
+            .expect("load_from_disk")
+    }
+
+    #[test]
+    fn start_points_round_trips_through_record() {
+        let original = StartPoints::new(10, NonZeroUsize::new(5).unwrap()).unwrap();
+        let restored = round_trip_helper(&original);
+        assert_eq!(restored.start(), original.start());
+        assert_eq!(restored.end(), original.end());
+    }
+
+    #[test]
+    fn start_points_round_trips_at_boundary() {
+        // Boundary: valid_points = 0, single frozen point.
+        let original = StartPoints::new(0, NonZeroUsize::new(1).unwrap()).unwrap();
+        let restored = round_trip_helper(&original);
+        assert_eq!(restored.start(), 0);
+        assert_eq!(restored.end(), 1);
+    }
+
+    #[test]
+    fn no_store_round_trips_through_record() {
+        let _restored = round_trip_helper(&NoStore);
+    }
+
+    #[test]
+    fn no_deletes_round_trips_through_record() {
+        let _restored = round_trip_helper(&NoDeletes);
     }
 }
