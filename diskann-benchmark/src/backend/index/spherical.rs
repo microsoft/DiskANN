@@ -63,8 +63,8 @@ mod imp {
     use diskann::graph::{DiskANNIndex, StartPointStrategy};
     use diskann_benchmark_core as benchmark_core;
     use diskann_benchmark_runner::{
-        dispatcher::{DispatchRule, FailureScore, MatchScore},
-        utils::{datatype, MicroSeconds},
+        benchmark::{FailureScore, MatchScore},
+        utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
@@ -189,9 +189,7 @@ mod imp {
                         failure_score = Some(1);
                     }
 
-                    if let Err(FailureScore(_)) =
-                        datatype::Type::<f32>::try_match(&input.build.data_type)
-                    {
+                    if !f32::is_match(input.build.data_type) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -243,7 +241,7 @@ mod imp {
                                 )?;
                             }
 
-                            if datatype::Type::<f32>::try_match(&input.build.data_type).is_err() {
+                            if !f32::is_match(input.build.data_type) {
                                 writeln!(
                                     f,
                                     "- Only `float32` data type is supported. Instead, got {}",
