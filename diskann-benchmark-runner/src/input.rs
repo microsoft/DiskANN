@@ -3,9 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use crate::{Any, Checker};
+use crate::Checker;
 
-pub trait Input {
+pub trait Input: Sized + std::fmt::Debug + 'static {
+    type Raw: serde::de::DeserializeOwned + serde::Serialize;
+
     /// Return the discriminant associated with this type.
     ///
     /// This is used to map inputs types to their respective parsers.
@@ -26,10 +28,10 @@ pub trait Input {
     /// [`CheckDeserialization`](crate::CheckDeserialization) and use this API to ensure
     /// shared resources (like input files or output files) are correctly resolved and
     /// properly shared among all jobs in a benchmark run.
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any>;
+    fn from_raw(raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self>;
+
+    /// Serialize `self` to a [`serde_json::Value`].
+    fn serialize(&self) -> anyhow::Result<serde_json::Value>;
 
     /// Print an example JSON representation of objects this input is expected to parse.
     ///
@@ -37,7 +39,7 @@ pub trait Input {
     /// [`serde_json::Value`] back to [`Self::try_deserialize`] correctly deserializes,
     /// though it need not necessarily pass
     /// [`CheckDeserialization`](crate::CheckDeserialization).
-    fn example() -> anyhow::Result<serde_json::Value>;
+    fn example() -> Self::Raw;
 }
 
 /// A registered input. See [`crate::Registry::input`].
@@ -55,7 +57,7 @@ impl Registered<'_> {
     /// Try to deserialize raw JSON into the dynamic type of the input.
     ///
     /// See: [`Input::try_deserialize`].
-    pub fn try_deserialize(
+    pub(crate) fn try_deserialize(
         &self,
         serialized: &serde_json::Value,
         checker: &mut Checker,
@@ -82,6 +84,64 @@ impl std::fmt::Debug for Registered<'_> {
 //////////////
 // Internal //
 //////////////
+
+/// Runtime representation of a deserialized [`Input`].
+#[derive(Debug)]
+pub(crate) struct Any {
+    any: Box<dyn RuntimeAny>,
+}
+
+impl Any {
+    pub(crate) fn new<T>(input: T) -> Self
+    where
+        T: Input + std::fmt::Debug + 'static,
+    {
+        Self {
+            any: Box::new(input),
+        }
+    }
+
+    #[must_use = "this function has no side effects"]
+    pub(crate) fn tag(&self) -> &'static str {
+        self.any.tag()
+    }
+
+    #[must_use = "this function has no side effects"]
+    pub(crate) fn downcast_ref<T>(&self) -> Option<&T>
+    where
+        T: std::any::Any,
+    {
+        self.any.as_any().downcast_ref::<T>()
+    }
+
+    #[must_use = "this function has no side effects"]
+    pub(crate) fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        self.any.serialize()
+    }
+}
+
+trait RuntimeAny: std::fmt::Debug {
+    fn tag(&self) -> &'static str;
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn serialize(&self) -> anyhow::Result<serde_json::Value>;
+}
+
+impl<T> RuntimeAny for T
+where
+    T: Input + std::fmt::Debug + 'static,
+{
+    fn tag(&self) -> &'static str {
+        <Self as Input>::tag()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        <Self as Input>::serialize(self)
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
@@ -118,7 +178,7 @@ pub(crate) trait DynInput {
 
 impl<T> DynInput for Wrapper<T>
 where
-    T: Input + 'static,
+    T: Input + std::fmt::Debug + 'static,
 {
     fn tag(&self) -> &'static str {
         T::tag()
@@ -128,10 +188,11 @@ where
         serialized: &serde_json::Value,
         checker: &mut Checker,
     ) -> anyhow::Result<Any> {
-        T::try_deserialize(serialized, checker)
+        let raw = <T::Raw as serde::Deserialize<'_>>::deserialize(serialized)?;
+        Ok(Any::new(T::from_raw(raw, checker)?))
     }
     fn example(&self) -> anyhow::Result<serde_json::Value> {
-        T::example()
+        Ok(serde_json::to_value(T::example())?)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

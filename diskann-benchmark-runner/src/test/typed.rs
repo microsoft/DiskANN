@@ -10,32 +10,30 @@ use serde::{Deserialize, Serialize};
 use crate::{
     benchmark::{FailureScore, MatchScore, PassFail, Regression},
     utils::datatype::{AsDataType, DataType},
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
+    Benchmark, Checker, Checkpoint, Input, Output,
 };
 
 ///////////
 // Input //
 ///////////
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub(crate) struct TypeInput {
     pub(super) data_type: DataType,
     pub(super) dim: usize,
-    // Should we return an error when `check_deserialization` is called?
-    pub(super) error_when_checked: bool,
-    // A flag to verify that [`CheckDeserialization`] has run.
-    #[serde(skip)]
-    pub(crate) checked: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TypeInputRaw {
+    data_type: DataType,
+    dim: usize,
+    // Should we return an error when deserializing?
+    error_when_checked: bool,
 }
 
 impl TypeInput {
-    pub(crate) fn new(data_type: DataType, dim: usize, error_when_checked: bool) -> Self {
-        Self {
-            data_type,
-            dim,
-            error_when_checked,
-            checked: false,
-        }
+    pub(crate) fn new(data_type: DataType, dim: usize) -> Self {
+        Self { data_type, dim }
     }
 
     fn run(&self) -> &'static str {
@@ -44,33 +42,29 @@ impl TypeInput {
 }
 
 impl Input for TypeInput {
+    type Raw = TypeInputRaw;
+
     fn tag() -> &'static str {
         "test-input-types"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(TypeInput::deserialize(serialized)?)
-    }
-
-    fn example() -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(TypeInput::new(
-            DataType::Float32,
-            128,
-            false,
-        ))?)
-    }
-}
-
-impl CheckDeserialization for TypeInput {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        if self.error_when_checked {
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.error_when_checked {
             Err(anyhow::anyhow!("test input erroring when checked"))
         } else {
-            self.checked = true;
-            Ok(())
+            Ok(Self::new(raw.data_type, raw.dim))
+        }
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        TypeInputRaw {
+            data_type: DataType::Float32,
+            dim: 128,
+            error_when_checked: false,
         }
     }
 }
@@ -81,42 +75,32 @@ impl CheckDeserialization for TypeInput {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct Tolerance {
-    // Should we return an error when `check_deserialization` is called?
+    // Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,
-
-    // A flag to verify that [`CheckDeserialization`] has run.
-    #[serde(skip)]
-    pub(crate) checked: bool,
 }
 
 impl Input for Tolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "test-input-types-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
-    }
-
-    fn example() -> anyhow::Result<serde_json::Value> {
-        let this = Self {
-            error_when_checked: false,
-            checked: false,
-        };
-        Ok(serde_json::to_value(this)?)
-    }
-}
-
-impl CheckDeserialization for Tolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        if self.error_when_checked {
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.error_when_checked {
             Err(anyhow::anyhow!("test input erroring when checked"))
         } else {
-            self.checked = true;
-            Ok(())
+            Ok(raw)
+        }
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        Self {
+            error_when_checked: false,
         }
     }
 }

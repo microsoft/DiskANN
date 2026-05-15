@@ -21,8 +21,7 @@
     "input": {
       "content": {
         "data_type": "float32",
-        "dim": 128,
-        "error_when_checked": false
+        "dim": 128
       },
       "type": "test-input-types"
     },
@@ -32,8 +31,7 @@
     "input": {
       "content": {
         "data_type": "int8",
-        "dim": 128,
-        "error_when_checked": false
+        "dim": 128
       },
       "type": "test-input-types"
     },

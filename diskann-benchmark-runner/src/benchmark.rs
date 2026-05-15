@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Any, Checkpoint, Input, Output};
+use crate::{input::Any, Checkpoint, Input, Output};
 
 /// A registered benchmark.
 ///

@@ -8,8 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::Any;
-
 /// Shared context for resolving input and output files paths post deserialization.
 #[derive(Debug)]
 pub struct Checker {
@@ -29,12 +27,6 @@ pub struct Checker {
     ///
     /// This ensures that each job uses a distinct output directory to avoid conflicts.
     current_outputs: HashSet<PathBuf>,
-
-    /// This crate-private variable is used to store the current input deserialization
-    /// tag and is referenced when creating new `Any` objects.
-    ///
-    /// Ensure that the correct tag is present before invoking [`Input::try_deserialize`].
-    tag: Option<&'static str>,
 }
 
 impl Checker {
@@ -44,21 +36,7 @@ impl Checker {
             search_directories,
             output_directory,
             current_outputs: HashSet::new(),
-            tag: None,
         }
-    }
-
-    /// Invoke [`CheckDeserialization`] on `value` and if successful, package it in [`Any`].
-    pub fn any<T>(&mut self, mut value: T) -> anyhow::Result<Any>
-    where
-        T: serde::Serialize + CheckDeserialization + std::fmt::Debug + 'static,
-    {
-        value.check_deserialization(self)?;
-        #[expect(
-            clippy::expect_used,
-            reason = "crate infrastructure ensures an untagged Checker is not leaked"
-        )]
-        Ok(Any::new(value, self.tag.expect("tag must be set")))
     }
 
     /// Return the ordered list of search directories registered with the [`Checker`].
@@ -168,16 +146,9 @@ impl Checker {
         )))
     }
 
-    pub(crate) fn set_tag(&mut self, tag: &'static str) {
-        let _ = self.tag.insert(tag);
-    }
-}
-
-/// Perform post-process resolution of input and output files paths.
-pub trait CheckDeserialization {
-    /// Perform any necessary resolution of file paths, returning an error if a problem is
-    /// discovered.
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error>;
+    // pub(crate) fn set_tag(&mut self, tag: &'static str) {
+    //     let _ = self.tag.insert(tag);
+    // }
 }
 
 ///////////

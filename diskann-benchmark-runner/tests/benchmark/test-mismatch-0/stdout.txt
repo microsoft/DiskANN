@@ -2,8 +2,7 @@ Could not find a match for the following input:
 
 {
   "data_type": "float16",
-  "dim": 128,
-  "error_when_checked": false
+  "dim": 128
 }
 
 Closest matches:
