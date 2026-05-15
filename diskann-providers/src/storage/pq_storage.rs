@@ -508,6 +508,13 @@ mod pq_storage_tests {
             "centroid should be all zeros when written with None"
         );
         assert_eq!(loaded_offsets, chunk_offsets);
+
+        // Check that `load_pq_pivots_bin` correctly loads the pivots.
+        let table = pq_storage
+            .load_pq_pivots_bin(pivot_path, num_pq_chunks, &storage_provider)
+            .unwrap();
+
+        assert_eq!(loaded_pivots, table.view_pivots().as_slice());
     }
 
     /// Write pivot data with a non-zero centroid, read it back, and verify that
