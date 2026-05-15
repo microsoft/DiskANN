@@ -5,10 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    dispatcher::{FailureScore, MatchScore},
-    Any, Checkpoint, Input, Output,
-};
+use crate::{Any, Checkpoint, Input, Output};
 
 /// A registered benchmark.
 ///
@@ -58,6 +55,31 @@ pub trait Benchmark: 'static {
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output>;
+}
+
+/// Successful matches from [`Benchmark::try_match`] will return `MatchScores`.
+///
+/// A lower numerical value indicates a better match for purposes of overload resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MatchScore(pub u32);
+
+impl std::fmt::Display for MatchScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "success ({})", self.0)
+    }
+}
+
+/// Successful matches from [`Benchmark::try_match`] will return `FailureScores`.
+///
+/// A lower numerical value indicates a better match, which can help when compiling a
+/// list of considered and rejected candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FailureScore(pub u32);
+
+impl std::fmt::Display for FailureScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "fail ({})", self.0)
+    }
 }
 
 /// A refinement of [`Benchmark`], that supports before/after comparison of generated results.

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use diskann_benchmark_runner::{
-    dispatcher::{FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore},
     output::Output,
     utils::{percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,

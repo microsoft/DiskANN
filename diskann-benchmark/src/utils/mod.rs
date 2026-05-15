@@ -3,6 +3,10 @@
  * Licensed under the MIT license.
  */
 
+use diskann_benchmark_runner::{
+    benchmark::{FailureScore, MatchScore},
+    utils::datatype::{AsDataType, DataType},
+};
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod datafiles;
@@ -10,6 +14,19 @@ pub(crate) mod filters;
 pub(crate) mod recall;
 pub(crate) mod streaming;
 pub(crate) mod tokio;
+
+const DATA_TYPE_MISMATCH: FailureScore = FailureScore(1000);
+
+pub(crate) fn match_data_type<T>(data_type: DataType) -> Result<MatchScore, FailureScore>
+where
+    T: AsDataType,
+{
+    if T::is_match(data_type) {
+        Ok(MatchScore(0))
+    } else {
+        Err(DATA_TYPE_MISMATCH)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -101,7 +118,7 @@ macro_rules! stub_impl {
         #[cfg(not(feature = $feature))]
         mod imp {
             use diskann_benchmark_runner::{
-                dispatcher::{FailureScore, MatchScore},
+                benchmark::{FailureScore, MatchScore},
                 output::Output,
                 Benchmark, Checkpoint, Registry,
             };

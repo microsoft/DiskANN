@@ -58,8 +58,8 @@ mod imp {
     use anyhow::Context;
     use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
-        utils::{datatype, MicroSeconds},
+        benchmark::{FailureScore, MatchScore},
+        utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
@@ -151,9 +151,7 @@ mod imp {
                         }
                     }
 
-                    if datatype::Type::<$T>::try_match(input.index_operation.source.data_type())
-                        .is_err()
-                    {
+                    if !<$T>::is_match(*input.index_operation.source.data_type()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -186,7 +184,7 @@ mod imp {
                             writeln!(
                                 f,
                                 "- Requires `{}` data",
-                                Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                <$T>::DATA_TYPE,
                             )?;
                             writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
                             writeln!(f, "- Does not support multi-insert")?;
@@ -202,12 +200,12 @@ mod imp {
                                 )?;
                             }
 
-                            let data_type = input.index_operation.source.data_type();
-                            if datatype::Type::<$T>::try_match(data_type).is_err() {
+                            let data_type = *input.index_operation.source.data_type();
+                            if !<$T>::is_match(data_type) {
                                 writeln!(
                                     f,
                                     "- Only `{}` data type is supported. Instead, got {}",
-                                    Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                    <$T>::DATA_TYPE,
                                     data_type
                                 )?;
                             }

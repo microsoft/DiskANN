@@ -55,8 +55,8 @@ mod imp {
     use diskann_utils::views::{Matrix, MatrixView};
 
     use diskann_benchmark_runner::{
-        dispatcher::{DispatchRule, FailureScore, MatchScore},
-        utils::{datatype, MicroSeconds},
+        benchmark::{FailureScore, MatchScore},
+        utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use rand::{rngs::StdRng, SeedableRng};
@@ -126,15 +126,14 @@ mod imp {
     where
         T: VectorRepr
             + diskann_utils::sampling::WithApproximateNorm
-            + diskann::graph::SampleableForStart,
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
+            + diskann::graph::SampleableForStart
+            + AsDataType,
     {
         type Input = IndexPQOperation;
         type Output = QuantBuildResult;
 
         fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            let score = datatype::Type::<T>::try_match(input.index_operation.source.data_type());
-
+            let score = utils::match_data_type::<T>(*input.index_operation.source.data_type());
             if self
                 .quant_search
                 .is_match(&input.index_operation.search_phase)
@@ -153,17 +152,11 @@ mod imp {
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&IndexPQOperation>,
         ) -> std::fmt::Result {
-            use diskann_benchmark_runner::dispatcher::{Description, Why};
-
             match input {
                 Some(arg) => {
-                    let data_type = arg.index_operation.source.data_type();
-                    if datatype::Type::<T>::try_match(data_type).is_err() {
-                        writeln!(
-                            f,
-                            "Data/Query Type: {}",
-                            Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
-                        )?;
+                    let desc = T::describe(*arg.index_operation.source.data_type());
+                    if !desc.is_match() {
+                        writeln!(f, "Data/Query Type: {}", desc,)?;
                     }
 
                     if !self
@@ -180,11 +173,7 @@ mod imp {
                     Ok(())
                 }
                 None => {
-                    writeln!(
-                        f,
-                        "Data/Query Type: {}",
-                        Description::<datatype::DataType, datatype::Type<T>>::new()
-                    )?;
+                    writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
 
                     writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
                 }
