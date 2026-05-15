@@ -54,14 +54,14 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                         if let Value::Array(field_arr) = field_val {
                             field_arr.iter().any(|v| arr.contains(v))
                         } else {
-                            arr.contains(&field_val)
+                            arr.contains(field_val)
                         }
                     }
                     CompareOp::Nin(arr) => {
                         if let Value::Array(field_arr) = field_val {
                             field_arr.iter().all(|v| !arr.contains(v))
                         } else {
-                            !arr.contains(&field_val)
+                            !arr.contains(field_val)
                         }
                     }
                 }

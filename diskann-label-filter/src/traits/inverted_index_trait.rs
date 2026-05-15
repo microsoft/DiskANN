@@ -465,17 +465,10 @@ mod reference_impl {
                         }
                         Ok(PL::empty())
                     }
-                    crate::CompareOp::In(arr) => {
-                        let mut acc = PL::empty();
-                        for v in arr {
-                            if let Some(pl) = self.get_posting_for(field, v)? {
-                                acc = acc.union(&pl);
-                            }
-                        }
-                        Ok(acc)
+                      crate::CompareOp::In(_arr) => {
+                        todo!("In is not yet supported in inverted index trait");
                     }
                     crate::CompareOp::Nin(_arr) => {
-                        // Not-in requires document universe to compute complement
                         todo!("Nin is not yet supported in inverted index trait");
                     }
                     crate::CompareOp::Ne(_v) => {
