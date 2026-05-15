@@ -13,7 +13,7 @@ use diskann::{
 };
 use diskann_utils::io::Metadata;
 
-use crate::{model::graph::traits::AdHoc, utils::load_metadata_from_file};
+use crate::model::graph::traits::AdHoc;
 
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
@@ -135,22 +135,25 @@ where
     S: SetData<Item = T>,
     T: VectorRepr,
 {
-    let metadata = load_metadata_from_file(provider, path).map_err(|err| {
-        ANNError::log_index_error(format_args!(
-            "failed to load data file \"{}\" due to the following error: {}",
-            path, err
-        ))
-    })?;
+    let itr = crate::utils::VectorDataIterator::<_, AdHoc<T>>::new(path, None, provider)
+        .map_err(|err| {
+            ANNError::log_index_error(format_args!(
+                "failed to load data file \"{}\" due to the following error: {}",
+                path, err
+            ))
+        })?;
+
+    let num_points = itr.get_num_points();
+    let dimension = itr.get_dimension();
 
     tracing::info!(
         "Loading {} vectors with dimension {} from storage system {} into dataset...",
-        metadata.npoints(),
-        metadata.ndims(),
+        num_points,
+        dimension,
         path
     );
 
-    let mut data = create(metadata.npoints(), metadata.ndims())?;
-    let itr = crate::utils::VectorDataIterator::<_, AdHoc<T>>::new(path, None, provider)?;
+    let mut data = create(num_points, dimension)?;
     for (i, (vector, _)) in itr.enumerate() {
         data.set_data(i.into_usize(), &vector)?;
     }

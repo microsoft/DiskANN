@@ -1464,7 +1464,7 @@ mod tests {
     // diskann-record round-trips //
     /////////////////////////////////
 
-    fn round_trip<T>(value: &T) -> T
+    fn round_trip_helper<T>(value: &T) -> T
     where
         T: diskann_record::save::Saveable + for<'a> diskann_record::load::Loadable<'a>,
     {
@@ -1479,7 +1479,7 @@ mod tests {
     #[test]
     fn prune_kind_round_trips() {
         for kind in [PruneKind::TriangleInequality, PruneKind::Occluding] {
-            let restored = round_trip(&kind);
+            let restored = round_trip_helper(&kind);
             assert_eq!(kind, restored);
         }
     }
@@ -1492,7 +1492,7 @@ mod tests {
             IntraBatchCandidates::Max(NonZeroU32::new(7).unwrap()),
         ];
         for c in cases {
-            assert_eq!(c, round_trip(&c));
+            assert_eq!(c, round_trip_helper(&c));
         }
     }
 
@@ -1502,7 +1502,7 @@ mod tests {
         let cfg = Builder::new(8, MaxDegree::Same, 16, PruneKind::TriangleInequality)
             .build()
             .expect("Builder::build");
-        assert_eq!(cfg, round_trip(&cfg));
+        assert_eq!(cfg, round_trip_helper(&cfg));
     }
 
     #[test]
@@ -1517,6 +1517,6 @@ mod tests {
             NonZeroU32::new(2).unwrap(),
             true,
         ));
-        assert_eq!(cfg, round_trip(&cfg));
+        assert_eq!(cfg, round_trip_helper(&cfg));
     }
 }

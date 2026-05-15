@@ -185,6 +185,63 @@ impl<Data: GraphDataType> storage::bin::GetData for MemoryVectorProviderAsync<Da
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+
+/// On-disk filename used for the vector blob inside the manifest directory.
+///
+/// The current contract is "one vector store per manifest". Once we support
+/// multiple sibling vector stores in the same manifest (e.g. full-precision +
+/// quantized), this will need parent-scoped naming.
+const VECTORS_ARTIFACT: &str = "vectors.bin";
+
+impl<Data> diskann_record::save::Save for MemoryVectorProviderAsync<Data>
+where
+    Data: GraphDataType,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        let mut writer = context.write(VECTORS_ARTIFACT)?;
+        {
+            let shim = crate::storage::SingleUseWriteProvider::new(VECTORS_ARTIFACT, &mut writer);
+            self.save_to_bin(&shim, VECTORS_ARTIFACT)
+                .map_err(diskann_record::save::Error::new)?;
+        }
+        let handle = writer.finish()?;
+        let mut record = diskann_record::save::Record::empty();
+        record.insert("vectors", handle)?;
+        Ok(record)
+    }
+}
+
+impl<Data> diskann_record::load::Load<'_> for MemoryVectorProviderAsync<Data>
+where
+    Data: GraphDataType,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(object, [vectors: diskann_record::save::Handle]);
+        let mut reader = object.read(&vectors)?;
+        let shim = crate::storage::SingleUseReadProvider::new(VECTORS_ARTIFACT, &mut reader)
+            .map_err(diskann_record::load::Error::new)?;
+        Self::load_from_bin(&shim, VECTORS_ARTIFACT).map_err(diskann_record::load::Error::new)
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -344,5 +401,60 @@ mod tests {
         let reloaded = Provider::load_with(&storage, &ctx).await.unwrap();
 
         check_providers_equal(&provider, &reloaded);
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    type TestVectorProvider = MemoryVectorProviderAsync<GraphDataF32VectorUnitData>;
+
+    fn assert_providers_match(left: &TestVectorProvider, right: &TestVectorProvider) {
+        assert_eq!(left.total(), right.total());
+        assert_eq!(left.dim(), right.dim());
+        for i in 0..left.total() {
+            let l = left.get_vector_sync(i).unwrap();
+            let r = right.get_vector_sync(i).unwrap();
+            assert_eq!(&*l, &*r, "vectors at index {i} differ");
+        }
+    }
+
+    fn round_trip(provider: &TestVectorProvider) -> TestVectorProvider {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
+            .expect("save_to_disk");
+        diskann_record::load::load_from_disk::<TestVectorProvider>(&manifest, dir.path())
+            .expect("load_from_disk")
+    }
+
+    #[test]
+    fn memory_vector_provider_round_trips_default_initialised() {
+        let provider = TestVectorProvider::new(4, 3);
+        let restored = round_trip(&provider);
+        assert_providers_match(&provider, &restored);
+    }
+
+    #[test]
+    fn memory_vector_provider_round_trips_populated() {
+        let provider = TestVectorProvider::new(5, 4);
+        for i in 0..provider.total() {
+            let row: Vec<f32> = (0..provider.dim())
+                .map(|j| ((i * 17 + j * 3) as f32) * 0.125)
+                .collect();
+            provider.set_vector_sync(i, &row).unwrap();
+        }
+        let restored = round_trip(&provider);
+        assert_providers_match(&provider, &restored);
+    }
+
+    #[test]
+    fn memory_vector_provider_round_trips_with_singleton_dim() {
+        let provider = TestVectorProvider::new(7, 1);
+        for i in 0..provider.total() {
+            provider.set_vector_sync(i, &[i as f32 + 0.5]).unwrap();
+        }
+        let restored = round_trip(&provider);
+        assert_providers_match(&provider, &restored);
     }
 }
