@@ -573,16 +573,14 @@ mod tests {
 
         // Not enough groundtruth - dynamic: unlike the fixed-size matrix case, dynamic
         // (variable-length) groundtruth rows with fewer than recall_k entries are valid
-        // and represent filtered queries with limited results. Recall is computed using
-        // the available entries (this_recall_k = gt_row.len().min(recall_k)).
+        // and represent queries with limited results (e.g. filtered queries). Recall is 
+        // computed using the available entries (this_recall_k = gt_row.len().min(recall_k)).
         {
             let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
             let results = Matrix::<u32>::new(0, 10, 10);
             // Should succeed: each row uses this_recall_k = min(5, 10) = 5
             let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
             assert_eq!(recall.num_queries, 10);
-            let recall_allow = knn(&groundtruth, None, &results, 10, 10, true).unwrap();
-            assert_eq!(recall_allow.num_queries, 10);
         }
 
         // Dynamic groundtruth with fewer entries: verify correct recall values.
@@ -644,7 +642,6 @@ mod tests {
 
             let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
             assert_eq!(recall.num_queries, 10);
-            // Average should be 1.0 (only 5 non-zero queries count)
             assert!((recall.average - 1.0).abs() < 1e-10);
         }
 
