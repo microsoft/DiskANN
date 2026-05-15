@@ -3067,14 +3067,6 @@ struct BatchIdMismatch {
 /// [`DiskANNIndex::paged_search_with_init_ids`]. Each call to
 /// [`next_page`](Self::next_page) resumes the graph search and returns the next page of
 /// nearest-neighbor results. Returns an empty `Vec` when the search is exhausted.
-///
-/// # Type Parameters
-///
-/// * `'idx` — lifetime of the borrowed [`DiskANNIndex`].
-/// * `'ctx` — lifetime of the borrowed [`DataProvider::Context`].
-/// * `DP` — the [`DataProvider`] type.
-/// * `S` — the [`SearchStrategy`] type.
-/// * `T` — the original query type (carried only for trait-bound resolution).
 #[derive(Debug)]
 pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
     index: &'a DiskANNIndex<DP>,
@@ -3085,8 +3077,8 @@ pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
     search_param_l: usize,
     strategy: S,
     computer: S::QueryComputer,
-    // Note: The use of `fn` here is so
-    _query: std::marker::PhantomData<fn(T) -> T>,
+    // Note: The `fn` is so we derive `Send` and `Sync` more easily: `fn` is always Send/Sync.
+    _query: std::marker::PhantomData<fn(T)>,
 }
 
 impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
