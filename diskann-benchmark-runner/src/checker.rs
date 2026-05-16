@@ -145,10 +145,6 @@ impl Checker {
             self.search_directories(),
         )))
     }
-
-    // pub(crate) fn set_tag(&mut self, tag: &'static str) {
-    //     let _ = self.tag.insert(tag);
-    // }
 }
 
 ///////////

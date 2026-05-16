@@ -5,7 +5,17 @@
 
 use crate::Checker;
 
+/// Inputs to [`Benchmarks`](crate::Benchmark).
+///
+/// These begin as [`raw`](Self::Raw) data transfer objects before final construction via
+/// [`from_raw`](Self::from_raw).
 pub trait Input: Sized + std::fmt::Debug + 'static {
+    /// The raw form of this input that is deserialized from input files and serialized as
+    /// [`examples`](Self::example). The raw nature of this type reflects that no input
+    /// validation has been performed beyond the checks performed by its
+    /// [`Deserialize`](serde::Deserialize) implementation.
+    ///
+    /// Final object validation is performed via [`from_raw`](Self::from_raw).
     type Raw: serde::de::DeserializeOwned + serde::Serialize;
 
     /// Return the discriminant associated with this type.
@@ -15,36 +25,22 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
     /// Well formed implementations should always return the same result.
     fn tag() -> &'static str;
 
-    /// Attempt to deserialize an opaque object from the raw `serialized` representation.
-    ///
-    /// Deserialized values can be constructed and returned via [`Checker::any`],
-    /// [`Any::new`] or [`Any::raw`].
-    ///
-    /// If using the [`Any`] constructors directly, implementations should associate
-    /// [`Self::tag`] with the returned `Any`. If [`Checker::any`] is used - this will
-    /// happen automatically.
-    ///
-    /// Implementations are **strongly** encouraged to implement
-    /// [`CheckDeserialization`](crate::CheckDeserialization) and use this API to ensure
-    /// shared resources (like input files or output files) are correctly resolved and
-    /// properly shared among all jobs in a benchmark run.
+    /// Construct `Self` from the raw deserialized representation, performing any necessary
+    /// validation checks (e.g., resolving file paths via the [`Checker`]).
     fn from_raw(raw: Self::Raw, checker: &mut Checker) -> anyhow::Result<Self>;
 
     /// Serialize `self` to a [`serde_json::Value`].
     fn serialize(&self) -> anyhow::Result<serde_json::Value>;
 
-    /// Print an example JSON representation of objects this input is expected to parse.
+    /// Return an example of a raw input for this [`Input`].
     ///
-    /// Well-formed implementations should ensure that passing the returned
-    /// [`serde_json::Value`] back to [`Self::try_deserialize`] correctly deserializes,
-    /// though it need not necessarily pass
-    /// [`CheckDeserialization`](crate::CheckDeserialization).
+    /// This is used to supply sample JSON layouts in the benchmark CLI.
     fn example() -> Self::Raw;
 }
 
 /// A registered input. See [`crate::Registry::input`].
 #[derive(Clone, Copy)]
-pub struct Registered<'a>(pub(crate) &'a dyn DynInput);
+pub struct Registered<'a>(pub(crate) &'a dyn internal::DynInput);
 
 impl Registered<'_> {
     /// Return the input tag of the registered input.
@@ -56,12 +52,12 @@ impl Registered<'_> {
 
     /// Try to deserialize raw JSON into the dynamic type of the input.
     ///
-    /// See: [`Input::try_deserialize`].
+    /// See: [`Input::from_raw`].
     pub(crate) fn try_deserialize(
         &self,
         serialized: &serde_json::Value,
         checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
+    ) -> anyhow::Result<internal::Any> {
         self.0.try_deserialize(serialized, checker)
     }
 
@@ -81,123 +77,123 @@ impl std::fmt::Debug for Registered<'_> {
     }
 }
 
-//////////////
-// Internal //
-//////////////
+pub(crate) mod internal {
+    use super::*;
 
-/// Runtime representation of a deserialized [`Input`].
-#[derive(Debug)]
-pub(crate) struct Any {
-    any: Box<dyn RuntimeAny>,
-}
+    /// Runtime representation of a deserialized [`Input`].
+    #[derive(Debug)]
+    pub(crate) struct Any {
+        any: Box<dyn RuntimeAny>,
+    }
 
-impl Any {
-    pub(crate) fn new<T>(input: T) -> Self
-    where
-        T: Input + std::fmt::Debug + 'static,
-    {
-        Self {
-            any: Box::new(input),
+    impl Any {
+        pub(crate) fn new<T>(input: T) -> Self
+        where
+            T: Input + std::fmt::Debug + 'static,
+        {
+            Self {
+                any: Box::new(input),
+            }
+        }
+
+        #[must_use = "this function has no side effects"]
+        pub(crate) fn tag(&self) -> &'static str {
+            self.any.tag()
+        }
+
+        #[must_use = "this function has no side effects"]
+        pub(crate) fn downcast_ref<T>(&self) -> Option<&T>
+        where
+            T: std::any::Any,
+        {
+            self.any.as_any().downcast_ref::<T>()
+        }
+
+        #[must_use = "this function has no side effects"]
+        pub(crate) fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+            self.any.serialize()
         }
     }
 
-    #[must_use = "this function has no side effects"]
-    pub(crate) fn tag(&self) -> &'static str {
-        self.any.tag()
+    trait RuntimeAny: std::fmt::Debug {
+        fn tag(&self) -> &'static str;
+        fn as_any(&self) -> &dyn std::any::Any;
+        fn serialize(&self) -> anyhow::Result<serde_json::Value>;
     }
 
-    #[must_use = "this function has no side effects"]
-    pub(crate) fn downcast_ref<T>(&self) -> Option<&T>
+    impl<T> RuntimeAny for T
     where
-        T: std::any::Any,
+        T: Input,
     {
-        self.any.as_any().downcast_ref::<T>()
+        fn tag(&self) -> &'static str {
+            <Self as Input>::tag()
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+            <Self as Input>::serialize(self)
+        }
     }
 
-    #[must_use = "this function has no side effects"]
-    pub(crate) fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        self.any.serialize()
-    }
-}
+    #[derive(Debug)]
+    pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
 
-trait RuntimeAny: std::fmt::Debug {
-    fn tag(&self) -> &'static str;
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn serialize(&self) -> anyhow::Result<serde_json::Value>;
-}
+    impl<T> Wrapper<T> {
+        pub(crate) const INSTANCE: Self = Self::new();
 
-impl<T> RuntimeAny for T
-where
-    T: Input + std::fmt::Debug + 'static,
-{
-    fn tag(&self) -> &'static str {
-        <Self as Input>::tag()
+        pub(crate) const fn new() -> Self {
+            Self(std::marker::PhantomData)
+        }
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    impl<T> Clone for Wrapper<T> {
+        fn clone(&self) -> Self {
+            *self
+        }
     }
 
-    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
-        <Self as Input>::serialize(self)
+    impl<T> Copy for Wrapper<T> {}
+
+    pub(crate) trait DynInput {
+        fn tag(&self) -> &'static str;
+        fn try_deserialize(
+            &self,
+            serialized: &serde_json::Value,
+            checker: &mut Checker,
+        ) -> anyhow::Result<Any>;
+        fn example(&self) -> anyhow::Result<serde_json::Value>;
+
+        // reflection
+        fn as_any(&self) -> &dyn std::any::Any;
+        fn type_name(&self) -> &'static str;
     }
-}
 
-#[derive(Debug)]
-pub(crate) struct Wrapper<T>(std::marker::PhantomData<T>);
-
-impl<T> Wrapper<T> {
-    pub(crate) const INSTANCE: Self = Self::new();
-
-    pub(crate) const fn new() -> Self {
-        Self(std::marker::PhantomData)
-    }
-}
-
-impl<T> Clone for Wrapper<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Wrapper<T> {}
-
-pub(crate) trait DynInput {
-    fn tag(&self) -> &'static str;
-    fn try_deserialize(
-        &self,
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any>;
-    fn example(&self) -> anyhow::Result<serde_json::Value>;
-
-    // reflection
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn type_name(&self) -> &'static str;
-}
-
-impl<T> DynInput for Wrapper<T>
-where
-    T: Input + std::fmt::Debug + 'static,
-{
-    fn tag(&self) -> &'static str {
-        T::tag()
-    }
-    fn try_deserialize(
-        &self,
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        let raw = <T::Raw as serde::Deserialize<'_>>::deserialize(serialized)?;
-        Ok(Any::new(T::from_raw(raw, checker)?))
-    }
-    fn example(&self) -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(T::example())?)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn type_name(&self) -> &'static str {
-        std::any::type_name::<T>()
+    impl<T> DynInput for Wrapper<T>
+    where
+        T: Input + std::fmt::Debug + 'static,
+    {
+        fn tag(&self) -> &'static str {
+            T::tag()
+        }
+        fn try_deserialize(
+            &self,
+            serialized: &serde_json::Value,
+            checker: &mut Checker,
+        ) -> anyhow::Result<Any> {
+            let raw = <T::Raw as serde::Deserialize<'_>>::deserialize(serialized)?;
+            Ok(Any::new(T::from_raw(raw, checker)?))
+        }
+        fn example(&self) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::to_value(T::example())?)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn type_name(&self) -> &'static str {
+            std::any::type_name::<T>()
+        }
     }
 }

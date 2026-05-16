@@ -14,6 +14,10 @@ pub(crate) trait Example {
     fn example() -> Self;
 }
 
+/// Implement [`diskann_benchmark_runner::Input`] for `$T` using `Raw = $T`.
+///
+/// Requires `$T` to implement [`Example`] and provide a
+/// `fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()>` method.
 macro_rules! as_input {
     ($T:ty) => {
         impl diskann_benchmark_runner::Input for $T {

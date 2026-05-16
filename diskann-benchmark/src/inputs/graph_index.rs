@@ -1232,6 +1232,7 @@ impl DynamicIndexRun {
         self.search_phase.validate(checker)?;
         Ok(())
     }
+
     pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
         let mut builder = self.build.try_as_config()?;
         builder.l_build(insert_l);
