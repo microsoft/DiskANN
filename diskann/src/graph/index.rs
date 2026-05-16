@@ -3164,3 +3164,50 @@ struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
 }
+
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+
+impl<DP> diskann_record::save::Save for DiskANNIndex<DP>
+where
+    DP: DataProvider + diskann_record::save::Save,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [config, data_provider]
+        ))
+    }
+}
+
+impl<'a, DP> diskann_record::load::Load<'a> for DiskANNIndex<DP>
+where
+    DP: DataProvider + diskann_record::load::Load<'a>,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(
+        object: diskann_record::load::Object<'a>,
+    ) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(object, [config: Config, data_provider: DP]);
+        // The scratch pool is transient runtime state; thread sizing is a deployment
+        // decision and not part of the persisted index. Loaders that want a specific
+        // thread count should construct `DataProvider` and `Config` directly and call
+        // `DiskANNIndex::new`
+        // TODO :: Add a way to specify runtime state like ScratchPool params in `load`
+        Ok(Self::new(config, data_provider, None))
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'a>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}

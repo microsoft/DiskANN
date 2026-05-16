@@ -151,6 +151,9 @@ work includes:
 The current design has clean seams for this — `Writer::finish() -> Handle` and
 `ContextInner::finish(Value)` are the extension points.
 
+### Specify runtimes state
+`DiskANNIndex::save` does not save `scratch_pool` because it is part of runtime state. At load time, we're skipping this field. We need to add an optional `Aux` to the `load` interface to allow for loading code to specify this runtime state params?
+
 ### Manifest Improvements
 
 - Record file sizes in the manifest for integrity checking / pre-allocation on load
