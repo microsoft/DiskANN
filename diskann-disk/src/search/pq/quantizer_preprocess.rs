@@ -10,7 +10,6 @@ use diskann_providers::model::compute_pq_distance;
 use diskann_providers::utils::BridgeErr;
 
 use super::{PQData, PQScratch};
-use crate::storage::quant::pq::pq_dataset::PQTable;
 
 /// Preprocesses the query vector for PQ distance calculations.
 /// This function rotates the query vector and prepares the PQ table distances
@@ -21,59 +20,32 @@ pub fn quantizer_preprocess(
     metric: Metric,
     id_to_calculate_pq_distance: &[u32],
 ) -> ANNResult<()> {
-    match &pq_data.pq_table() {
-        PQTable::Transposed(table) => {
-            let expected_len = table.ncenters() * table.nchunks();
-            let dst = diskann_utils::views::MutMatrixView::try_from(
-                &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
-                table.nchunks(),
-                table.ncenters(),
-            )
-            .bridge_err()?;
+    let table = pq_data.pq_table();
+    let expected_len = table.ncenters() * table.nchunks();
+    let dst = diskann_utils::views::MutMatrixView::try_from(
+        &mut (*pq_scratch.aligned_pqtable_dist_scratch)[..expected_len],
+        table.nchunks(),
+        table.ncenters(),
+    )
+    .bridge_err()?;
 
-            match metric {
-                // Prior to the introduction of the `quantizer_preprocess` method, the
-                // disk index was hard-coded to use L2 distance for comparisons.
-                //
-                // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
-                // as L2 until a more thorough evaluation can be made.
-                Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
-                    table.process_into::<diskann_quantization::distances::SquaredL2>(
-                        &pq_scratch.query_scratch,
-                        dst,
-                    );
-                }
-                Metric::InnerProduct => {
-                    table.process_into::<diskann_quantization::distances::InnerProduct>(
-                        &pq_scratch.query_scratch,
-                        dst,
-                    );
-                }
-            }
+    match metric {
+        // Prior to the introduction of the `quantizer_preprocess` method, the
+        // disk index was hard-coded to use L2 distance for comparisons.
+        //
+        // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
+        // as L2 until a more thorough evaluation can be made.
+        Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
+            table.process_into::<diskann_quantization::distances::SquaredL2>(
+                &pq_scratch.query_scratch,
+                dst,
+            );
         }
-        PQTable::Fixed(table) => {
-            match metric {
-                // Prior to the introduction of the `quantizer_preprocess` method, the
-                // disk index was hard-coded to use L2 distance for comparisons.
-                //
-                // We're keeping that behavior here - treating `Cosine` and `CosineNormalized`
-                // as L2 until a more thorough evaluation can be made.
-                Metric::L2 | Metric::Cosine | Metric::CosineNormalized => {
-                    table.preprocess_query(&mut pq_scratch.query_scratch);
-
-                    // Compute the distance between each chunk of the query to each pq centroids.
-                    table.populate_chunk_distances(
-                        &pq_scratch.query_scratch,
-                        &mut pq_scratch.aligned_pqtable_dist_scratch,
-                    )?;
-                }
-                Metric::InnerProduct => {
-                    table.populate_chunk_inner_products(
-                        &pq_scratch.query_scratch,
-                        &mut pq_scratch.aligned_pqtable_dist_scratch,
-                    )?;
-                }
-            }
+        Metric::InnerProduct => {
+            table.process_into::<diskann_quantization::distances::InnerProduct>(
+                &pq_scratch.query_scratch,
+                dst,
+            );
         }
     }
 
