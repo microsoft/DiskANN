@@ -21,6 +21,7 @@ use crate::{
 pub(crate) struct TypeInput {
     pub(super) data_type: DataType,
     pub(super) dim: usize,
+    error_when_checked: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -33,7 +34,7 @@ pub(crate) struct TypeInputRaw {
 
 impl TypeInput {
     pub(crate) fn new(data_type: DataType, dim: usize) -> Self {
-        Self { data_type, dim }
+        Self { data_type, dim, error_when_checked: false }
     }
 
     fn run(&self) -> &'static str {

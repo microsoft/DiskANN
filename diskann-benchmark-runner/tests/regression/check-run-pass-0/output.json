@@ -12,7 +12,8 @@
     "input": {
       "content": {
         "data_type": "float32",
-        "dim": 1000
+        "dim": 1000,
+        "error_when_checked": false
       },
       "type": "test-input-types"
     },
@@ -22,7 +23,8 @@
     "input": {
       "content": {
         "data_type": "int8",
-        "dim": 128
+        "dim": 128,
+        "error_when_checked": false
       },
       "type": "test-input-types"
     },
