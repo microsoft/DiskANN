@@ -221,7 +221,7 @@ impl Product {
         self.data.resolve(checker)?;
         self.search.validate(checker)?;
 
-        // Chcck that provided data type is compatible with `f32`.
+        // Check that provided data type is compatible with `f32`.
         f32::check_converting_load(self.data_type)?;
 
         let num_centers = self.num_pq_centers.get();

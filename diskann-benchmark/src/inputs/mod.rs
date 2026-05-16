@@ -16,8 +16,13 @@ pub(crate) trait Example {
 
 /// Implement [`diskann_benchmark_runner::Input`] for `$T` using `Raw = $T`.
 ///
-/// Requires `$T` to implement [`Example`] and provide a
-/// `fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()>` method.
+/// Requires `$T` to:
+/// - implement [`Example`];
+/// - provide an inherent `fn tag() -> &'static str` method;
+/// - provide a
+///   `fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()>` method; and
+/// - implement the serde traits required by
+///   [`diskann_benchmark_runner::Input`] and `serde_json::to_value(self)`.
 macro_rules! as_input {
     ($T:ty) => {
         impl diskann_benchmark_runner::Input for $T {
