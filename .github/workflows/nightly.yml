@@ -10,7 +10,7 @@ on:
 name: Nightly
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
 env:
