@@ -34,7 +34,11 @@ pub(crate) struct TypeInputRaw {
 
 impl TypeInput {
     pub(crate) fn new(data_type: DataType, dim: usize) -> Self {
-        Self { data_type, dim, error_when_checked: false }
+        Self {
+            data_type,
+            dim,
+            error_when_checked: false,
+        }
     }
 
     fn run(&self) -> &'static str {
