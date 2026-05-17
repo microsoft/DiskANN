@@ -446,6 +446,88 @@ mod tests {
         }
     }
 
+    /// Helper to insert a vector with u32 external ID and SB8 (signed int8) data.
+    fn insert_sb8_vector(
+        ctx: &Context,
+        index_ptr: *const c_void,
+        eid: u32,
+        vector: &[i8],
+    ) -> bool {
+        let id_bytes = bytemuck::bytes_of(&eid);
+        let vector_bytes = bytemuck::cast_slice(vector);
+        unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id_bytes.as_ptr(),
+                id_bytes.len(),
+                VectorValueType::SB8,
+                vector_bytes.as_ptr(),
+                vector.len(),
+                b"".as_ptr(),
+                0,
+            )
+        }
+    }
+
+    /// Helper to run search_vector with SB8 query and parse the output IDs (u32) and distances.
+    fn do_search_sb8(
+        ctx: &Context,
+        index_ptr: *const c_void,
+        query: &[i8],
+        k: usize,
+        bitmap: Option<&[u8]>,
+    ) -> (Vec<u32>, Vec<f32>) {
+        let query_bytes: &[u8] = bytemuck::cast_slice(query);
+        let mut output_id_buffer = vec![0u8; k * (mem::size_of::<u32>() + mem::size_of::<u32>())];
+        let mut output_dists = vec![0f32; k];
+
+        let (bitmap_ptr, bitmap_len) = match bitmap {
+            Some(b) => (b.as_ptr(), b.len()),
+            None => (ptr::null(), 0),
+        };
+
+        let count = unsafe {
+            search_vector(
+                ctx.0,
+                index_ptr,
+                VectorValueType::SB8,
+                query_bytes.as_ptr(),
+                query.len(),
+                0.0,
+                (k * 2) as u32,
+                bitmap_ptr,
+                bitmap_len,
+                0,
+                output_id_buffer.as_mut_ptr(),
+                output_id_buffer.len(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert!(count >= 0, "search failed with {count}");
+        let count = count as usize;
+
+        let mut ids = vec![];
+        let mut offset = 0;
+        for _ in 0..count {
+            let mut id_len = 0u32;
+            bytemuck::bytes_of_mut(&mut id_len)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            offset += mem::size_of::<u32>();
+            let mut id = 0u32;
+            bytemuck::bytes_of_mut(&mut id)
+                .copy_from_slice(&output_id_buffer[offset..offset + id_len as usize]);
+            offset += id_len as usize;
+            ids.push(id);
+        }
+
+        output_dists.truncate(count);
+        (ids, output_dists)
+    }
+
     /// Helper to insert a vector with u32 external ID and FP32 data.
     fn insert_f32_vector(
         ctx: &Context,
@@ -590,6 +672,212 @@ mod tests {
             // BetaFilter biases toward matching vectors by scaling their distances.
             assert!(!ids.is_empty(), "should return at least one result");
             // EID 20 should appear since it's the closest to query AND matches the filter
+            assert!(
+                ids.contains(&20),
+                "filtered vector EID 20 should be in results"
+            );
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn add_check_and_remove_sb8_vector() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store);
+
+        let garnet_vector_id = 42u32;
+        let id_bytes = bytemuck::bytes_of(&garnet_vector_id);
+
+        let vector: [i8; 2] = [-10, 50];
+        let vector_bytes: &[u8] = bytemuck::cast_slice(&vector);
+        let vector_len = 2;
+
+        let attributes_bytes = b"sb8_attr";
+        let attributes_len = attributes_bytes.len();
+
+        let result: bool = unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id_bytes.as_ptr(),
+                id_bytes.len(),
+                VectorValueType::SB8,
+                vector_bytes.as_ptr(),
+                vector_len,
+                attributes_bytes.as_ptr(),
+                attributes_len,
+            )
+        };
+
+        assert!(result);
+
+        let exists =
+            unsafe { check_external_id_valid(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        assert!(exists);
+
+        let mut cardinality = unsafe { card(ctx.0, index_ptr) };
+        assert_eq!(cardinality, 1);
+
+        let removed = unsafe { remove(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        assert!(removed);
+
+        cardinality = unsafe { card(ctx.0, index_ptr) };
+        assert_eq!(cardinality, 1);
+
+        unsafe {
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_sb8_vectors() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store);
+
+        unsafe {
+            assert!(insert_sb8_vector(&ctx, index_ptr, 10, &[100, 0]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 20, &[0, 100]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 30, &[-100, 0]));
+
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[100, 0], 3, None);
+            assert!(ids.len() >= 2, "should return at least 2 vectors");
+            assert_eq!(ids[0], 10, "closest to [100,0] should be id=10");
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_sb8_with_negative_values() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store);
+
+        unsafe {
+            assert!(insert_sb8_vector(&ctx, index_ptr, 10, &[-50, -50]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 20, &[50, 50]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 30, &[-50, 50]));
+
+            // Query near [-50, -50], closest should be id=10
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[-50, -50], 3, None);
+            assert!(!ids.is_empty(), "should return at least 1 vector");
+            assert_eq!(ids[0], 10, "closest to [-50,-50] should be id=10");
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_sb8_with_large_external_ids() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store);
+
+        let id1 = 1234u64;
+        let v1: &[u8] = &[246u8, 0u8]; // -10i8 as u8 = 246, 0i8 as u8 = 0
+        let id2 = 5678u64;
+        let v2: &[u8] = &[0u8, 10u8]; // 0i8 as u8 = 0, 10i8 as u8 = 10
+
+        let id1_bytes = bytemuck::bytes_of(&id1);
+        let id2_bytes = bytemuck::bytes_of(&id2);
+
+        assert!(unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id1_bytes.as_ptr(),
+                id1_bytes.len(),
+                VectorValueType::SB8,
+                v1.as_ptr(),
+                v1.len(),
+                b"".as_ptr(),
+                0,
+            )
+        });
+
+        assert!(unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id2_bytes.as_ptr(),
+                id2_bytes.len(),
+                VectorValueType::SB8,
+                v2.as_ptr(),
+                v2.len(),
+                b"".as_ptr(),
+                0,
+            )
+        });
+
+        // Search with SB8 query [0, 0]
+        let qv: &[u8] = &[0u8, 0u8];
+        let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
+        let mut output_dists = vec![0f32; 2];
+
+        let count = unsafe {
+            search_vector(
+                ctx.0,
+                index_ptr,
+                VectorValueType::SB8,
+                qv.as_ptr(),
+                qv.len(),
+                2.0,
+                10,
+                ptr::null(),
+                0,
+                0,
+                output_id_buffer.as_mut_ptr(),
+                output_id_buffer.len(),
+                output_dists.as_mut_ptr(),
+                output_dists.len(),
+                ptr::null_mut(),
+            )
+        };
+
+        assert_eq!(count, 2);
+
+        let mut output_ids = vec![];
+        let mut offset = 0;
+        for _ in 0..(count as usize) {
+            let mut id_len = 0u32;
+            bytemuck::bytes_of_mut(&mut id_len)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            offset += mem::size_of::<u32>();
+
+            assert_eq!(id_len, mem::size_of::<u64>() as u32);
+
+            let mut id = 0u64;
+            bytemuck::bytes_of_mut(&mut id)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u64>()]);
+            offset += mem::size_of::<u64>();
+
+            output_ids.push(id);
+        }
+
+        assert!(
+            output_ids.contains(&1234u64) && output_ids.contains(&5678u64),
+            "expected ids 1234 and 5678, got {:?}",
+            output_ids
+        );
+
+        unsafe {
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn search_sb8_with_bitmap_filter() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index(&store);
+
+        unsafe {
+            assert!(insert_sb8_vector(&ctx, index_ptr, 10, &[100, 0]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 20, &[0, 100]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 30, &[-100, 0]));
+
+            // Bitmap with only bit 2 set (internal ID 2 = EID 20)
+            let bitmap: [u8; 8] = [0b00000100, 0, 0, 0, 0, 0, 0, 0];
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[0, 100], 3, Some(&bitmap));
+            assert!(!ids.is_empty(), "should return at least one result");
             assert!(
                 ids.contains(&20),
                 "filtered vector EID 20 should be in results"
