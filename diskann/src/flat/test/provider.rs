@@ -25,7 +25,7 @@ use crate::{
     flat::{DistancesUnordered, SearchStrategy},
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
-    provider::{self, BuildQueryComputer, ExecutionContext, HasElementRef, HasId, NoopGuard},
+    provider::{self, ExecutionContext, HasId, NoopGuard},
     utils::VectorRepr,
 };
 
@@ -320,28 +320,13 @@ impl HasId for Visitor<'_> {
     type Id = u32;
 }
 
-impl HasElementRef for Visitor<'_> {
+impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
     type ElementRef<'a> = &'a [f32];
-}
-
-impl BuildQueryComputer<&[f32]> for Visitor<'_> {
-    type QueryComputerError = Infallible;
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[f32],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(f32::query_distance(from, Metric::L2))
-    }
-}
-
-impl DistancesUnordered<&[f32]> for Visitor<'_> {
     type Error = AccessError;
 
     fn distances_unordered<F>(
         &mut self,
-        computer: &Self::QueryComputer,
+        computer: &<f32 as VectorRepr>::QueryDistance,
         mut f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
@@ -368,7 +353,8 @@ impl DistancesUnordered<&[f32]> for Visitor<'_> {
 // Strategy //
 //////////////
 
-/// Stateless factory of [`Visitor`]s.
+/// Stateless factory of [`Visitor`]s. Also owns the per-query computer
+/// construction (see [`SearchStrategy::build_query_computer`]).
 #[derive(Clone, Debug, Default)]
 pub struct Strategy {
     transient_ids: Option<Arc<HashSet<u32>>>,
@@ -389,6 +375,9 @@ impl Strategy {
 }
 
 impl SearchStrategy<Provider, &[f32]> for Strategy {
+    type ElementRef<'a> = &'a [f32];
+    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
+    type QueryComputerError = Infallible;
     type Visitor<'a> = Visitor<'a>;
     type Error = Infallible;
 
@@ -402,5 +391,12 @@ impl SearchStrategy<Provider, &[f32]> for Strategy {
             None => Visitor::new(provider),
         };
         Ok(visitor)
+    }
+
+    fn build_query_computer(
+        &self,
+        from: &[f32],
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
+        Ok(f32::query_distance(from, Metric::L2))
     }
 }

@@ -8,7 +8,7 @@
 use diskann::{
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, HasId},
+    provider::BuildQueryComputer,
 };
 
 /// A bridge allowing `Accessors` to opt-in to [`RemoveDeletedIdsAndCopy`] by delegating to
@@ -39,7 +39,7 @@ pub struct RemoveDeletedIdsAndCopy;
 
 impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
 where
-    A: BuildQueryComputer<T> + HasId<Id = u32> + AsDeletionCheck,
+    A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck,
 {
     type Error = std::convert::Infallible;
 

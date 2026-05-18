@@ -3,12 +3,12 @@
  * Licensed under the MIT license.
  */
 
-//! Sequential ("flat") search infrastructure.
+//! Sequential ("flat") search.
 //!
-//! This module is the streaming counterpart to the random-access [`crate::provider::Accessor`]
-//! family. It is designed for backends whose natural access pattern is a one-pass scan over
-//! their data — for example append-only buffered stores, on-disk shards streamed via I/O,
-//! or any provider where random access is significantly more expensive than sequential.
+//! This module is the streaming counterpart to the random-access
+//! [`crate::provider::Accessor`] family. It is designed for backends whose natural access
+//! pattern is a one-pass scan over their data -- for example append-only buffered stores or
+//! on-disk shards streamed via I/O.
 //!
 //! # Architecture
 //!
@@ -18,13 +18,14 @@
 //! | :------------------------------------       | :----------------------------------------- |:--------- |
 //! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
 //! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
-//! | [`crate::provider::DistancesUnordered`]     | [`DistancesUnordered`]                     | No        |
+//! | [`crate::graph::glue::ExpandBeam`]          | [`DistancesUnordered`]                     | No        |
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
-//! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |
 //! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
 //!
-//! See [`FlatIndex::knn_search`] for the canonical brute-force k-NN algorithm built on these
-//! primitives.
+//! The flat surface is intentionally narrower than graph search: there is no shared
+//! post-processing trait, and the [`SearchStrategy`] (not the visitor) owns the
+//! `QueryComputer`. See [`FlatIndex::knn_search`] for the canonical brute-force k-NN
+//! algorithm built on these primitives.
 
 pub mod index;
 pub mod iterator;

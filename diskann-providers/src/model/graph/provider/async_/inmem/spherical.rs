@@ -18,8 +18,8 @@ use diskann::{
         workingset,
     },
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
-        ExecutionContext, HasElementRef, HasId,
+        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
+        HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -340,15 +340,6 @@ where
     }
 }
 
-impl<V, D, Ctx> HasElementRef for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = spherical::iface::Opaque<'a>;
-}
-
 impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
@@ -361,6 +352,9 @@ where
         = spherical::iface::Opaque<'a>
     where
         Self: 'a;
+
+    /// `ElementRef` has an arbitrarily short lifetime.
+    type ElementRef<'a> = spherical::iface::Opaque<'a>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
@@ -465,15 +459,6 @@ where
 }
 
 impl<V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, V, D, Ctx>
-where
-    T: VectorRepr,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-}
-
-impl<V, D, Ctx, T> DistancesUnordered<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,

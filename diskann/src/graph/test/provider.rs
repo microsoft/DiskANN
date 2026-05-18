@@ -1040,15 +1040,12 @@ impl provider::HasId for Accessor<'_> {
     type Id = u32;
 }
 
-impl provider::HasElementRef for Accessor<'_> {
-    type ElementRef<'a> = &'a [f32];
-}
-
 impl provider::Accessor for Accessor<'_> {
     type Element<'a>
         = &'a [f32]
     where
         Self: 'a;
+    type ElementRef<'a> = &'a [f32];
     type GetError = AccessError;
 
     async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessError> {
@@ -1087,8 +1084,6 @@ impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
         Ok(f32::query_distance(from, self.provider.config.metric))
     }
 }
-
-impl provider::DistancesUnordered<&[f32]> for Accessor<'_> {}
 
 impl provider::BuildDistanceComputer for Accessor<'_> {
     type DistanceComputerError = Infallible;

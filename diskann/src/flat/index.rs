@@ -13,9 +13,9 @@ use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
     flat::{DistancesUnordered, SearchStrategy},
-    graph::{SearchOutputBuffer, glue::SearchPostProcess},
+    graph::SearchOutputBuffer,
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
 };
 
 /// Statistics collected during a flat search.
@@ -53,38 +53,39 @@ impl<P: DataProvider> FlatIndex<P> {
     /// Brute-force k-nearest-neighbor flat search.
     ///
     /// Streams every element produced by the strategy's visitor through the query
-    /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], and hands
-    /// the survivors to the post-processor.
+    /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], and
+    /// writes the `(id, distance)` survivors into `output` in best-first order.
     ///
     /// # Arguments
     /// - `k`: number of nearest neighbors to return.
-    /// - `strategy`: produces the per-query iterator and the query computer. See [`SearchStrategy`].
-    /// - `processor`: post-processes the survivor candidates into the output type.
+    /// - `strategy`: produces the per-query visitor and the query computer. See
+    ///   [`SearchStrategy`].
     /// - `context`: per-request context threaded through to the provider.
     /// - `query`: the query.
-    /// - `output`: caller-owned output buffer.
-    pub fn knn_search<S, T, O, OB, PP>(
+    /// - `output`: caller-owned output buffer that receives `(InternalId, f32)`
+    ///   pairs in best-first order. Survivors beyond `output`'s capacity are
+    ///   silently dropped.
+    pub fn knn_search<S, T, OB>(
         &self,
         k: NonZeroUsize,
         strategy: &S,
-        processor: &PP,
         context: &P::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
         S: SearchStrategy<P, T>,
-        T: Copy + Send + Sync,
-        O: Send,
-        OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> SearchPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
+        T: Send + Sync,
+        OB: SearchOutputBuffer<P::InternalId> + Send + ?Sized,
     {
         async move {
             let mut visitor = strategy
                 .create_visitor(&self.provider, context)
                 .into_ann_result()?;
 
-            let computer = visitor.build_query_computer(query).into_ann_result()?;
+            let computer = strategy
+                .build_query_computer(query)
+                .into_ann_result()?;
 
             let k = k.get();
             let mut queue = NeighborPriorityQueue::new(k);
@@ -98,10 +99,8 @@ impl<P: DataProvider> FlatIndex<P> {
                 .await
                 .escalate("flat scan must complete to produce correct k-NN results")?;
 
-            let result_count = processor
-                .post_process(&mut visitor, query, &computer, queue.iter().take(k), output)
-                .await
-                .into_ann_result()? as u32;
+            let result_count =
+                output.extend(queue.iter().take(k).map(|n| (n.id, n.distance))) as u32;
 
             Ok(SearchStats { cmps, result_count })
         }
@@ -133,7 +132,7 @@ mod tests {
     /// many concurrent searches on a multi-threaded runtime, each producing the
     /// correct top-k independently.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn knn_search() {
+    async fn multithreaded_knn_search() {
         use std::sync::Arc;
 
         let (index, len) = fixture(Grid::Two, 4);

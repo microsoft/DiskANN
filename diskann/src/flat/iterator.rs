@@ -2,45 +2,44 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-
-//! Sequential ("flat") access primitives.
-//!
 //! This module defines the traits that flat-search algorithms use to walk every element
-//! of a [`DataProvider`](crate::provider::DataProvider) once.
+//! of a [`crate::provider::DataProvider`] once.
 //!
-//! * [`DistancesUnordered`]: the single trait flat search consumes. It takes a
-//!   pre-built query computer and a callback, applies the callback to every
-//!   `(id, distance)` pair in the provider, and is the only trait an in-memory
+//! * [`DistancesUnordered<C>`]: the single trait flat search consumes. It takes a
+//!   pre-built query computer of type `C` and a callback, and applies the callback to
+//!   every `(id, distance)` pair in the provider. This is the only trait an in-memory
 //!   visitor (such as [`crate::flat::test::provider::Visitor`]) needs to implement.
-//!   The super-traits [`HasId`] and [`BuildQueryComputer`] define the id and
-//!   query-computer types.
 //!
 //! * [`FlatIterator`]: a convenient entry point for backends whose natural shape is
-//!   element-at-a-time iteration. The trait exposes a single `next` method and an
-//!   associated `Element<'_>` type that must be [`Reborrow`]able to the `ElementRef<'_>`
-//!   exposed via the [`HasElementRef`] super-trait.
+//!   element-at-a-time iteration. The trait exposes a single `next` method, an
+//!   associated `ElementRef<'a>` GAT (the element shape used for distance scoring),
+//!   and an associated `Element<'a>` that must be [`Reborrow`]able into `ElementRef<'b>`.
 //!
 //! * [`Iterated`]: bridges any [`FlatIterator`] implementation into a
-//!   [`DistancesUnordered`] by looping over [`FlatIterator::next`] and scoring each
-//!   element with the supplied computer.
+//!   [`DistancesUnordered<C>`] for any computer `C` whose
+//!   [`PreprocessedDistanceFunction`] target matches the iterator's `ElementRef`.
 
 use std::fmt::Debug;
 
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{
-    error::ToRanked,
-    provider::{BuildQueryComputer, HasElementRef, HasId},
-};
+use crate::{error::ToRanked, provider::HasId};
 
 /// Fused iterate-and-score primitive over the elements of a flat index.
 ///
-/// Implementations drive an entire scan over the underlying data, scoring each
-/// element with the supplied [`BuildQueryComputer::QueryComputer`] and invoking
-/// `f` with the resulting `(id, distance)` pair. The super-trait
-/// [`BuildQueryComputer<T>`] supplies the computer type.
-pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
+/// Implementations drive an entire scan over the underlying data, scoring each element
+/// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
+/// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
+/// be able to compute distances.
+pub trait DistancesUnordered<C>: HasId + Send + Sync
+where
+    C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
+{
+    /// Lifetime is intentionally unconstrained so it can appear under HRTB without
+    /// inducing a `'static` bound on `Self`.
+    type ElementRef<'a>;
+
     /// The error type yielded by [`Self::distances_unordered`].
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
@@ -48,7 +47,7 @@ pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
     /// with the resulting `(id, distance)` pair.
     fn distances_unordered<F>(
         &mut self,
-        computer: &<Self as BuildQueryComputer<T>>::QueryComputer,
+        computer: &C,
         f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
@@ -62,13 +61,17 @@ pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
 /// A lending, asynchronous iterator over the elements of a flat index.
 ///
 /// Implementations provide element-at-a-time access via [`Self::next`]. Providers that
-/// only implement `FlatIterator` can be wrapped in [`Iterated`] to obtain a
-/// default [`DistancesUnordered`] implementation.
-pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
+/// only implement `FlatIterator` can be wrapped in [`Iterated`] to obtain a default
+/// [`DistancesUnordered<C>`] implementation for any computer `C` whose
+/// [`PreprocessedDistanceFunction`] target matches `Self::ElementRef`.
+pub trait FlatIterator: HasId + Send + Sync {
+    /// The reference element shape on which distance computations are defined.
+    /// Lifetime is intentionally unconstrained so it can appear under HRTB without
+    /// inducing a `'static` bound on `Self`.
+    type ElementRef<'a>;
+
     /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
-    type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>>
-        + Send
-        + Sync
+    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
 
@@ -89,13 +92,9 @@ pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
 // Default //
 /////////////
 
-/// Bridges a [`FlatIterator`] into a [`DistancesUnordered`] by looping over
-/// [`FlatIterator::next`], reborrowing each element, and scoring it with the
-/// supplied computer.
-///
-/// This is the default adapter for providers that implement element-at-a-time
-/// iteration. Providers that can do better (prefetching, SIMD batching, bulk
-/// I/O) should implement [`DistancesUnordered`] directly.
+/// Bridges a [`FlatIterator`] into a [`DistancesUnordered<C>`] by looping over
+/// [`FlatIterator::next`], reborrowing each element, and scoring it with the supplied
+/// computer.
 pub struct Iterated<I> {
     inner: I,
 }
@@ -116,39 +115,19 @@ impl<I: HasId> HasId for Iterated<I> {
     type Id = I::Id;
 }
 
-impl<I: HasElementRef> HasElementRef for Iterated<I> {
+/// The blanket implementation of [`DistancesUnordered<C>`] for any
+/// [`FlatIterator`] paired with a computer that scores its `ElementRef`.
+impl<I, C> DistancesUnordered<C> for Iterated<I>
+where
+    I: FlatIterator + Send + Sync,
+    C: for<'b> PreprocessedDistanceFunction<I::ElementRef<'b>, f32> + Send + Sync,
+{
     type ElementRef<'a> = I::ElementRef<'a>;
-}
-
-/// Forwards the inner iterator's [`BuildQueryComputer`] impl through the wrapper
-/// so that callers (and the [`DistancesUnordered`] blanket below) can obtain the
-/// query computer from the [`Iterated`] adapter directly.
-impl<I, T> BuildQueryComputer<T> for Iterated<I>
-where
-    I: BuildQueryComputer<T>,
-{
-    type QueryComputerError = I::QueryComputerError;
-    type QueryComputer = I::QueryComputer;
-
-    fn build_query_computer(
-        &self,
-        from: T,
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        self.inner.build_query_computer(from)
-    }
-}
-
-/// The blanket implementation of [`DistancesUnordered`] for any
-/// [`FlatIterator`] that also exposes a [`BuildQueryComputer`].
-impl<I, T> DistancesUnordered<T> for Iterated<I>
-where
-    I: FlatIterator + BuildQueryComputer<T> + Send + Sync,
-{
     type Error = I::Error;
 
     fn distances_unordered<F>(
         &mut self,
-        computer: &Self::QueryComputer,
+        computer: &C,
         mut f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
@@ -181,7 +160,7 @@ mod tests {
     use crate::{
         ANNError, always_escalate,
         error::Infallible,
-        provider::{BuildQueryComputer, HasElementRef, HasId},
+        provider::HasId,
         utils::VectorRepr,
     };
 
@@ -198,9 +177,7 @@ mod tests {
         ]
     }
 
-    /// Backing store of `[f32]` vectors, used by every element-shape fixture
-    /// below to cover [`FlatIterator::Element`] variants without re-implementing
-    /// the data layout each time.
+    /// Backing store of `[f32]` vectors, used by every element-shape fixture below.
     struct Store {
         items: Vec<(u32, Vec<f32>)>,
     }
@@ -213,45 +190,11 @@ mod tests {
         }
     }
 
-    ///////////////////////
-    // Common impl macro //
-    ///////////////////////
-
-    /// Implement [`HasId`], [`HasElementRef`], and [`BuildQueryComputer`] for an
-    /// iterator type. Every fixture in this module shares these impls — only
-    /// [`FlatIterator::Element`] varies. The [`DistancesUnordered`] impl on
-    /// `Iterated<$T>` comes from the blanket impl in the parent module, so does
-    /// not need to be repeated here.
-    macro_rules! common_iterator_impls {
-        ($T:ty) => {
-            impl HasId for $T {
-                type Id = u32;
-            }
-
-            impl HasElementRef for $T {
-                type ElementRef<'a> = &'a [f32];
-            }
-
-            impl BuildQueryComputer<&[f32]> for $T {
-                type QueryComputerError = Infallible;
-                type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-
-                fn build_query_computer(
-                    &self,
-                    from: &[f32],
-                ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-                    Ok(f32::query_distance(from, Metric::L2))
-                }
-            }
-        };
-    }
-
     /////////////////////////////////
     // Allocating: Element = Vec   //
     /////////////////////////////////
 
     /// `Element<'a> = Vec<f32>` — owns its data, reborrows to `&'a [f32]`.
-    /// Mirrors the `Allocating` accessor in [`crate::provider`].
     struct Allocating<'a> {
         store: &'a Store,
         cursor: usize,
@@ -263,9 +206,12 @@ mod tests {
         }
     }
 
-    common_iterator_impls!(Allocating<'_>);
+    impl HasId for Allocating<'_> {
+        type Id = u32;
+    }
 
     impl FlatIterator for Allocating<'_> {
+        type ElementRef<'a> = &'a [f32];
         type Element<'a>
             = Vec<f32>
         where
@@ -291,10 +237,7 @@ mod tests {
     // Forwarding: Element = &'store [f32]        //
     ////////////////////////////////////////////////
 
-    /// `Element<'a> = &'store [f32]` — borrows directly out of the underlying
-    /// store. The element lifetime is tied to the *store* (not the iterator),
-    /// proving the trait supports forwarding accessors. Mirrors the
-    /// `Forwarding` accessor in [`crate::provider`].
+    /// `Element<'a> = &'store [f32]` — borrows directly out of the underlying store.
     struct Forwarding<'store> {
         store: &'store Store,
         cursor: usize,
@@ -306,9 +249,12 @@ mod tests {
         }
     }
 
-    common_iterator_impls!(Forwarding<'_>);
+    impl HasId for Forwarding<'_> {
+        type Id = u32;
+    }
 
     impl<'store> FlatIterator for Forwarding<'store> {
+        type ElementRef<'a> = &'a [f32];
         type Element<'a>
             = &'store [f32]
         where
@@ -334,10 +280,7 @@ mod tests {
     // Wrapping: Element = guard-shaped non-ref `Wrapped`  //
     /////////////////////////////////////////////////////////
 
-    /// A guard-shaped element that reborrows to `&'b [f32]` and counts its own
-    /// drops. Mirrors the `Wrapping` accessor's `Wrapped<'a>` in
-    /// [`crate::provider`], plus a [`Drop`] hook to verify the [`Iterated`]
-    /// adapter does not leak guards.
+    /// A guard-shaped element that reborrows to `&'b [f32]` and counts its own drops.
     struct Wrapped<'g> {
         data: &'g [f32],
         drop_count: Arc<AtomicUsize>,
@@ -373,9 +316,12 @@ mod tests {
         }
     }
 
-    common_iterator_impls!(Wrapping<'_>);
+    impl HasId for Wrapping<'_> {
+        type Id = u32;
+    }
 
     impl FlatIterator for Wrapping<'_> {
+        type ElementRef<'a> = &'a [f32];
         type Element<'a>
             = Wrapped<'a>
         where
@@ -407,9 +353,8 @@ mod tests {
     // Sharing: Element = &'a [f32] via local buf  //
     /////////////////////////////////////////////////
 
-    /// `Element<'a> = &'a [f32]` — copies into an internal buffer per `next()`
-    /// to avoid per-call allocation. Mirrors the `Sharing` accessor in
-    /// [`crate::provider`].
+    /// `Element<'a> = &'a [f32]` — copies into an internal buffer per `next()` to avoid
+    /// per-call allocation.
     struct Sharing<'a> {
         store: &'a Store,
         cursor: usize,
@@ -426,9 +371,12 @@ mod tests {
         }
     }
 
-    common_iterator_impls!(Sharing<'_>);
+    impl HasId for Sharing<'_> {
+        type Id = u32;
+    }
 
     impl FlatIterator for Sharing<'_> {
+        type ElementRef<'a> = &'a [f32];
         type Element<'a>
             = &'a [f32]
         where
@@ -470,9 +418,8 @@ mod tests {
         }
     }
 
-    /// `Element<'a> = &'a [f32]`, but `next()` returns `Err(Boom(id))` exactly
-    /// once after `fail_after` successful yields. Used to verify error
-    /// propagation through [`Iterated`]'s [`DistancesUnordered`] impl.
+    /// `Element<'a> = &'a [f32]`, but `next()` returns `Err(Boom(id))` exactly once
+    /// after `fail_after` successful yields.
     struct Failing<'a> {
         store: &'a Store,
         cursor: usize,
@@ -483,23 +430,8 @@ mod tests {
         type Id = u32;
     }
 
-    impl HasElementRef for Failing<'_> {
-        type ElementRef<'a> = &'a [f32];
-    }
-
-    impl BuildQueryComputer<&[f32]> for Failing<'_> {
-        type QueryComputerError = Infallible;
-        type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-
-        fn build_query_computer(
-            &self,
-            from: &[f32],
-        ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-            Ok(f32::query_distance(from, Metric::L2))
-        }
-    }
-
     impl FlatIterator for Failing<'_> {
+        type ElementRef<'a> = &'a [f32];
         type Element<'a>
             = &'a [f32]
         where
@@ -524,69 +456,59 @@ mod tests {
         }
     }
 
-    /////////////
-    // Helpers //
-    /////////////
-
-    /// Build the canonical `(id, distance)` ground-truth list for a query under
-    /// L2, against [`sample_items`].
-    fn expected_distances(query: &[f32]) -> Vec<(u32, f32)> {
-        let computer = f32::query_distance(query, Metric::L2);
-        sample_items()
-            .into_iter()
-            .map(|(id, v)| (id, computer.evaluate_similarity(v.as_slice())))
-            .collect()
-    }
-
     ///////////
     // Tests //
     ///////////
 
-    /// The blanket [`DistancesUnordered`] impl on [`Iterated`] produces the
-    /// correct `(id, distance)` pairs for every supported
-    /// [`FlatIterator::Element`] shape: owning, forwarding, guard-wrapped, and
-    /// shared-buffer.
+    /// The blanket [`DistancesUnordered`] impl on [`Iterated`] produces the correct
+    /// `(id, distance)` pairs for every supported [`FlatIterator::Element`] shape:
+    /// owning, forwarding, guard-wrapped, and shared-buffer.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn distances_unordered() {
+    async fn distances_unordered_default_impls() {
         let store = Store::sample();
         let query = vec![0.5_f32, 0.9];
-        let expected = expected_distances(&query);
+        let computer = f32::query_distance(&query, Metric::L2);
+        let expected: Vec<(u32, f32)> = sample_items()
+            .into_iter()
+            .map(|(id, v)| (id, computer.evaluate_similarity(v.as_slice())))
+            .collect();
 
-        async fn run<I>(mut visitor: Iterated<I>, query: &[f32], expected: &[(u32, f32)])
-        where
+        async fn run<I>(
+            mut visitor: Iterated<I>,
+            computer: &<f32 as VectorRepr>::QueryDistance,
+            expected: &[(u32, f32)],
+        ) where
             I: FlatIterator<Id = u32> + Send + Sync,
-            I: for<'a> HasElementRef<ElementRef<'a> = &'a [f32]>,
-            Iterated<I>: HasId<Id = u32> + for<'q> DistancesUnordered<&'q [f32]>,
+            I: for<'a> FlatIterator<ElementRef<'a> = &'a [f32]>,
         {
-            let computer = visitor.build_query_computer(query).unwrap();
             let mut seen: Vec<(u32, f32)> = Vec::new();
             visitor
-                .distances_unordered(&computer, |id, d| seen.push((id, d)))
+                .distances_unordered(computer, |id, d| seen.push((id, d)))
                 .await
                 .unwrap();
             assert_eq!(seen, expected);
         }
 
         // Allocating: Element = Vec<f32> (owns).
-        run(Iterated::new(Allocating::new(&store)), &query, &expected).await;
+        run(Iterated::new(Allocating::new(&store)), &computer, &expected).await;
 
         // Forwarding: Element = &'store [f32] (borrows from store).
-        run(Iterated::new(Forwarding::new(&store)), &query, &expected).await;
+        run(Iterated::new(Forwarding::new(&store)), &computer, &expected).await;
 
         // Round-trip through `Iterated::into_inner` to exercise the unwrap path.
         let recovered = Iterated::new(Forwarding::new(&store)).into_inner();
-        run(Iterated::new(recovered), &query, &expected).await;
+        run(Iterated::new(recovered), &computer, &expected).await;
 
         // Wrapping: Element = Wrapped<'a> (guard-shaped non-ref).
-        run(Iterated::new(Wrapping::new(&store)), &query, &expected).await;
+        run(Iterated::new(Wrapping::new(&store)), &computer, &expected).await;
 
         // Sharing: Element = &'a [f32] (per-call internal buffer).
-        run(Iterated::new(Sharing::new(&store)), &query, &expected).await;
+        run(Iterated::new(Sharing::new(&store)), &computer, &expected).await;
     }
 
-    /// An error returned mid-iteration by [`FlatIterator::next`] propagates up
-    /// through the [`Iterated`] adapter's [`DistancesUnordered`] impl, and the
-    /// closure stops being invoked at the failure point.
+    /// An error returned mid-iteration by [`FlatIterator::next`] propagates up through
+    /// the [`Iterated`] adapter's [`DistancesUnordered`] impl, and the closure stops
+    /// being invoked at the failure point.
     #[tokio::test]
     async fn failures_midstream() {
         let store = Store::sample();
@@ -597,7 +519,7 @@ mod tests {
         });
 
         let query = vec![0.0_f32, 0.0];
-        let computer = visitor.build_query_computer(query.as_slice()).unwrap();
+        let computer = f32::query_distance(&query, Metric::L2);
 
         let mut seen: Vec<u32> = Vec::new();
         let err = visitor

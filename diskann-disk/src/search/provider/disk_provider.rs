@@ -29,8 +29,8 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor,
-        DistancesUnordered, HasElementRef, HasId, NeighborAccessor, NoopGuard,
+        Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
+        NeighborAccessor, NoopGuard,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -428,13 +428,7 @@ where
                 .to_vec(),
         })
     }
-}
 
-impl<Data, VP> DistancesUnordered<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
     async fn distances_unordered<Itr, F>(
         &mut self,
         vec_id_itr: Itr,
@@ -695,15 +689,6 @@ where
     type Id = u32;
 }
 
-impl<Data, VP> HasElementRef for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    /// `ElementRef` can have arbitrary lifetimes.
-    type ElementRef<'a> = &'a [u8];
-}
-
 impl<Data, VP> Accessor for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -715,6 +700,9 @@ where
         = &'a [u8]
     where
         Self: 'a;
+
+    /// `ElementRef` can have arbitrary lifetimes.
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;

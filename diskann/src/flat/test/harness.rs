@@ -5,18 +5,7 @@
 
 //! Reusable execution harness for [`crate::flat::FlatIndex`] tests.
 //!
-//! Centralizes every piece of repeated boilerplate that surrounds a `knn_search`
-//! call so individual tests stay close to a one-line statement of intent:
-//!
-//! * runtime construction (`current_thread_runtime`),
-//! * scratch buffer + [`BackInserter`] plumbing,
-//! * [`NonZeroUsize`] wrapping and [`CopyIds`] selection,
-//! * brute-force ground-truth oracle,
-//! * canonical `(distance asc, id asc)` re-sort that matches the oracle's
-//!   tie-breaking (the priority queue's heap-pop order is *not* id-stable on
-//!   ties, but the oracle's is).
-//!
-//! Use [`KnnOracleRun::new`] to drive `knn_search` and pair the result with the
+//! Use [`KnnOracleRun::run`] to drive `knn_search` and pair the result with the
 //! brute-force ground truth.
 
 use std::{cmp::Ordering, num::NonZeroUsize};
@@ -29,7 +18,6 @@ use crate::{
         FlatIndex, SearchStats,
         test::provider::{Provider, Strategy},
     },
-    graph::glue::CopyIds,
     neighbor::{BackInserter, Neighbor},
     test::tokio::current_thread_runtime,
     utils::VectorRepr,
@@ -39,7 +27,7 @@ use crate::{
 /// brute-force ground-truth oracle.
 #[derive(Debug, Clone)]
 pub(crate) struct KnnOracleRun {
-    /// Top-`k` `(id, distance)` pairs in canonical `(distance asc, id asc)` order.
+    /// Top-`k` `(id, distance)` pairs.
     /// Re-sorted from the heap output so equality checks are deterministic on ties.
     pub top_k: Vec<(u32, f32)>,
     /// `top_k.iter().map(|(_, d)| d).collect()`.
@@ -63,7 +51,7 @@ impl KnnOracleRun {
         current_thread_runtime().block_on(Self::run(index, strategy, query, k))
     }
 
-    /// Async variant of [`KnnOracleRun::new`]. Use this from tests that already
+    /// Async variant of [`KnnOracleRun::run_sync`]. Use this from tests that already
     /// have a Tokio runtime (e.g. `#[tokio::test]`) or that need to drive
     /// `knn_search` concurrently across tasks.
     pub async fn run(
@@ -79,7 +67,6 @@ impl KnnOracleRun {
             .knn_search(
                 NonZeroUsize::new(k).expect("flat::test::harness requires k > 0"),
                 strategy,
-                &CopyIds,
                 &context,
                 query,
                 &mut BackInserter::new(buf.as_mut_slice()),

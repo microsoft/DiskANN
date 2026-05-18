@@ -21,7 +21,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        DistancesUnordered, HasElementRef, HasId,
+        HasId,
     },
     utils::IntoUsize,
 };
@@ -164,10 +164,6 @@ impl HasId for FlakyAccessor<'_> {
     type Id = u32;
 }
 
-impl HasElementRef for FlakyAccessor<'_> {
-    type ElementRef<'a> = &'a [f32];
-}
-
 impl Accessor for FlakyAccessor<'_> {
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
@@ -175,6 +171,8 @@ impl Accessor for FlakyAccessor<'_> {
         = &'a [f32]
     where
         Self: 'a;
+
+    type ElementRef<'a> = &'a [f32];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = TestError;
@@ -232,8 +230,6 @@ impl<'a, 'b> BuildQueryComputer<&'a [f32]> for FlakyAccessor<'b> {
 }
 
 impl ExpandBeam<&[f32]> for FlakyAccessor<'_> {}
-
-impl DistancesUnordered<&[f32]> for FlakyAccessor<'_> {}
 
 impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     type Delegate = &'a SimpleNeighborProviderAsync<u32>;

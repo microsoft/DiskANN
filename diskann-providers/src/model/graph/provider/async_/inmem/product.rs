@@ -16,8 +16,8 @@ use diskann::{
         workingset,
     },
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, DistancesUnordered,
-        ExecutionContext, HasElementRef, HasId,
+        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
+        HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -143,15 +143,6 @@ where
     }
 }
 
-impl<V, D, Ctx> HasElementRef for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = &'a [u8];
-}
-
 impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
@@ -164,6 +155,9 @@ where
         = &'a [u8]
     where
         Self: 'a;
+
+    /// `ElementRef` has an arbitrarily short lifetime.
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
@@ -248,15 +242,6 @@ where
 {
 }
 
-impl<T, V, D, Ctx> DistancesUnordered<&[T]> for QuantAccessor<'_, V, D, Ctx>
-where
-    T: VectorRepr,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-}
-
 //-------------------//
 // In-mem Extensions //
 //-------------------//
@@ -331,15 +316,6 @@ where
     }
 }
 
-impl<T, D, Ctx> HasElementRef for HybridAccessor<'_, T, D, Ctx>
-where
-    T: VectorRepr,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
-}
-
 impl<T, D, Ctx> Accessor for HybridAccessor<'_, T, D, Ctx>
 where
     T: VectorRepr,
@@ -354,6 +330,9 @@ where
         = distances::pq::Hybrid<&'a [T], &'a [u8]>
     where
         Self: 'a;
+
+    /// `ElementRef` has an arbitrarily short lifetime.
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;

@@ -6,29 +6,41 @@
 //! [`SearchStrategy`] — glue between [`DataProvider`] and per-query
 //! [`DistancesUnordered`] visitors.
 
-use crate::{error::StandardError, flat::DistancesUnordered, provider::DataProvider};
+use diskann_vector::PreprocessedDistanceFunction;
+
+use crate::{
+    error::StandardError, flat::DistancesUnordered, provider::DataProvider,
+};
 
 /// Per-call configuration that knows how to construct a per-query
-/// [`DistancesUnordered<T>`] visitor for a provider.
-///
-/// `SearchStrategy` is the flat counterpart to [`crate::graph::glue::SearchStrategy`]
-/// (disambiguated by module path). A strategy instance carries the per-query setup
-/// recipe; the per-query mutable state lives in the visitor it produces, so a single
-/// strategy may be reused across many searches.
-///
-/// The strategy itself is a pure factory; the visitor it produces carries the
-/// query-preprocessing capability via [`crate::provider::BuildQueryComputer<T>`] (a
-/// super-trait of [`DistancesUnordered<T>`]).
+/// [`DistancesUnordered`] visitor for a provider, and the [`Self::QueryComputer`] used
+/// to score each element during the scan.
 pub trait SearchStrategy<P, T>: Send + Sync
 where
     P: DataProvider,
 {
-    /// The visitor type produced by [`Self::create_visitor`]. Borrows from `self` and the
-    /// provider.
-    ///
-    /// The visitor implements both the streaming [`DistancesUnordered<T>`] primitive and
-    /// the query preprocessor [`crate::provider::BuildQueryComputer<T>`].
-    type Visitor<'a>: DistancesUnordered<T>
+    /// The reference element shape on which [`Self::QueryComputer`] computes
+    /// distances.  The visitor's [`DistancesUnordered::ElementRef`] is 
+    /// constrained to equal this for every lifetime.
+    type ElementRef<'a>;
+
+    /// The concrete query-computer type.
+    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
+        + Send
+        + Sync
+        + 'static;
+
+    /// The error type for [`Self::build_query_computer`].
+    type QueryComputerError: StandardError;
+
+    /// The visitor type produced by [`Self::create_visitor`]. Borrows from `self` and
+    /// the provider, scans elements of shape [`Self::ElementRef`], and consumes a
+    /// [`Self::QueryComputer`].
+    type Visitor<'a>: for<'b> DistancesUnordered<
+            Self::QueryComputer,
+            ElementRef<'b> = Self::ElementRef<'b>,
+            Id = P::InternalId,
+        >
     where
         Self: 'a,
         P: 'a;
@@ -37,15 +49,17 @@ where
     type Error: StandardError;
 
     /// Construct a fresh visitor over `provider` for the given request `context`.
-    ///
-    /// This is where lock acquisition, snapshot pinning, and any other per-query setup
-    /// should happen. The returned visitor owns whatever borrows / guards it needs to
-    /// remain valid until it is dropped.
     fn create_visitor<'a>(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
     ) -> Result<Self::Visitor<'a>, Self::Error>;
+
+    /// Construct the per-query computer.
+    fn build_query_computer(
+        &self,
+        query: T,
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 }
 
 #[cfg(test)]
@@ -57,11 +71,8 @@ mod tests {
 
     use super::SearchStrategy;
 
-    /// `create_visitor` produces independent visitors on successive calls.
-    ///
-    /// The strategy is a stateless factory; calling it twice should yield two
-    /// distinct visitors that may be used in parallel without interfering with
-    /// each other.
+    /// `create_visitor` produces independent visitors on successive calls, and a
+    /// computer can be built from each.
     #[test]
     fn exercise_create_visitor() {
         let provider = flat_provider::Provider::grid(Grid::Two, 3);
@@ -71,8 +82,12 @@ mod tests {
         let v1 = strategy.create_visitor(&provider, &context).unwrap();
         let v2 = strategy.create_visitor(&provider, &context).unwrap();
 
-        // The two visitors must occupy distinct stack slots — i.e. holding `v1`
-        // does not preclude constructing `v2`.
+        // The two visitors must occupy distinct stack slots — i.e. holding `v1` does
+        // not preclude constructing `v2`.
         let _ = (&v1, &v2);
+
+        // A query computer can be built independently of any visitor.
+        let _c1 = strategy.build_query_computer(&[1.0_f32, 0.0][..]).unwrap();
+        let _c2 = strategy.build_query_computer(&[0.0_f32, 1.0][..]).unwrap();
     }
 }

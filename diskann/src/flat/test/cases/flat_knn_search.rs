@@ -56,7 +56,7 @@ struct FlatKnnBaseline {
     /// Sorted distance multiset of the top-`k` returned by `knn_search`.
     /// We store the distance multiset rather than `(id, distance)` pairs because
     /// the priority queue may evict different *ids* on a boundary distance tie
-    /// (the queue's tie-breaking is heap-internal, not id-based) — but the
+    /// (the queue's tie-breaking is heap-internal, not id-based) ΓÇö but the
     /// multiset of distances is invariant.
     top_k_distances: Vec<f32>,
 
@@ -148,7 +148,7 @@ fn run_row(
     }
 }
 
-/// Sweep [`KS`] × `queries` for the given `(grid, size)` and snapshot the results.
+/// Sweep [`KS`] ├ù `queries` for the given `(grid, size)` and snapshot the results.
 fn _flat_knn_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
     let dim: usize = grid.dim().into();
 
