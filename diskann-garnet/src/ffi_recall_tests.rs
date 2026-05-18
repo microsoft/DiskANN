@@ -404,6 +404,32 @@ mod tests {
         k: usize,
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> f64 {
+        run_sb8_recall_with_quant(
+            store,
+            dimensions,
+            metric,
+            ids,
+            vectors_i8,
+            k,
+            distance_fn,
+            VectorQuantType::NoQuant,
+        )
+    }
+
+    /// Common helper: create an index with specified quant type, insert SB8 vectors, query each
+    /// with SB8, return recall. Brute-force comparison uses f32 space; index distance computation
+    /// depends on the quant type (f32 for NoQuant, i8 for Q8).
+    #[allow(clippy::too_many_arguments)]
+    fn run_sb8_recall_with_quant(
+        store: &Store,
+        dimensions: u32,
+        metric: Metric,
+        ids: &[String],
+        vectors_i8: &[Vec<i8>],
+        k: usize,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+        quant_type: VectorQuantType,
+    ) -> f64 {
         store.clear();
         let callbacks = store.callbacks();
         let ctx = Context(0);
@@ -416,7 +442,7 @@ mod tests {
                 ctx.0,
                 dimensions,
                 reduce_dimensions,
-                VectorQuantType::NoQuant,
+                quant_type,
                 metric as i32,
                 l_build,
                 max_degree,
@@ -564,5 +590,50 @@ mod tests {
         let store = Store;
         let recall = run_sb8_grid_recall(&store, 4, 5, 3);
         assert!(recall >= 0.99, "SB8 4D grid recall too low: {recall:.4}");
+    }
+
+    // ── Q8 (native int8 index) recall tests ─────────────────────────────
+
+    /// Helper: create a Q8 L2 index, insert SB8 grid vectors, query each, return recall.
+    fn run_q8_grid_recall(store: &Store, dimensions: u32, grid_size: usize, k: usize) -> f64 {
+        let (ids, vectors) = generate_sb8_grid_vectors(dimensions as usize, grid_size);
+        run_sb8_recall_with_quant(
+            store,
+            dimensions,
+            Metric::L2,
+            &ids,
+            &vectors,
+            k,
+            distance_fn::<SquaredL2>,
+            VectorQuantType::Q8,
+        )
+    }
+
+    #[test]
+    fn q8_grid_l2_recall_1d_100() {
+        let store = Store;
+        let recall = run_q8_grid_recall(&store, 1, 100, 3);
+        assert!(recall >= 0.99, "Q8 1D grid recall too low: {recall:.4}");
+    }
+
+    #[test]
+    fn q8_grid_l2_recall_2d_10() {
+        let store = Store;
+        let recall = run_q8_grid_recall(&store, 2, 10, 3);
+        assert!(recall >= 0.99, "Q8 2D grid recall too low: {recall:.4}");
+    }
+
+    #[test]
+    fn q8_grid_l2_recall_3d_7() {
+        let store = Store;
+        let recall = run_q8_grid_recall(&store, 3, 7, 3);
+        assert!(recall >= 0.99, "Q8 3D grid recall too low: {recall:.4}");
+    }
+
+    #[test]
+    fn q8_grid_l2_recall_4d_5() {
+        let store = Store;
+        let recall = run_q8_grid_recall(&store, 4, 5, 3);
+        assert!(recall >= 0.99, "Q8 4D grid recall too low: {recall:.4}");
     }
 }

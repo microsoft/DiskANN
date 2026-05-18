@@ -908,4 +908,147 @@ mod tests {
             drop_index(ctx.0, index_ptr);
         }
     }
+
+    // ── Q8 (native int8 index) tests ────────────────────────────────────
+
+    /// Creates a Q8 index (native i8 storage) with default test values.
+    fn create_test_index_q8(store: &Store) -> (*const c_void, Context) {
+        store.clear();
+
+        let callbacks = store.callbacks();
+        let ctx = Context(0);
+
+        let dim: u32 = 2;
+        let reduce_dim = 0;
+        let quant_type = VectorQuantType::Q8;
+        let l_build = 10;
+        let max_degree = 20;
+
+        let index_ptr = unsafe {
+            create_index(
+                ctx.0,
+                dim,
+                reduce_dim,
+                quant_type,
+                Metric::L2 as i32,
+                l_build,
+                max_degree,
+                callbacks.read_callback(),
+                callbacks.write_callback(),
+                callbacks.delete_callback(),
+                callbacks.rmw_callback(),
+            )
+        };
+
+        assert!(
+            !index_ptr.is_null(),
+            "create_test_index_q8 failed to create index"
+        );
+        (index_ptr, ctx)
+    }
+
+    #[test]
+    fn q8_add_check_and_remove_sb8_vector() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index_q8(&store);
+
+        let garnet_vector_id = 42u32;
+        let id_bytes = bytemuck::bytes_of(&garnet_vector_id);
+
+        let vector: [i8; 2] = [-10, 50];
+        let vector_bytes: &[u8] = bytemuck::cast_slice(&vector);
+        let vector_len = 2;
+
+        let result: bool = unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id_bytes.as_ptr(),
+                id_bytes.len(),
+                VectorValueType::SB8,
+                vector_bytes.as_ptr(),
+                vector_len,
+                b"".as_ptr(),
+                0,
+            )
+        };
+
+        assert!(result);
+
+        let exists =
+            unsafe { check_external_id_valid(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        assert!(exists);
+
+        let mut cardinality = unsafe { card(ctx.0, index_ptr) };
+        assert_eq!(cardinality, 1);
+
+        let removed = unsafe { remove(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        assert!(removed);
+
+        cardinality = unsafe { card(ctx.0, index_ptr) };
+        assert_eq!(cardinality, 1);
+
+        unsafe {
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn q8_search_sb8_vectors() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index_q8(&store);
+
+        unsafe {
+            assert!(insert_sb8_vector(&ctx, index_ptr, 10, &[100, 0]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 20, &[0, 100]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 30, &[-100, 0]));
+
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[100, 0], 3, None);
+            assert!(ids.len() >= 2, "should return at least 2 vectors");
+            assert_eq!(ids[0], 10, "closest to [100,0] should be id=10");
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn q8_search_sb8_with_negative_values() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index_q8(&store);
+
+        unsafe {
+            assert!(insert_sb8_vector(&ctx, index_ptr, 10, &[-50, -50]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 20, &[50, 50]));
+            assert!(insert_sb8_vector(&ctx, index_ptr, 30, &[-50, 50]));
+
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[-50, -50], 3, None);
+            assert!(!ids.is_empty(), "should return at least 1 vector");
+            assert_eq!(ids[0], 10, "closest to [-50,-50] should be id=10");
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn q8_insert_fp32_and_search_sb8() {
+        let store = Store;
+        let (index_ptr, ctx) = create_test_index_q8(&store);
+
+        // Insert FP32 vectors into a Q8 index — they should be truncated to i8.
+        unsafe {
+            assert!(insert_f32_vector(&ctx, index_ptr, 10, &[100.0, 0.0]));
+            assert!(insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 100.0]));
+            assert!(insert_f32_vector(&ctx, index_ptr, 30, &[-100.0, 0.0]));
+
+            // Search with SB8 query
+            let (ids, _dists) = do_search_sb8(&ctx, index_ptr, &[100, 0], 3, None);
+            assert!(ids.len() >= 2, "should return at least 2 vectors");
+            assert_eq!(
+                ids[0], 10,
+                "closest to [100,0] should be id=10 (FP32 truncated to i8)"
+            );
+
+            drop_index(ctx.0, index_ptr);
+        }
+    }
 }
