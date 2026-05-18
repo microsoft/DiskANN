@@ -74,6 +74,8 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
+      # Kept inline because this must run before checkout, but local action.yml
+      # files are only available after checkout.
       - name: Mount high-speed NVMe SSD
         shell: bash
         run: |
