@@ -530,7 +530,7 @@ jobs:
         run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../current-llvm-lines.txt
 
       - name: Compare LLVM lines
-        run: diskann_rust/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
+        run: bash diskann_rust/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
 
       - name: Check LLVM lines growth threshold
         run: |
