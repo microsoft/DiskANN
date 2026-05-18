@@ -66,14 +66,12 @@ pub fn determinant_diversity_post_process<Id: Copy>(
         return Vec::new();
     }
 
-    let candidates: Vec<_> = candidates
-        .into_iter()
-        .filter(|(_, _, vector)| vector.len() == query.len())
-        .collect();
-
-    if candidates.is_empty() {
-        return Vec::new();
-    }
+    assert!(
+        candidates
+            .iter()
+            .all(|(_, _, vector)| vector.len() == query.len()),
+        "all candidate vectors must have the same dimension as query"
+    );
 
     let k = k.min(candidates.len());
     if k == 0 {
@@ -255,14 +253,14 @@ mod tests {
     }
 
     #[test]
-    fn test_mismatched_dimensions() {
+    #[should_panic(expected = "all candidate vectors must have the same dimension as query")]
+    fn test_mismatched_dimensions_panics() {
         let candidates = vec![
             (0u32, 0.5, vec![1.0, 2.0]),
             (1u32, 0.3, vec![1.0]), // Wrong dimension
         ];
         let query = &[1.0, 2.0, 3.0];
-        let result = determinant_diversity_post_process(candidates, query, 5, 0.5, 1.0);
-        assert_eq!(result.len(), 0); // All candidates filtered due to dimension mismatch
+        let _ = determinant_diversity_post_process(candidates, query, 5, 0.5, 1.0);
     }
 
     #[test]
