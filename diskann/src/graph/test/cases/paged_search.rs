@@ -6,7 +6,7 @@
 //! Tests for paged (iterative) search.
 //!
 //! Paged search returns results in pages of k neighbors via a stateful
-//! [`PagedSearch`](crate::graph::index::PagedSearch) handle. Tests cover basic pagination,
+//! [`PagedSearch`](crate::graph::search::PagedSearch) handle. Tests cover basic pagination,
 //! single-page retrieval, and small page sizes that stress the iteration machinery.
 
 use std::sync::Arc;

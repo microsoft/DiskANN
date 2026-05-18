@@ -342,7 +342,7 @@ where
     /// Begin a paged search over the index (synchronous wrapper).
     ///
     /// Returns a [`PagedSearch`] handle. See
-    /// [`graph::index::PagedSearch::next_page`] for retrieving results.
+    /// [`PagedSearch::next_page`] for retrieving results.
     pub fn paged_search<'a, S, T>(
         &'a self,
         strategy: S,
