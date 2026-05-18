@@ -4,7 +4,7 @@
 |------------------|--------------------------------|
 | **Authors**      | Aditya Krishnan, Alex Razumov, Dongliang Wu                |
 | **Created**      | 2026-04-24                     |
-| **Updated**      | 2026-05-14                     |
+| **Updated**      | 2026-05-18                     |
 
 ## 1. Motivation
 
@@ -17,74 +17,48 @@ A growing class of consumers diverge from our current pattern of use by accesssi
 
 ### 1.2 Problem Statement
 
-The problem-statement here is simple: provide first-class support for sequential, one-pass scans over a data backend without
-stuffing the algorithm or the backend through the `Accessor` trait surface.
+The problem-statement here is simple: provide first-class support for sequential, one-pass scans over a data backend without stuffing the algorithm or the backend through the `Accessor` trait surface.
 
 ### 1.3 Goals
 
-1. Define a fused iterate-and-score primitive — `flat::DistancesUnordered<T>` — that
+1. Define a fused iterate-and-score primitive — `flat::DistancesUnordered<C>` — that
    mirrors the role `Accessor` plays for graph search but exposes a sequential
    scan-and-score operation instead of random access.
 2. Provide flat-search algorithm implementations built on the new primitives, so consumers can use this against their own providers / backends. 
-3. Expose support for diferent distance computers and post-processing like re-ranking _out-of-the-box_ without having to reimplement these for the flat search path.  
+3. (Near-future) Expose support for diferent distance computers and post-processing like re-ranking _out-of-the-box_ without having to reimplement these for the flat search path.  
 
 ## 2. Proposal
 
-The flat-search infrastructure is built on a small sequence of traits. The only trait a
-backend *must* implement is `flat::DistancesUnordered<T>`. A `flat::SearchStrategy`
-then instantiates per-query visitors that implement it.
+The only shared surface between graph and flat search are the `DataProvider` (for id-mapping / context) and `HasId`.
 
-An opt-in `FlatIterator` trait plus the `Iterated<I>` adapter exist for
-convenience for backends that naturally expose element-at-a-time iteration.
+The module exposes three layers:
 
-### 2.1 Refactor `Accessor` and `BuildQueryComputer `
-We start by a small refactor we introduce to the traits in `diskann::providers` and `diskann::graph::glue` that 
-will enable us to cleanly separate the query preprocessing, result post-processing from the search pattern so that 
-both graph and flat search can share common components as much as possible: 
+| Layer | Trait | Role |
+|-------|-------|------|
+| Backend | `DistancesUnordered<C>` | Scan-and-score primitive |
+| Factory | `SearchStrategy<P, T>` | Per-query visitor + computer construction |
+| Algorithm | `FlatIndex::knn_search` | Brute-force top-k |
 
-1. **Extract `HasElementRef` out of `Accessor`.** The `ElementRef<'a>` GAT moves to
-   its own zero-method trait so that streaming visitors (which are not `Accessor`s)
-   can still expose an element type. `Accessor` is now `Accessor: HasId +
-   HasElementRef + Send + Sync`. `HasElementRef` is simply: 
+An opt-in `FlatIterator` trait plus the `Iterated<I>` adapter exist for backends that
+naturally expose element-at-a-time iteration.
 
-   ```rust
-   pub trait HasElementRef { type ElementRef<'a> } 
-   ```
+### 2.1 `DistancesUnordered<C>` — the core scanning trait
 
-2. **Decouple `BuildQueryComputer<T>` from `Accessor`.** Previously a
-   sub-trait of `Accessor`, `BuildQueryComputer<T>` is lifted to depend only on
-   `HasElementRef`. Secondly, it now contains only a constructor `build_query_computer` 
-   as an associated method and nothing else. This is the
-   change that lets `BuildQueryComputer<T>` and `graph::glue::SearchPostProcess` be
-   used unchanged by both the flat index and the graph.
-
-3. **Split distance scoring into a new `DistancesUnordered<T>` trait family.**
-   Previously, the unordered iterate-and-score loop was a default method tucked
-   inside `Accessor` (and shadowed by overrides on a few providers). It is now its
-   own subtrait of `BuildQueryComputer<T>`, with two flavors that share a name and a
-   default-body shape but differ in their access super-trait:
-
-   - **`provider::DistancesUnordered<T>: Accessor + BuildQueryComputer<T>`** — drives
-     the scan via the random-access `Accessor` machinery. Used by graph search.
-   - **`flat::DistancesUnordered<T>: HasId + BuildQueryComputer<T>`** — a
-     self-contained fused iterate-and-score trait used by flat search. Backends
-     implement the entire scan-and-score loop in a single method. More on it below.
-
-### 2.2 Core traits for flat search
-
-The single required trait for flat search is `flat::DistancesUnordered<T>`. It fuses
-iteration and scoring into one method: implementations drive an entire scan over their
-underlying data, scoring each element with the supplied query computer and invoking a
-callback with `(id, distance)` pairs. Implementations choose iteration order,
-prefetching, and any bulk reads; algorithms see only `(Id, f32)` pairs.
+The single required trait for flat search. It is generic over a **computer type** `C`
+rather than a query type — the algorithm supplies a pre-built computer and the visitor
+drives the scan.
 
 ```rust
-pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
+pub trait DistancesUnordered<C>: HasId + Send + Sync
+where
+    C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
+{
+    type ElementRef<'a>;
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
     fn distances_unordered<F>(
         &mut self,
-        computer: &<Self as BuildQueryComputer<T>>::QueryComputer,
+        computer: &C,
         f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
@@ -92,174 +66,166 @@ pub trait DistancesUnordered<T>: HasId + BuildQueryComputer<T> + Send + Sync {
 }
 ```
 
-`DistancesUnordered<T>` is scoped to a single query. We introduce a strategy that is the per-call
-constructor that hands the algorithm a freshly-bound visitor. It is meant to be stateless,
-cheap to construct, and lives only for the duration of one search. 
+Key differences from the graph-side `Accessor` path:
+
+- No random access — the visitor drives the entire scan internally.
+- `ElementRef<'a>` lives on `DistancesUnordered` itself (not on a shared `HasElementRef` trait).
+
+### 2.2 `SearchStrategy<P, T>` — per-query factory
+
+The strategy owns both visitor construction and query-computer construction:
 
 ```rust
 pub trait SearchStrategy<P, T>: Send + Sync
 where
     P: DataProvider,
 {
-    /// The per-query visitor type produced by [`Self::create_visitor`]. Borrows from
-    /// `self` and the provider. The visitor implements both the streaming
-    /// [`DistancesUnordered<T>`] primitive and the query preprocessor
-    /// [`BuildQueryComputer<T>`].
-    type Visitor<'a>: DistancesUnordered<T>
-    where
-        Self: 'a,
-        P: 'a;
+    type ElementRef<'a>;
+    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
+        + Send + Sync + 'static;
+    type QueryComputerError: StandardError;
+
+    type Visitor<'a>: for<'b> DistancesUnordered<
+            Self::QueryComputer,
+            ElementRef<'b> = Self::ElementRef<'b>,
+            Id = P::InternalId,
+        >
+    where Self: 'a, P: 'a;
 
     type Error: StandardError;
 
-    /// Construct a fresh visitor over `provider` for the given request `context`.
     fn create_visitor<'a>(
         &'a self,
         provider: &'a P,
         context: &'a P::Context,
     ) -> Result<Self::Visitor<'a>, Self::Error>;
+
+    fn build_query_computer(
+        &self,
+        query: T,
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 }
 ```
-This shape mirrors the random-access `graph::glue::SearchStrategy` and lets `FlatIndex::knn_search` accept the same
-`graph::glue::SearchPostProcess` that graph search uses (see below).
 
-### 2.3 `FlatIndex` — the top-level handle
+`build_query_computer` lives on the **strategy**, not the visitor. This keeps the
+visitor free of any distance-computation trait bounds — it only needs to implement
+`DistancesUnordered<C>` for the strategy's computer type.
 
-`FlatIndex` is a thin `'static` wrapper around a `DataProvider`. The same
-`DataProvider` trait used by graph search is reused — flat and graph share one
-provider surface and the same `Context` / id-mapping / error machinery.
+### 2.3 `FlatIndex::knn_search`
+
+`FlatIndex<P>` is a thin `'static` wrapper around a `DataProvider`. The `knn_search`
+method is the brute-force top-k algorithm:
 
 ```rust
-pub struct FlatIndex<P: DataProvider> {
-    provider: P,
-}
-
 impl<P: DataProvider> FlatIndex<P> {
-    pub fn new(provider: P) -> Self;
-    pub fn provider(&self) -> &P;
-
-    pub fn knn_search<S, T, O, OB, PP>(
+    pub fn knn_search<S, T, OB>(
         &self,
         k: NonZeroUsize,
         strategy: &S,
-        processor: &PP,
         context: &P::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
-        S: flat::SearchStrategy<P, T>,
-        T: Copy + Send + Sync,
-        O: Send,
-        OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> graph::glue::SearchPostProcess<S::Visitor<'a>, T, O> + Send + Sync,
+        S: SearchStrategy<P, T>,
+        T: Send + Sync,
+        OB: SearchOutputBuffer<P::InternalId> + Send + ?Sized;
 }
 ```
 
-**Note:** The `PP` bound uses the same `graph::glue::SearchPostProcess` trait as graph search;
-there is no flat-specific post-process trait. Reuse is enabled by the trait splits
-described above (the visitor implements `BuildQueryComputer<T> + HasId`, which is all
-`SearchPostProcess` requires).
+Algorithm:
 
-The `knn_search` method is the canonical brute-force search algorithm:
+1. `strategy.create_visitor(&provider, context)` — acquire the scanning visitor.
+2. `strategy.build_query_computer(query)` — preprocess the query into a computer.
+3. `visitor.distances_unordered(&computer, |id, dist| queue.insert(...))` — full scan.
+4. Drain the priority queue into `output` in best-first order.
 
-1. Construct the per-query visitor via `strategy.create_visitor`.
-2. Build the query computer from the visitor via `BuildQueryComputer::build_query_computer`.
-3. Drive the scan via `visitor.distances_unordered(&computer, ...)`, inserting each
-   `(id, distance)` pair into a `NeighborPriorityQueue<Id>` of capacity `k`.
-4. Hand the survivors (in distance order) to `processor.post_process`.
-5. Return search stats.
+**No post-processing parameter (yet).** Currently `knn_search` writes
+`(P::InternalId, f32)` directly into the `SearchOutputBuffer`. Once the
+graph-search trait refactor in [PR #1076](https://github.com/microsoft/DiskANN/pull/1076)
+lands, `knn_search` will accept an optional `SearchPostProcess` parameter
+(the same trait graph search uses), enabling id remapping, re-ranking, and
+other transformations as a composable layer.
 
-Other algorithms (filtered, range, diverse) can be added later as additional methods on
-`FlatIndex`.
+### 2.4 `FlatIterator` and `Iterated` — convenience adapter
 
-#### Search call chain (AI Generated)
-
-The diagram below traces the trait dispatch sequence inside one `search` call for
-each of graph and flat search. The centre lane shows the shared traits that both
-columns dip into.
-
-```text
-        Graph                       Shared                          Flat
-        ─────                       ──────                          ────
-
-  DiskANNIndex::search                                          FlatIndex::knn_search
-        │                                                                │
-        ▼                                                                ▼
-  graph::glue::SearchStrategy                                  flat::SearchStrategy
-   ::search_accessor                                            ::create_visitor
-        │                                                                │
-        ▼                                                                ▼
-  ExpandBeam<T> visitor                                       DistancesUnordered<T> visitor
-  (Accessor + BuildQueryComputer<T>)                          (HasId + BuildQueryComputer<T>)
-        │                                                                │
-        │                  BuildQueryComputer<T>                         │
-        ├─────────────────►::build_query_computer ◄──────────────────────┤
-        │                  (visitor → QueryComputer)                     │
-        │                                                                │
-        ▼                                                                ▼
-  ExpandBeam::expand_beam                                  DistancesUnordered
-  (greedy beam loop:                                       ::distances_unordered
-   for each frontier id,                                   (one pass over every
-    get_neighbors,                                          element; computer scores
-    distances_unordered)                                    each one)
-        │                                                                │
-        ▼                                                                ▼
-  NeighborPriorityQueue                                       NeighborPriorityQueue
-        │                                                                │
-        │              graph::glue::SearchPostProcess                    │
-        └─────────────►::post_process ◄──────────────────────────────────┘
-                                  │
-                                  ▼
-                          SearchOutputBuffer
-```
-
-### 2.4 `FlatIterator` and `Iterated` — convenience for element-at-a-time backends
-
-For backends that naturally expose element-at-a-time iteration, `FlatIterator` is a
-lending async iterator:
+For backends that naturally expose element-at-a-time iteration:
 
 ```rust
-pub trait FlatIterator: HasId + HasElementRef + Send + Sync {
-    type Element<'a>: for<'b> Reborrow<'b, Target = <Self as HasElementRef>::ElementRef<'b>>
-        + Send + Sync
+pub trait FlatIterator: HasId + Send + Sync {
+    type ElementRef<'a>;
+    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
         where Self: 'a;
-    type Error: StandardError;
+    type Error: ToRanked + Debug + Send + Sync + 'static;
 
-    fn next(
-        &mut self,
-    ) -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
+    fn next(&mut self)
+        -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
 }
 ```
 
-`Iterated<I>` wraps any `FlatIterator` and implements `DistancesUnordered<T>` (when
-the inner type also implements `BuildQueryComputer<T>`) by looping over `next()`,
-reborrowing each element, and scoring it with the supplied query computer.
+`Iterated<I>` wraps any `FlatIterator` and implements `DistancesUnordered<C>` for any
+computer `C` whose `PreprocessedDistanceFunction` target matches the iterator's
+`ElementRef`. The adapter loops `next()`, reborrows each element, and scores it.
+
+#### Call-chain diagram
+
+```text
+        Graph                                              Flat
+        ─────                                              ────
+
+  DiskANNIndex::search                              FlatIndex::knn_search
+        │                                                    │
+        ▼                                                    ▼
+  graph::glue::SearchStrategy                      flat::SearchStrategy
+   ::search_accessor                                ::create_visitor
+        │                                           ::build_query_computer
+        ▼                                                    │
+  Accessor + BuildQueryComputer<T>                           ▼
+   → QueryComputer                                 DistancesUnordered<C>
+        │                                           ::distances_unordered(&computer, f)
+        ▼                                                    │
+  ExpandBeam::expand_beam                                    │
+  (greedy beam, random access)                               │
+        │                                                    │
+        ▼                                                    ▼
+  NeighborPriorityQueue                            NeighborPriorityQueue
+        │                                                    │
+        ▼                                                    ▼
+  SearchPostProcess                                SearchPostProcess (planned, PR #1076)
+   → SearchOutputBuffer                             → SearchOutputBuffer
+```
 
 ## Trade-offs
 
+### No built-in post-processing (temporary)
+
+`knn_search` currently writes `(InternalId, f32)` directly. Once the graph-search
+trait refactor in [PR #1076](https://github.com/microsoft/DiskANN/pull/1076) lands
+and stabilizes a shared `SearchPostProcess` trait, `knn_search` will gain an optional
+post-processor parameter matching the graph-search signature. Until then, callers that
+need id remapping or re-ranking compose it externally.
+
 ### Reusing `DataProvider`
 
-This design leans into using the `DataProvider` trait which requires implementations to implement `InternalId` and `ExternalId` conversions (via the context). Arguably, this requirement is too restrictive for some consumers of a flat-index. Reasons for sticking with `DataProvider`: 
-
-- Every concrete provider already implements `DataProvider`, so a separate trait adds
-  an abstraction that existing consumers will have to implement if they want to opt-in to the flat-index path.
-- Sharing `DataProvider` means the `Context`, id-mapping (`to_internal_id` /
-  `to_external_id`), and error machinery are identical across graph and flat search,
-  reducing the learning surface for new contributors.
+The design requires implementations to provide `InternalId` / `ExternalId` conversions.
+This is arguably too restrictive for some flat-index consumers, but avoids introducing a
+second provider trait.
 
 ### Expand `Element` to support batched distance computation?
 
-The current optional iterator `FlatIterator` yields one element per `next()` call, and the query computer scores
-elements one at a time via `PreprocessedDistanceFunction::evaluate_similarity`. This could leave some optimization and performance on the table; especially with the upcoming effort around batched distance kernels. Of course, a consumer can choose to implement their own optimized implementation of `distances_unordered` that uses batching.
+`FlatIterator` yields one element per `next()` call. An alternative is to yield batches,
+enabling (potentially) better cache utilization. Backends that need this can implement `DistancesUnordered<C>`
+directly with an optimized bulk loop, so the single-element `FlatIterator` path is not a
+bottleneck — it's a convenience default.
 
-An alternative is to make `next()` yield a *batch* instead of a single vector representation like `Element<'_>`. Some work will need to be done to define the right interaction between the batch type, the element type in the batch, the interaction with `QueryComputer`'s types and way IDs and distances are collected in the queue.
+### Intra-query parallelism
 
-### Intra-query parallelism 
-
-The current design of `DistancesUnordered` does not allow an implementation to exploit parallelism within a query; since the trait requires a `&mut self`. Especially for a flat index, some implementations might want to parallelize within the scan for a query. Arguably we will need a more complex extension of this architecture to support this. 
+`DistancesUnordered` requires `&mut self`, precluding internal parallelism within a single
+scan. A parallel variant would need a different trait shape (e.g. splitting the scan across
+shards). This is left for future work.
 
 ## Future Work
-- Support for other flat-search algorithms like - filtered, range and diverse flat algorithms as additional methods on `FlatIndex`.
-- Index build -- this is just one part of the picture; more work needs to be done around how this fits in with any traits / interface we need for index build.
+- **Post-processing support** — once [PR #1076](https://github.com/microsoft/DiskANN/pull/1076) lands, add a `SearchPostProcess` parameter to `knn_search` so flat search can share the same id-remapping / re-ranking infrastructure as graph search.
+- Support for other flat-search algorithms like filtered, range, and diverse flat algorithms as additional methods on `FlatIndex`.
+- Index build — this is just one part of the picture; more work needs to be done around how this fits in with any traits / interface we need for index build.
 

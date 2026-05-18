@@ -157,12 +157,7 @@ mod tests {
     use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 
     use super::*;
-    use crate::{
-        ANNError, always_escalate,
-        error::Infallible,
-        provider::HasId,
-        utils::VectorRepr,
-    };
+    use crate::{ANNError, always_escalate, error::Infallible, provider::HasId, utils::VectorRepr};
 
     ///////////////////////////
     // Shared sample dataset //

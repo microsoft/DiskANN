@@ -8,9 +8,7 @@
 
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{
-    error::StandardError, flat::DistancesUnordered, provider::DataProvider,
-};
+use crate::{error::StandardError, flat::DistancesUnordered, provider::DataProvider};
 
 /// Per-call configuration that knows how to construct a per-query
 /// [`DistancesUnordered`] visitor for a provider, and the [`Self::QueryComputer`] used
@@ -20,7 +18,7 @@ where
     P: DataProvider,
 {
     /// The reference element shape on which [`Self::QueryComputer`] computes
-    /// distances.  The visitor's [`DistancesUnordered::ElementRef`] is 
+    /// distances.  The visitor's [`DistancesUnordered::ElementRef`] is
     /// constrained to equal this for every lifetime.
     type ElementRef<'a>;
 
