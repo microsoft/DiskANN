@@ -4,7 +4,7 @@
 //! Layout markers and tile-level conversion traits.
 //!
 //! - [`Layout`] — marker trait: memory layout + element type.
-//! - [`BlockTransposedLayout`] / [`RowMajor`] — zero-sized layout markers.
+//! - [`BlockTransposed`] / [`RowMajor`] — zero-sized layout markers.
 //! - [`DescribeLayout`] — bridges matrix types to layout markers.
 //! - [`ConvertTo`] — tile-level conversion (blanket identity + f16→f32).
 
@@ -17,7 +17,7 @@ use diskann_wide::arch::Target2;
 // ── Layout trait ─────────────────────────────────────
 
 /// Memory layout and element type marker for tile data.
-pub trait Layout {
+pub(super) trait Layout {
     type Element: Copy;
 }
 
@@ -25,36 +25,28 @@ pub trait Layout {
 
 /// Block-transposed tile layout: `GROUP` rows per block, `PACK` columns
 /// interleaved. Matches [`BlockTransposedRef`](crate::multi_vector::BlockTransposedRef).
-///
-/// This is the zero-sized **layout marker** used in [`Kernel<A>::Left`] /
-/// [`Kernel<A>::Right`](super::Kernel) associated types. It is distinct
-/// from the owning storage type [`BlockTransposed`](crate::multi_vector::BlockTransposed)
-/// — the marker carries layout information at the type level; the owning
-/// type holds actual data.
-pub struct BlockTransposedLayout<T, const GROUP: usize, const PACK: usize = 1>(PhantomData<T>);
+pub(super) struct BlockTransposed<T, const GROUP: usize, const PACK: usize = 1>(PhantomData<T>);
 
-impl<T, const GROUP: usize, const PACK: usize> BlockTransposedLayout<T, GROUP, PACK> {
+impl<T, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
     pub(super) fn new() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T, const GROUP: usize, const PACK: usize> Copy for BlockTransposedLayout<T, GROUP, PACK> {}
+impl<T, const GROUP: usize, const PACK: usize> Copy for BlockTransposed<T, GROUP, PACK> {}
 
-impl<T, const GROUP: usize, const PACK: usize> Clone for BlockTransposedLayout<T, GROUP, PACK> {
+impl<T, const GROUP: usize, const PACK: usize> Clone for BlockTransposed<T, GROUP, PACK> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: Copy, const GROUP: usize, const PACK: usize> Layout
-    for BlockTransposedLayout<T, GROUP, PACK>
-{
+impl<T: Copy, const GROUP: usize, const PACK: usize> Layout for BlockTransposed<T, GROUP, PACK> {
     type Element = T;
 }
 
 /// Dense row-major tile layout. Matches [`MatRef<Standard<T>>`](crate::multi_vector::MatRef).
-pub struct RowMajor<T>(PhantomData<T>);
+pub(super) struct RowMajor<T>(PhantomData<T>);
 
 impl<T> RowMajor<T> {
     pub(super) fn new() -> Self {
@@ -78,7 +70,7 @@ impl<T: Copy> Layout for RowMajor<T> {
 
 /// Bridges a concrete matrix type to its [`Layout`] marker, enabling
 /// type inference of [`ConvertTo`] parameters at call sites.
-pub trait DescribeLayout {
+pub(super) trait DescribeLayout {
     type Layout: Layout;
 
     fn layout(&self) -> Self::Layout;
@@ -87,10 +79,10 @@ pub trait DescribeLayout {
 impl<T: Copy, const GROUP: usize, const PACK: usize> DescribeLayout
     for crate::multi_vector::BlockTransposedRef<'_, T, GROUP, PACK>
 {
-    type Layout = BlockTransposedLayout<T, GROUP, PACK>;
+    type Layout = BlockTransposed<T, GROUP, PACK>;
 
     fn layout(&self) -> Self::Layout {
-        BlockTransposedLayout::new()
+        BlockTransposed::new()
     }
 }
 
@@ -116,7 +108,7 @@ impl<T: Copy> DescribeLayout for crate::multi_vector::MatRef<'_, crate::multi_ve
 /// - `convert` reads at most `rows * k` source elements.
 /// - `convert` writes only within `buf`.
 /// - The returned pointer is valid until the next `&mut` access to `buf`.
-pub unsafe trait ConvertTo<A: Architecture, To: Layout>: Layout {
+pub(super) unsafe trait ConvertTo<A: Architecture, To: Layout>: Layout {
     /// Staging buffer for converted tile data (`()` for identity conversions).
     type Buffer;
 
@@ -170,8 +162,7 @@ unsafe impl<A: Architecture, L: Layout> ConvertTo<A, L> for L {
 // into `rows * k` f32 values in `buf`. The returned pointer is
 // `buf.as_ptr()`, valid until the next `&mut` access to `buf`.
 unsafe impl<A, const GROUP: usize, const PACK: usize>
-    ConvertTo<A, BlockTransposedLayout<f32, GROUP, PACK>>
-    for BlockTransposedLayout<half::f16, GROUP, PACK>
+    ConvertTo<A, BlockTransposed<f32, GROUP, PACK>> for BlockTransposed<half::f16, GROUP, PACK>
 where
     A: Architecture,
     SliceCast<f32, half::f16>: for<'a> Target2<A, (), &'a mut [f32], &'a [half::f16]>,

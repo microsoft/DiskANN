@@ -27,7 +27,7 @@ diskann_wide::alias!(f32s = <Scalar>::f32x8);
 // A_PANEL(8) * k A elements, UNROLL * k B elements, and A_PANEL(8)
 // scratch elements — all within the bounds guaranteed by `tiled_reduce`.
 unsafe impl Kernel<Scalar> for F32Kernel<8> {
-    type Left = layouts::BlockTransposedLayout<f32, 8>;
+    type Left = layouts::BlockTransposed<f32, 8>;
     type Right = layouts::RowMajor<f32>;
     const A_PANEL: usize = 8;
     const B_PANEL: usize = 2;

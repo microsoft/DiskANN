@@ -712,22 +712,6 @@ impl<T: NewCloned> Clone for Mat<T> {
 }
 
 impl<T: Copy> Mat<Standard<T>> {
-    /// Create a new matrix by invoking `f` once per element in row-major order.
-    ///
-    /// # Example
-    /// ```
-    /// use diskann_quantization::multi_vector::{Mat, Standard};
-    /// let mut n = 0;
-    /// let mat = Mat::from_fn(Standard::<i32>::new(1, 4).unwrap(), || { n += 1; n });
-    /// assert_eq!(mat.as_slice(), &[1, 2, 3, 4]);
-    /// ```
-    pub fn from_fn<F: FnMut() -> T>(repr: Standard<T>, mut f: F) -> Self {
-        let b: Box<[T]> = (0..repr.num_elements()).map(|_| f()).collect();
-
-        // SAFETY: By construction, `b` has length `repr.num_elements()`.
-        unsafe { repr.box_to_mat(b) }
-    }
-
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1781,18 +1765,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_standard_from_fn() {
-        let mut counter: i32 = 0;
-        let m = Mat::from_fn(Standard::<i32>::new(2, 3).unwrap(), || {
-            let v = counter;
-            counter += 1;
-            v
-        });
-
-        assert_eq!(m.as_slice(), &[0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

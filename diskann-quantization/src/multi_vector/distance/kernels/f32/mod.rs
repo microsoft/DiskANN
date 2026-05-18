@@ -30,7 +30,7 @@ mod scalar;
 mod v3;
 
 /// Zero-sized kernel type for f32 micro-kernels with block size `GROUP`.
-pub struct F32Kernel<const GROUP: usize>;
+pub(crate) struct F32Kernel<const GROUP: usize>;
 
 #[inline(never)]
 #[cold]
@@ -66,7 +66,7 @@ pub(super) fn max_ip_kernel<A: Architecture, T: Copy, const GROUP: usize>(
     budget: TileBudget,
 ) where
     F32Kernel<GROUP>: Kernel<A>,
-    layouts::BlockTransposedLayout<T, GROUP>:
+    layouts::BlockTransposed<T, GROUP>:
         layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + layouts::Layout<Element = T>,
     layouts::RowMajor<T>: layouts::ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right>
         + layouts::Layout<Element = T>,
@@ -117,7 +117,7 @@ impl<A, const GROUP: usize>
 where
     A: Architecture,
     Self: Kernel<A>,
-    layouts::BlockTransposedLayout<f32, GROUP>:
+    layouts::BlockTransposed<f32, GROUP>:
         layouts::ConvertTo<A, <Self as Kernel<A>>::Left> + layouts::Layout<Element = f32>,
     layouts::RowMajor<f32>:
         layouts::ConvertTo<A, <Self as Kernel<A>>::Right> + layouts::Layout<Element = f32>,

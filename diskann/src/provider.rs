@@ -97,7 +97,7 @@
 
 use std::ops::Deref;
 
-use diskann_utils::{Reborrow, WithLifetime};
+use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 use sealed::{BoundTo, Sealed};
 
@@ -472,32 +472,6 @@ pub trait Accessor: HasId + Send + Sync {
             Ok(())
         }
     }
-}
-
-/// A utility trait for adding a caching layer to Accessors.
-///
-/// Note that the implementation of `as_cached` is such that this trait is only implementable
-/// if `Self::Map::Of` can be safely transmuted from `Self::Element`. The easiest way to do
-/// this safely is to have `Self::Map::Of` be the same type as `Self::Element`.
-///
-/// This dance is mainly needed to allow down stream implementations to properly constrain
-/// the elements returned from a cache are "compatible" with `Self::Element` in a way that
-/// does not introduce a '`static` requirement on the `Accessor`.
-pub trait CacheableAccessor: Accessor {
-    /// A `'static` helper for describing a type with an arbitrary lifetime. The lifetime
-    /// annotated type is the value passed between `Self` and the cache.
-    type Map: WithLifetime;
-
-    /// Take a cached item with an arbitrary lifetime (limited to that of `Self`) and
-    /// cheaply construct `Self::Element` with the same lifetime.
-    fn from_cached<'a>(element: <Self::Map as WithLifetime>::Of<'a>) -> Self::Element<'a>
-    where
-        Self: 'a;
-
-    /// View `Self::Element` as the adapted cached type.
-    fn as_cached<'a, 'b>(element: &'a Self::Element<'b>) -> &'a <Self::Map as WithLifetime>::Of<'b>
-    where
-        Self: 'a + 'b;
 }
 
 /// A specialized [`Accessor`] that provides random-access distance computations.

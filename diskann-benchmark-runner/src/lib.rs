@@ -13,7 +13,6 @@ mod result;
 
 pub mod any;
 pub mod app;
-pub mod dispatcher;
 pub mod files;
 pub mod input;
 pub mod output;
@@ -26,6 +25,7 @@ pub use benchmark::Benchmark;
 pub use checker::{CheckDeserialization, Checker};
 pub use input::Input;
 pub use output::Output;
+pub use registry::{Registry, RegistryError};
 pub use result::Checkpoint;
 
 #[cfg(any(test, feature = "test-app"))]

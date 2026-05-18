@@ -8,15 +8,14 @@ use std::{fmt, io::Write};
 
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     output::Output,
     utils::{
-        datatype::{DataType, Type},
+        datatype::AsDataType,
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input,
+    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -53,17 +52,17 @@ where
 
 impl<T> Benchmark for DiskIndex<T>
 where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
+    T: VectorRepr + AsDataType,
 {
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
 
     fn try_match(&self, input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
-        match &input.source {
-            DiskIndexSource::Load(load) => Type::<T>::try_match(&load.data_type),
-            DiskIndexSource::Build(build) => Type::<T>::try_match(&build.data_type),
-        }
+        let data_type = match &input.source {
+            DiskIndexSource::Load(load) => load.data_type,
+            DiskIndexSource::Build(build) => build.data_type,
+        };
+        crate::utils::match_data_type::<T>(data_type)
     }
 
     fn description(
@@ -72,11 +71,14 @@ where
         input: Option<&DiskIndexOperation>,
     ) -> std::fmt::Result {
         match input {
-            Some(arg) => match &arg.source {
-                DiskIndexSource::Load(load) => Type::<T>::description(f, Some(&load.data_type)),
-                DiskIndexSource::Build(build) => Type::<T>::description(f, Some(&build.data_type)),
-            },
-            None => Type::<T>::description(f, None::<&DataType>),
+            Some(arg) => {
+                let desc = match &arg.source {
+                    DiskIndexSource::Load(load) => T::describe(load.data_type),
+                    DiskIndexSource::Build(build) => T::describe(build.data_type),
+                };
+                write!(f, "{}", desc)
+            }
+            None => write!(f, "{}", T::DATA_TYPE),
         }
     }
 
@@ -121,11 +123,12 @@ where
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register_regression("disk-index-f32", DiskIndex::<f32>::new());
-    benchmarks.register_regression("disk-index-f16", DiskIndex::<f16>::new());
-    benchmarks.register_regression("disk-index-u8", DiskIndex::<u8>::new());
-    benchmarks.register_regression("disk-index-i8", DiskIndex::<i8>::new());
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
+    registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
+    registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;
+    registry.register_regression("disk-index-i8", DiskIndex::<i8>::new())?;
+    Ok(())
 }
 
 /////////////////////////
@@ -297,8 +300,7 @@ fn check_metric(
 
 impl<T> Regression for DiskIndex<T>
 where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
+    T: VectorRepr + AsDataType,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;

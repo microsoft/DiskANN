@@ -19,18 +19,6 @@ impl QueryComputer<half::f16> {
     pub fn new(query: MatRef<'_, Standard<half::f16>>) -> Self {
         diskann_wide::arch::dispatch1_no_features(BuildComputer, query)
     }
-
-    /// Build an f16 query computer pinned to a specific architecture token.
-    ///
-    /// See [`QueryComputer::<f32>::from_arch`] for the rationale and usage.
-    pub fn from_arch<A>(query: MatRef<'_, Standard<half::f16>>, arch: A) -> Self
-    where
-        A: Architecture,
-        BuildComputer:
-            for<'a> diskann_wide::arch::Target1<A, Self, MatRef<'a, Standard<half::f16>>>,
-    {
-        arch.run1(BuildComputer, query)
-    }
 }
 
 impl<A, const GROUP: usize> DynQueryComputer<half::f16>
@@ -63,9 +51,8 @@ where
     }
 }
 
-/// Architecture-dispatch target for `QueryComputer::<half::f16>` construction.
 #[derive(Debug, Clone, Copy)]
-pub struct BuildComputer;
+pub(super) struct BuildComputer;
 
 impl diskann_wide::arch::Target1<Scalar, QueryComputer<half::f16>, MatRef<'_, Standard<half::f16>>>
     for BuildComputer

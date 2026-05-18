@@ -5,10 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    dispatcher::{FailureScore, MatchScore},
-    Any, Checkpoint, Input, Output,
-};
+use crate::{Any, Checkpoint, Input, Output};
 
 /// A registered benchmark.
 ///
@@ -29,7 +26,7 @@ pub trait Benchmark: 'static {
     ///
     /// In the case of ties, the winner is chosen using an unspecified tie-breaking procedure.
     ///
-    /// On failure, returns `Err(FailureScore)`. In the [`crate::registry::Benchmarks`]
+    /// On failure, returns `Err(FailureScore)`. In the [`crate::Registry`]
     /// registry, [`FailureScore`]s will be used to rank the "nearest misses". Implementations
     /// are encouraged to generate ranked [`FailureScore`]s to assist in user level debugging.
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore>;
@@ -60,6 +57,31 @@ pub trait Benchmark: 'static {
     ) -> anyhow::Result<Self::Output>;
 }
 
+/// Successful matches from [`Benchmark::try_match`] will return `MatchScores`.
+///
+/// A lower numerical value indicates a better match for purposes of overload resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MatchScore(pub u32);
+
+impl std::fmt::Display for MatchScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "success ({})", self.0)
+    }
+}
+
+/// Successful matches from [`Benchmark::try_match`] will return `FailureScores`.
+///
+/// A lower numerical value indicates a better match, which can help when compiling a
+/// list of considered and rejected candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FailureScore(pub u32);
+
+impl std::fmt::Display for FailureScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "fail ({})", self.0)
+    }
+}
+
 /// A refinement of [`Benchmark`], that supports before/after comparison of generated results.
 ///
 /// Benchmarks are associated with a "tolerance" input, which may contain runtime values
@@ -68,7 +90,7 @@ pub trait Benchmark: 'static {
 /// The semantics of pass or failure are left solely to the discretion of the [`Regression`]
 /// implementation.
 ///
-/// See: [`register_regression`](crate::registry::Benchmarks::register_regression).
+/// See: [`register_regression`](crate::Registry::register_regression).
 pub trait Regression: Benchmark<Output: for<'a> Deserialize<'a>> {
     /// The tolerance [`Input`] associated with this regression check.
     type Tolerances: Input + 'static;

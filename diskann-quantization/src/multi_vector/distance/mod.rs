@@ -50,10 +50,10 @@
 //! ```
 
 mod fallback;
-pub mod kernels;
+mod kernels;
 mod max_sim;
 mod query_computer;
 
 pub use fallback::QueryMatRef;
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use query_computer::{DynQueryComputer, QueryComputer};
+pub use query_computer::QueryComputer;

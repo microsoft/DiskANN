@@ -19,20 +19,6 @@ impl QueryComputer<f32> {
     pub fn new(query: MatRef<'_, Standard<f32>>) -> Self {
         diskann_wide::arch::dispatch1_no_features(BuildComputer, query)
     }
-
-    /// Build an f32 query computer pinned to a specific architecture token.
-    ///
-    /// The caller obtains the token via `Scalar::new()` (always available)
-    /// or `V3::new_checked()` / `V4::new_checked()` / `Neon::new_checked()`
-    /// (which check CPU support). Use this constructor to A/B compare kernels
-    /// across ISAs on the same machine.
-    pub fn from_arch<A>(query: MatRef<'_, Standard<f32>>, arch: A) -> Self
-    where
-        A: Architecture,
-        BuildComputer: for<'a> diskann_wide::arch::Target1<A, Self, MatRef<'a, Standard<f32>>>,
-    {
-        arch.run1(BuildComputer, query)
-    }
 }
 
 impl<A, const GROUP: usize> DynQueryComputer<f32> for Prepared<A, BlockTransposed<f32, GROUP>>
@@ -64,9 +50,8 @@ where
     }
 }
 
-/// Architecture-dispatch target for `QueryComputer::<f32>` construction.
 #[derive(Debug, Clone, Copy)]
-pub struct BuildComputer;
+pub(super) struct BuildComputer;
 
 impl diskann_wide::arch::Target1<Scalar, QueryComputer<f32>, MatRef<'_, Standard<f32>>>
     for BuildComputer

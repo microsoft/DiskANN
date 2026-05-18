@@ -3,18 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 // Create a stub-module if the "scalar-quantization" feature is disabled.
 crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOperation);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
         use crate::backend::index::search::plugins::Topk;
 
         // NOTE: This benchmark is heavily monomorphized. Each `(NBITS, T)` pair
-        // generates a full `Benchmark` impl via the `impl_sq_build!` macro in `mod imp`,
+        // generates a full `Benchmark` impl/build path for
+        // `ScalarQuantized<NBITS, T>` via the `impl_sq_build!` macro in `mod imp`,
         // which materially impacts compile time. We intentionally keep the registered
         // set minimal (`f32` at 1, 4, and 8 bits) to cover the common cases used by
         // `example/scalar.json`.
@@ -32,20 +33,22 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         benchmarks.register(
             "graph-index-sq-8-bit-f32",
             imp::ScalarQuantized::<8, f32>::new().search(Topk),
-        );
+        )?;
         benchmarks.register(
             "graph-index-sq-4-bit-f32",
             imp::ScalarQuantized::<4, f32>::new().search(Topk),
-        );
+        )?;
         benchmarks.register(
             "graph-index-sq-1-bit-f32",
             imp::ScalarQuantized::<1, f32>::new().search(Topk),
-        );
+        )?;
     }
 
     // Stub implementation
     #[cfg(not(feature = "scalar-quantization"))]
-    imp::register("graph-index-sq", benchmarks);
+    imp::register("graph-index-sq", benchmarks)?;
+
+    Ok(())
 }
 
 #[cfg(feature = "scalar-quantization")]
@@ -55,8 +58,8 @@ mod imp {
     use anyhow::Context;
     use diskann::utils::VectorRepr;
     use diskann_benchmark_runner::{
-        dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
-        utils::{datatype, MicroSeconds},
+        benchmark::{FailureScore, MatchScore},
+        utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use diskann_providers::{
@@ -148,9 +151,7 @@ mod imp {
                         }
                     }
 
-                    if datatype::Type::<$T>::try_match(input.index_operation.source.data_type())
-                        .is_err()
-                    {
+                    if !<$T>::is_match(*input.index_operation.source.data_type()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -183,7 +184,7 @@ mod imp {
                             writeln!(
                                 f,
                                 "- Requires `{}` data",
-                                Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                <$T>::DATA_TYPE,
                             )?;
                             writeln!(f, "- Implements `squared_l2` or `inner_product` distance",)?;
                             writeln!(f, "- Does not support multi-insert")?;
@@ -199,12 +200,12 @@ mod imp {
                                 )?;
                             }
 
-                            let data_type = input.index_operation.source.data_type();
-                            if datatype::Type::<$T>::try_match(data_type).is_err() {
+                            let data_type = *input.index_operation.source.data_type();
+                            if !<$T>::is_match(data_type) {
                                 writeln!(
                                     f,
                                     "- Only `{}` data type is supported. Instead, got {}",
-                                    Description::<datatype::DataType, datatype::Type<$T>>::new(),
+                                    <$T>::DATA_TYPE,
                                     data_type
                                 )?;
                             }

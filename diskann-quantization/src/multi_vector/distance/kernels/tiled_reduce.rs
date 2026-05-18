@@ -89,7 +89,7 @@ impl FullReduce {
 /// * `b_ptr` must be valid for `b_nrows * k` elements of `BElem`.
 /// * `scratch` must have length ≥ `a_padded_nrows` and be initialized by caller.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn tiled_reduce<A, K, LA, LB>(
+pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
     arch: A,
     ca: &LA,
     cb: &LB,
@@ -343,7 +343,7 @@ mod tests {
         let b = vec![0.0f32; 2 * k];
         let mut scratch = vec![f32::MIN; 16];
 
-        let ca = layouts::BlockTransposedLayout::<f32, 8>::new();
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
         let cb = layouts::RowMajor::<f32>::new();
 
         // SAFETY: pointers and scratch are correctly sized; we expect a panic.
@@ -373,7 +373,7 @@ mod tests {
         let b = Vec::<f32>::new();
         let mut scratch = vec![f32::MIN; a_rows];
 
-        let ca = layouts::BlockTransposedLayout::<f32, 8>::new();
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
         let cb = layouts::RowMajor::<f32>::new();
 
         // SAFETY: k == 0 so no elements are read; pointers are never dereferenced.
@@ -402,7 +402,7 @@ mod tests {
         let a_rows = 8;
         let mut scratch = vec![f32::MIN; a_rows];
 
-        let ca = layouts::BlockTransposedLayout::<f32, 8>::new();
+        let ca = layouts::BlockTransposed::<f32, 8>::new();
         let cb = layouts::RowMajor::<f32>::new();
 
         // SAFETY: k == 0, b_nrows == 0; no elements read.
@@ -516,7 +516,7 @@ mod tests {
         A: Architecture,
         T: Copy + Default,
         F32Kernel<GROUP>: Kernel<A>,
-        layouts::BlockTransposedLayout<T, GROUP>:
+        layouts::BlockTransposed<T, GROUP>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + Layout<Element = T>,
         layouts::RowMajor<T>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
@@ -698,7 +698,7 @@ mod tests {
         A: Architecture,
         T: Copy + Default,
         F32Kernel<GROUP>: Kernel<A>,
-        layouts::BlockTransposedLayout<T, GROUP>:
+        layouts::BlockTransposed<T, GROUP>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Left> + Layout<Element = T>,
         layouts::RowMajor<T>:
             ConvertTo<A, <F32Kernel<GROUP> as Kernel<A>>::Right> + Layout<Element = T>,
