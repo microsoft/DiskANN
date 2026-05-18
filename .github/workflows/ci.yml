@@ -487,7 +487,8 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  # LLVM IR bloat check: compare monomorphization cost against baseline
+  # LLVM IR bloat check: compare monomorphization cost against baseline.
+  # This job is not part of the required CI gate, so it won't block PR merges.
   llvm-lines:
     needs: basics
     name: LLVM Lines Regression Check
@@ -522,11 +523,11 @@ jobs:
 
       - name: Generate baseline LLVM lines
         working-directory: baseline
-        run: cargo llvm-lines --package diskann-benchmark --release --features "$DISKANN_FEATURES" | head -100 | tee ../baseline-llvm-lines.txt
+        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../baseline-llvm-lines.txt
 
       - name: Generate current LLVM lines
         working-directory: diskann_rust
-        run: cargo llvm-lines --package diskann-benchmark --release --features "$DISKANN_FEATURES" | head -100 | tee ../current-llvm-lines.txt
+        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../current-llvm-lines.txt
 
       - name: Compare LLVM lines
         run: |
@@ -534,9 +535,10 @@ jobs:
           current_total=$(awk '/\(TOTAL\)/{print $1}' current-llvm-lines.txt)
           growth=$(( (current_total - baseline_total) * 100 / baseline_total ))
 
-          if [ "$growth" -gt "$LLVM_LINES_GROWTH_THRESHOLD" ]; then
-            echo "::warning::LLVM IR grew ${growth}% ($baseline_total → $current_total lines)"
-          fi
-
           diskann_rust/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt | head -100 | tee /tmp/llvm-lines-report.txt
           cat /tmp/llvm-lines-report.txt >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$growth" -gt "$LLVM_LINES_GROWTH_THRESHOLD" ]; then
+            echo "::error::LLVM IR grew ${growth}% ($baseline_total → $current_total lines), threshold is ${LLVM_LINES_GROWTH_THRESHOLD}%"
+            exit 1
+          fi
