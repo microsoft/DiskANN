@@ -49,6 +49,12 @@
 use diskann_utils::views::Matrix;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
+#[derive(Clone, Copy)]
+struct DistanceRange {
+    min: f32,
+    max: f32,
+}
+
 pub fn determinant_diversity_post_process<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
     query: &[f32],
@@ -87,7 +93,10 @@ pub fn determinant_diversity_post_process<Id: Copy>(
             max_distance = max_distance.max(*distance);
         }
 
-        (min_distance, max_distance)
+        DistanceRange {
+            min: min_distance,
+            max: max_distance,
+        }
     };
 
     // For eta=0, the inv_sqrt_eta factor is 1.0 (greedy orthogonalization without regularization).
@@ -115,15 +124,12 @@ pub fn determinant_diversity_post_process<Id: Copy>(
 ///
 /// - `inv_sqrt_eta = 1.0`: exact greedy orthogonalization (eta=0 case)
 /// - `inv_sqrt_eta = 1/sqrt(eta)`: ridge-regularized variant for numerical stability
-///
-/// This unified implementation replaces two nearly-identical functions that only
-/// differed in whether the scale factor included the eta term.
 fn greedy_orthogonal_select<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
     k: usize,
     power: f32,
     inv_sqrt_eta: f32,
-    distance_range: (f32, f32),
+    distance_range: DistanceRange,
 ) -> Vec<(Id, f32)> {
     let n = candidates.len();
     let k = k.min(n);
@@ -217,12 +223,11 @@ fn greedy_orthogonal_select<Id: Copy>(
         .collect()
 }
 
-fn distance_to_similarity(distance: f32, distance_range: (f32, f32)) -> f32 {
-    let (min_distance, max_distance) = distance_range;
-    let span = (max_distance - min_distance).max(f32::EPSILON);
+fn distance_to_similarity(distance: f32, distance_range: DistanceRange) -> f32 {
+    let span = (distance_range.max - distance_range.min).max(f32::EPSILON);
 
     // Distances are lower-is-better in DiskANN distance semantics.
-    ((max_distance - distance) / span).max(0.0) + f32::EPSILON
+    ((distance_range.max - distance) / span).max(0.0) + f32::EPSILON
 }
 
 #[inline]
