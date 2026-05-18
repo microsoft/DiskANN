@@ -487,3 +487,56 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  # LLVM IR bloat check: compare monomorphization cost against baseline
+  llvm-lines:
+    needs: basics
+    name: LLVM Lines Regression Check
+    runs-on: ubuntu-latest
+    env:
+      LLVM_LINES_GROWTH_THRESHOLD: 5
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          path: diskann_rust
+
+      - name: Checkout baseline (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: baseline
+
+      - name: Install Rust
+        shell: bash
+        run: rustup show
+        working-directory: diskann_rust
+
+      - name: Install cargo-llvm-lines
+        run: cargo install cargo-llvm-lines --locked
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            diskann_rust -> target
+            baseline -> target
+
+      - name: Generate baseline LLVM lines
+        working-directory: baseline
+        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../baseline-llvm-lines.txt
+
+      - name: Generate current LLVM lines
+        working-directory: diskann_rust
+        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../current-llvm-lines.txt
+
+      - name: Compare LLVM lines
+        run: |
+          baseline_total=$(awk '/\(TOTAL\)/{print $1}' baseline-llvm-lines.txt)
+          current_total=$(awk '/\(TOTAL\)/{print $1}' current-llvm-lines.txt)
+          growth=$(( (current_total - baseline_total) * 100 / baseline_total ))
+
+          if [ "$growth" -gt "$LLVM_LINES_GROWTH_THRESHOLD" ]; then
+            echo "::warning::LLVM IR grew ${growth}% ($baseline_total → $current_total lines)"
+          fi
+
+          diskann_rust/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt | head -100 | tee /tmp/llvm-lines-report.txt
+          cat /tmp/llvm-lines-report.txt >> "$GITHUB_STEP_SUMMARY"
