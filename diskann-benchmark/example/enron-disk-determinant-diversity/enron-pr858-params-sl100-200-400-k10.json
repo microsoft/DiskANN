@@ -1,0 +1,60 @@
+{
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "search_phase": {
+          "recall_at": 10,
+          "vector_filters_file": null,
+          "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "num_threads": 8,
+          "beam_width": 4,
+          "distance": "cosine_normalized",
+          "is_flat_search": false,
+          "search_list": [
+            100,
+            200,
+            400
+          ],
+          "groundtruth": "groundtruth_recall_1000_query_1000.bin"
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      }
+    },
+    {
+      "type": "disk-index",
+      "content": {
+        "search_phase": {
+          "recall_at": 10,
+          "vector_filters_file": null,
+          "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "determinant_diversity_eta": 0.01,
+          "is_determinant_diversity_search": true,
+          "num_threads": 8,
+          "beam_width": 4,
+          "distance": "cosine_normalized",
+          "is_flat_search": false,
+          "determinant_diversity_power": 2.0,
+          "search_list": [
+            100,
+            200,
+            400
+          ],
+          "groundtruth": "groundtruth_recall_1000_query_1000.bin"
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      }
+    }
+  ],
+  "search_directories": [
+    "tmp/mimir-t1-email-test-enron-index"
+  ]
+}

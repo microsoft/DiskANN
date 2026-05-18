@@ -1,0 +1,1122 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": null,
+          "determinant_diversity_power": null,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": false,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": null,
+        "determinant_diversity_power": null,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": false,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 12428.875,
+            "mean_hops": 1009.377,
+            "mean_io_time": 100049.099,
+            "mean_ios": 1009.377,
+            "mean_latency": 112534.21,
+            "mean_pq_preprocess_time": 56.236,
+            "p95_latency": 130894,
+            "p999_latency": 199584,
+            "qps": 70.8797378540039,
+            "recall": 99.58000183105469,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 5434.821,
+            "mean_hops": 411.127,
+            "mean_io_time": 40424.091,
+            "mean_ios": 411.127,
+            "mean_latency": 45909.514,
+            "mean_pq_preprocess_time": 50.602,
+            "p95_latency": 59925,
+            "p999_latency": 72169,
+            "qps": 173.54261779785156,
+            "recall": 98.93000030517578,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 29.629629629629626,
+                "duration_seconds": 0.2696956,
+                "elapsed_cycles": 0.20252850651741028,
+                "peak_memory_usage": 0.2085418701171875
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 14.109011
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 5.7628506999999995
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 195.5302323296822,
+                "duration_seconds": 19.873283999999998,
+                "elapsed_cycles": 88.72303771972656,
+                "peak_memory_usage": 0.22344970703125
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.1,
+          "determinant_diversity_power": 1.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.1,
+        "determinant_diversity_power": 1.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 49424.908,
+            "mean_hops": 1009.377,
+            "mean_io_time": 164223.757,
+            "mean_ios": 1009.377,
+            "mean_latency": 213701.398,
+            "mean_pq_preprocess_time": 52.733,
+            "p95_latency": 238990,
+            "p999_latency": 415322,
+            "qps": 37.33347702026367,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 19414.349,
+            "mean_hops": 411.127,
+            "mean_io_time": 66834.072,
+            "mean_ios": 411.127,
+            "mean_latency": 86295.345,
+            "mean_pq_preprocess_time": 46.924,
+            "p95_latency": 105213,
+            "p999_latency": 199418,
+            "qps": 92.37630462646484,
+            "recall": 0.05999999865889549,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 166.23376623376623,
+                "duration_seconds": 0.0906451,
+                "elapsed_cycles": 0.19651563465595245,
+                "peak_memory_usage": 0.22344970703125
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.7859563
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.8257191
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 167.4964308890331,
+                "duration_seconds": 37.6134424,
+                "elapsed_cycles": 142.09901428222656,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.1,
+          "determinant_diversity_power": 2.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.1,
+        "determinant_diversity_power": 2.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 46714.601,
+            "mean_hops": 1009.377,
+            "mean_io_time": 165777.33,
+            "mean_ios": 1009.377,
+            "mean_latency": 212544.047,
+            "mean_pq_preprocess_time": 52.116,
+            "p95_latency": 239332,
+            "p999_latency": 294470,
+            "qps": 37.54302215576172,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 18816.776,
+            "mean_hops": 411.127,
+            "mean_io_time": 66278.372,
+            "mean_ios": 411.127,
+            "mean_latency": 85144.659,
+            "mean_pq_preprocess_time": 49.511,
+            "p95_latency": 105095,
+            "p999_latency": 123692,
+            "qps": 93.7229232788086,
+            "recall": 0.05000000074505806,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 94.11764705882352,
+                "duration_seconds": 0.0877572,
+                "elapsed_cycles": 0.1909671127796173,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.6363316
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.6702183
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 154.2254442670575,
+                "duration_seconds": 37.3088546,
+                "elapsed_cycles": 135.02981567382812,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.1,
+          "determinant_diversity_power": 3.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.1,
+        "determinant_diversity_power": 3.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 47280.867,
+            "mean_hops": 1009.377,
+            "mean_io_time": 165631.569,
+            "mean_ios": 1009.377,
+            "mean_latency": 212963.112,
+            "mean_pq_preprocess_time": 50.676,
+            "p95_latency": 241719,
+            "p999_latency": 292736,
+            "qps": 37.46052169799805,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 19051.298,
+            "mean_hops": 411.127,
+            "mean_io_time": 66335.975,
+            "mean_ios": 411.127,
+            "mean_latency": 85433.919,
+            "mean_pq_preprocess_time": 46.646,
+            "p95_latency": 104408,
+            "p999_latency": 195677,
+            "qps": 93.44596099853516,
+            "recall": 0.03999999910593033,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 87.67123287671232,
+                "duration_seconds": 0.0747295,
+                "elapsed_cycles": 0.16695070266723633,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.6951409
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.701793
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 155.47083093957278,
+                "duration_seconds": 37.398527,
+                "elapsed_cycles": 136.9313507080078,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 1.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.01,
+        "determinant_diversity_power": 1.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 46238.481,
+            "mean_hops": 1009.377,
+            "mean_io_time": 166652.486,
+            "mean_ios": 1009.377,
+            "mean_latency": 212939.066,
+            "mean_pq_preprocess_time": 48.099,
+            "p95_latency": 242323,
+            "p999_latency": 298663,
+            "qps": 37.472408294677734,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 18638.326,
+            "mean_hops": 411.127,
+            "mean_io_time": 66272.756,
+            "mean_ios": 411.127,
+            "mean_latency": 84958.824,
+            "mean_pq_preprocess_time": 47.742,
+            "p95_latency": 103450,
+            "p999_latency": 115106,
+            "qps": 93.83534240722656,
+            "recall": 0.05999999865889549,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 84.21052631578947,
+                "duration_seconds": 0.0708755,
+                "elapsed_cycles": 0.15929193794727325,
+                "peak_memory_usage": 0.2704353332519531
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.686505
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.6573642
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 149.2206297729888,
+                "duration_seconds": 37.3456842,
+                "elapsed_cycles": 128.4000701904297,
+                "peak_memory_usage": 0.2727813720703125
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 2.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.01,
+        "determinant_diversity_power": 2.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 44849.205,
+            "mean_hops": 1009.377,
+            "mean_io_time": 166288.71,
+            "mean_ios": 1009.377,
+            "mean_latency": 211185.65,
+            "mean_pq_preprocess_time": 47.735,
+            "p95_latency": 236200,
+            "p999_latency": 258579,
+            "qps": 37.78318405151367,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 18212.824,
+            "mean_hops": 411.127,
+            "mean_io_time": 67985.625,
+            "mean_ios": 411.127,
+            "mean_latency": 86242.058,
+            "mean_pq_preprocess_time": 43.609,
+            "p95_latency": 107121,
+            "p999_latency": 158488,
+            "qps": 92.5982894897461,
+            "recall": 0.05000000074505806,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 97.5609756097561,
+                "duration_seconds": 0.0732679,
+                "elapsed_cycles": 0.1633572280406952,
+                "peak_memory_usage": 0.2727813720703125
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.4670043
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.8000284
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 150.00131010087776,
+                "duration_seconds": 37.268206,
+                "elapsed_cycles": 125.33067321777344,
+                "peak_memory_usage": 0.2727813720703125
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 3.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.01,
+        "determinant_diversity_power": 3.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 45405.218,
+            "mean_hops": 1009.377,
+            "mean_io_time": 165753.219,
+            "mean_ios": 1009.377,
+            "mean_latency": 211205.467,
+            "mean_pq_preprocess_time": 47.03,
+            "p95_latency": 236375,
+            "p999_latency": 340779,
+            "qps": 37.77827072143555,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 19581.794,
+            "mean_hops": 411.127,
+            "mean_io_time": 65294.391,
+            "mean_ios": 411.127,
+            "mean_latency": 84924.793,
+            "mean_pq_preprocess_time": 48.608,
+            "p95_latency": 104795,
+            "p999_latency": 121291,
+            "qps": 93.91568756103516,
+            "recall": 0.03999999910593033,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 73.84615384615385,
+                "duration_seconds": 0.0696658,
+                "elapsed_cycles": 0.15718625485897064,
+                "peak_memory_usage": 0.2727813720703125
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.4704517
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.6490216
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 148.32122934427957,
+                "duration_seconds": 37.120983,
+                "elapsed_cycles": 126.1123275756836,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.001,
+          "determinant_diversity_power": 1.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.001,
+        "determinant_diversity_power": 1.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 48480.884,
+            "mean_hops": 1009.377,
+            "mean_io_time": 170157.408,
+            "mean_ios": 1009.377,
+            "mean_latency": 218685.85,
+            "mean_pq_preprocess_time": 47.558,
+            "p95_latency": 251624,
+            "p999_latency": 304588,
+            "qps": 36.48602294921875,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 19088.31,
+            "mean_hops": 411.127,
+            "mean_io_time": 68708.824,
+            "mean_ios": 411.127,
+            "mean_latency": 87843.28,
+            "mean_pq_preprocess_time": 46.146,
+            "p95_latency": 107413,
+            "p999_latency": 197486,
+            "qps": 90.73006439208984,
+            "recall": 0.05999999865889549,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 128.57142857142858,
+                "duration_seconds": 0.0942696,
+                "elapsed_cycles": 0.2012949436903,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 27.4080308
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 11.0221338
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 149.83100810652843,
+                "duration_seconds": 38.4320381,
+                "elapsed_cycles": 132.7156524658203,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.001,
+          "determinant_diversity_power": 2.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.001,
+        "determinant_diversity_power": 2.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 47235.747,
+            "mean_hops": 1009.377,
+            "mean_io_time": 164220.204,
+            "mean_ios": 1009.377,
+            "mean_latency": 211503.575,
+            "mean_pq_preprocess_time": 47.624,
+            "p95_latency": 238402,
+            "p999_latency": 255293,
+            "qps": 37.747493743896484,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 18697.256,
+            "mean_hops": 411.127,
+            "mean_io_time": 66673.82,
+            "mean_ios": 411.127,
+            "mean_latency": 85416.758,
+            "mean_pq_preprocess_time": 45.682,
+            "p95_latency": 105284,
+            "p999_latency": 138607,
+            "qps": 93.39684295654297,
+            "recall": 0.05000000074505806,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 66.66666666666666,
+                "duration_seconds": 0.079056,
+                "elapsed_cycles": 0.17749276757240295,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.4921005
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.7079349
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 150.94894343089643,
+                "duration_seconds": 37.2016577,
+                "elapsed_cycles": 130.5212860107422,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "determinant_diversity_eta": 0.001,
+          "determinant_diversity_power": 3.0,
+          "distance": "cosine_normalized",
+          "groundtruth": "tmp/mimir-t1-email-test-enron-index\\groundtruth_recall_1000_query_1000.bin",
+          "is_determinant_diversity_search": true,
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 8,
+          "queries": "tmp/mimir-t1-email-test-enron-index\\query_vector_normalized_dim_384_fp16_top_1000.bin",
+          "recall_at": 10,
+          "search_io_limit": null,
+          "search_list": [
+            1000,
+            400
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "data_type": "float16",
+          "disk-index-source": "Load",
+          "load_path": "tmp/mimir-t1-email-test-enron-index/normalized_dim_384_vector_fp16_1087932_vectors_r_59_l_100"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "beam_width": 4,
+        "determinant_diversity_eta": 0.001,
+        "determinant_diversity_power": 3.0,
+        "distance": "cosine_normalized",
+        "is_determinant_diversity_search": true,
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 8,
+        "recall_at": 10,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 28743.497,
+            "mean_cpu_time": 45424.961,
+            "mean_hops": 1009.377,
+            "mean_io_time": 165596.72,
+            "mean_ios": 1009.377,
+            "mean_latency": 211065.664,
+            "mean_pq_preprocess_time": 43.983,
+            "p95_latency": 237736,
+            "p999_latency": 267020,
+            "qps": 37.838008880615234,
+            "recall": 0.0,
+            "search_l": 1000
+          },
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 13169.165,
+            "mean_cpu_time": 18937.871,
+            "mean_hops": 411.127,
+            "mean_io_time": 66000.987,
+            "mean_ios": 411.127,
+            "mean_latency": 84984.843,
+            "mean_pq_preprocess_time": 45.985,
+            "p95_latency": 104283,
+            "p999_latency": 113805,
+            "qps": 93.69429016113281,
+            "recall": 0.03999999910593033,
+            "search_l": 400
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 105.26315789473684,
+                "duration_seconds": 0.0734465,
+                "elapsed_cycles": 0.1657143086194992,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 26.4288552
+              },
+              "span_name": "search-with-L=1000-bw=4"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.6735702
+              },
+              "span_name": "search-with-L=400-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 150.5540494301582,
+                "duration_seconds": 37.103684,
+                "elapsed_cycles": 125.52998352050781,
+                "peak_memory_usage": 0.272796630859375
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  }
+]
