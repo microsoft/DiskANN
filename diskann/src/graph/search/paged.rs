@@ -116,11 +116,7 @@ where
             let computed_result_count = candidates.len();
             self.computed_result.clear();
             self.computed_result.append(&mut candidates);
-
             self.next_result_index = 0;
-            if computed_result_count != self.search_param_l {
-                self.computed_result.truncate(computed_result_count);
-            }
 
             let remaining_need = k - result.len();
             let leftover = std::cmp::min(remaining_need, computed_result_count);
