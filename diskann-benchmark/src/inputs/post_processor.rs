@@ -4,6 +4,7 @@
  */
 
 use diskann_benchmark_runner::{CheckDeserialization, Checker};
+use diskann_providers::post_processor::DeterminantDiversityParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,12 +17,8 @@ impl CheckDeserialization for TopkPostProcessor {
     fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
             TopkPostProcessor::DeterminantDiversity { power, eta } => {
-                if *power <= 0.0 {
-                    anyhow::bail!("determinant-diversity power must be > 0.0, got: {}", power);
-                }
-                if *eta < 0.0 {
-                    anyhow::bail!("determinant-diversity eta must be >= 0.0, got: {}", eta);
-                }
+                DeterminantDiversityParams::new(*power, *eta)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Ok(())
             }
         }
