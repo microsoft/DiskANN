@@ -6,6 +6,8 @@
 # Runs main vs main at 9 AM UTC every day to detect environment noise.
 # If any threshold is breached, a GitHub issue is created to notify @microsoft/diskann-admin.
 # Can also be triggered manually for debugging.
+#
+# For more details see .github/docs/disk-benchmarks-aa.md
 
 name: Disk Benchmarks (A/A)
 
@@ -102,14 +104,39 @@ jobs:
             diskann_rust/target/tmp/${{ matrix.dataset }}_baseline.json
           retention-days: 30
 
-  # Notify diskann-admin on A/A failure
+  # Notify diskann-disk-maintainers on A/A failure — but only when the failure
+  # rate exceeds 5% over the last 20 runs. Our reliability promise is 95%, so
+  # 1 failure in 20 runs is expected and should not trigger a notification.
   notify-on-failure:
     name: Notify on A/A Failure
     needs: [aa-benchmark]
     runs-on: ubuntu-latest
     if: failure()
     steps:
+      - name: Check recent failure rate
+        id: check-rate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'disk-benchmarks-aa.yml',
+              per_page: 20,
+              status: 'completed',
+            });
+            const total = runs.workflow_runs.length;
+            const failures = runs.workflow_runs.filter(r => r.conclusion === 'failure').length;
+            const failureRate = total > 0 ? failures / total : 0;
+            console.log(`Recent A/A runs: ${total}, failures: ${failures}, rate: ${(failureRate * 100).toFixed(1)}%`);
+            // Only notify if failure rate exceeds our 5% reliability budget
+            core.setOutput('should_notify', failureRate > 0.05 ? 'true' : 'false');
+            core.setOutput('failure_rate', `${(failureRate * 100).toFixed(1)}%`);
+            core.setOutput('failures', `${failures}`);
+            core.setOutput('total', `${total}`);
+
       - name: Create GitHub issue for A/A failure
+        if: steps.check-rate.outputs.should_notify == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -126,6 +153,7 @@ jobs:
                 `This indicates environment noise exceeded the configured thresholds.`,
                 ``,
                 `**Run:** ${runUrl}`,
+                `**Recent failure rate:** ${{ steps.check-rate.outputs.failures }}/${{ steps.check-rate.outputs.total }} (${{ steps.check-rate.outputs.failure_rate }}) — exceeds 5% reliability budget`,
                 ``,
                 `Please review the benchmark artifacts and determine if thresholds need tuning`,
                 `or if there is a runner environment issue.`,

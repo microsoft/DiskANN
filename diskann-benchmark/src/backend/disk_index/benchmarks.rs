@@ -8,15 +8,14 @@ use std::{fmt, io::Write};
 
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     output::Output,
     utils::{
-        datatype::{DataType, Type},
+        datatype::AsDataType,
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input,
+    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -30,8 +29,7 @@ use crate::{
 };
 
 /// Disk Index
-struct DiskIndex<'a, T> {
-    input: &'a DiskIndexOperation,
+struct DiskIndex<T> {
     _vector_type: std::marker::PhantomData<T>,
 }
 
@@ -41,24 +39,58 @@ pub(super) struct DiskIndexStats {
     pub(super) search: DiskSearchStats,
 }
 
-impl<'a, T> DiskIndex<'a, T>
+impl<T> DiskIndex<T>
 where
     T: VectorRepr,
 {
-    fn new(input: &'a DiskIndexOperation) -> Self {
+    fn new() -> Self {
         Self {
-            input,
             _vector_type: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> Benchmark for DiskIndex<T>
+where
+    T: VectorRepr + AsDataType,
+{
+    type Input = DiskIndexOperation;
+    type Output = DiskIndexStats;
+
+    fn try_match(&self, input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
+        let data_type = match &input.source {
+            DiskIndexSource::Load(load) => load.data_type,
+            DiskIndexSource::Build(build) => build.data_type,
+        };
+        crate::utils::match_data_type::<T>(data_type)
+    }
+
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&DiskIndexOperation>,
+    ) -> std::fmt::Result {
+        match input {
+            Some(arg) => {
+                let desc = match &arg.source {
+                    DiskIndexSource::Load(load) => T::describe(load.data_type),
+                    DiskIndexSource::Build(build) => T::describe(build.data_type),
+                };
+                write!(f, "{}", desc)
+            }
+            None => write!(f, "{}", T::DATA_TYPE),
         }
     }
 
     fn run(
         &self,
+        input: &DiskIndexOperation,
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
-    ) -> Result<DiskIndexStats, anyhow::Error> {
-        writeln!(output, "{}", self.input.source)?;
-        let (build_stats, index_load) = match &self.input.source {
+    ) -> anyhow::Result<DiskIndexStats> {
+        writeln!(output, "{}", input.source)?;
+
+        let (build_stats, index_load) = match &input.source {
             DiskIndexSource::Load(load) => Ok((None, (*load).clone())),
             DiskIndexSource::Build(build) => build_disk_index::<T, _>(&FileStorageProvider, build)
                 .map(|stats| {
@@ -75,9 +107,9 @@ where
             writeln!(output, "{}", build_stats)?;
         }
 
-        writeln!(output, "{}", self.input.search_phase)?;
+        writeln!(output, "{}", input.search_phase)?;
         let search_stats =
-            search_disk_index::<T, _>(&index_load, &self.input.search_phase, &FileStorageProvider)?;
+            search_disk_index::<T, _>(&index_load, &input.search_phase, &FileStorageProvider)?;
         writeln!(output, "{}", search_stats)?;
 
         Ok(DiskIndexStats {
@@ -87,52 +119,16 @@ where
     }
 }
 
-impl<T> Benchmark for DiskIndex<'static, T>
-where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
-{
-    type Input = DiskIndexOperation;
-    type Output = DiskIndexStats;
-
-    fn try_match(input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
-        match &input.source {
-            DiskIndexSource::Load(load) => Type::<T>::try_match(&load.data_type),
-            DiskIndexSource::Build(build) => Type::<T>::try_match(&build.data_type),
-        }
-    }
-
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DiskIndexOperation>,
-    ) -> std::fmt::Result {
-        match input {
-            Some(arg) => match &arg.source {
-                DiskIndexSource::Load(load) => Type::<T>::description(f, Some(&load.data_type)),
-                DiskIndexSource::Build(build) => Type::<T>::description(f, Some(&build.data_type)),
-            },
-            None => Type::<T>::description(f, None::<&DataType>),
-        }
-    }
-
-    fn run(
-        input: &DiskIndexOperation,
-        checkpoint: Checkpoint<'_>,
-        output: &mut dyn Output,
-    ) -> anyhow::Result<DiskIndexStats> {
-        DiskIndex::<T>::new(input).run(checkpoint, output)
-    }
-}
-
 ////////////////////////////
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register_regression::<DiskIndex<'static, f32>>("disk-index-f32");
-    benchmarks.register_regression::<DiskIndex<'static, f16>>("disk-index-f16");
-    benchmarks.register_regression::<DiskIndex<'static, u8>>("disk-index-u8");
-    benchmarks.register_regression::<DiskIndex<'static, i8>>("disk-index-i8");
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
+    registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
+    registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;
+    registry.register_regression("disk-index-i8", DiskIndex::<i8>::new())?;
+    Ok(())
 }
 
 /////////////////////////
@@ -302,16 +298,16 @@ fn check_metric(
     }
 }
 
-impl<T> Regression for DiskIndex<'static, T>
+impl<T> Regression for DiskIndex<T>
 where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
+    T: VectorRepr + AsDataType,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;
     type Fail = DiskIndexCheckResult;
 
     fn check(
+        &self,
         tolerances: &DiskIndexTolerance,
         _input: &DiskIndexOperation,
         before: &DiskIndexStats,

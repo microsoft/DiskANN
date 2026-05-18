@@ -5,17 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    dispatcher::{FailureScore, MatchScore},
-    Any, Checkpoint, Input, Output,
-};
+use crate::{Any, Checkpoint, Input, Output};
 
 /// A registered benchmark.
 ///
 /// Benchmarks consist of an [`Input`] and a corresponding serialized `Output`. Inputs will
 /// first be validated with the benchmark using [`try_match`](Self::try_match). Only
 /// successful matches will be passed to [`run`](Self::run).
-pub trait Benchmark {
+pub trait Benchmark: 'static {
     /// The [`Input`] type this benchmark matches against.
     type Input: Input + 'static;
 
@@ -29,10 +26,10 @@ pub trait Benchmark {
     ///
     /// In the case of ties, the winner is chosen using an unspecified tie-breaking procedure.
     ///
-    /// On failure, returns `Err(FailureScore)`. In the [`crate::registry::Benchmarks`]
+    /// On failure, returns `Err(FailureScore)`. In the [`crate::Registry`]
     /// registry, [`FailureScore`]s will be used to rank the "nearest misses". Implementations
     /// are encouraged to generate ranked [`FailureScore`]s to assist in user level debugging.
-    fn try_match(input: &Self::Input) -> Result<MatchScore, FailureScore>;
+    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore>;
 
     /// Return descriptive information about the benchmark.
     ///
@@ -40,6 +37,7 @@ pub trait Benchmark {
     /// If `input` is `Some`, and is an unsuccessful match, diagnostic information about what
     /// was expected should be generated to help users.
     fn description(
+        &self,
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&Self::Input>,
     ) -> std::fmt::Result;
@@ -52,10 +50,36 @@ pub trait Benchmark {
     ///
     /// Implementors may assume that [`Self::try_match`] returned `Ok` on `input`.
     fn run(
+        &self,
         input: &Self::Input,
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output>;
+}
+
+/// Successful matches from [`Benchmark::try_match`] will return `MatchScores`.
+///
+/// A lower numerical value indicates a better match for purposes of overload resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MatchScore(pub u32);
+
+impl std::fmt::Display for MatchScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "success ({})", self.0)
+    }
+}
+
+/// Successful matches from [`Benchmark::try_match`] will return `FailureScores`.
+///
+/// A lower numerical value indicates a better match, which can help when compiling a
+/// list of considered and rejected candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FailureScore(pub u32);
+
+impl std::fmt::Display for FailureScore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "fail ({})", self.0)
+    }
 }
 
 /// A refinement of [`Benchmark`], that supports before/after comparison of generated results.
@@ -66,7 +90,7 @@ pub trait Benchmark {
 /// The semantics of pass or failure are left solely to the discretion of the [`Regression`]
 /// implementation.
 ///
-/// See: [`register_regression`](crate::registry::Benchmarks::register_regression).
+/// See: [`register_regression`](crate::Registry::register_regression).
 pub trait Regression: Benchmark<Output: for<'a> Deserialize<'a>> {
     /// The tolerance [`Input`] associated with this regression check.
     type Tolerances: Input + 'static;
@@ -88,6 +112,7 @@ pub trait Regression: Benchmark<Output: for<'a> Deserialize<'a>> {
     /// stream. Instead, all diagnostics should be encoded in the returned [`PassFail`] type
     /// for reporting upstream.
     fn check(
+        &self,
         tolerances: &Self::Tolerances,
         input: &Self::Input,
         before: &Self::Output,
@@ -108,8 +133,6 @@ pub enum PassFail<P, F> {
 
 pub(crate) mod internal {
     use super::*;
-
-    use std::marker::PhantomData;
 
     use anyhow::Context;
     use thiserror::Error;
@@ -176,38 +199,32 @@ pub(crate) mod internal {
         }
     }
 
-    pub(crate) trait AsRegression {
-        fn as_regression(&self) -> Option<&dyn Regression>;
+    pub(crate) trait AsRegression<T> {
+        fn as_regression(benchmark: &T) -> Option<&dyn Regression>;
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy)]
     pub(crate) struct NoRegression;
 
-    impl AsRegression for NoRegression {
-        fn as_regression(&self) -> Option<&dyn Regression> {
+    impl<T> AsRegression<T> for NoRegression {
+        fn as_regression(_benchmark: &T) -> Option<&dyn Regression> {
             None
         }
     }
 
     #[derive(Debug, Clone, Copy)]
-    pub(crate) struct WithRegression<T>(PhantomData<T>);
+    pub(crate) struct WithRegression;
 
-    impl<T> WithRegression<T> {
-        pub(crate) const fn new() -> Self {
-            Self(PhantomData)
-        }
-    }
-
-    impl<T> AsRegression for WithRegression<T>
+    impl<T> AsRegression<T> for WithRegression
     where
         T: super::Regression,
     {
-        fn as_regression(&self) -> Option<&dyn Regression> {
-            Some(self)
+        fn as_regression(benchmark: &T) -> Option<&dyn Regression> {
+            Some(benchmark)
         }
     }
 
-    impl<T> Regression for WithRegression<T>
+    impl<T> Regression for T
     where
         T: super::Regression,
     {
@@ -242,7 +259,7 @@ pub(crate) mod internal {
             let after = T::Output::deserialize(after)
                 .map_err(|err| DeserializationError::new(Kind::After, err))?;
 
-            let passfail = match T::check(tolerance, input, &before, &after)? {
+            let passfail = match self.check(tolerance, input, &before, &after)? {
                 PassFail::Pass(pass) => PassFail::Pass(Checked::new(pass)?),
                 PassFail::Fail(fail) => PassFail::Fail(Checked::new(fail)?),
             };
@@ -253,21 +270,15 @@ pub(crate) mod internal {
 
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct Wrapper<T, R = NoRegression> {
-        regression: R,
-        _type: PhantomData<T>,
-    }
-
-    impl<T> Wrapper<T, NoRegression> {
-        pub(crate) const fn new() -> Self {
-            Self::new_with(NoRegression)
-        }
+        benchmark: T,
+        _regression: R,
     }
 
     impl<T, R> Wrapper<T, R> {
-        pub(crate) const fn new_with(regression: R) -> Self {
+        pub(crate) const fn new(benchmark: T, regression: R) -> Self {
             Self {
-                regression,
-                _type: PhantomData,
+                benchmark,
+                _regression: regression,
             }
         }
     }
@@ -278,11 +289,11 @@ pub(crate) mod internal {
     impl<T, R> Benchmark for Wrapper<T, R>
     where
         T: super::Benchmark,
-        R: AsRegression,
+        R: AsRegression<T>,
     {
         fn try_match(&self, input: &Any) -> Result<MatchScore, FailureScore> {
             if let Some(cast) = input.downcast_ref::<T::Input>() {
-                T::try_match(cast)
+                self.benchmark.try_match(cast)
             } else {
                 Err(MATCH_FAIL)
             }
@@ -295,7 +306,7 @@ pub(crate) mod internal {
         ) -> std::fmt::Result {
             match input {
                 Some(input) => match input.downcast_ref::<T::Input>() {
-                    Some(cast) => T::description(f, Some(cast)),
+                    Some(cast) => self.benchmark.description(f, Some(cast)),
                     None => write!(
                         f,
                         "expected tag \"{}\" - instead got \"{}\"",
@@ -305,7 +316,7 @@ pub(crate) mod internal {
                 },
                 None => {
                     writeln!(f, "tag \"{}\"", <T::Input as Input>::tag())?;
-                    T::description(f, None)
+                    self.benchmark.description(f, None)
                 }
             }
         }
@@ -318,7 +329,7 @@ pub(crate) mod internal {
         ) -> anyhow::Result<serde_json::Value> {
             match input.downcast_ref::<T::Input>() {
                 Some(input) => {
-                    let result = T::run(input, checkpoint, output)?;
+                    let result = self.benchmark.run(input, checkpoint, output)?;
                     Ok(serde_json::to_value(result)?)
                 }
                 None => Err(BadDownCast::new(T::Input::tag(), input.tag()).into()),
@@ -327,7 +338,7 @@ pub(crate) mod internal {
 
         // Extensions
         fn as_regression(&self) -> Option<&dyn Regression> {
-            self.regression.as_regression()
+            R::as_regression(&self.benchmark)
         }
     }
 

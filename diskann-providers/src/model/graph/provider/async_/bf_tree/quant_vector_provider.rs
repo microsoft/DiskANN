@@ -9,12 +9,9 @@ use std::sync::Arc;
 
 use bf_tree::{BfTree, Config};
 use bytemuck::bytes_of;
-use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
-    error::IntoANNResult,
-    utils::{VectorRepr, object_pool::ObjectPool},
-};
+use diskann::{ANNError, ANNErrorKind, ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_quantization::CompressInto;
+use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
@@ -119,7 +116,7 @@ impl QuantVectorProvider {
     /// Create a query computer for the provided query vector
     pub fn query_computer<T>(&self, query: &[T]) -> ANNResult<QueryComputer>
     where
-        T: Copy + VectorRepr,
+        T: VectorRepr,
     {
         QueryComputer::new(
             self.pq_chunk_table.clone(),
@@ -273,13 +270,11 @@ mod tests {
     #[tokio::test]
     async fn common_errors() {
         let dim = 5;
-        let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
 
         let pq_chunk_table =
-            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
 
         let bf_tree_config = Config::default();
         let provider =
@@ -309,7 +304,6 @@ mod tests {
         let table = FixedChunkPQTable::new(
             dim,
             Box::new([0.0, 0.0, 1.0, 1.0, 2.0, 2.0]),
-            Box::new([0.0, 0.0]),
             Box::new([0, dim]),
         )
         .unwrap();
@@ -356,7 +350,7 @@ mod tests {
         let c = provider.query_computer(&[-0.5, -0.5]).unwrap();
         let expected: f32 = 1.5 * 1.5 * 2.0;
         assert_eq!(
-            c.evaluate_similarity(&provider.get_vector_sync(3).unwrap()),
+            c.evaluate_similarity(provider.get_vector_sync(3).unwrap().as_slice()),
             expected
         );
 
@@ -364,15 +358,15 @@ mod tests {
         let d = provider.distance_computer();
         assert_eq!(
             d.evaluate_similarity(
-                &provider.get_vector_sync(0).unwrap(),
-                &provider.get_vector_sync(3).unwrap()
+                provider.get_vector_sync(0).unwrap().as_slice(),
+                provider.get_vector_sync(3).unwrap().as_slice()
             ),
             2.0
         );
 
         let slice: &[f32] = &[-0.5, -0.5];
         assert_eq!(
-            d.evaluate_similarity(slice, &provider.get_vector_sync(3).unwrap()),
+            d.evaluate_similarity(slice, provider.get_vector_sync(3).unwrap().as_slice()),
             expected,
         );
     }
@@ -382,12 +376,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
         let dim = 2;
-        let centroid = vec![0.0; dim];
         let offsets = vec![0, dim];
         let full_pivot_data = vec![0.0; 256 * dim];
         let pq_chunk_table =
-            FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
-                .unwrap();
+            FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into()).unwrap();
 
         let bf_tree_config = Config::default();
         let provider = Arc::new(

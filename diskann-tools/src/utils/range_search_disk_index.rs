@@ -154,7 +154,7 @@ where
 
         let test_start = Instant::now();
         zipped.for_each_in_pool(
-            &pool,
+            pool.as_ref(),
             |((((res_count, query), query_result_id), query_result_dist), stats)| {
                 let mut associated_data = vec![];
 

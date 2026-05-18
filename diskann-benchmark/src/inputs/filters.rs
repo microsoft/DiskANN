@@ -14,13 +14,6 @@ use crate::inputs::{as_input, Example};
 
 as_input!(MetadataIndexBuild);
 
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<MetadataIndexBuild>()?;
-    Ok(())
-}
-
 ///////////////////////////////
 // Metadata-only Index Build //
 ///////////////////////////////

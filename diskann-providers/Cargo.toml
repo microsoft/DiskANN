@@ -37,7 +37,6 @@ tempfile = { workspace = true, optional = true }
 bf-tree = { workspace = true, optional = true }
 prost = "0.14.1"
 futures-util.workspace = true
-polonius-the-crab = { version = "0.5.0", optional = true }
 serde_json = { workspace = true, optional = true }
 vfs = { workspace = true, optional = true }
 
@@ -69,7 +68,6 @@ default-target = "x86_64-pc-windows-msvc"
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-pc-windows-msvc",
-    "i686-pc-windows-msvc",
     "x86_64-pc-windows-msvc",
 ]
 
@@ -77,7 +75,7 @@ targets = [
 default = []
 perf_test = ["dep:opentelemetry"]
 testing = ["dep:tempfile"]
-bf_tree = ["dep:bf-tree", "dep:polonius-the-crab", "dep:serde_json"]
+bf_tree = ["dep:bf-tree", "dep:serde_json"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]
 

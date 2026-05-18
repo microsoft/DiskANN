@@ -25,12 +25,11 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
-        self, Batch, ExpandBeam, IdIterator, InplaceDeleteStrategy, InsertStrategy,
-        MultiInsertStrategy, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
+        self, Batch, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
-        Knn,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
@@ -52,9 +51,9 @@ use crate::{
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
         async_tools::{self, DynamicBalancer},
-        object_pool::{ObjectPool, PooledRef},
     },
 };
+use diskann_utils::object_pool::{ObjectPool, PooledRef};
 
 #[derive(Debug)]
 pub struct DiskANNIndex<DP: DataProvider> {
@@ -102,6 +101,14 @@ pub struct DegreeStats {
     pub min_degree: u32,
     pub cnt_less_than_two: usize, // Number of vertices with degree less than 2
 }
+
+#[cfg(test)]
+crate::test::cmp::verbose_eq!(DegreeStats {
+    max_degree,
+    avg_degree,
+    min_degree,
+    cnt_less_than_two,
+});
 
 /// Statistics collected during a search operation.
 ///
@@ -2175,99 +2182,6 @@ where
         search_params.search(self, strategy, processor, context, query, output)
     }
 
-    /// Performs a brute-force flat search over the points matching a provided filter function.
-    ///
-    /// This method executes a linear scan through all points in the index, applying the provided
-    /// `vector_filter` to select candidate points. It computes the similarity between the query
-    /// vector and each candidate, returning the top results according to the provided search parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `strategy` - The search strategy to use for accessing and processing elements.
-    /// * `context` - The context to pass through to providers.
-    /// * `query` - The query vector for which nearest neighbors are sought.
-    /// * `vector_filter` - A predicate function used to filter candidate vectors based on their external IDs.
-    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`).
-    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
-    ///
-    /// # Returns
-    ///
-    /// Returns search statistics including the number of distance computations performed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is a failure accessing elements or if the provided parameters are invalid.
-    ///
-    /// # Notes
-    ///
-    /// This method is computationally expensive for large datasets, as it does not leverage the graph structure
-    /// and instead performs a linear scan of all filtered points.
-    pub async fn flat_search<'a, S, T, O, OB, I>(
-        &'a self,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: T,
-        vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
-        search_params: &Knn,
-        output: &mut OB,
-    ) -> ANNResult<SearchStats>
-    where
-        T: Copy + Send,
-        S: glue::DefaultSearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
-        I: Iterator<Item = <DP as DataProvider>::InternalId>,
-        O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
-    {
-        let mut accessor = strategy
-            .search_accessor(&self.data_provider, context)
-            .into_ann_result()?;
-        let computer = accessor.build_query_computer(query).into_ann_result()?;
-
-        let mut scratch = {
-            let num_start_points = accessor.starting_points().await?.len();
-            self.search_scratch(search_params.l_value().get(), num_start_points)
-        };
-
-        let id_iterator = accessor.id_iterator().await?;
-        for id in id_iterator {
-            let external_id = self
-                .data_provider
-                .to_external_id(context, id)
-                .escalate("external id should be found")?;
-
-            if vector_filter(&external_id) {
-                scratch.visited.insert(id);
-                let element = accessor
-                    .get_element(id)
-                    .await
-                    .escalate("matched point retrieval must succeed")?;
-                let dist = computer.evaluate_similarity(element.reborrow());
-                scratch.best.insert(Neighbor::new(id, dist));
-                scratch.cmps += 1;
-            }
-        }
-
-        let result_count = strategy
-            .default_post_processor()
-            .post_process(
-                &mut accessor,
-                query,
-                &computer,
-                scratch.best.iter().take(search_params.l_value().get()),
-                output,
-            )
-            .send()
-            .await
-            .into_ann_result()?;
-
-        Ok(SearchStats {
-            cmps: scratch.cmps,
-            hops: scratch.hops,
-            result_count: result_count as u32,
-            range_search_second_round: false,
-        })
-    }
-
     //////////////////
     // Paged Search //
     //////////////////
@@ -2491,9 +2405,13 @@ where
         }
     }
 
-    pub fn get_degree_stats<NA>(&self, accessor: &mut NA) -> impl SendFuture<ANNResult<DegreeStats>>
+    pub fn get_degree_stats<NA, Itr>(
+        &self,
+        accessor: &mut NA,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<DegreeStats>>
     where
-        for<'a> &'a DP: IntoIterator<Item = DP::InternalId, IntoIter: Send>,
+        Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
         NA: AsNeighbor<Id = DP::InternalId>,
     {
         async move {
@@ -2504,7 +2422,7 @@ where
             let mut total_live_points = 0;
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            for id in &self.data_provider {
+            for id in itr {
                 total_live_points += 1;
                 accessor.get_neighbors(id, &mut neighbors).await?;
                 let pool_size = neighbors.len();
@@ -2517,6 +2435,17 @@ where
             }
 
             let total_f32 = total as f32;
+
+            // protecting against the divide by zero below.
+            if total_live_points == 0 {
+                return Ok(DegreeStats {
+                    max_degree: 0,
+                    avg_degree: 0.0,
+                    min_degree: 0,
+                    cnt_less_than_two: 0,
+                });
+            }
+
             Ok(DegreeStats {
                 max_degree: u32::try_from(max_degree_usize)?,
                 avg_degree: total_f32 / total_live_points as f32,
@@ -3163,4 +3092,31 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_label_provider_on_visit_default() {
+        #[derive(Debug)]
+        struct BasicValidation;
+
+        impl QueryLabelProvider<u32> for BasicValidation {
+            fn is_match(&self, id: u32) -> bool {
+                id.is_multiple_of(2)
+            }
+        }
+
+        let filter = BasicValidation;
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(0, 1.0)),
+            QueryVisitDecision::Accept(_)
+        ));
+        assert!(matches!(
+            filter.on_visit(Neighbor::new(1, 1.0)),
+            QueryVisitDecision::Reject
+        ));
+    }
 }

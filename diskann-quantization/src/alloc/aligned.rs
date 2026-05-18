@@ -20,6 +20,19 @@ pub struct AlignedAllocator {
 }
 
 impl AlignedAllocator {
+    /// Aligned allocators for commonly specified boundaries in the codebase (4..4096)
+    pub const A4: Self = Self::new(PowerOfTwo::V4);
+    pub const A8: Self = Self::new(PowerOfTwo::V8);
+    pub const A16: Self = Self::new(PowerOfTwo::V16);
+    pub const A32: Self = Self::new(PowerOfTwo::V32);
+    pub const A64: Self = Self::new(PowerOfTwo::V64);
+    pub const A128: Self = Self::new(PowerOfTwo::V128);
+    pub const A256: Self = Self::new(PowerOfTwo::V256);
+    pub const A512: Self = Self::new(PowerOfTwo::V512);
+    pub const A1024: Self = Self::new(PowerOfTwo::V1024);
+    pub const A2048: Self = Self::new(PowerOfTwo::V2048);
+    pub const A4096: Self = Self::new(PowerOfTwo::V4096);
+
     /// Construct a new allocator that uses the given alignment.
     #[inline]
     pub const fn new(alignment: PowerOfTwo) -> Self {

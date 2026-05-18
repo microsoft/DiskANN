@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "minmax-exhaustive-search";
 
@@ -11,17 +11,19 @@ crate::utils::stub_impl!("minmax-quantization", inputs::exhaustive::MinMax);
 
 // MinMax - requires feature "minmax-quantization"
 #[cfg(feature = "minmax-quantization")]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<imp::MinMaxQ<'static, 1>>(NAME);
-    benchmarks.register::<imp::MinMaxQ<'static, 2>>(NAME);
-    benchmarks.register::<imp::MinMaxQ<'static, 4>>(NAME);
-    benchmarks.register::<imp::MinMaxQ<'static, 8>>(NAME);
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register(NAME, imp::MinMaxQ::<1>)?;
+    registry.register(NAME, imp::MinMaxQ::<2>)?;
+    registry.register(NAME, imp::MinMaxQ::<4>)?;
+    registry.register(NAME, imp::MinMaxQ::<8>)?;
+
+    Ok(())
 }
 
 // Stub implementation
 #[cfg(not(feature = "minmax-quantization"))]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    imp::register(NAME, benchmarks)
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    imp::register(NAME, registry)
 }
 
 /////////////
@@ -33,8 +35,7 @@ mod imp {
     use std::{io::Write, num::NonZeroUsize};
 
     use diskann_benchmark_runner::{
-        describeln,
-        dispatcher::{FailureScore, MatchScore},
+        benchmark::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -85,23 +86,21 @@ mod imp {
         Ok(progress)
     }
 
-    /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct MinMaxQ<'a, const NBITS: usize> {
-        input: &'a inputs::exhaustive::MinMax,
-    }
+    /// The dispatcher target for `minmax-quantization` operations.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct MinMaxQ<const NBITS: usize>;
 
-    impl<'a, const NBITS: usize> MinMaxQ<'a, NBITS> {
-        pub(super) fn new(input: &'a inputs::exhaustive::MinMax) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results>
+    impl<const NBITS: usize> MinMaxQ<NBITS> {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::MinMax,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results>
         where
             Unsigned: Representation<NBITS>,
             Plan: algos::CreateQuantComputer<Store<NBITS>>,
         {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -111,13 +110,13 @@ mod imp {
 
             let dim = NonZeroUsize::new(data.ncols()).unwrap();
             let transform = Transform::new(
-                (&self.input.transform_kind).into(),
+                (&input.transform_kind).into(),
                 dim,
                 Some(&mut rng),
                 diskann_quantization::alloc::GlobalAllocator,
             )?;
 
-            let quantizer = MinMaxQuantizer::new(transform, Positive::new(self.input.scale)?);
+            let quantizer = MinMaxQuantizer::new(transform, Positive::new(input.scale)?);
 
             let training_time: MicroSeconds = start.elapsed().into();
 
@@ -198,7 +197,7 @@ mod imp {
         }
     }
 
-    impl<const NBITS: usize> Benchmark for MinMaxQ<'static, NBITS>
+    impl<const NBITS: usize> Benchmark for MinMaxQ<NBITS>
     where
         Unsigned: Representation<NBITS>,
         Plan: algos::CreateQuantComputer<Store<NBITS>>,
@@ -206,7 +205,10 @@ mod imp {
         type Input = inputs::exhaustive::MinMax;
         type Output = Results;
 
-        fn try_match(input: &inputs::exhaustive::MinMax) -> Result<MatchScore, FailureScore> {
+        fn try_match(
+            &self,
+            input: &inputs::exhaustive::MinMax,
+        ) -> Result<MatchScore, FailureScore> {
             let num_bits = input.num_bits.get();
             if num_bits == NBITS {
                 Ok(MatchScore(0))
@@ -218,22 +220,23 @@ mod imp {
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&inputs::exhaustive::MinMax>,
         ) -> std::fmt::Result {
             match input {
                 None => {
-                    describeln!(
+                    writeln!(
                         f,
                         "- Exhaustive search for {}-bit minmax quantization",
                         NBITS
                     )?;
-                    describeln!(f, "- Requires `float32` data")?;
-                    describeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
+                    writeln!(f, "- Requires `float32` data")?;
+                    writeln!(f, "- Implements `squared_l2` or `inner_product` distance")?;
                 }
                 Some(from) => {
                     if from.num_bits.get() != NBITS {
-                        describeln!(
+                        writeln!(
                             f,
                             "- Expected \"num_bits = {}\", instead got {}",
                             NBITS,
@@ -246,11 +249,12 @@ mod imp {
         }
 
         fn run(
+            &self,
             input: &inputs::exhaustive::MinMax,
             _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<Results> {
-            MinMaxQ::<NBITS>::new(input).run(output)
+            self.run(input, output)
         }
     }
 

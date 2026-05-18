@@ -20,13 +20,11 @@ use diskann::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
         Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
-    utils::{
-        VectorRepr,
-        object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
-    },
+    utils::VectorRepr,
 };
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_utils::Reborrow;
+use diskann_utils::object_pool::{AsPooled, ObjectPool, PooledRef, Undef};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
     future, mem,
@@ -810,7 +808,7 @@ impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, &[T], GarnetId> for 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     type PruneAccessor<'a> = FullAccessor<'a, T>;
     type PruneAccessorError = GarnetProviderError;
-    type DistanceComputer = T::Distance;
+    type DistanceComputer<'a> = T::Distance;
     type WorkingSet = WorkingSet<T>;
 
     fn prune_accessor<'a>(

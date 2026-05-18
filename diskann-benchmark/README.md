@@ -93,65 +93,60 @@ cargo run --release --package diskann-benchmark -- inputs
 which will list something like
 ```
 Available input kinds are listed below:
-    async-index-build
-    async-index-build-pq
+    graph-index-build
+    graph-index-build-pq
 ```
 To obtain the JSON schema for an input, add its name to the query like
 ```sh
-cargo run --release --package diskann-benchmark -- inputs async-index-build
+cargo run --release --package diskann-benchmark -- inputs graph-index-build
 ```
 which will generate something like
 ```json
 {
-  "type": "async_index_build",
+  "type": "graph-index-build",
   "content": {
-    "data_type": "float32",
-    "data": "path/to/data",
-    "distance": "squared_l2",
-    "max_degree": 32,
-    "l_build": 50,
-    "alpha": 1.2,
-    "backedge_ratio": 1.0,
-    "num_threads": 1,
-    "num_start_points": 10,
-    "num_insert_attempts": 2,
-    "saturate_inserts": true,
-    "multi_insert": {
-      "batch_size": 128,
-      "batch_parallelism": 32
-    },
     "search_phase": {
-      "search-type": "topk",
-      "queries": "path/to/queries",
       "groundtruth": "path/to/groundtruth",
-      "reps": 5,
       "num_threads": [
         1,
         2,
         4,
         8
       ],
+      "queries": "path/to/queries",
+      "reps": 5,
       "runs": [
         {
-          "enhanced_metrics": false,
-          "search_k": 10,
+          "recall_k": 10,
           "search_l": [
             10,
             20,
             30,
             40
           ],
-          "target_recall": [
-                {
-                  "target": [50, 90, 95, 98, 99],
-                  "percentile": [0.5, 0.75, 0.9, 0.95],
-                  "max_search_l": 1000,
-                  "calibration_size": 1000,
-                },
-          ],
-          "recall_n": 10
+          "search_n": 10
         }
-      ]
+      ],
+      "search-type": "topk"
+    },
+    "source": {
+      "alpha": 1.2000000476837158,
+      "backedge_ratio": 1.0,
+      "data": "path/to/data",
+      "data_type": "float32",
+      "distance": "squared_l2",
+      "index-source": "Build",
+      "insert_retry": null,
+      "l_build": 50,
+      "max_degree": 32,
+      "multi_insert": {
+        "batch_parallelism": 32,
+        "batch_size": 128,
+        "intra_batch_candidates": "none"
+      },
+      "num_threads": 1,
+      "save_path": null,
+      "start_point_strategy": "medoid"
     }
   }
 }
@@ -186,17 +181,54 @@ cargo run --release --package diskann-benchmark -- benchmarks
 Example output is shown below:
 ```
 Registered Benchmarks:
-    async-full-precision-f32: tag: "async-index-build", float32
-    async-full-precision-f16: tag: "async-index-build", float16
-    async-pq-f32: tag: "async-index-build-pq", float32
+    graph-index-full-precision-f32:
+        tag "graph-index-build"
+        Data/Query Type: float32
+        Search Kinds: "topk", "range", "topk-beta-filter", and "topk-multihop-filter"
+    graph-index-full-precision-f16:
+        tag "graph-index-build"
+        Data/Query Type: float16
+        Search Kinds: "topk"
+    graph-index-pq-f32:
+        tag "graph-index-build-pq"
+        Data/Query Type: float32
+        Search Kinds: "topk" and "range"
+    ...
 ```
 The keyword after "tag" corresponds to the type of input that the benchmark accepts.
+
+#### Adding Search Kinds
+
+Be aware that by default, not all benchmark types support all flavors of search.
+This is a deliberate choice to keep the compile time for `diskann-benchmark` mostly reasonable.
+If you are doing experiments and need (in the example above) range search for the `f16` index,
+this is usually easily done with a small code change.
+
+With the example of adding Range search to the `f16` index, the registration site:
+```rust
+benchmarks.register(
+    "async-full-precision-f16",
+    FullPrecision::<f16>::new()
+        .search(plugins::Topk),
+);
+```
+Can be updated to:
+```rust
+benchmarks.register(
+    "async-full-precision-f16",
+    FullPrecision::<f16>::new()
+        .search(plugins::Topk)
+        .search(plugins::Range),
+);
+```
+This will both compile the range search implementation and make it available for benchmark
+matching.
 
 ### Running Benchmarks
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async.json --output-file output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index.json --output-file output.json
 ```
 
 A benchmark run happens in several phases.
@@ -237,10 +269,10 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/graph-index-dynamic.json --output-file dynamic-output.json
 ```
-Note in the example json that the benchmark is registered under `async-dynamic-index-run`,
-instead of `async-index-build` etc..
+Note in the example json that the benchmark is registered under `graph-index-dynamic-run`,
+instead of `graph-index-build` etc..
 
 A streaming run happens in several phases.
 First, the input file is parsed and data is checked for its validity. The check consists of
@@ -268,27 +300,19 @@ can be run by `cargo test -p benchmark streaming`.
 
 ## Adding New Benchmarks
 
-The benchmarking infrastructure uses a loosely-coupled method for dispatching benchmarks
-broken into the front end (inputs) and the back end (benchmarks). Inputs can be any `serde`
-compatible type. Input registration happens by registering types implementing
-`diskann_benchmark_runner::Input` with the `diskann_benchmark_runner::registry::Inputs`
-registry. This is done in `inputs::register_inputs`. At run time, the front end will discover
-benchmarks in the input JSON file and use the tag string in the "contents" field to select
-the correct input deserializer.
+The benchmarking infrastructure works in two phases: first a raw JSON file is parsed into a
+collection of registered `diskann_benchmark_runner::Input`s. Then, each input is matched
+with a `diskann_benchmark_runner::Benchmark`. A `diskann_benchmark_runner::Registry` contains
+the collection of all registered inputs and benchmarks.
 
-Benchmarks need to be registered with `diskann_benchmark_runner::registry::Benchmarks` by
-registering themselves in `benchmark::backend::load()`. To be discoverable by the front-end
-input, a `DispatchRule` from the `dispatcher` crate (via
-`diskann_benchmark_runner::dispatcher`) needs to be defined matching a back-end type to
-`diskann_benchmark_runner::Any`. The dynamic type in the `Any` will come from one of the
-registered `diskann_benchmark_runner::Inputs`.
+New benchmarks must implement the `diskann_benchmark_runner::Benchmark` trait, which has its
+input as an associated type. Registering a benchmark via `Registry::register` will
+automatically register the associated input.
 
-The rule can be as simple as checking a down cast or as complicated such as lifting run-time
-information to the type/compile time realm, as is done for the async index tests for the data
-type.
-
-Once this is complete, the benchmark will be reachable by its input and can live peacefully
-with the other benchmarks.
+At run time, the front end will discover benchmarks in the input JSON file and use the tag
+string in the `type` field to select the correct input deserializer. Benchmarks will
+be matched to inputs using `Benchmark::try_match`, with the best candidate being selected
+to be run.
 
 ### Example
 
@@ -334,10 +358,9 @@ impl diskann_benchmark_runner::Input for crate::inputs::Input<ComputeGroundTruth
 
     // Attempt to deserialize `Self` from raw JSON.
     //
-    // Implementos can assume that `serialized` looks similar in structure to what is
+    // Implementors can assume that `serialized` looks similar in structure to what is
     // returned by `example`.
     fn try_deserialize(
-        &self,
         serialized: &serde_json::Value,
         checker: &mut diskann_benchmark_runner::Checker,
     ) -> anyhow::Result<diskann_benchmark_runner::Any> {
@@ -357,26 +380,22 @@ impl diskann_benchmark_runner::Input for crate::inputs::Input<ComputeGroundTruth
 
 impl CheckDeserialization for ComputeGroundTruth {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Forward the deserializaiton check to the input files.
-        self.data.check_deserialization(checkt)?;
-        self.queries.check_deserialization(checkt)?;
+        // Forward the deserialization check to the input files.
+        self.data.check_deserialization(checker)?;
+        self.queries.check_deserialization(checker)?;
         Ok(())
     }
 }
 ```
 
-#### Front End Registration
+#### Benchmark Registration
 
-With the new input type ready, we can register it with the
-`diskann_benchmark_runner::registry::Inputs` registry. This can be as simple as:
-```rust
-fn register(registry: &mut diskann_benchmark_runner::registry::Inputs) -> anyhow::Result<()> {
-    registry.register(crate::inputs::Input::<ComputeGroundTruth>::new())
-}
-```
-Note that registration can fail if multiple inputs have the same`tag`.
+With the new input type ready, we register a benchmark that uses it with the
+`diskann_benchmark_runner::Registry`. Input registration happens automatically as a
+side-effect. Registration can fail if a different input type with the same `tag` was already
+registered; duplicate registrations of the same tag and type are allowed.
 
-When these steps are completed, our new input will be available using
+When a benchmark is registered, the input will be available using
 ```sh
 cargo run --release --package diskann-benchmark -- inputs
 ```
@@ -386,104 +405,94 @@ cargo run --release --package diskann-benchmark -- inputs compute-groundtruth
 ```
 will display an example JSON input for our type.
 
-#### Back End Benchmarks
-
-So far, we have created a new input type and registered it with the front end, but there are
-not any benchmarks that use this type. To implement new benchmarks, we need register them
-with the `diskann_benchmark_runner::registry::Benchmarks` returned from
-`benchmark::backend::load()`. The simplest thing we can do is something like this:
+To implement benchmarks, we register them with the `diskann_benchmark_runner::Registry`.
+The simplest thing we can do is something like this:
 ```rust
 use diskann_benchmark_runner::{
-    dispatcher::{DispatchRule, MatchScore, FailureScore, Ref},
-    Any, Checkpoint, Output
+    dispatcher::{MatchScore, FailureScore},
+    Any, Benchmark, Checkpoint, Output, Registry,
 };
 
-// Allows the dispatcher to try to match a value with type `CentralDispatch` to the receiver
-// type `ComputeGroundTruth`.
-impl<'a> DispatchRule<&'a Any> for &'a ComputeGroundTruth {
-    type Error = anyhow::Error;
+// Benchmarks can be stateful.
+struct RunGroundTruth;
 
-    // Will return `Ok` if the dynamic type in `Any` matches
-    //
-    // Otherwise, returns a failure.
-    fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
-        from.try_match::<ComputeGroundTruth, Self>(from)
+impl Benchmark for RunGroundTruth {
+    // The input that will be registered along with the benchmark.
+    type Input = ComputeGroundTruth;
+
+    // Real benchmarks should have output that will be saved. For this example, there
+    // is no meaningful output.
+    type Output = ();
+
+    // Always match the input.
+    fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
+        Ok(MatchScore::new(0))
     }
 
-    // Will return `Ok` if `from`'s active variant is `ComputeGroundTruth`.
-    //
-    // This just forms a reference to the contained value and should only be called if
-    // `try_match` is successful.
-    fn convert(from: &'a Any) -> Result<Self, Self::Error> {
-        from.convert::<ComputeGroundTruth, Self>(from)
+    // Run the benchmark (for this example, nothing happens).
+    fn run(
+        &self,
+        input: &Self::Input,
+        checkpoint: Checkpoint<'_>,
+        output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
+        Ok(())
     }
 }
 
-fn register(benchmarks: &mut diskann_benchmark_runner::registry::Bencymarks) {
-    benchmarks.register::<Ref<ComputeGroundTruth>>(
-        "compute-groundtruth",
-        |input: &ComputeGroundTruth, checkpoint: Checkpoint<'_>, output: &mut dyn Output| {
-            // Run the benchmark
-        }
-    )
+fn register(registry: &mut diskann_benchmark_runner::Registry) -> anyhow::Result<()> {
+    // Register the benchmark and its associated input.
+    Ok(registry.register("compute-groundtruth", RunGroundTruth)?)
 }
 ```
 
-What happening here is that the implementation of `DispatchRule` provides a valid conversion
-from `&Any` to `&ComputeGroundTruth`, which is only applicable if runtime value in the `Any`
-is the `ComputeGroundTruth` struct. If this happens, the benchmarking infrastructure will
-call the closure passed to `benchmarks.register()` after calling `DispatchRule::convert()`
-on the `Any`. This mechanism allows multiple backend benchmarks to exist and pull input from
-the deserialized inputs present in the current run.
+What is happening here is that the implementation of `Benchmark::try_match` checks if the
+benchmark matches the runtime parameters in the associated input. For the case of the example,
+this always succeeds. If the `try_match` is successful, then the benchmarking infrastructure
+will call `Benchmark::run`. This mechanism allows multiple backend benchmarks to exist and
+pull input from the deserialized inputs present in the current run. If multiple benchmarks
+match an input, then the benchmark with the lowest `MatchScore` will be selected.
 
-There are three more things to note about closures (benchmarks) that get registered with the dispatcher:
+The argument `checkpoint: diskann_benchmark_runner::Checkpoint<'_>` allows long-running
+benchmarks to periodically save incremental results to file by calling the `.checkpoint`
+method. This function creates a new snapshot every time it is invoked, so benchmarks do not
+need to worry about redundant data.
 
-1. The argument `checkpoint: diskann_benchmark_runner::Checkpoint<'_>` allows long-running
-   benchmarks to periodically save incremental results to file by calling the `.checkpoint`
-   method. Benchmark results are anything that implements `serde::Serialize`. This function
-   creates a new snapshot every time it is invoked, so benchmarks to not need to worry about
-   redundant data.
-
-2. The argument `output: &mut dyn diskann_benchmark_runner::Output` is a dynamic type where
-   all output should be written too. Additionally, it provides a
-   [`ProgressDrawTarget`](https://docs.rs/indicatif/latest/indicatif/struct.ProgressDrawTarget.html)
-   for use with [indicatif](https://docs.rs/indicatif/latest/indicatif/index.html) progress bars.
-   This supports output redirection for integration tests and piping to files.
-
-3. The return type from the closure should be `anyhow::Result<serde_json::Value>`. This
-   contains all data collected from the benchmark and will be collected and saved along with
-   all other runs. Benchmark implementations do not need to worry about saving their input
-   as well as this is automatically handled by the benchmarking infrastructure.
+The argument `output: &mut dyn diskann_benchmark_runner::Output` is a dynamic type where
+all output should be written to. Additionally, it provides a
+[`ProgressDrawTarget`](https://docs.rs/indicatif/latest/indicatif/struct.ProgressDrawTarget.html)
+for use with [indicatif](https://docs.rs/indicatif/latest/indicatif/index.html) progress bars.
+This supports output redirection for integration tests and piping to files.
 
 With the benchmark registered, that is all that is needed.
 
-#### Expanding `DispatchRule`
+#### Matching with `try_match`
 
-The functionality offered by `DispatchRule` is much more powerful than what was described in
-the simple example. In particular, careful implementation will allow your benchmarks to be
-more easily discoverable from the command-line and can also assist in debugging by providing
-"near misses".
+The functionality offered by `Benchmark::try_match` is much more powerful than what was
+described in the simple example. In particular, careful implementation will allow your
+benchmarks to be more easily discoverable from the command-line and can also assist in
+debugging by providing "near misses".
 
 **Fine Grained Matching**
 
-The method `DispatchRule::try_match` returns both a successful `MatchScore` and an
-unsuccessful `FailureScore`. The dispatcher will only invoke methods where all arguments
+The method `Benchmark::try_match` returns both a successful `MatchScore` and an
+unsuccessful `FailureScore`. The registry will only invoke methods where all arguments
 return successful `MatchScores`. Additionally, it will call the method with the "best"
-overall score, determined by lexicographic ordering. So, you can make some registered
-benchmarks "better fits" for inputs returning a better match score.
+overall score. So, you can make some registered benchmarks "better fits" for inputs
+returning a better match score.
 
-When the dispatcher cannot find any matching method for an input, it begins a process of
+When the registry cannot find any matching method for an input, it begins a process of
 finding the "nearest misses" by inspecting and ranking methods based on their `FailureScore`.
-Benchmarks can opt-in to this process by returning meaning `FailureScores` when an input is
+Benchmarks can opt-in to this process by returning meaningful `FailureScores` when an input is
 close, but not quite right.
 
 **Benchmark Description and Failure Description**
 
-The trait `DispatchRule` has another method:
+The trait `Benchmark` has another method:
 ```rust
-fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&&'a Any>);
+fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&Self::Input>);
 ```
-This is used for self-documenting the dispatch rule: If `from` is `None`, then
+This is used for self-documenting the matching rule: If `from` is `None`, then
 implementations should write to the formatter `f` a description of the benchmark and what
 inputs it can work with. If `from` is `Some`, then implementation should write the reason
 for a successful or unsuccessful match with the enclosed value. Doing these two steps make

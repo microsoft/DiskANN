@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "async-index-build-pq",
+      "type": "graph-index-build-pq",
       "content": {
         "index_operation": {
           "source":{

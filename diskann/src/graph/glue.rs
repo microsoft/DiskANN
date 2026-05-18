@@ -91,7 +91,6 @@ use crate::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
         DataProvider, HasId, NeighborAccessor,
     },
-    utils::VectorId,
 };
 
 /// A trait to override search constraints such as early termination based on constraints
@@ -613,13 +612,12 @@ where
     ///
     /// We could grab this type from the `PruneAccessor` associated type, but it's
     /// useful enough that we move it up here.
-    type DistanceComputer: for<'a, 'b, 'c, 'd> DistanceFunction<
+    type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
             <Self::PruneAccessor<'a> as Accessor>::ElementRef<'b>,
             <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
             f32,
         > + Send
-        + Sync
-        + 'static;
+        + Sync;
 
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
@@ -630,7 +628,7 @@ where
     /// Implementations are encouraged to have [`Accessor::get_element`] return the
     /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
-        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer>
+        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
         + AsNeighborMut
         + workingset::Fill<Self::WorkingSet>;
 
@@ -818,24 +816,6 @@ where
         context: &'a Provider::Context,
         id: Provider::InternalId,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
-}
-
-/// Provides asynchronous access to an iterator over vector IDs.
-///
-/// This trait defines a method to asynchronously retrieve an iterator over vector IDs.
-///
-/// # Type Parameters
-///
-/// - `I`: The iterator type returned by the accessor. It must implement `Iterator` with items of type implementing `VectorId`.
-///
-/// # Errors
-///
-/// Returns an [`ANNError`] if the iterator cannot be retrieved successfully.
-pub trait IdIterator<I>
-where
-    I: Iterator<Item: VectorId>,
-{
-    fn id_iterator(&mut self) -> impl std::future::Future<Output = Result<I, ANNError>>;
 }
 
 ///////////

@@ -8,9 +8,8 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
-    utils::datatype::{DataType, Type},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    utils::datatype::{AsDataType, DataType},
     Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
 };
 
@@ -129,25 +128,42 @@ impl CheckDeserialization for Tolerance {
 #[derive(Debug)]
 pub(super) struct TypeBench<T>(std::marker::PhantomData<T>);
 
+impl<T> TypeBench<T> {
+    pub(super) fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
 impl<T> Benchmark for TypeBench<T>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         // Try to match based on data type.
         // Add a small penalty so `ExactTypeBench` can be more specific if it hits.
-        Type::<T>::try_match(&input.data_type).map(|m| MatchScore(m.0 + 10))
+        if T::is_match(input.data_type) {
+            Ok(MatchScore(10))
+        } else {
+            Err(FailureScore(1000))
+        }
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&TypeInput>) -> std::fmt::Result {
-        Type::<T>::description(f, input.map(|i| &i.data_type))
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&TypeInput>,
+    ) -> std::fmt::Result {
+        match input {
+            None => write!(f, "{}", T::DATA_TYPE),
+            Some(input) => write!(f, "{}", T::describe(input.data_type)),
+        }
     }
 
     fn run(
+        &self,
         input: &TypeInput,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
@@ -161,14 +177,14 @@ where
 
 impl<T> Regression for TypeBench<T>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Tolerances = Tolerance;
     type Pass = DataType;
     type Fail = DataType;
 
     fn check(
+        &self,
         _tolerance: &Tolerance,
         input: &TypeInput,
         before: &String,
@@ -189,41 +205,54 @@ where
 #[derive(Debug)]
 pub(super) struct ExactTypeBench<T, const N: usize>(std::marker::PhantomData<T>);
 
+impl<T, const N: usize> ExactTypeBench<T, N> {
+    pub(super) fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
 impl<T, const N: usize> Benchmark for ExactTypeBench<T, N>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Input = TypeInput;
     type Output = String;
 
-    fn try_match(input: &TypeInput) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         if input.dim == N {
-            Type::<T>::try_match(&input.data_type)
+            if T::is_match(input.data_type) {
+                Ok(MatchScore(0))
+            } else {
+                Err(FailureScore(1000))
+            }
         } else {
             Err(FailureScore(1000))
         }
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, input: Option<&TypeInput>) -> std::fmt::Result {
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        input: Option<&TypeInput>,
+    ) -> std::fmt::Result {
         match input {
             None => {
-                write!(f, "{}, dim={}", Description::<DataType, Type<T>>::new(), N)
+                write!(f, "{}, dim={}", T::DATA_TYPE, N)
             }
             Some(input) => {
-                let type_result = Type::<T>::try_match_verbose(&input.data_type);
+                let type_description = T::describe(input.data_type);
                 let dim_ok = input.dim == N;
-                match (type_result, dim_ok) {
-                    (Ok(_), true) => write!(f, "successful match"),
-                    (Err(err), true) => write!(f, "{}", err),
-                    (Ok(_), false) => {
+                match (type_description.is_match(), dim_ok) {
+                    (true, true) => write!(f, "successful match"),
+                    (false, true) => write!(f, "{}", type_description),
+                    (true, false) => {
                         write!(f, "expected dim={}, but found dim={}", N, input.dim)
                     }
-                    (Err(err), false) => {
+                    (false, false) => {
                         write!(
                             f,
                             "{}; expected dim={}, but found dim={}",
-                            err, N, input.dim
+                            type_description, N, input.dim
                         )
                     }
                 }
@@ -232,6 +261,7 @@ where
     }
 
     fn run(
+        &self,
         input: &TypeInput,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
@@ -245,14 +275,14 @@ where
 
 impl<T, const N: usize> Regression for ExactTypeBench<T, N>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Tolerances = Tolerance;
     type Pass = String;
     type Fail = String;
 
     fn check(
+        &self,
         _tolerance: &Tolerance,
         input: &TypeInput,
         before: &String,
