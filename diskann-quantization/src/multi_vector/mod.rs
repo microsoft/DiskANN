@@ -20,9 +20,11 @@
 //! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
 //! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
 //! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
-//! | [`QueryComputer`] | Architecture-dispatched SIMD query computer |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
+//! | [`MaxSimKernel`] | Object-safe kernel returned by [`build_max_sim_f32`] / [`build_max_sim_f16`] |
+//! | [`MaxSimIsa`] | ISA selector for the factory functions |
+//! | [`Erase`] | BYOTE visitor used by the factory |
 //!
 //! # Example
 //!
@@ -72,7 +74,10 @@ pub mod distance;
 pub(crate) mod matrix;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use distance::{Chamfer, MaxSim, MaxSimError, QueryComputer, QueryMatRef};
+pub use distance::{
+    BoxErase, Chamfer, Erase, MaxSim, MaxSimError, MaxSimIsa, MaxSimKernel, NotSupported,
+    QueryMatRef, build_max_sim_f16, build_max_sim_f32,
+};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,

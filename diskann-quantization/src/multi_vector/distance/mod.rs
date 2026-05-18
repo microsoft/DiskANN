@@ -5,15 +5,15 @@
 //!
 //! Provides asymmetric distance primitives for multi-vector search:
 //!
-//! - [`MaxSim`]: Per-query-vector maximum similarities.
-//! - [`Chamfer`]: Sum of MaxSim scores (asymmetric Chamfer distance).
-//! - [`QueryComputer`]: Architecture-dispatched query computer backed by
-//!   SIMD-accelerated block-transposed kernels.
+//! - [`MaxSim`]: per-query-vector maximum similarities.
+//! - [`Chamfer`]: sum of MaxSim scores (asymmetric Chamfer distance).
+//! - [`MaxSimKernel`]: object-safe interface implemented by every concrete
+//!   kernel constructed through [`build_max_sim_f32`] / [`build_max_sim_f16`].
+//! - [`Erase`]: BYOTE visitor — caller decides how to type-erase the kernel.
 //!
 //! The fallback path uses a double-loop kernel over
-//! [`InnerProduct`](diskann_vector::distance::InnerProduct). The optimised
-//! path (via [`QueryComputer`]) uses block-transposed layout with
-//! cache-tiled SIMD micro-kernels.
+//! [`InnerProduct`](diskann_vector::distance::InnerProduct). The factory
+//! functions return cache-tiled SIMD kernels selected by [`MaxSimIsa`].
 //!
 //! # Example
 //!
@@ -49,11 +49,15 @@
 //! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
 //! ```
 
+mod factory;
 mod fallback;
+mod isa;
+mod kernel;
 mod kernels;
 mod max_sim;
-mod query_computer;
 
+pub use factory::{build_max_sim_f16, build_max_sim_f32};
 pub use fallback::QueryMatRef;
+pub use isa::{MaxSimIsa, NotSupported};
+pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use query_computer::QueryComputer;
