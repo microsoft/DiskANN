@@ -103,7 +103,9 @@ fn run_row(
     let len = index.provider().len();
     let metrics_before = index.provider().metrics();
 
-    let outcome = harness::KnnOracleRun::run_sync(index, &Strategy::new(), query, k).unwrap();
+    let outcome =
+        harness::KnnOracleRun::run_sync(index, &Strategy::new(index.provider().dim()), query, k)
+            .unwrap();
     let stats = outcome.stats;
 
     assert_eq!(
@@ -154,7 +156,7 @@ fn _flat_knn_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
 
     // Build the provider and index once, mirroring the production pattern where a
     // single index serves many queries.
-    let provider = flat_provider::Provider::grid(grid, size);
+    let provider = flat_provider::Provider::grid(grid, size).unwrap();
     let len = provider.len();
     assert_eq!(
         len,

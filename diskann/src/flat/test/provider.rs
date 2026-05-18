@@ -3,8 +3,6 @@
  * Licensed under the MIT license.
  */
 
-#![allow(dead_code)]
-
 //! Self-contained test provider for the flat-search module.
 
 use std::{
@@ -15,19 +13,35 @@ use std::{
     sync::Arc,
 };
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::{future::SendFuture, views::Matrix};
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
     ANNError, always_escalate,
-    error::{Infallible, RankedError, ToRanked, TransientError},
+    error::{RankedError, ToRanked, TransientError},
     flat::{DistancesUnordered, SearchStrategy},
     graph::test::synthetic::Grid,
     internal::counter::{Counter, LocalCounter},
     provider::{self, ExecutionContext, HasId, NoopGuard},
     utils::VectorRepr,
 };
+
+/// Error conditions for [`Provider::new`].
+#[derive(Debug, Error)]
+pub enum ProviderError {
+    #[error("flat::test::Provider needs at least one item")]
+    Empty,
+    #[error("flat::test::Provider items must have non-zero dimension")]
+    ZeroDimension,
+}
+
+impl From<ProviderError> for ANNError {
+    #[track_caller]
+    fn from(err: ProviderError) -> ANNError {
+        ANNError::opaque(err)
+    }
+}
 
 //////////////
 // Provider //
@@ -36,38 +50,27 @@ use crate::{
 /// In-memory test provider for flat search.
 #[derive(Debug)]
 pub struct Provider {
-    items: Vec<Vec<f32>>,
-    dim: usize,
+    items: Matrix<f32>,
     get_element: Counter,
 }
 
 impl Provider {
-    /// Construct a provider that owns `items`. Every vector must have the same
-    /// (non-zero) length.
-    pub fn new(items: impl IntoIterator<Item = Vec<f32>>) -> Self {
-        let items: Vec<Vec<f32>> = items.into_iter().collect();
-        assert!(
-            !items.is_empty(),
-            "flat::test::Provider needs at least one item"
-        );
-        let dim = items[0].len();
-        assert!(
-            dim > 0,
-            "flat::test::Provider items must have non-zero dimension"
-        );
-        for (i, v) in items.iter().enumerate() {
-            assert_eq!(
-                v.len(),
-                dim,
-                "flat::test::Provider item {i} has dim {} but expected {dim}",
-                v.len(),
-            );
+    /// Construct a provider from a matrix of vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the matrix is empty or has zero-width columns.
+    pub fn new(items: Matrix<f32>) -> Result<Self, ProviderError> {
+        if items.nrows() == 0 {
+            return Err(ProviderError::Empty);
         }
-        Self {
+        if items.ncols() == 0 {
+            return Err(ProviderError::ZeroDimension);
+        }
+        Ok(Self {
             items,
-            dim,
             get_element: Counter::new(),
-        }
+        })
     }
 
     /// Build a provider over the row vectors of [`Grid::data`]. IDs are `0..n` in
@@ -75,15 +78,22 @@ impl Provider {
     ///
     /// Unlike the graph-side `Provider::grid`, this does *not* add a separate
     /// start-point row — flat search has no notion of one.
-    pub fn grid(grid: Grid, size: usize) -> Self {
-        let data = grid.data(size);
-        let items: Vec<Vec<f32>> = data.row_iter().map(|row| row.to_vec()).collect();
-        Self::new(items)
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from [`Self::new`].
+    pub fn grid(grid: Grid, size: usize) -> Result<Self, ProviderError> {
+        Self::new(grid.data(size))
     }
 
     /// Number of vectors in the provider.
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.nrows()
+    }
+
+    /// Dimension of each vector in the provider.
+    pub fn dim(&self) -> usize {
+        self.items.ncols()
     }
 
     /// Snapshot of the per-provider counters.
@@ -94,8 +104,8 @@ impl Provider {
     }
 
     /// Expose the items for brute force.
-    pub fn items(&self) -> &[Vec<f32>] {
-        self.items.as_slice()
+    pub fn items(&self) -> &Matrix<f32> {
+        &self.items
     }
 }
 
@@ -256,7 +266,7 @@ impl provider::DataProvider for Provider {
     type Guard = NoopGuard<u32>;
 
     fn to_internal_id(&self, _ctx: &Context, gid: &u32) -> Result<u32, InvalidId> {
-        if (*gid as usize) < self.items.len() {
+        if (*gid as usize) < self.items.nrows() {
             Ok(*gid)
         } else {
             Err(InvalidId(*gid))
@@ -264,7 +274,7 @@ impl provider::DataProvider for Provider {
     }
 
     fn to_external_id(&self, _ctx: &Context, id: u32) -> Result<u32, InvalidId> {
-        if (id as usize) < self.items.len() {
+        if (id as usize) < self.items.nrows() {
             Ok(id)
         } else {
             Err(InvalidId(id))
@@ -333,7 +343,7 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
-            for (i, vector) in self.provider.items.iter().enumerate() {
+            for (i, vector) in self.provider.items.row_iter().enumerate() {
                 let id = i as u32;
                 if let Some(ids) = &self.transient_ids
                     && ids.contains(&id)
@@ -341,7 +351,7 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
                     return Err(AccessError::Transient(TransientGetError::new(id)));
                 }
                 self.get_element.increment();
-                let dist = computer.evaluate_similarity(vector.as_slice());
+                let dist = computer.evaluate_similarity(vector);
                 f(id, dist);
             }
             Ok(())
@@ -353,22 +363,44 @@ impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
 // Strategy //
 //////////////
 
-/// Stateless factory of [`Visitor`]s. Also owns the per-query computer
-/// construction (see [`SearchStrategy::build_query_computer`]).
-#[derive(Clone, Debug, Default)]
+/// Error from [`Strategy::create_visitor`] or [`Strategy::build_query_computer`]
+/// when dimensions don't match.
+#[derive(Debug, Clone, Error)]
+#[error("dimension mismatch: strategy expects {expected}, got {actual}")]
+pub struct StrategyError {
+    pub expected: usize,
+    pub actual: usize,
+}
+
+impl From<StrategyError> for ANNError {
+    #[track_caller]
+    fn from(err: StrategyError) -> ANNError {
+        ANNError::opaque(err)
+    }
+}
+
+/// Factory of [`Visitor`]s that validates dimensions and optionally injects
+/// transient errors into the scan.
+#[derive(Clone, Debug)]
 pub struct Strategy {
+    dim: usize,
     transient_ids: Option<Arc<HashSet<u32>>>,
 }
 
 impl Strategy {
-    pub fn new() -> Self {
-        Self::default()
+    /// Construct a strategy expecting vectors of dimension `dim`.
+    pub fn new(dim: usize) -> Self {
+        Self {
+            dim,
+            transient_ids: None,
+        }
     }
 
     /// Construct a strategy whose visitors return a transient error on `get_element`
     /// for every id in `transient_ids`.
-    pub fn with_transient(transient_ids: impl IntoIterator<Item = u32>) -> Self {
+    pub fn with_transient(dim: usize, transient_ids: impl IntoIterator<Item = u32>) -> Self {
         Self {
+            dim,
             transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
         }
     }
@@ -377,15 +409,22 @@ impl Strategy {
 impl SearchStrategy<Provider, &[f32]> for Strategy {
     type ElementRef<'a> = &'a [f32];
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type QueryComputerError = Infallible;
+    type QueryComputerError = StrategyError;
     type Visitor<'a> = Visitor<'a>;
-    type Error = Infallible;
+    type Error = StrategyError;
 
     fn create_visitor<'a>(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
     ) -> Result<Self::Visitor<'a>, Self::Error> {
+        let actual = provider.dim();
+        if actual != self.dim {
+            return Err(StrategyError {
+                expected: self.dim,
+                actual,
+            });
+        }
         let visitor = match &self.transient_ids {
             Some(ids) => Visitor::flaky(provider, Cow::Borrowed(ids)),
             None => Visitor::new(provider),
@@ -397,6 +436,12 @@ impl SearchStrategy<Provider, &[f32]> for Strategy {
         &self,
         from: &[f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
+        if from.len() != self.dim {
+            return Err(StrategyError {
+                expected: self.dim,
+                actual: from.len(),
+            });
+        }
         Ok(f32::query_distance(from, Metric::L2))
     }
 }

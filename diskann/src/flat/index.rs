@@ -28,11 +28,7 @@ pub struct SearchStats {
     pub result_count: u32,
 }
 
-/// A `'static` thin wrapper around a [`DataProvider`] used for flat search.
-///
-/// The provider is owned by the index. The index is constructed once at process startup and
-/// shared across requests; per-query state lives in the [`crate::flat::DistancesUnordered`]
-/// implementation that the [`SearchStrategy`] produces.
+/// A thin wrapper around a [`DataProvider`] used for flat search.
 #[derive(Debug)]
 pub struct FlatIndex<P: DataProvider> {
     /// The backing provider.
@@ -55,16 +51,6 @@ impl<P: DataProvider> FlatIndex<P> {
     /// Streams every element produced by the strategy's visitor through the query
     /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], and
     /// writes the `(id, distance)` survivors into `output` in best-first order.
-    ///
-    /// # Arguments
-    /// - `k`: number of nearest neighbors to return.
-    /// - `strategy`: produces the per-query visitor and the query computer. See
-    ///   [`SearchStrategy`].
-    /// - `context`: per-request context threaded through to the provider.
-    /// - `query`: the query.
-    /// - `output`: caller-owned output buffer that receives `(InternalId, f32)`
-    ///   pairs in best-first order. Survivors beyond `output`'s capacity are
-    ///   silently dropped.
     pub fn knn_search<S, T, OB>(
         &self,
         k: NonZeroUsize,
@@ -115,13 +101,13 @@ mod tests {
         FlatIndex,
         test::{
             harness::KnnOracleRun,
-            provider::{self as flat_provider, Strategy},
+            provider::{self as flat_provider},
         },
     };
     use crate::graph::test::synthetic::Grid;
 
     fn fixture(grid: Grid, size: usize) -> (FlatIndex<flat_provider::Provider>, usize) {
-        let provider = flat_provider::Provider::grid(grid, size);
+        let provider = flat_provider::Provider::grid(grid, size).unwrap();
         let len = provider.len();
         (FlatIndex::new(provider), len)
     }
@@ -154,9 +140,14 @@ mod tests {
             let query: Vec<f32> = query.to_vec();
             let k = *k;
             set.spawn(async move {
-                let outcome = KnnOracleRun::run(&index, &Strategy::new(), &query, k)
-                    .await
-                    .expect("knn_search failed");
+                let outcome = KnnOracleRun::run(
+                    &index,
+                    &flat_provider::Strategy::new(index.provider().dim()),
+                    &query,
+                    k,
+                )
+                .await
+                .expect("knn_search failed");
                 (query, k, outcome)
             });
         }
@@ -172,21 +163,20 @@ mod tests {
         }
     }
 
+    ////////////
+    // Errors //
+    ////////////
+
     /// A transient error from the visitor's scan must escalate up through `knn_search`.
     #[test]
     fn transient_scan_error() {
-        let (index, _len) = fixture(Grid::Two, 3);
-
-        // The flat scan must touch every id, so any transient id is guaranteed to be
-        // hit.
+        // The flat scan touches every id, so any transient id is guaranteed to be hit.
         for transient_ids in [&[0u32][..], &[3][..], &[1, 2, 5][..]] {
-            let err = KnnOracleRun::run_sync(
-                &index,
-                &Strategy::with_transient(transient_ids.iter().copied()),
-                &[1.0, 0.0],
-                4,
-            )
-            .expect_err("transient error during full scan must escalate");
+            let strategy =
+                flat_provider::Strategy::with_transient(2, transient_ids.iter().copied());
+            let (index, _) = fixture(Grid::Two, 3);
+            let err = KnnOracleRun::run_sync(&index, &strategy, &[1.0, 0.0], 4)
+                .expect_err("transient error during full scan must escalate");
 
             let msg = format!("{err}");
             assert!(
@@ -197,5 +187,36 @@ mod tests {
                  transient ids, got: {msg}",
             );
         }
+    }
+
+    /// Run `knn_search` via the harness, assert it fails, and check the error
+    /// message contains `expected_msg`.
+    fn assert_search_error(strategy: &flat_provider::Strategy, query: &[f32], expected_msg: &str) {
+        let (index, _) = fixture(Grid::Two, 3);
+        let err = KnnOracleRun::run_sync(&index, strategy, query, 4)
+            .expect_err("expected knn_search to fail");
+
+        let msg = format!("{err}");
+        assert!(
+            msg.contains(expected_msg),
+            "expected error containing {expected_msg:?}, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn strategy_constructor_errors() {
+        // Strategy/provider expect dim=2, query has dim=3.
+        assert_search_error(
+            &flat_provider::Strategy::new(2),
+            &[0.0, 0.0, 0.0],
+            "dimension mismatch",
+        );
+
+        // Strategy expects dim=5, provider has dim=2.
+        assert_search_error(
+            &flat_provider::Strategy::new(5),
+            &[0.0, 0.0],
+            "dimension mismatch",
+        );
     }
 }

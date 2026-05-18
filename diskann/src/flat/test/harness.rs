@@ -101,7 +101,7 @@ pub(crate) fn brute_force_topk(
 
     let mut neighbors: Vec<Neighbor<u32>> = provider
         .items()
-        .iter()
+        .row_iter()
         .enumerate()
         .map(|(id, element)| Neighbor::new(id as u32, computer.evaluate_similarity(element)))
         .collect();

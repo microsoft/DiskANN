@@ -2,13 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-//! This module defines the traits that flat-search algorithms use to walk every element
-//! of a [`crate::provider::DataProvider`] once.
-//!
-//! * [`DistancesUnordered<C>`]: the single trait flat search consumes. It takes a
-//!   pre-built query computer of type `C` and a callback, and applies the callback to
-//!   every `(id, distance)` pair in the provider. This is the only trait an in-memory
-//!   visitor (such as [`crate::flat::test::provider::Visitor`]) needs to implement.
+//! Lending-iterator entry point for flat-search providers.
 //!
 //! * [`FlatIterator`]: a convenient entry point for backends whose natural shape is
 //!   element-at-a-time iteration. The trait exposes a single `next` method, an
@@ -16,7 +10,7 @@
 //!   and an associated `Element<'a>` that must be [`Reborrow`]able into `ElementRef<'b>`.
 //!
 //! * [`Iterated`]: bridges any [`FlatIterator`] implementation into a
-//!   [`DistancesUnordered<C>`] for any computer `C` whose
+//!   [`DistancesUnordered<C>`](super::DistancesUnordered) for any computer `C` whose
 //!   [`PreprocessedDistanceFunction`] target matches the iterator's `ElementRef`.
 
 use std::fmt::Debug;
@@ -24,39 +18,7 @@ use std::fmt::Debug;
 use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::ToRanked, provider::HasId};
-
-/// Fused iterate-and-score primitive over the elements of a flat index.
-///
-/// Implementations drive an entire scan over the underlying data, scoring each element
-/// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
-/// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
-/// be able to compute distances.
-pub trait DistancesUnordered<C>: HasId + Send + Sync
-where
-    C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
-{
-    /// Lifetime is intentionally unconstrained so it can appear under HRTB without
-    /// inducing a `'static` bound on `Self`.
-    type ElementRef<'a>;
-
-    /// The error type yielded by [`Self::distances_unordered`].
-    type Error: ToRanked + Debug + Send + Sync + 'static;
-
-    /// Drive the entire scan, scoring each element with `computer` and invoking `f`
-    /// with the resulting `(id, distance)` pair.
-    fn distances_unordered<F>(
-        &mut self,
-        computer: &C,
-        f: F,
-    ) -> impl SendFuture<Result<(), Self::Error>>
-    where
-        F: Send + FnMut(<Self as HasId>::Id, f32);
-}
-
-//////////////
-// Iterator //
-//////////////
+use crate::{error::ToRanked, flat::DistancesUnordered, provider::HasId};
 
 /// A lending, asynchronous iterator over the elements of a flat index.
 ///
@@ -65,17 +27,14 @@ where
 /// [`DistancesUnordered<C>`] implementation for any computer `C` whose
 /// [`PreprocessedDistanceFunction`] target matches `Self::ElementRef`.
 pub trait FlatIterator: HasId + Send + Sync {
-    /// The reference element shape on which distance computations are defined.
     /// Lifetime is intentionally unconstrained so it can appear under HRTB without
     /// inducing a `'static` bound on `Self`.
     type ElementRef<'a>;
 
-    /// The concrete element returned by [`Self::next`]. Reborrows to [`Self::ElementRef`].
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
 
-    /// The error type yielded by [`Self::next`].
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
     /// Advance the iterator and asynchronously yield the next `(id, element)` pair.
@@ -100,7 +59,6 @@ pub struct Iterated<I> {
 }
 
 impl<I> Iterated<I> {
-    /// Wrap an iterator to produce a [`DistancesUnordered`] implementation.
     pub fn new(inner: I) -> Self {
         Self { inner }
     }

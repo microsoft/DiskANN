@@ -22,18 +22,13 @@
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
 //! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
 //!
-//! The flat surface is intentionally narrower than graph search: there is no shared
-//! post-processing trait, and the [`SearchStrategy`] (not the visitor) owns the
-//! `QueryComputer`. See [`FlatIndex::knn_search`] for the canonical brute-force k-NN
-//! algorithm built on these primitives.
-
 pub mod index;
 pub mod iterator;
 pub mod strategy;
 
 pub use index::{FlatIndex, SearchStats};
-pub use iterator::{DistancesUnordered, FlatIterator, Iterated};
-pub use strategy::SearchStrategy;
+pub use iterator::{FlatIterator, Iterated};
+pub use strategy::{DistancesUnordered, SearchStrategy};
 
 #[cfg(test)]
 mod test;

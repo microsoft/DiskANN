@@ -3,12 +3,44 @@
  * Licensed under the MIT license.
  */
 
-//! [`SearchStrategy`] — glue between [`DataProvider`] and per-query
-//! [`DistancesUnordered`] visitors.
+//! Core flat-search traits: [`DistancesUnordered`] and [`SearchStrategy`].
 
+use std::fmt::Debug;
+
+use diskann_utils::future::SendFuture;
 use diskann_vector::PreprocessedDistanceFunction;
 
-use crate::{error::StandardError, flat::DistancesUnordered, provider::DataProvider};
+use crate::{
+    error::{StandardError, ToRanked},
+    provider::{DataProvider, HasId},
+};
+
+/// Fused iterate-and-score primitive over the elements of a flat index.
+///
+/// Implementations drive an entire scan over the underlying data, scoring each element
+/// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
+/// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
+/// be able to compute distances.
+pub trait DistancesUnordered<C>: HasId + Send + Sync
+where
+    C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
+{
+    /// Lifetime is intentionally unconstrained so it can appear under HRTB without
+    /// inducing a `'static` bound on `Self`.
+    type ElementRef<'a>;
+
+    type Error: ToRanked + Debug + Send + Sync + 'static;
+
+    /// Drive the entire scan, scoring each element with `computer` and invoking `f`
+    /// with the resulting `(id, distance)` pair.
+    fn distances_unordered<F>(
+        &mut self,
+        computer: &C,
+        f: F,
+    ) -> impl SendFuture<Result<(), Self::Error>>
+    where
+        F: Send + FnMut(<Self as HasId>::Id, f32);
+}
 
 /// Per-call configuration that knows how to construct a per-query
 /// [`DistancesUnordered`] visitor for a provider, and the [`Self::QueryComputer`] used
@@ -18,8 +50,7 @@ where
     P: DataProvider,
 {
     /// The reference element shape on which [`Self::QueryComputer`] computes
-    /// distances.  The visitor's [`DistancesUnordered::ElementRef`] is
-    /// constrained to equal this for every lifetime.
+    /// distances.
     type ElementRef<'a>;
 
     /// The concrete query-computer type.
@@ -31,9 +62,7 @@ where
     /// The error type for [`Self::build_query_computer`].
     type QueryComputerError: StandardError;
 
-    /// The visitor type produced by [`Self::create_visitor`]. Borrows from `self` and
-    /// the provider, scans elements of shape [`Self::ElementRef`], and consumes a
-    /// [`Self::QueryComputer`].
+    /// The visitor type produced by [`Self::create_visitor`].
     type Visitor<'a>: for<'b> DistancesUnordered<
             Self::QueryComputer,
             ElementRef<'b> = Self::ElementRef<'b>,
@@ -58,34 +87,4 @@ where
         &self,
         query: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        flat::test::provider::{self as flat_provider, Strategy},
-        graph::test::synthetic::Grid,
-    };
-
-    use super::SearchStrategy;
-
-    /// `create_visitor` produces independent visitors on successive calls, and a
-    /// computer can be built from each.
-    #[test]
-    fn exercise_create_visitor() {
-        let provider = flat_provider::Provider::grid(Grid::Two, 3);
-        let context = flat_provider::Context::new();
-        let strategy = Strategy::new();
-
-        let v1 = strategy.create_visitor(&provider, &context).unwrap();
-        let v2 = strategy.create_visitor(&provider, &context).unwrap();
-
-        // The two visitors must occupy distinct stack slots — i.e. holding `v1` does
-        // not preclude constructing `v2`.
-        let _ = (&v1, &v2);
-
-        // A query computer can be built independently of any visitor.
-        let _c1 = strategy.build_query_computer(&[1.0_f32, 0.0][..]).unwrap();
-        let _c2 = strategy.build_query_computer(&[0.0_f32, 1.0][..]).unwrap();
-    }
 }
