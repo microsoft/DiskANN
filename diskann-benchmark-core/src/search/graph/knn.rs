@@ -111,16 +111,6 @@ where
         &self.index
     }
 
-    /// Access the queries.
-    pub fn queries(&self) -> &Arc<Matrix<T>> {
-        &self.queries
-    }
-
-    /// Access the strategy.
-    pub fn strategy(&self) -> &Strategy<S> {
-        &self.strategy
-    }
-
     /// Access the post-processor, if present.
     pub fn post_processor(&self) -> &Option<PP> {
         &self.post_processor

@@ -34,9 +34,9 @@ use std::fmt;
 #[derive(Debug, Clone, Copy)]
 pub struct DeterminantDiversityParams {
     /// Relevance weighting exponent. Must be > 0.0.
-    pub power: f32,
+    power: f32,
     /// Numerical stability parameter. Must be >= 0.0.
-    pub eta: f32,
+    eta: f32,
 }
 
 impl DeterminantDiversityParams {

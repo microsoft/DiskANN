@@ -548,7 +548,7 @@ where
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
-            post_processor::DeterminantDiversity::new(params.power, params.eta),
+            post_processor::DeterminantDiversity::new(params.power(), params.eta()),
         )?;
 
         let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
