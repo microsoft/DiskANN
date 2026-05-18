@@ -38,14 +38,19 @@ parse() {
   }' "$1" | sort -t$'\t' -k2
 }
 
-parse "$baseline_file" > /tmp/llvm_baseline_parsed.txt
-parse "$current_file" > /tmp/llvm_current_parsed.txt
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+baseline_parsed_file="$tmpdir/llvm_baseline_parsed.txt"
+current_parsed_file="$tmpdir/llvm_current_parsed.txt"
+
+parse "$baseline_file" > "$baseline_parsed_file"
+parse "$current_file" > "$current_parsed_file"
 
 echo "| Delta | Current | Baseline | Function |"
 echo "|-------|---------|----------|----------|"
 printf "| %+d | %s | %s | (TOTAL) |\n" "$delta_total" "$current_total" "$baseline_total"
 join -t$'\t' -j 2 -a1 -e 0 -o 1.2,1.1,2.1 \
-  /tmp/llvm_current_parsed.txt /tmp/llvm_baseline_parsed.txt | \
+  "$current_parsed_file" "$baseline_parsed_file" | \
   awk -F'\t' '{delta=$2-$3; printf "%d\t%s\t%s\t%s\n", delta, $2, $3, $1}' | \
   sort -t$'\t' -rn | \
   awk -F'\t' '{printf "| %+d | %s | %s | %s |\n", $1, $2, $3, $4}'
