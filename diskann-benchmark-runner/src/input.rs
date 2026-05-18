@@ -89,7 +89,7 @@ pub(crate) mod internal {
     impl Any {
         pub(crate) fn new<T>(input: T) -> Self
         where
-            T: Input + std::fmt::Debug + 'static,
+            T: Input,
         {
             Self {
                 any: Box::new(input),
@@ -173,7 +173,7 @@ pub(crate) mod internal {
 
     impl<T> DynInput for Wrapper<T>
     where
-        T: Input + std::fmt::Debug + 'static,
+        T: Input,
     {
         fn tag(&self) -> &'static str {
             T::tag()
