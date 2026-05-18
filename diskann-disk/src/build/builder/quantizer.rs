@@ -73,7 +73,7 @@ impl BuildQuantizer {
                     PQStorage::new(&pq_paths.pivots, &pq_paths.compressed_data, None);
                 pq_build_storage.write_pivot_data(
                     table.get_pq_table(),
-                    table.get_centroids(),
+                    None,
                     table.get_chunk_offsets(),
                     table.get_num_centers(),
                     table.get_dim(),

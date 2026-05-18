@@ -71,16 +71,13 @@ pub fn train_pq(
         model::pq::NUM_PQ_CENTROIDS,
         num_pq_chunks,
         5,
-        false,
     )?;
-    let mut centroid = vec![0.0; dim];
     let mut offsets = vec![0; num_pq_chunks + 1];
     let mut full_pivot_data = vec![0.0; model::pq::NUM_PQ_CENTROIDS * dim];
 
     model::pq::generate_pq_pivots_from_membuf(
         &pivot_args,
         data.as_slice(),
-        &mut centroid,
         &mut offsets,
         &mut full_pivot_data,
         rng,
@@ -88,7 +85,7 @@ pub fn train_pq(
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -1550,13 +1547,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
@@ -1671,13 +1663,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();

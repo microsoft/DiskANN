@@ -126,8 +126,7 @@ impl<'a> Checks<'a> {
     pub(crate) fn new(
         tolerances: &Path,
         input_file: &Path,
-        inputs: &registry::Inputs,
-        entries: &'a HashMap<&'static str, registry::RegisteredTolerance<'a>>,
+        registry: &'a registry::Registry,
     ) -> anyhow::Result<Self> {
         // Load the raw input file.
         let partial = jobs::Partial::load(input_file)?;
@@ -135,11 +134,11 @@ impl<'a> Checks<'a> {
         // Parse and validate the raw jobs against the registered inputs.
         //
         // This preserves the ordering of the jobs.
-        let inputs = jobs::Jobs::parse(&partial, inputs)?;
+        let inputs = jobs::Jobs::parse(&partial, registry)?;
 
         // Now that the inputs have been fully parsed and validated, we then check that we
         // can load the raw tolerance file.
-        let parsed = Raw::load(tolerances)?.parse(entries)?;
+        let parsed = Raw::load(tolerances)?.parse(&registry.tolerances())?;
         Self::match_all(parsed, partial, inputs)
     }
 
@@ -298,7 +297,7 @@ impl Raw {
 
     fn parse<'a>(
         self,
-        entries: &'a HashMap<&'static str, registry::RegisteredTolerance<'a>>,
+        entries: &HashMap<&'static str, registry::RegisteredTolerance<'a>>,
     ) -> anyhow::Result<Parsed<'a>> {
         // Attempt to parse raw tolerances into registered tolerance inputs.
         let num_checks = self.checks.len();
@@ -356,7 +355,7 @@ impl Raw {
                     .with_context(context)?;
 
                 Ok(ParsedInner {
-                    entry,
+                    entry: entry.clone(),
                     tolerance: Rc::new(tolerance),
                     input: unprocessed.input,
                 })
@@ -382,7 +381,7 @@ impl Raw {
 /// * The tag in `input` exists within at least one of the regressions in `entry`.
 #[derive(Debug)]
 struct ParsedInner<'a> {
-    entry: &'a registry::RegisteredTolerance<'a>,
+    entry: registry::RegisteredTolerance<'a>,
     tolerance: Rc<Any>,
     input: jobs::Unprocessed,
 }

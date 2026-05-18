@@ -12,61 +12,6 @@ use crate::{
     input, Any, Checkpoint, Input, Output,
 };
 
-/// A collection of [`crate::Input`].
-pub struct Inputs {
-    // Inputs keyed by their tag type.
-    inputs: HashMap<&'static str, Box<dyn input::DynInput>>,
-}
-
-impl Inputs {
-    /// Construct a new empty [`Inputs`] registry.
-    pub fn new() -> Self {
-        Self {
-            inputs: HashMap::new(),
-        }
-    }
-
-    /// Return the input with the registered `tag` if present. Otherwise, return `None`.
-    pub fn get(&self, tag: &str) -> Option<input::Registered<'_>> {
-        self.inputs.get(tag).map(|v| input::Registered(&**v))
-    }
-
-    /// Register the [`Input`] `T` in the registry.
-    ///
-    /// Returns an error if any other input with the same [`Input::tag()`] has been registered
-    /// while leaving the underlying registry unchanged.
-    pub fn register<T>(&mut self) -> anyhow::Result<()>
-    where
-        T: Input + 'static,
-    {
-        let tag = T::tag();
-        match self.inputs.entry(tag) {
-            Entry::Vacant(entry) => {
-                entry.insert(Box::new(crate::input::Wrapper::<T>::new()));
-                Ok(())
-            }
-            Entry::Occupied(_) => {
-                #[derive(Debug, Error)]
-                #[error("An input with the tag \"{}\" already exists", self.0)]
-                struct AlreadyExists(&'static str);
-
-                Err(anyhow::anyhow!(AlreadyExists(tag)))
-            }
-        }
-    }
-
-    /// Return an iterator over all registered input tags in an unspecified order.
-    pub fn tags(&self) -> impl ExactSizeIterator<Item = &'static str> + use<'_> {
-        self.inputs.keys().copied()
-    }
-}
-
-impl Default for Inputs {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A registered benchmark entry: a name paired with a type-erased benchmark.
 pub(crate) struct RegisteredBenchmark {
     name: String,
@@ -93,24 +38,52 @@ impl RegisteredBenchmark {
     }
 }
 
-/// A collection of registered benchmarks.
-pub struct Benchmarks {
+/// A collection of registered inputs and benchmarks.
+pub struct Registry {
+    // Inputs keyed by their tag type.
+    inputs: HashMap<&'static str, Box<dyn input::DynInput>>,
     benchmarks: Vec<RegisteredBenchmark>,
 }
 
-impl Benchmarks {
+impl Registry {
     /// Return a new empty registry.
     pub fn new() -> Self {
         Self {
+            inputs: HashMap::new(),
             benchmarks: Vec::new(),
         }
     }
 
-    /// Register a new benchmark with the given name.
-    pub fn register<T>(&mut self, name: impl Into<String>, benchmark: T)
+    /// Return the input with the registered `tag` if present. Otherwise, return `None`.
+    ///
+    /// Inputs are automatically registered as a side-effect of:
+    ///
+    /// * [`register`](Self::register)
+    /// * [`register_regression`](Self::register_regression)
+    pub fn input(&self, tag: &str) -> Option<input::Registered<'_>> {
+        self._input(tag).map(input::Registered)
+    }
+
+    /// Return an iterator over all registered input tags in an unspecified order.
+    pub fn input_tags(&self) -> impl ExactSizeIterator<Item = &'static str> + use<'_> {
+        self.inputs.keys().copied()
+    }
+
+    /// Register a new `benchmark` with the given `name`.
+    ///
+    /// As a side-effect, the benchmark's [`Input`](Benchmark::Input) type is also registered.
+    /// Duplicate registrations of the same tag and type are allowed; mismatched types for the
+    /// same tag return an error.
+    pub fn register<T>(
+        &mut self,
+        name: impl Into<String>,
+        benchmark: T,
+    ) -> Result<(), RegistryError>
     where
         T: Benchmark,
     {
+        self.register_input::<T::Input>()?;
+
         self.benchmarks.push(RegisteredBenchmark {
             name: name.into(),
             benchmark: Box::new(benchmark::internal::Wrapper::<T, _>::new(
@@ -118,6 +91,7 @@ impl Benchmarks {
                 benchmark::internal::NoRegression,
             )),
         });
+        Ok(())
     }
 
     /// Return an iterator over registered benchmark names and their descriptions.
@@ -206,18 +180,59 @@ impl Benchmarks {
             .map(|(entry, _)| entry)
     }
 
+    fn _input(&self, tag: &str) -> Option<&dyn input::DynInput> {
+        self.inputs.get(tag).map(|v| &**v)
+    }
+
+    fn register_input<T>(&mut self) -> Result<(), RegistryError>
+    where
+        T: Input + 'static,
+    {
+        let tag = T::tag();
+        let wrapper = crate::input::Wrapper::<T>::new();
+        match self.inputs.entry(tag) {
+            Entry::Vacant(v) => {
+                v.insert(Box::new(wrapper));
+                Ok(())
+            }
+            Entry::Occupied(o) => {
+                use input::DynInput;
+
+                if o.get().as_any().is::<crate::input::Wrapper<T>>() {
+                    Ok(())
+                } else {
+                    Err(RegistryError {
+                        tag,
+                        existing: o.get().type_name(),
+                        new: wrapper.type_name(),
+                    })
+                }
+            }
+        }
+    }
+
     //-------------------//
     // Regression Checks //
     //-------------------//
 
-    /// Register a regression-checkable benchmark with the associated name.
+    /// Register a regression-checkable `benchmark` with the given `name`.
+    ///
+    /// As a side-effect, the benchmark's [`Input`](Benchmark::Input) type is also registered.
+    /// Duplicate registrations of the same tag and type are allowed; mismatched types for the
+    /// same tag return an error.
     ///
     /// Upon registration, the associated [`Regression::Tolerances`] input and the benchmark
     /// itself will be reachable via [`Check`](crate::app::Check).
-    pub fn register_regression<T>(&mut self, name: impl Into<String>, benchmark: T)
+    pub fn register_regression<T>(
+        &mut self,
+        name: impl Into<String>,
+        benchmark: T,
+    ) -> Result<(), RegistryError>
     where
         T: Regression,
     {
+        self.register_input::<T::Input>()?;
+
         let registered = benchmark::internal::Wrapper::<T, _>::new(
             benchmark,
             benchmark::internal::WithRegression,
@@ -226,6 +241,8 @@ impl Benchmarks {
             name: name.into(),
             benchmark: Box::new(registered),
         });
+
+        Ok(())
     }
 
     /// Return a collection of all tolerance related inputs, keyed by the input tag type
@@ -260,10 +277,24 @@ impl Benchmarks {
     }
 }
 
-impl Default for Benchmarks {
+impl Default for Registry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Error for [`Registry::register`] or [`Registry::register_regression`].
+#[derive(Debug, Error)]
+#[error(
+    "A different input with tag \"{}\" was already registered. Existing type: \"{}\". New type: \"{}\"",
+    self.tag,
+    self.existing,
+    self.new,
+)]
+pub struct RegistryError {
+    tag: &'static str,
+    existing: &'static str,
+    new: &'static str,
 }
 
 /// Document the reason for a method matching failure.
@@ -318,7 +349,7 @@ impl RegressionBenchmark<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RegisteredTolerance<'a> {
     /// The tolerance parser.
     pub(crate) tolerance: input::Registered<'a>,
@@ -340,5 +371,77 @@ impl std::fmt::Display for Capture<'_> {
 impl std::fmt::Debug for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.description(f, self.1)
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{input, Checker};
+
+    macro_rules! input {
+        ($T:ident, $tag:literal) => {
+            struct $T;
+
+            impl Input for $T {
+                fn tag() -> &'static str {
+                    $tag
+                }
+                fn try_deserialize(
+                    _serialized: &serde_json::Value,
+                    _checker: &mut Checker,
+                ) -> anyhow::Result<Any> {
+                    unimplemented!("this struct is for test only");
+                }
+                fn example() -> anyhow::Result<serde_json::Value> {
+                    unimplemented!("this struct is for test only");
+                }
+            }
+        };
+    }
+
+    // For the types below, `A` and `B` have distinct tags, but `A2`'s tag conflicts with `A`.
+    input!(A, "type-a");
+    input!(B, "type-b");
+    input!(A2, "type-a");
+
+    #[test]
+    fn test_tag_conflicts() {
+        let mut registry = Registry::new();
+        registry.register_input::<A>().unwrap();
+        registry.register_input::<B>().unwrap();
+
+        let mut tags: Vec<_> = registry.input_tags().collect();
+        tags.sort();
+        assert_eq!(tags.as_slice(), ["type-a", "type-b"]);
+
+        {
+            let a = registry._input(A::tag()).unwrap();
+            assert!(a.as_any().is::<input::Wrapper<A>>());
+
+            let name = a.type_name();
+            assert!(name.contains("A"), "{}", name);
+        }
+
+        {
+            let b = registry._input(B::tag()).unwrap();
+            assert!(b.as_any().is::<input::Wrapper<B>>());
+
+            let name = b.type_name();
+            assert!(name.contains("B"), "{}", name);
+        }
+
+        let err = registry.register_input::<A2>().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("A different input with tag \"type-a\" was already registered"),
+            "FAILED: {}",
+            msg
+        );
     }
 }
