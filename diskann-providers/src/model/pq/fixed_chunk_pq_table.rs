@@ -29,7 +29,7 @@ pub struct FixedChunkPQTable {
 // These free functions use internals of the `FixedChunkPQTable`.
 //
 // We should clean up the API in the FFI.
-fn direct_distance_impl<T>(
+pub fn direct_distance_impl<T>(
     pq_table: &[f32],
     chunk_offsets: &[usize],
     dim: usize,
@@ -252,7 +252,7 @@ impl FixedChunkPQTable {
     /// Calculate the distance between query and given centroid by inner product
     /// * `query_vec` - query vector: 1 * dim
     /// * `base_vec` - given centroid array: 1 * num_pq_chunks
-    fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
+    pub fn inner_product_raw(&self, query_vec: &[f32], base_vec: &[u8]) -> f32 {
         direct_distance_impl::<distance::simd::ResumableIP<diskann_wide::arch::Current>>(
             self.table.view_pivots().as_slice(),
             self.table.view_offsets().as_slice(),
