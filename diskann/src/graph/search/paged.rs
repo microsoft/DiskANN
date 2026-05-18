@@ -18,12 +18,12 @@ use crate::{
     utils::VectorId,
 };
 
-/// A paged search handle that owns all search state internally.
+/// Intermediate state for paged search.
 ///
-/// Created by [`DiskANNIndex::paged_search`] or
-/// [`DiskANNIndex::paged_search_with_init_ids`]. Each call to
-/// [`next_page`](Self::next_page) resumes the graph search and returns the next page of
-/// nearest-neighbor results. Returns an empty `Vec` when the search is exhausted.
+/// Each call to [`next_page`](Self::next_page) resumes the graph search and returns the
+/// next page of nearest-neighbor results. Returns an empty `Vec` when the search is exhausted.
+///
+/// See also: [`DiskANNIndex::paged_search`], [`DiskANNIndex::paged_search_with_init_ids`].
 #[derive(Debug)]
 pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
     pub(in crate::graph) index: &'a DiskANNIndex<DP>,
@@ -45,7 +45,11 @@ where
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
-    /// Results across pages are non-overlapping and ordered by non-decreasing distance.
+    /// Results across pages are non-overlapping but not guaranteed to be monotonic with
+    /// respect to distance.
+    ///
+    /// Within a page, results ordered by non-decreasing distance.
+    ///
     /// When the search is exhausted, returns an empty `Vec`.
     pub fn next_page(
         &mut self,
