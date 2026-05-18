@@ -13,7 +13,8 @@ use diskann_vector::{
 use rand::{Rng, distr::Distribution};
 use rand_distr::{Normal, Uniform};
 
-use crate::model::{FixedChunkPQTable, pq::calculate_chunk_offsets_auto};
+use crate::model::FixedChunkPQTable;
+use diskann_quantization::views::ChunkOffsets;
 
 /// We need a way to generate random queries.
 ///
@@ -130,7 +131,12 @@ pub(crate) fn generate_expected_vector(
 /// * N + 1: The number of PQ Pivots
 pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     // Get the chunk offsets for the selected dimension and bytes.
-    let offsets = calculate_chunk_offsets_auto(config.dim, config.pq_chunks);
+    let chunk_offsets = ChunkOffsets::partition(
+        std::num::NonZeroUsize::new(config.dim).unwrap(),
+        std::num::NonZeroUsize::new(config.pq_chunks).unwrap(),
+    )
+    .unwrap();
+    let offsets = chunk_offsets.as_slice();
 
     // Create the pivot table following the schema described in the docstring.
     let mut pivots = Vec::<f32>::new();
@@ -149,10 +155,7 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     }
 
     assert_eq!(pivots.len(), config.dim * config.num_pivots);
-
-    let centroid = vec![0.0f32; config.dim];
-
-    FixedChunkPQTable::new(config.dim, pivots.into(), centroid.into(), offsets.into()).unwrap()
+    FixedChunkPQTable::new(config.dim, pivots.into(), offsets.into()).unwrap()
 }
 
 /// Generate a random PQ code spanning the requested number of pivots and chunks.
@@ -184,32 +187,28 @@ where
 ///
 /// Next, if OPQ is used, we need to ensure that the matrix multiplication is applied
 /// to the query vector before we can obtain expected results.
-pub(super) fn test_l2_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+pub(super) fn test_l2_inner<'a, F, R>(
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
     rng: &mut R,
     errors: RelativeAndAbsolute,
 ) where
-    T: Into<f32> + TestDistribution,
     F: for<'any> PreprocessedDistanceFunction<&'any [u8], f32>,
     R: Rng,
 {
     for _ in 0..num_trials {
-        let input: Vec<T> = T::generate(config.dim, rng);
-        let mut input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
+        let input_query: Vec<f32> = f32::generate(config.dim, rng);
 
-        table.preprocess_query(&mut input_f32);
-
-        let computer = create(table, &input);
+        let computer = create(table, &input_query);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =
                 generate_expected_vector(&code, table.get_chunk_offsets(), config.start_value);
 
             let got = computer.evaluate_similarity(&code);
-            let expected = SquaredL2::evaluate(input_f32.as_slice(), expected_vector.as_slice());
+            let expected = SquaredL2::evaluate(input_query.as_slice(), expected_vector.as_slice());
 
             // This doesn't need to be exact due to rounding differences.
             assert_relative_eq!(
@@ -222,23 +221,21 @@ pub(super) fn test_l2_inner<'a, T, F, R>(
     }
 }
 
-pub(super) fn test_ip_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+pub(super) fn test_ip_inner<'a, F, R>(
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
     rng: &mut R,
     errors: RelativeAndAbsolute,
 ) where
-    T: Into<f32> + TestDistribution,
     F: for<'any> PreprocessedDistanceFunction<&'any [u8], f32>,
     R: Rng,
 {
     for _ in 0..num_trials {
-        let input: Vec<T> = T::generate(config.dim, rng);
-        let input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
+        let input_f32: Vec<f32> = f32::generate(config.dim, rng);
 
-        let computer = create(table, &input);
+        let computer = create(table, &input_f32);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =
@@ -258,23 +255,21 @@ pub(super) fn test_ip_inner<'a, T, F, R>(
     }
 }
 
-pub(super) fn test_cosine_inner<'a, T, F, R>(
-    create: impl Fn(&'a FixedChunkPQTable, &[T]) -> F,
+pub(super) fn test_cosine_inner<'a, F, R>(
+    create: impl Fn(&'a FixedChunkPQTable, &[f32]) -> F,
     table: &'a FixedChunkPQTable,
     num_trials: usize,
     config: TableConfig,
     rng: &mut R,
     errors: RelativeAndAbsolute,
 ) where
-    T: Into<f32> + TestDistribution,
     F: for<'any> PreprocessedDistanceFunction<&'any [u8], f32>,
     R: Rng,
 {
     for _ in 0..num_trials {
-        let input: Vec<T> = T::generate(config.dim, rng);
-        let input_f32: Vec<f32> = input.iter().map(|x| (*x).into()).collect();
+        let input_f32: Vec<f32> = f32::generate(config.dim, rng);
 
-        let computer = create(table, &input);
+        let computer = create(table, &input_f32);
         for _ in 0..num_trials {
             let code = generate_random_code(config.num_pivots, config.pq_chunks, rng);
             let expected_vector =

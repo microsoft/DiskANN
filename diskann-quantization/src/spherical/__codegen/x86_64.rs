@@ -335,6 +335,90 @@ pub fn twobit_v3_cosine_full_data(
 // 4-bit //
 ///////////
 
+//----//
+// V4 //
+//----//
+
+#[inline(never)]
+pub fn fourbit_v4_l2_data_data(arch: V4, dim: usize) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsData<4>, AsData<4>>::new(
+        vectors::CompensatedSquaredL2::new(dim),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn fourbit_v4_ip_data_data(
+    arch: V4,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsData<4>, AsData<4>>::new(
+        vectors::CompensatedIP::new(shift, dim),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn fourbit_v4_cosine_data_data(
+    arch: V4,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsData<4>, AsData<4>>::new(
+        vectors::CompensatedCosine::new(vectors::CompensatedIP::new(shift, dim)),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn fourbit_v4_l2_query_data(arch: V4, dim: usize) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsQuery<4, Dense>, AsData<4>>::new(
+        vectors::CompensatedSquaredL2::new(dim),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn fourbit_v4_ip_query_data(
+    arch: V4,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsQuery<4, Dense>, AsData<4>>::new(
+        vectors::CompensatedIP::new(shift, dim),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+#[inline(never)]
+pub fn fourbit_v4_cosine_query_data(
+    arch: V4,
+    shift: &[f32],
+    dim: usize,
+) -> Result<DistanceComputer, AllocatorError> {
+    let reify = Reify::<_, _, AsQuery<4, Dense>, AsData<4>>::new(
+        vectors::CompensatedCosine::new(vectors::CompensatedIP::new(shift, dim)),
+        dim,
+        arch,
+    );
+    DistanceComputer::new(reify, GlobalAllocator)
+}
+
+//----//
+// V3 //
+//----//
+
 #[inline(never)]
 pub fn fourbit_v3_l2_data_data(arch: V3, dim: usize) -> Result<DistanceComputer, AllocatorError> {
     let reify = Reify::<_, _, AsData<4>, AsData<4>>::new(

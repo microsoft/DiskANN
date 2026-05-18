@@ -71,16 +71,13 @@ pub fn train_pq(
         model::pq::NUM_PQ_CENTROIDS,
         num_pq_chunks,
         5,
-        false,
     )?;
-    let mut centroid = vec![0.0; dim];
     let mut offsets = vec![0; num_pq_chunks + 1];
     let mut full_pivot_data = vec![0.0; model::pq::NUM_PQ_CENTROIDS * dim];
 
     model::pq::generate_pq_pivots_from_membuf(
         &pivot_args,
         data.as_slice(),
-        &mut centroid,
         &mut offsets,
         &mut full_pivot_data,
         rng,
@@ -88,7 +85,7 @@ pub fn train_pq(
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), centroid.into(), offsets.into())
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -1559,13 +1556,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
@@ -1680,13 +1672,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
@@ -3006,7 +2993,10 @@ pub(crate) mod tests {
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // check that we have an unpruned graph
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() > max_degree);
 
         // prune graph and check that max_degree is respected
@@ -3014,7 +3004,10 @@ pub(crate) mod tests {
             .prune_range(&FullPrecision, ctx, 0..256)
             .await
             .unwrap();
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() <= max_degree);
     }
 
@@ -3293,14 +3286,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
-        let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+        let res_unsat = index_unsat
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(
@@ -3315,14 +3311,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
         let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(

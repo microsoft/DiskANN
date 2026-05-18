@@ -7,7 +7,6 @@ use std::{
     collections::HashMap,
     future::Future,
     num::NonZeroUsize,
-    ops::Range,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
         Arc,
@@ -17,16 +16,16 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use diskann::{
+    error::IntoANNResult,
     graph::{
         self,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
-            SearchStrategy,
+            self, DefaultPostProcessor, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy,
         },
         search::Knn,
         search_output_buffer, AdjacencyList, DiskANNIndex,
     },
-    neighbor::Neighbor,
+    neighbor::{Neighbor, NeighborPriorityQueue},
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
         NeighborAccessor, NoopGuard,
@@ -646,7 +645,7 @@ where
 #[derive(Clone)]
 struct DiskSearchScratchArgs<'a, ProviderFactory> {
     graph_degree: usize,
-    dim: usize,
+    pq_dim: usize,
     num_pq_chunks: usize,
     num_pq_centers: usize,
     vertex_factory: &'a ProviderFactory,
@@ -664,7 +663,7 @@ where
     fn try_create(args: &DiskSearchScratchArgs<ProviderFactory>) -> Result<Self, Self::Error> {
         let pq_scratch = PQScratch::new(
             args.graph_degree,
-            args.dim,
+            args.pq_dim,
             args.num_pq_chunks,
             args.num_pq_centers,
         )?;
@@ -766,7 +765,7 @@ where
             scratch_pool,
             &DiskSearchScratchArgs {
                 graph_degree: provider.graph_header.max_degree::<Data::VectorDataType>()?,
-                dim: provider.graph_header.metadata().dims,
+                pq_dim: provider.pq_data.get_dim(),
                 num_pq_chunks: provider.pq_data.get_num_chunks(),
                 num_pq_centers: provider.pq_data.get_num_centers(),
                 vertex_factory: vertex_provider_factory,
@@ -774,9 +773,9 @@ where
             },
         )?;
 
-        scratch
-            .pq_scratch
-            .set(provider.graph_header.metadata().dims, query)?;
+        // Decode caller's native vector representation into `f32`; downstream PQ kernels operate purely on `&[f32]`.
+        let f32_query = Data::VectorDataType::as_f32(query).into_ann_result()?;
+        scratch.pq_scratch.set(&f32_query)?;
         let start_vertex_id = provider.graph_header.metadata().medoid as u32;
 
         let timer = Instant::now();
@@ -856,16 +855,6 @@ where
         id: Self::Id,
     ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
         std::future::ready(self.provider.pq_data.get_compressed_vector(id as usize))
-    }
-}
-
-impl<Data, VP> IdIterator<Range<u32>> for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    async fn id_iterator(&mut self) -> Result<Range<u32>, ANNError> {
-        Ok(0..self.provider.num_points as u32)
     }
 }
 
@@ -1020,7 +1009,7 @@ where
         let pq_data = disk_index_reader.get_pq_data();
         let scratch_pool_args = DiskSearchScratchArgs {
             graph_degree: graph_header.max_degree::<Data::VectorDataType>()?,
-            dim: graph_header.metadata().dims,
+            pq_dim: pq_data.get_dim(),
             num_pq_chunks: pq_data.get_num_chunks(),
             num_pq_centers: pq_data.get_num_centers(),
             vertex_factory: &vertex_provider_factory,
@@ -1058,6 +1047,55 @@ where
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
         }
+    }
+
+    /// Perform a brute-force linear scan of all points in the index, returning the
+    /// nearest neighbors that pass `vector_filter`.
+    ///
+    /// The top `neighbors_before_reranking` candidates from the quantized scan will be
+    /// provided to full-precision reranking.
+    async fn flat_search<OB>(
+        &self,
+        strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
+        query: &[Data::VectorDataType],
+        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
+        neighbors_before_reranking: usize,
+        output: &mut OB,
+    ) -> ANNResult<graph::index::SearchStats>
+    where
+        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+    {
+        let provider = self.index.provider();
+        let mut accessor = strategy
+            .search_accessor(provider, &DefaultContext)
+            .into_ann_result()?;
+        let computer = accessor.build_query_computer(query).into_ann_result()?;
+
+        let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
+        let mut cmps = 0u32;
+
+        let num_points = provider.num_points as u32;
+        for id in 0..num_points {
+            if vector_filter(&id) {
+                let element = accessor.get_element(id).await.into_ann_result()?;
+                let dist = computer.evaluate_similarity(element);
+                best.insert(Neighbor::new(id, dist));
+                cmps += 1;
+            }
+        }
+
+        let result_count = strategy
+            .default_post_processor()
+            .post_process(&mut accessor, query, &computer, best.iter(), output)
+            .await
+            .into_ann_result()?;
+
+        Ok(graph::index::SearchStats {
+            cmps,
+            hops: 0,
+            result_count: result_count as u32,
+            range_search_second_round: false,
+        })
     }
 
     /// Perform a search on the disk index.
@@ -1155,12 +1193,11 @@ where
         let k = k_value;
         let l = search_list_size as usize;
         let stats = if is_flat_search {
-            self.runtime.block_on(self.index.flat_search(
+            self.runtime.block_on(self.flat_search(
                 &strategy,
-                &DefaultContext,
-                strategy.query,
+                query,
                 vector_filter,
-                &Knn::new(k, l, beam_width)?,
+                l,
                 &mut result_output_buffer,
             ))?
         } else if let Some(processor) = post_processor {

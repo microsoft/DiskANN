@@ -10,16 +10,6 @@ pub(crate) mod graph_index;
 pub(crate) mod post_processor;
 pub(crate) mod save_and_load;
 
-pub(crate) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    graph_index::register_inputs(registry)?;
-    exhaustive::register_inputs(registry)?;
-    disk::register_inputs(registry)?;
-    filters::register_inputs(registry)?;
-    Ok(())
-}
-
 /// Construct an example input of type `Self`.
 pub(crate) trait Example {
     fn example() -> Self;

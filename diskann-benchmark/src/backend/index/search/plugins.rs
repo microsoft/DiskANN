@@ -20,7 +20,7 @@
 //!
 //! Benchmarks own a [`Plugins`] collection and register only the plugin types they want to
 //! support. The helper methods on [`Plugins`] then integrate with
-//! [`diskann_benchmark_runner::Benchmarks`]:
+//! [`diskann_benchmark_runner::Registry`]:
 //!
 //! * [`Plugins::format_kinds`]: format the registered plugin labels for diagnostics.
 //! * [`Plugins::is_match`]: check whether any registered plugin accepts a requested `Kind`.

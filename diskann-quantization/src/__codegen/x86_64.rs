@@ -89,6 +89,16 @@ pub fn bits_v4_ip_bu2_bu2(arch: V4, x: USlice<'_, 2>, y: USlice<'_, 2>) -> MR<u3
     arch.run2_inline(distances::InnerProduct, x, y)
 }
 
+#[inline(never)]
+pub fn bits_v4_l2_bu4_bu4(arch: V4, x: USlice<'_, 4>, y: USlice<'_, 4>) -> MR<u32> {
+    arch.run2_inline(distances::SquaredL2, x, y)
+}
+
+#[inline(never)]
+pub fn bits_v4_ip_bu4_bu4(arch: V4, x: USlice<'_, 4>, y: USlice<'_, 4>) -> MR<u32> {
+    arch.run2_inline(distances::InnerProduct, x, y)
+}
+
 //------------//
 // Transposed //
 //------------//

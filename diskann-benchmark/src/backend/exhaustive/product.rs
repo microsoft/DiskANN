@@ -3,18 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
 crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register(NAME, imp::ProductQ);
+    registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, benchmarks)
+    imp::register(NAME, registry)?;
+
+    Ok(())
 }
 
 //////////////
@@ -26,7 +28,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        dispatcher::{FailureScore, MatchScore},
+        benchmark::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -84,10 +86,10 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_providers::model::pq::calculate_chunk_offsets_auto(
-                data.ncols(),
-                input.num_pq_chunks.get(),
-            );
+            let dim = std::num::NonZeroUsize::new(data.ncols())
+                .ok_or_else(|| anyhow::anyhow!("data has zero columns"))?;
+            let offsets =
+                diskann_quantization::views::ChunkOffsets::partition(dim, input.num_pq_chunks)?;
 
             let base = {
                 let threadpool = rayon::ThreadPoolBuilder::new()
@@ -96,7 +98,7 @@ mod imp {
                 threadpool.install(|| -> anyhow::Result<_> {
                     Ok(parameters.train(
                         data.as_view(),
-                        diskann_quantization::views::ChunkOffsetsView::new(offsets.as_slice())?,
+                        offsets.as_view(),
                         diskann_quantization::Parallelism::Rayon,
                         &diskann_quantization::random::StdRngBuilder::new(input.seed),
                         &diskann_quantization::cancel::DontCancel,
@@ -107,8 +109,7 @@ mod imp {
             let quantizer = diskann_providers::model::pq::FixedChunkPQTable::new(
                 data.ncols(),
                 base.flatten().into(),
-                vec![0.0; data.ncols()].into(),
-                offsets.into(),
+                offsets.as_slice().into(),
             )?;
 
             let training_time: MicroSeconds = start.elapsed().into();

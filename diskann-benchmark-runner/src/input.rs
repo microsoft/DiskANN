@@ -40,7 +40,7 @@ pub trait Input {
     fn example() -> anyhow::Result<serde_json::Value>;
 }
 
-/// A registered input. See [`crate::registry::Inputs::get`].
+/// A registered input. See [`crate::Registry::input`].
 #[derive(Clone, Copy)]
 pub struct Registered<'a>(pub(crate) &'a dyn DynInput);
 
@@ -110,11 +110,15 @@ pub(crate) trait DynInput {
         checker: &mut Checker,
     ) -> anyhow::Result<Any>;
     fn example(&self) -> anyhow::Result<serde_json::Value>;
+
+    // reflection
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn type_name(&self) -> &'static str;
 }
 
 impl<T> DynInput for Wrapper<T>
 where
-    T: Input,
+    T: Input + 'static,
 {
     fn tag(&self) -> &'static str {
         T::tag()
@@ -128,5 +132,11 @@ where
     }
     fn example(&self) -> anyhow::Result<serde_json::Value> {
         T::example()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
     }
 }

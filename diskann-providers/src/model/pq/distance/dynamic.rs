@@ -5,7 +5,7 @@
 
 use std::{ops::Deref, sync::Arc};
 
-use diskann::ANNResult;
+use diskann::{ANNError, ANNResult};
 use diskann_utils::object_pool::ObjectPool;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
@@ -67,15 +67,19 @@ where
     ///
     /// Even though PQ does not necessarily preserve the norms of compressed vectors, using L2
     /// for Cosine Normalized seems to work well enough in practice to work as a temporary fix.
-    pub fn new<U>(
+    pub fn new(
         table: T,
         metric: Metric,
-        query: &[U],
+        query: &[f32],
         pool: Option<Arc<ObjectPool<Vec<f32>>>>,
-    ) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    ) -> ANNResult<Self> {
+        let dim = table.get_dim();
+        if query.len() != dim {
+            return Err(ANNError::log_dimension_mismatch_error(format!(
+                "QueryComputer::new: expected query of length {dim}, got {}",
+                query.len()
+            )));
+        }
         let result = match metric {
             Metric::L2 => Self::L2(TableL2::new(table, query, pool)?),
             Metric::InnerProduct => Self::IP(TableIP::new(table, query, pool)?),
@@ -98,25 +102,6 @@ where
                 PreprocessedDistanceFunction::evaluate_similarity(f, changing)
             }
         }
-    }
-}
-
-impl<T> PreprocessedDistanceFunction<&Vec<u8>, f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &Vec<u8>) -> f32 {
-        self.evaluate_similarity(changing.as_slice())
-    }
-}
-
-impl<T> PreprocessedDistanceFunction<&&[u8], f32> for QueryComputer<T>
-where
-    T: Deref<Target = FixedChunkPQTable>,
-{
-    fn evaluate_similarity(&self, changing: &&[u8]) -> f32 {
-        let changing: &[u8] = changing;
-        self.evaluate_similarity(changing)
     }
 }
 
@@ -210,6 +195,13 @@ where
     #[inline(always)]
     fn evaluate_similarity(&self, fp: &[f32], q: &[u8]) -> f32 {
         assert_eq!(
+            fp.len(),
+            self.table.get_dim(),
+            "DistanceComputer: full-precision query length {} != dim {}",
+            fp.len(),
+            self.table.get_dim(),
+        );
+        assert_eq!(
             q.len(),
             self.table.get_num_chunks(),
             "{}",
@@ -235,21 +227,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use approx::assert_relative_eq;
     use diskann_vector::{
-        Half, Norm, PureDistanceFunction,
+        Norm, PureDistanceFunction,
         distance::{Cosine, CosineNormalized, InnerProduct, SquaredL2},
         norm::FastL2Norm,
     };
     use rand::SeedableRng;
     use rstest::rstest;
 
-    use super::{
-        super::test_utils::{self, TestDistribution},
-        *,
-    };
+    use super::{super::test_utils, *};
 
     // A wrapper for the `DistanceComputer` that enables it to behave like a
     // `PreprocessedDistanceFunction`.
@@ -276,13 +263,8 @@ mod tests {
     // L2 //
     ////////
 
-    #[rstest]
-    fn test_l2<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<i8>, PhantomData::<u8>)]
-        _marker: PhantomData<T>,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_l2() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x83aa68de5765b565);
         for dim in [50, 51] {
             for pq_chunks in [8, 19, 50] {
@@ -307,7 +289,7 @@ mod tests {
                     };
 
                     test_utils::test_l2_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::L2, query, None).unwrap()
                         },
                         &table,
@@ -318,9 +300,9 @@ mod tests {
                     );
 
                     test_utils::test_l2_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
+                        |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::L2),
-                            query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
+                            query: query.to_vec(),
                         },
                         &table,
                         num_trials,
@@ -337,15 +319,8 @@ mod tests {
     // InnerProduct //
     //////////////////
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_innerproduct<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
+    #[test]
+    fn test_innerproduct() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc392d773dc8de593);
         for dim in [12, 15, 128] {
             for pq_chunks in [2, 5, 15] {
@@ -370,7 +345,7 @@ mod tests {
                     };
 
                     test_utils::test_ip_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::InnerProduct, query, None).unwrap()
                         },
                         &table,
@@ -381,9 +356,9 @@ mod tests {
                     );
 
                     test_utils::test_ip_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
+                        |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::InnerProduct),
-                            query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
+                            query: query.to_vec(),
                         },
                         &table,
                         num_trials,
@@ -400,16 +375,8 @@ mod tests {
     // Cosine //
     ////////////
 
-    #[rstest]
-    #[case(PhantomData::<f32>)]
-    #[case(PhantomData::<Half>)]
-    #[case(PhantomData::<i8>)]
-    #[case(PhantomData::<u8>)]
-    fn test_cosine<T>(#[case] _marker: PhantomData<T>)
-    where
-        T: Into<f32> + TestDistribution,
-    {
-        // RNG
+    #[test]
+    fn test_cosine() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc33529acbe474958);
         let num_trials = 20;
 
@@ -433,7 +400,7 @@ mod tests {
                     };
 
                     test_utils::test_cosine_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| {
+                        |table: &FixedChunkPQTable, query: &[f32]| {
                             QueryComputer::new(table, Metric::Cosine, query, None).unwrap()
                         },
                         &table,
@@ -444,9 +411,9 @@ mod tests {
                     );
 
                     test_utils::test_cosine_inner(
-                        |table: &FixedChunkPQTable, query: &[T]| PreprocessedWrapper {
+                        |table: &FixedChunkPQTable, query: &[f32]| PreprocessedWrapper {
                             table: DistanceComputer::new(table, Metric::Cosine),
-                            query: query.iter().map(|i| <T as Into<f32>>::into(*i)).collect(),
+                            query: query.to_vec(),
                         },
                         &table,
                         num_trials,
@@ -531,5 +498,35 @@ mod tests {
                 max_relative = 4.0e-6,
             );
         }
+    }
+
+    #[test]
+    fn query_computer_new_rejects_mismatched_query() {
+        let config = test_utils::TableConfig {
+            dim: 16,
+            pq_chunks: 4,
+            num_pivots: 8,
+            start_value: 0.0,
+        };
+        let table = test_utils::seed_pivot_table(config);
+        let short_query = vec![0.0f32; config.dim - 1];
+        let err = QueryComputer::new(&table, Metric::L2, &short_query, None).unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
+    }
+
+    #[test]
+    #[should_panic(expected = "DistanceComputer: full-precision query length")]
+    fn distance_computer_panics_on_mismatched_fp_query() {
+        let config = test_utils::TableConfig {
+            dim: 16,
+            pq_chunks: 4,
+            num_pivots: 8,
+            start_value: 0.0,
+        };
+        let table = test_utils::seed_pivot_table(config);
+        let computer = DistanceComputer::new(&table, Metric::L2);
+        let short_fp = vec![0.0f32; config.dim - 1];
+        let code = vec![0u8; config.pq_chunks];
+        let _ = computer.evaluate_similarity(short_fp.as_slice(), code.as_slice());
     }
 }

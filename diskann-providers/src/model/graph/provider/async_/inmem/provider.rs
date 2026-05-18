@@ -156,7 +156,6 @@ use crate::{
 /// let table = FixedChunkPQTable::new(
 ///     dim,
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
-///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
 /// ).unwrap();
 ///
@@ -204,7 +203,6 @@ use crate::{
 /// let dim = 4;
 /// let table = FixedChunkPQTable::new(
 ///     dim,
-///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0.0, 0.0, 0.0, 0.0]),
 ///     Box::new([0, dim]),
 /// ).unwrap();

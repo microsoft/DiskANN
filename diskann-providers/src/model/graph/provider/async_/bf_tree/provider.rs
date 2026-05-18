@@ -2156,7 +2156,7 @@ where
         let pq_table = &self.quant_vectors.pq_chunk_table;
         pq_storage.write_pivot_data(
             pq_table.get_pq_table(),
-            pq_table.get_centroids(),
+            None,
             pq_table.get_chunk_offsets(),
             NUM_PQ_CENTROIDS,
             pq_table.get_dim(),
@@ -2683,7 +2683,6 @@ mod tests {
         let pq_table = FixedChunkPQTable::new(
             dim,
             vec![0.0; dim * 256].into_boxed_slice(),
-            vec![0.0; dim].into_boxed_slice(),
             Box::new([0, 4, dim]),
         )
         .unwrap();
@@ -2784,11 +2783,6 @@ mod tests {
             original_pq.get_pq_table(),
             loaded_pq.get_pq_table(),
             "PQ table data mismatch"
-        );
-        assert_eq!(
-            original_pq.get_centroids(),
-            loaded_pq.get_centroids(),
-            "PQ table centroids mismatch"
         );
         assert_eq!(
             original_pq.get_chunk_offsets(),
@@ -2986,7 +2980,6 @@ mod tests {
         let pq_table = FixedChunkPQTable::new(
             dim,
             vec![0.0; dim * 256].into_boxed_slice(),
-            vec![0.0; dim].into_boxed_slice(),
             Box::new([0, 4, dim]),
         )
         .unwrap();
