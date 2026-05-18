@@ -221,6 +221,10 @@ fn single_page() {
     // Verify second call returns empty (nothing left)
     let page2 = rt.block_on(search.next_page(page_size)).unwrap();
     assert!(page2.is_empty(), "second page should be empty");
+
+    // Verify repeated calls after exhaustion remain empty (idempotent, no panic).
+    let page3 = rt.block_on(search.next_page(page_size)).unwrap();
+    assert!(page3.is_empty(), "third page should still be empty");
 }
 
 #[test]

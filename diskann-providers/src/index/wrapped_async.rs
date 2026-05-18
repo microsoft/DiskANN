@@ -408,13 +408,13 @@ where
     }
 }
 
-/// Synchronous wrapper around [`graph::index::PagedSearch`] that owns a tokio runtime handle.
+/// Synchronous wrapper around [`graph::search::PagedSearch`] that owns a tokio runtime handle.
 ///
 /// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
 /// blocks the current thread to drive the underlying async search forward.
 pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
     handle: tokio::runtime::Handle,
-    inner: graph::index::PagedSearch<'a, DP, S, T>,
+    inner: graph::search::PagedSearch<'a, DP, S, T>,
 }
 
 impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
