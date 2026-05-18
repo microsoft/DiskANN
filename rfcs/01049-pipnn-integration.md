@@ -235,7 +235,15 @@ Stage 1 covers build-from-scratch and full rebuilds with PiPNN. M0 ships in this
 Crate, `BuildAlgorithm` enum, dispatch behind `pipnn` Cargo feature. JSON config gains optional `build_algorithm`. CI smoke test (SIFT-1M) with `--features pipnn`.
 
 ### M1 — Quantization parity
-Extend PiPNN beyond `SQ1` to `SQ_2/4/8`, reusing the trained `ScalarQuantizer`. **Pass:** SQ_8 recall within 0.5% of FP on BigANN 10M and Enron 10M.
+PiPNN's leaf-build computes pairwise distances via batched GEMM, so its quantization options are constrained by what hardware GEMM units accelerate: **int8** (AVX-512-VNNI, AMX-INT8), **fp16** (AVX-512-FP16), and **bf16** (AVX-512-BF16, AMX-BF16). 1-bit is not in that set — GEMM hardware does multiply-accumulate, not XOR+popcount.
+
+Vamana's existing quantized path is **SQ1 (1-bit) Hamming**, which is a fundamentally different kernel (XOR+popcount, not MAC). PiPNN cannot directly reuse Vamana's SQ1 quantizer for the same speedup story; porting requires adapting the quantization pipeline to a GEMM-compatible format and computing distance through the quantized-GEMM dispatch.
+
+Scope:
+- Extend PiPNN with **SQ_8 (int8)** quantization via the trained `ScalarQuantizer` from `diskann-quantization`, producing the packed int8 buffers the quantized-GEMM interface consumes.
+- fp16 and bf16 are natural follow-ons through the same dispatch path.
+
+**Pass:** SQ_8 PiPNN recall within 0.5% of FP-PiPNN on BigANN 10M and Enron 10M.
 
 ### M2 — Label-filtered indexes
 Run filter benchmark configs with `BuildAlgorithm::PiPNN`; confirm filter-recall within ±1% of Vamana. Partition may need label-aware leaf assignment for high-cardinality labels.
@@ -258,6 +266,20 @@ End-to-end on the full workload mix. Datasets: BigANN, Enron, plus one productio
 
 ### M6 — Operational readiness
 Telemetry (per-phase timing + RSS via existing OTel tracer), permanent docs replacing experimental `CLAUDE.md` notes, runbook (OOM, partition timeout, `l_max` saturation), default parameter recommendations per workload class.
+
+### M7 — Abstraction convergence with `diskann` *(Stage-2 entry gate)*
+
+Stage-1 lands PiPNN as a separate crate that touches several primitives that ought to be shared with the rest of `diskann`. Stage 2 doesn't commit to retiring Vamana's full-rebuild path until those primitives converge — otherwise we accept two parallel implementations of the same low-level building blocks long-term.
+
+- **a. Pruning.** Vamana's `RobustPrune` / `occlude_list` (currently `pub(crate)` in `diskann/src/graph/internal/prune.rs`) is exposed via a shared pruning surface — either promoted to `pub` or extracted to a `diskann-prune` crate. PiPNN's `final_prune_from_candidates` (currently a duplicate of that logic in `diskann-pipnn/src/builder.rs`) is replaced by a call into the shared API. PiPNN's HashPrune (LSH-bucketed reservoir merge) co-locates in the same shared pruning module for code-organization consistency. Whether Vamana can usefully consume HashPrune is an exploration item — if yes, Vamana reuses; if no, the code still lives in the right place.
+
+- **b. Quantized GEMM.** PiPNN's quantized leaf-build distance consumes the **quantized-GEMM interface** that `diskann-quantization` is developing for multi-vectors (int8/bf16/fp16 inputs, f32 accumulation). Whichever side ships first contributes: if the multi-vector quantized GEMM lands first, PiPNN reuses; if PiPNN ships its GEMM solution first, that solution is contributed back to `diskann-quantization` so other components (including a future Vamana variant if it wants) can adopt it. Either direction, no PiPNN-internal quantized distance kernel remains.
+
+- **c. GEMM dispatch.** `diskann-pipnn/src/gemm.rs` (today a thin `faer` wrapper) consumes the same shared GEMM / quantized-GEMM interface per (b). PiPNN's leaf-build shapes (m=n=256, k=128 / 384) and partition-stripe shapes (m≈1000, n up to 65k, k=128 / 384) are included in that interface's coverage tests.
+
+- **d. Distance kernels.** PiPNN's per-leaf and per-stripe distance computations fully delegate to `diskann_vector::distance` for both FP and quantized metrics. No bypass paths.
+
+**Validation:** a diff of `diskann-pipnn/src/` showing only algorithm-specific code (partition / scheduler / builder orchestration), no primitive duplication.
 
 ### Deferred to Stage 2
 
