@@ -11,7 +11,6 @@ use diskann_quantization::{
     num::PowerOfTwo,
 };
 use hashbrown::HashSet;
-use tracing::info;
 
 use crate::{
     data_model::{Cache, CachingStrategy, GraphHeader},
@@ -27,6 +26,7 @@ use crate::{
         AlignedRead,
     },
 };
+use diskann::tracked_info;
 
 const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
 const BEAM_WIDTH_FOR_BFS: usize = 32;
@@ -142,7 +142,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
                 let graph_metadata = graph_metadata.metadata();
 
                 if num_nodes_to_cache > graph_metadata.num_pts as usize {
-                    info!(
+                    tracked_info!(
                         "Reducing nodes to cache from: {} to: {} (total no. of nodes)",
                         num_nodes_to_cache, graph_metadata.num_pts
                     );
@@ -159,7 +159,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
             CachingStrategy::None => {}
         }
 
-        info!("Cache setup took: {} ms", timer.elapsed().as_millis());
+        tracked_info!("Cache setup took: {} ms", timer.elapsed().as_millis());
         Ok(())
     }
 
@@ -169,7 +169,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         num_nodes_to_cache: usize,
         dimension: usize,
     ) -> ANNResult<Cache<Data>> {
-        info!("Building cache with {} nodes via BFS.", num_nodes_to_cache);
+        tracked_info!("Building cache with {} nodes via BFS.", num_nodes_to_cache);
         let mut cache = Cache::new(dimension, num_nodes_to_cache)?;
         let mut vertex_provider =
             self.create_disk_vertex_provider(BEAM_WIDTH_FOR_BFS, &self.get_header()?)?;

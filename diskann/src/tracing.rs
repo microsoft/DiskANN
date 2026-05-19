@@ -50,6 +50,23 @@ macro_rules! tracked_warn {
 
 #[cfg(feature = "tracing")]
 #[macro_export]
+macro_rules! tracked_info {
+    ($($arg:tt)+) => {{
+        let location = std::panic::Location::caller();
+        ::tracing::info!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
+    }};
+}
+
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_info {
+    ($($arg:tt)+) => {{
+        $crate::used!($($arg)+);
+    }};
+}
+
+#[cfg(feature = "tracing")]
+#[macro_export]
 macro_rules! tracked_debug {
     ($($arg:tt)+) => {{
         let location = std::panic::Location::caller();

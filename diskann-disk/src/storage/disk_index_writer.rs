@@ -14,12 +14,12 @@ use diskann_providers::{
     storage::{get_mem_index_file, path_utility::*},
     utils::{save_bytes, READ_WRITE_BLOCK_SIZE},
 };
-use tracing::info;
 
 use crate::{
     data_model::{GraphHeader, GraphMetadata},
     storage::{CachedReader, CachedWriter},
 };
+use diskann::tracked_info;
 
 // Struct DiskIndexWriterState maintains the state of the process of creating a disk
 // layout using index and associated data. By moving the state to this struct, we
@@ -172,7 +172,7 @@ impl DiskIndexWriter {
 
         // Create cached reader + writer
         let actual_file_size = storage_provider.get_length(mem_index_file.as_str())?;
-        info!("Vamana index file size={}", actual_file_size);
+        tracked_info!("Vamana index file size={}", actual_file_size);
 
         state.muti_shard_index_reader =
             Some(storage_provider.open_reader(mem_index_file.as_str())?);
@@ -180,7 +180,7 @@ impl DiskIndexWriter {
         if let Some(vamana_reader) = state.muti_shard_index_reader.as_mut() {
             let index_file_size = vamana_reader.read_u64::<LittleEndian>()?;
             if index_file_size != actual_file_size {
-                info!(
+                tracked_info!(
                     "Vamana Index file size does not match expected size per meta-data. file size from file: {}, actual file size: {}",
                     index_file_size, actual_file_size
                 );
@@ -415,11 +415,11 @@ impl DiskIndexWriter {
 
         let num_nodes_per_block = (block_size as u64) / state.node_len; // 0 if node_len > block_size
 
-        info!("block_size: {}B", block_size);
-        info!("medoid: {}B", state.medoid);
-        info!("node_len: {}B", state.node_len);
-        info!("num_nodes_per_sector: {}B", num_nodes_per_block);
-        info!(
+        tracked_info!("block_size: {}B", block_size);
+        tracked_info!("medoid: {}B", state.medoid);
+        tracked_info!("node_len: {}B", state.node_len);
+        tracked_info!("num_nodes_per_sector: {}B", num_nodes_per_block);
+        tracked_info!(
             "associated_data_length: {}B",
             state.associated_data_length * mem::size_of::<Data::AssociatedDataType>()
         );
@@ -429,10 +429,10 @@ impl DiskIndexWriter {
             state.num_pts.div_ceil(num_nodes_per_block)
         } else {
             let num_block_per_node = state.node_len.div_ceil(block_size as u64);
-            info!("num_sector_per_node: {}B", num_block_per_node);
+            tracked_info!("num_sector_per_node: {}B", num_block_per_node);
             state.num_pts * num_block_per_node
         };
-        info!("num_blocks: {}B", num_blocks);
+        tracked_info!("num_blocks: {}B", num_blocks);
 
         let disk_layout_file = self.disk_index_file();
         {
@@ -454,7 +454,7 @@ impl DiskIndexWriter {
                 // Write multiple nodes per sector
                 for sector in 0..num_blocks {
                     if sector % 100_000 == 0 {
-                        info!("Sector #{} written", sector);
+                        tracked_info!("Sector #{} written", sector);
                     }
                     block_buf.fill(0);
 
@@ -485,7 +485,7 @@ impl DiskIndexWriter {
 
                 for node_idx in 0..state.num_pts {
                     if (node_idx * num_block_per_node).is_multiple_of(100_000) {
-                        info!("Sector #{} written", node_idx * num_block_per_node);
+                        tracked_info!("Sector #{} written", node_idx * num_block_per_node);
                     }
 
                     self.read_neighbors::<Data, _>(&mut state, &mut multi_block_buf)?;

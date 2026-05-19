@@ -31,7 +31,7 @@ use diskann_providers::{
 use diskann_utils::io::{read_bin, write_bin};
 use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::{
     build::{
@@ -61,6 +61,7 @@ use crate::{
     },
     DiskIndexBuildParameters, QuantizationType,
 };
+use diskann::tracked_info;
 
 /// Disk index builder that composes with DiskIndexBuilderCore.
 pub struct DiskIndexBuilder<'a, Data, StorageProvider>
@@ -175,7 +176,7 @@ where
         storage_provider: &StorageProvider,
         checkpoint_record_manager: &mut dyn CheckpointManager,
     ) -> ANNResult<BuildQuantizer> {
-        info!(
+        tracked_info!(
             "Training quantizer for {} quantized builds.",
             build_quantization_type.to_string()
         );
@@ -193,7 +194,7 @@ where
                 )
             },
             || {
-                info!(
+                tracked_info!(
                 "Skipping quantizer training, instead loading from already trained quantizer saved in the file system.",
                 );
                 BuildQuantizer::load(
@@ -210,7 +211,7 @@ where
         runtime.block_on(async {
             match self.build_internal().await {
                 Err(err) if err.kind() == ANNErrorKind::BuildInterrupted => {
-                    info!(
+                    tracked_info!(
                         "Index build was interrupted by continuation_checker, progress saved for resumption"
                     );
                     Ok(()) // Return success for controlled interruptions
@@ -225,7 +226,7 @@ where
 
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
 
-        info!(
+        tracked_info!(
             "Starting index build: R={} L={} Indexing RAM budget={} T={}",
             self.index_configuration.config.pruned_degree(),
             self.index_configuration.config.l_build(),
@@ -252,7 +253,7 @@ where
 
         let storage_provider = self.core.storage_provider;
 
-        info!(
+        tracked_info!(
             "Compressing data into {} bytes per vector for disk search",
             num_chunks.get()
         );
@@ -266,7 +267,7 @@ where
         let offset = match checkpoint_context.get_resumption_point()? {
             Some(offset) => offset,
             None => {
-                info!("Skip the DataCompression");
+                tracked_info!("Skip the DataCompression");
                 return Ok(());
             }
         };
@@ -362,7 +363,7 @@ where
         let offset = match checkpoint_context.get_resumption_point()? {
             Some(offset) => offset,
             None => {
-                info!(
+                tracked_info!(
                     "[Stage:{:?}] Skip build_shard_index for shard {} - no valid checkpoint exists",
                     stage, shard_id
                 );
@@ -383,9 +384,9 @@ where
                 &shard_ids_file,
                 &shard_base_file,
             )?;
-            info!("[Stage:{:?}] Generate data for shard {}", stage, shard_id);
+            tracked_info!("[Stage:{:?}] Generate data for shard {}", stage, shard_id);
         } else {
-            info!(
+            tracked_info!(
                 "[Stage:{:?}] Resume shard {} build with existing data",
                 stage, shard_id
             );
@@ -440,7 +441,7 @@ where
         let offset = match checkpoint_context.get_resumption_point()? {
             Some(offset) => offset,
             None => {
-                info!(
+                tracked_info!(
                     "[Stage:{:?}] Skip in-memory index build - no valid checkpoint exists",
                     stage
                 );
@@ -627,7 +628,7 @@ where
 
     match progress {
         Progress::Processed(num_points) => {
-            info!(
+            tracked_info!(
                 "Linked #{} points. Start #{}, end #{} ",
                 num_points,
                 offset,
@@ -635,7 +636,7 @@ where
             );
         }
         Progress::Completed => {
-            info!("Linked all points. Num points: #{}", total_points);
+            tracked_info!("Linked all points. Num points: #{}", total_points);
         }
     }
 

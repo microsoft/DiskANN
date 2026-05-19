@@ -18,9 +18,9 @@ use diskann_providers::{
 use diskann_quantization::{product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
 use diskann_vector::distance::Metric;
-use tracing::info;
 
 use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
+use diskann::tracked_info;
 
 pub struct PQGenerationContext<'a, Storage>
 where
@@ -109,7 +109,7 @@ where
                 pool,
             )?;
 
-            info!(
+            tracked_info!(
                 "PQ pivot generation took {} seconds",
                 timer.elapsed().as_secs_f64()
             );

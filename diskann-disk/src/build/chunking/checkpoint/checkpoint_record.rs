@@ -5,9 +5,9 @@
 
 use diskann::ANNResult;
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
 use super::WorkStage;
+use diskann::tracked_info;
 
 /// Represents a checkpoint record in the index build process.
 /// The checkpoint record can be marked as in-valid to indicate that the exising intermediate data should be discarded.
@@ -45,13 +45,13 @@ impl CheckpointRecord {
 
     pub fn get_resumption_point(&self, stage: WorkStage) -> Option<usize> {
         if self.stage == stage {
-            info!(
+            tracked_info!(
                 "The resumption point is at {} for stage {:?}",
                 self.progress, stage
             );
             Some(if self.is_valid { self.progress } else { 0 })
         } else {
-            info!(
+            tracked_info!(
                 "Failed to get resumption point for {:?} since the current stage is {:?}.",
                 stage, self.stage
             );
@@ -63,7 +63,7 @@ impl CheckpointRecord {
     // This method is used in each individual step of the index build process
     // ..t o update the checkpoint record.
     pub fn advance_work_type(&self, next_stage: WorkStage) -> ANNResult<CheckpointRecord> {
-        info!(
+        tracked_info!(
             "Advancing work type from {:?} to {:?}.",
             self.stage, next_stage
         );
@@ -85,7 +85,7 @@ impl CheckpointRecord {
 
     // Update the progress of the current work type.
     pub fn update_progress(&self, progress: usize) -> CheckpointRecord {
-        info!("Updating progress to {:?}={}", self.stage, progress);
+        tracked_info!("Updating progress to {:?}={}", self.stage, progress);
         CheckpointRecord {
             stage: self.stage,
             is_valid: true,

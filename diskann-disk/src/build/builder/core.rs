@@ -17,7 +17,6 @@ use diskann_providers::{
 };
 use diskann_utils::io::read_bin;
 use rand::{seq::SliceRandom, Rng};
-use tracing::info;
 
 use crate::{
     build::chunking::{
@@ -31,6 +30,7 @@ use crate::{
     utils::partition_with_ram_budget,
     DiskIndexBuildParameters, QuantizationType,
 };
+use diskann::tracked_info;
 
 /// Overhead factor for RAM estimation during index build (10% buffer).
 const OVERHEAD_FACTOR: f64 = 1.1f64;
@@ -146,7 +146,7 @@ where
         let storage_provider = self.storage_provider;
         let shard_ids = read_bin::<u32>(&mut storage_provider.open_reader(shard_ids_file)?)?;
         let shard_size = shard_ids.nrows();
-        info!("Loaded {} shard ids from {}", shard_size, shard_ids_file);
+        tracked_info!("Loaded {} shard ids from {}", shard_size, shard_ids_file);
         let max_id = shard_ids.as_slice().iter().max().copied().unwrap_or(0);
         let sampling_rate = shard_ids.as_slice().len() as f64 / (max_id + 1) as f64;
 
@@ -177,7 +177,7 @@ where
             Ok(())
         })?;
 
-        info!(
+        tracked_info!(
             "Written file: {} with {} points",
             shard_base_file, num_written
         );
@@ -215,19 +215,19 @@ where
         // find max node id
         let num_nodes: u32 = *id_maps.iter().flatten().max().unwrap_or(&0) + 1;
         let num_elements: u32 = id_maps.iter().map(|idmap| idmap.len() as u32).sum();
-        info!("# nodes: {}, max degree: {}", num_nodes, max_degree);
+        tracked_info!("# nodes: {}, max degree: {}", num_nodes, max_degree);
 
         // compute inverse map: node -> shards
         let mut node_shard: Vec<(u32, u32)> = Vec::with_capacity(num_elements as usize);
         for (shard, id_map) in id_maps.iter().enumerate() {
-            info!("Creating inverse map -- shard #{}", shard);
+            tracked_info!("Creating inverse map -- shard #{}", shard);
             node_shard.extend(id_map.iter().map(|node_id| (*node_id, shard as u32)));
         }
         node_shard.sort_unstable_by(|left, right| {
             left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
         });
 
-        info!("Finished computing node -> shards map");
+        tracked_info!("Finished computing node -> shards map");
 
         // create cached vamana readers
         let mut vamana_readers = Vec::new();
@@ -270,7 +270,7 @@ where
 
         // write max_degree to merged_vamana_index
         let output_width: u32 = max_degree;
-        info!(
+        tracked_info!(
             "Max input width: {}, output width: {}",
             max_input_width, output_width
         );
@@ -300,7 +300,7 @@ where
                                           // Hence the final index will also not have any frozen points.
         merged_vamana_cached_writer.write(&vamana_index_frozen.to_le_bytes())?;
 
-        info!("Starting merge");
+        tracked_info!("Starting merge");
 
         let mut nbr_set = vec![false; num_nodes as usize];
         let mut final_nbrs: Vec<u32> = Vec::new();
@@ -334,7 +334,7 @@ where
             let num_nbrs = vamana_readers[shard_id as usize].read_u32()?;
 
             if num_nbrs == 0 {
-                info!(
+                tracked_info!(
                     "WARNING: shard #{}, node_id {} has 0 nbrs",
                     shard_id, node_id
                 );
@@ -373,11 +373,11 @@ where
         nbr_set.clear();
         final_nbrs.clear();
 
-        info!("Expected size: {}", merged_index_size);
+        tracked_info!("Expected size: {}", merged_index_size);
         merged_vamana_cached_writer.reset()?;
         merged_vamana_cached_writer.write(&merged_index_size.to_le_bytes())?;
 
-        info!("Finished merge");
+        tracked_info!("Finished merge");
         Ok(())
     }
 
@@ -445,21 +445,21 @@ pub(crate) fn determine_build_strategy<Data: GraphDataType>(
         build_quantization_type,
     );
 
-    info!(
+    tracked_info!(
         "Estimated index RAM usage: {} GB, index_build_ram_limit={} GB",
         estimated_index_ram_in_bytes / BYTES_IN_GB,
         index_build_ram_limit_in_bytes / BYTES_IN_GB
     );
 
     if estimated_index_ram_in_bytes >= index_build_ram_limit_in_bytes {
-        info!(
+        tracked_info!(
             "Insufficient memory budget for index build in one shot, index_build_ram_limit={} GB estimated_index_ram={} GB",
             index_build_ram_limit_in_bytes / BYTES_IN_GB,
             estimated_index_ram_in_bytes / BYTES_IN_GB,
         );
         IndexBuildStrategy::Merged
     } else {
-        info!(
+        tracked_info!(
             "Full index fits in RAM budget, should consume at most {} GBs, so building in one shot",
             estimated_index_ram_in_bytes / BYTES_IN_GB
         );
@@ -562,7 +562,7 @@ impl<'a> MergedVamanaIndexWorkflow<'a> {
                 ) {
                     p += 1;
                 }
-                info!("Found {} existing partitions from previous run", p);
+                tracked_info!("Found {} existing partitions from previous run", p);
                 Ok(p)
             },
         )

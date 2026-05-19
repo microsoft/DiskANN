@@ -4,9 +4,9 @@
  */
 
 use diskann::ANNResult;
-use tracing::info;
 
 use super::{Progress, WorkStage};
+use diskann::tracked_info;
 
 /// This trait provides functionalities to get and set checkpoint records
 /// ..for tracking the progress and state in a chunkable index build process.
@@ -73,7 +73,7 @@ where
                 Ok(result)
             }
             None => {
-                info!("[Stage:{:?}] Skip stage - invalid checkpoint", stage);
+                tracked_info!("[Stage:{:?}] Skip stage - invalid checkpoint", stage);
                 skip_handler()
             }
         }

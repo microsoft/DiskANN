@@ -5,10 +5,10 @@
 
 use std::{error::Error, thread::sleep};
 
-use tracing::info;
 
 use super::continuation_tracker::{ContinuationGrant, ContinuationTrackerTrait};
 use crate::build::chunking::checkpoint::Progress;
+use diskann::tracked_info;
 
 /// This takes an operation with an iterator of oprands,
 /// and processes the oprands using the operation in a loop,
@@ -30,19 +30,19 @@ where
         loop {
             match continuation_checker.get_continuation_grant() {
                 ContinuationGrant::Continue => {
-                    info!("Continue processing.");
+                    tracked_info!("Continue processing.");
                     action(param)?;
                     break;
                 }
                 ContinuationGrant::Yield(duration) => {
-                    info!(
+                    tracked_info!(
                         "Continuation checker asks to yield for {} ms.",
                         duration.as_millis()
                     );
                     sleep(duration);
                 }
                 ContinuationGrant::Stop => {
-                    info!("Continuation checker asks to stop. Breaking the loop.");
+                    tracked_info!("Continuation checker asks to stop. Breaking the loop.");
                     return Ok(Progress::Processed(idx));
                 }
             }
@@ -71,19 +71,19 @@ where
         loop {
             match continuation_checker.get_continuation_grant() {
                 ContinuationGrant::Continue => {
-                    info!("Continue processing.");
+                    tracked_info!("Continue processing.");
                     action(param).await?;
                     break;
                 }
                 ContinuationGrant::Yield(duration) => {
-                    info!(
+                    tracked_info!(
                         "Continuation checker asks to yield for {} ms.",
                         duration.as_millis()
                     );
                     sleep(duration);
                 }
                 ContinuationGrant::Stop => {
-                    info!("Continuation checker asks to stop. Breaking the loop.");
+                    tracked_info!("Continuation checker asks to stop. Breaking the loop.");
                     return Ok(Progress::Processed(idx));
                 }
             }

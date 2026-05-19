@@ -17,9 +17,9 @@ use diskann_providers::{
 };
 use diskann_quantization::scalar::train::ScalarQuantizationParameters;
 use diskann_utils::views::MatrixView;
-use tracing::info;
 
 use crate::QuantizationType;
+use diskann::tracked_info;
 
 /// Quantizer types used specifically for async disk index building.
 #[derive(Clone)]
@@ -111,7 +111,7 @@ impl BuildQuantizer {
                     MatrixView::try_from(&train_data_vector, train_size, train_dim).bridge_err()?,
                 );
 
-                info!("Now quantizer is trained and saving to file");
+                tracked_info!("Now quantizer is trained and saving to file");
                 let sq_storage = SQStorage::new(index_path_prefix);
                 sq_storage.save_quantizer(&quantizer, storage_provider)?;
 

@@ -6,7 +6,7 @@ use std::io::{Read, Seek};
 
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::StorageReadProvider;
-use tracing::info;
+use diskann::tracked_info;
 
 /// Sequential cached reads with a generic storage provider with read access.
 pub struct CachedReader<Storage>
@@ -38,14 +38,14 @@ where
         cache_size: u64,
         storage_provider: &Storage,
     ) -> std::io::Result<Self> {
-        info!("Opening: {}", filename);
+        tracked_info!("Opening: {}", filename);
         let mut reader = storage_provider.open_reader(filename)?;
         let size = storage_provider.get_length(filename)?;
 
         let cache_size = cache_size.min(size);
         let mut cache_buf = vec![0; cache_size as usize];
         reader.read_exact(&mut cache_buf)?;
-        info!(
+        tracked_info!(
             "Opened: {}, size: {}, cache_size: {}",
             filename, size, cache_size
         );

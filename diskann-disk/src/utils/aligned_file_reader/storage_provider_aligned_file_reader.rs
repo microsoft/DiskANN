@@ -7,10 +7,10 @@ use std::io::Read;
 
 use diskann::ANNResult;
 use diskann_providers::storage::StorageReadProvider;
-use tracing::info;
 
 use super::traits::AlignedFileReader;
 use crate::utils::aligned_file_reader::{AlignedRead, A1};
+use diskann::tracked_info;
 
 pub struct StorageProviderAlignedFileReader {
     data: Vec<u8>,
@@ -21,7 +21,7 @@ impl StorageProviderAlignedFileReader {
         storage_provider: &impl StorageReadProvider,
         file_name: &str,
     ) -> ANNResult<StorageProviderAlignedFileReader> {
-        info!("Loading data from {}", file_name);
+        tracked_info!("Loading data from {}", file_name);
         let file_length = storage_provider.get_length(file_name)?;
 
         let mut data = vec![0u8; file_length as usize];

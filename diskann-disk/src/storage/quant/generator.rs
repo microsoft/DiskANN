@@ -15,7 +15,6 @@ use diskann_providers::utils::{
 };
 use diskann_utils::{io::Metadata, views};
 use rayon::iter::IndexedParallelIterator;
-use tracing::info;
 
 use crate::{
     build::chunking::{
@@ -24,6 +23,7 @@ use crate::{
     },
     storage::quant::compressor::{CompressionStage, QuantCompressor},
 };
+use diskann::tracked_info;
 
 /// [`GeneratorContext`] defines parameters for vector quantization checkpoint state
 ///
@@ -121,7 +121,7 @@ where
             storage_provider.delete(compressed_path)?;
         }
 
-        info!("Generating quantized data for {}", compressed_path);
+        tracked_info!("Generating quantized data for {}", compressed_path);
 
         let data_reader = &mut storage_provider.open_reader(&self.data_path)?;
 
@@ -148,7 +148,7 @@ where
         let num_blocks =
             num_remaining / block_size + !num_remaining.is_multiple_of(block_size) as usize;
 
-        info!(
+        tracked_info!(
             "Compressing with block size {}, num_remaining {}, num_blocks {}, offset {}, num_points {}",
             block_size, num_remaining, num_blocks, offset, num_points
         );
@@ -215,7 +215,7 @@ where
         )?
         .map(|processed| processed * block_size + offset);
 
-        info!(
+        tracked_info!(
             "Quant data generation took {} seconds",
             timer.elapsed().as_secs_f64()
         );

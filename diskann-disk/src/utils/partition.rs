@@ -8,12 +8,12 @@ use diskann_providers::utils::{gen_random_slice, RayonThreadPoolRef, READ_WRITE_
 
 use crate::utils::{compute_closest_centers, k_meanspp_selecting_pivots, run_lloyds};
 use rand::Rng;
-use tracing::info;
 
 use crate::{
     disk_index_build_parameter::BYTES_IN_GB,
     storage::{CachedReader, CachedWriter, DiskIndexWriter},
 };
+use diskann::tracked_info;
 
 /// Block size for reading/processing large files and matrices in blocks
 const BLOCK_SIZE_LARGE_FILE: u32 = 10_000;
@@ -48,7 +48,7 @@ where
         &ram_estimator,
     )?;
 
-    info!("Saving shard data into clusters, with only ids");
+    tracked_info!("Saving shard data into clusters, with only ids");
 
     shard_data_into_clusters_only_ids::<T, StorageProvider>(
         dataset_file,
@@ -85,11 +85,11 @@ where
 
     let (train_data_float, num_train, train_dim) =
         gen_random_slice::<T, StorageProvider>(dataset_file, sampling_rate, storage_provider, rng)?;
-    info!("Loaded {} points for train, dim: {}", num_train, train_dim);
+    tracked_info!("Loaded {} points for train, dim: {}", num_train, train_dim);
 
     let (test_data_float, num_test, test_dim) =
         gen_random_slice::<T, StorageProvider>(dataset_file, sampling_rate, storage_provider, rng)?;
-    info!("Loaded {} points for test, dim: {}", num_test, test_dim);
+    tracked_info!("Loaded {} points for test, dim: {}", num_test, test_dim);
 
     // Calculate total points accounting for sampling rate
     let total_points = (num_train as f64 / sampling_rate) as u64;
@@ -114,7 +114,7 @@ where
         pivot_data = vec![0.0; num_parts * train_dim];
 
         // Process Global k-means for kmeans_partitioning Step
-        info!("Processing global k-means (kmeans_partitioning Step)");
+        tracked_info!("Processing global k-means (kmeans_partitioning Step)");
         k_meanspp_selecting_pivots(
             &train_data_float,
             num_train,
@@ -163,7 +163,7 @@ where
             }
         }
 
-        info!(
+        tracked_info!(
             "Partition RAM estimates (GB): {}",
             partition_stats
                 .iter()
@@ -172,7 +172,7 @@ where
                 .join(", ")
         );
 
-        info!(
+        tracked_info!(
             "With {} parts, max estimated RAM usage: {:.2} GB, budget given is {:.2} GB",
             num_parts,
             max_ram_usage_in_bytes / BYTES_IN_GB,
@@ -182,7 +182,7 @@ where
             fit_in_ram = false;
             num_parts += 2;
         } else {
-            info!(
+            tracked_info!(
                 "Found optimal partition count: [parts={}, initial={}, max_ram={:.2}GB, budget={:.2}GB]",
                 num_parts,
                 initial_num_parts,
@@ -217,7 +217,7 @@ where
         partition_count += 1;
     }
 
-    info!(
+    tracked_info!(
         "Estimated initial partition count: {} (total points: {}, dimension: {}, k_base: {}, total_ram_estimate: {:.2} GB, ram_budget: {:.2} GB)",
         partition_count,
         total_points,
@@ -340,14 +340,14 @@ where
 
     for i in 0..num_parts {
         let cur_shard_count = shard_counts[i] as u32;
-        info!(" shard_{} with npts : {} ", i, cur_shard_count);
+        tracked_info!(" shard_{} with npts : {} ", i, cur_shard_count);
         total_count += cur_shard_count;
         shard_idmap_cached_writers[i].reset()?;
         shard_idmap_cached_writers[i].write(&cur_shard_count.to_le_bytes())?;
         shard_idmap_cached_writers[i].flush()?;
     }
 
-    info!(
+    tracked_info!(
         "Partitioned {} with replication factor {} to get {} points across {} shards",
         num_points, k_base, total_count, num_parts
     );
@@ -411,7 +411,7 @@ fn estimate_cluster_sizes(
         let cur_shard_count = shard_counts[i] as u32;
         cluster_sizes.push(cur_shard_count);
     });
-    info!("Estimated cluster sizes: {:?}", cluster_sizes);
+    tracked_info!("Estimated cluster sizes: {:?}", cluster_sizes);
     Ok(())
 }
 

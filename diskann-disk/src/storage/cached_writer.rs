@@ -5,7 +5,7 @@
 use std::io::{Seek, SeekFrom, Write};
 
 use diskann_providers::storage::StorageWriteProvider;
-use tracing::info;
+use diskann::tracked_info;
 
 /// Sequential cached writes with a generic storage provider with write access.
 pub struct CachedWriter<Storage>
@@ -37,7 +37,7 @@ where
             return Err(std::io::Error::other("Cache size must be greater than 0"));
         }
 
-        info!("Opened: {}, cache_size: {}", filename, cache_size);
+        tracked_info!("Opened: {}, cache_size: {}", filename, cache_size);
         Ok(Self {
             writer,
             cache_size,
@@ -54,7 +54,7 @@ where
         }
 
         self.writer.flush()?;
-        info!("Finished writing {}B", self.fsize);
+        tracked_info!("Finished writing {}B", self.fsize);
         Ok(())
     }
 

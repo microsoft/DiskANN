@@ -9,7 +9,7 @@ use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{storage::PQStorage, utils::load_metadata_from_file};
 
 use crate::search::pq::PQData;
-use tracing::info;
+use diskann::tracked_info;
 
 /// This struct is used by the DiskIndexSearcher to read the index data from storage. Noted that the index data here is different from index graph,
 /// It includes the PQ data, pivot table, and the warmup query data.
@@ -46,7 +46,7 @@ impl<VectorType> DiskIndexReader<VectorType> {
             pq_pivot_table.get_num_chunks(),
             storage_provider,
         )?;
-        info!(
+        tracked_info!(
             "Loaded PQ centroids and in-memory compressed vectors. #points:{} #pq_chunks: {}",
             metadata.npoints(),
             pq_pivot_table.get_num_chunks()
