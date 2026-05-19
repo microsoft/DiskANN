@@ -8,6 +8,7 @@ authors.workspace = true
 documentation.workspace = true
 license.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 bf-tree.workspace = true
@@ -39,3 +40,4 @@ experimental_diversity_search = ["diskann/experimental_diversity_search"]
 
 [lints]
 workspace = true
+

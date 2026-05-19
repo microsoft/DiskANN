@@ -232,10 +232,45 @@ impl<T, Q> BfTreeProvider<T, Q>
 where
     T: VectorRepr,
 {
+    /// Construct a new data provider from empty. Callers of this are required to manually set start
+    /// points before performing search tasks.
+    ///
+    /// This constructor for `BfTreeProvider` should be used when building and constructing from
+    /// scratch.
+    ///
+    /// # Arguments
+    /// * `params`: An instance of [`BfTreeProviderParameters`] collecting shared
+    ///   configuration information.
+    /// * `quant_precursor`: A precursor type for the quantizer layer.
+    ///
+    /// # Type Constraints
+    /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
+    pub fn new_empty<TQ>(params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
+    where
+        Self: StartPoint<T>,
+        TQ: CreateQuantProvider<Target = Q>,
+    {
+        Ok(Self {
+            quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
+            full_vectors: VectorProvider::new_with_config(
+                params.max_points,
+                params.dim,
+                params.num_start_points.get(),
+                params.vector_provider_config,
+            )?,
+            neighbor_provider: NeighborProvider::new_with_config(
+                params.max_degree,
+                params.neighbor_list_provider_config,
+            )?,
+            metric: params.metric,
+            graph_params: params.graph_params,
+        })
+    }
+
     /// Construct a new data provider with start points initialized.
     ///
-    /// This is the primary constructor for `BfTreeProvider`. It creates the provider
-    /// and sets the start points in one operation.
+    /// This is the primary constructor for `BfTreeProvider` where start points are known from the
+    /// beginning. It creates the provider and sets the start points in one operation.
     ///
     /// # Arguments
     /// * `params`: An instance of [`BfTreeProviderParameters`] collecting shared
@@ -243,7 +278,6 @@ where
     /// * `start_points`: A matrix view containing the start point vectors. The number
     ///   of rows must match `params.num_start_points.get()`.
     /// * `quant_precursor`: A precursor type for the quantizer layer.
-    /// * `delete_precursor`: A precursor type for the delete layer.
     ///
     /// # Type Constraints
     /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
@@ -265,21 +299,7 @@ where
             )));
         }
 
-        let provider = Self {
-            quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
-            full_vectors: VectorProvider::new_with_config(
-                params.max_points,
-                params.dim,
-                params.num_start_points.get(),
-                params.vector_provider_config,
-            )?,
-            neighbor_provider: NeighborProvider::new_with_config(
-                params.max_degree,
-                params.neighbor_list_provider_config,
-            )?,
-            metric: params.metric,
-            graph_params: params.graph_params,
-        };
+        let provider = Self::new_empty(params.clone(), quant_precursor)?;
         provider.set_start_points(Hidden(()), start_points)?;
         {
             // Initialize all neighborhoods to be empty lists.
@@ -914,6 +934,7 @@ where
         Ok(T::query_distance(from, self.provider.metric))
     }
 }
+
 impl<T, Q> ExpandBeam<&[T]> for FullAccessor<'_, T, Q>
 where
     T: VectorRepr,
