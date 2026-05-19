@@ -41,8 +41,8 @@ pub enum ComputeRecallError {
     NotEnoughGroundTruth(usize, usize),
     #[error("number of groundtruth distances {0} does not match groundtruth entries {1}")]
     NotEnoughGroundTruthDistances(usize, usize),
-    #[error("number of result distances {0} for query {2} does not match result entries {1}")]
-    ResultDistanceMismatch(usize, usize, usize),
+    #[error("number of groundtruth distances {0} for query {2} does not match groundtruth ids {1}")]
+    GroundTruthDistanceMismatch(usize, usize, usize),
 }
 
 /// An abstraction over data-structures such as vector-of-vectors.
@@ -214,7 +214,7 @@ where
         if let Some(distances) = groundtruth_distances {
             let distances_row = distances.row(i);
             if distances_row.len() != gt_row.len() {
-                return Err(ComputeRecallError::ResultDistanceMismatch(
+                return Err(ComputeRecallError::GroundTruthDistanceMismatch(
                     distances_row.len(),
                     gt_row.len(),
                     i,
@@ -520,182 +520,196 @@ mod tests {
     }
 
     #[test]
-    fn test_errors() {
-        // k greater than n
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 10);
-            let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(&groundtruth, None, &results, 11, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
-        }
+    fn test_error_recall_k_and_n() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
+        let err = knn(&groundtruth, None, &results, 11, 10, false).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
+    }
 
-        // Unequal rows
-        {
-            let groundtruth = Matrix::<u32>::new(0, 11, 10);
-            let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
-            let err_allow_insufficient_results =
-                knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
-            assert!(matches!(
-                err_allow_insufficient_results,
-                ComputeRecallError::RowsMismatch(..)
-            ));
-        }
+    #[test]
+    fn test_error_rows_mismatch() {
+        let groundtruth = Matrix::<u32>::new(0, 11, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
+        let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
+        let err_allow_insufficient_results =
+            knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
+        assert!(matches!(
+            err_allow_insufficient_results,
+            ComputeRecallError::RowsMismatch(..)
+        ));
+    }
 
-        // Not enough results
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 10);
-            let results = Matrix::<u32>::new(0, 10, 5);
-            let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
-            let _ = knn(&groundtruth, None, &results, 5, 10, true);
-        }
+    #[test]
+    fn test_error_not_enough_results() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let results = Matrix::<u32>::new(0, 10, 5);
+        let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
+        let _ = knn(&groundtruth, None, &results, 5, 10, true);
+    }
 
-        // Not enough results - dynamic
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 10);
-            let results: Vec<_> = (0..10).map(|_| vec![0; 5]).collect();
-            let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
-            let _ = knn(&groundtruth, None, &results, 5, 10, true);
-        }
+    #[test]
+    fn test_error_not_enough_results_dynamic() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let results: Vec<_> = (0..10).map(|_| vec![0; 5]).collect();
+        let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
+        let _ = knn(&groundtruth, None, &results, 5, 10, true);
+    }
 
-        // Not enough groundtruth
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 5);
-            let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
-            assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
-            let err_allow_insufficient_results =
-                knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
-            assert!(matches!(
-                err_allow_insufficient_results,
-                ComputeRecallError::NotEnoughGroundTruth(..)
-            ));
-        }
+    #[test]
+    fn test_error_not_enough_groundtruth() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 5);
+        let results = Matrix::<u32>::new(0, 10, 10);
+        let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
+        let err_allow_insufficient_results =
+            knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
+        assert!(matches!(
+            err_allow_insufficient_results,
+            ComputeRecallError::NotEnoughGroundTruth(..)
+        ));
+    }
 
-        // Not enough groundtruth - dynamic: unlike the fixed-size matrix case, dynamic
-        // (variable-length) groundtruth rows with fewer than recall_k entries are valid
-        // and represent queries with limited results (e.g. filtered queries). Recall is
-        // computed using the available entries (this_recall_k = gt_row.len().min(recall_k)).
-        {
-            let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
-            let results = Matrix::<u32>::new(0, 10, 10);
-            // Should succeed: each row uses this_recall_k = min(5, 10) = 5
-            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-            assert_eq!(recall.num_queries, 10);
-        }
+    #[test]
+    fn test_dynamic_groundtruth_valid() {
+        let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
+        let results = Matrix::<u32>::new(0, 10, 10);
+        // Should succeed: each row uses this_recall_k = min(5, 10) = 5
+        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        assert_eq!(recall.num_queries, 10);
+    }
 
-        // Dynamic groundtruth with fewer entries: verify correct recall values.
-        // groundtruth has 5 entries per row: [1, 2, 3, 4, 5].
-        // results has 10 entries per row: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].
-        // With recall_k=10, this_recall_k = min(5, 10) = 5. All 5 groundtruth
-        // entries appear in the results, so recall = 5/5 = 1.0.
-        {
-            let gt_row: Vec<u32> = (1..=5).collect();
-            let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-            let mut results = Matrix::<u32>::new(0, 10, 10);
-            for i in 0..10 {
-                for (j, v) in (1u32..=10).enumerate() {
-                    results[(i, j)] = v;
-                }
+    #[test]
+    fn test_dynamic_groundtruth_full_match() {
+        let gt_row: Vec<u32> = (1..=5).collect();
+        let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
+        let mut results = Matrix::<u32>::new(0, 10, 10);
+        for i in 0..10 {
+            for (j, v) in (1u32..=10).enumerate() {
+                results[(i, j)] = v;
             }
-            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-            assert!((recall.average - 1.0).abs() < 1e-10);
         }
+        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        assert!((recall.average - 1.0).abs() < 1e-10);
+    }
 
-        // Dynamic groundtruth with partial match: 3 of 5 groundtruth entries appear in results.
-        // recall = 3/5 = 0.6 per query.
-        {
-            // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
-            let gt_row: Vec<u32> = (1..=5).collect();
-            let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
-            let mut results = Matrix::<u32>::new(0, 10, 10);
-            let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
-            for i in 0..10 {
-                for (j, &v) in res_row.iter().enumerate() {
-                    results[(i, j)] = v;
-                }
+    #[test]
+    fn test_dynamic_groundtruth_partial_match() {
+        // groundtruth: [1, 2, 3, 4, 5]; results contain [1, 2, 3, 6, 7, 8, 9, 10, 11, 12]
+        let gt_row: Vec<u32> = (1..=5).collect();
+        let groundtruth: Vec<_> = (0..10).map(|_| gt_row.clone()).collect();
+        let mut results = Matrix::<u32>::new(0, 10, 10);
+        let res_row: Vec<u32> = vec![1, 2, 3, 6, 7, 8, 9, 10, 11, 12];
+        for i in 0..10 {
+            for (j, &v) in res_row.iter().enumerate() {
+                results[(i, j)] = v;
             }
-            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-            assert!((recall.average - 0.6).abs() < 1e-10);
+        }
+        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        assert!((recall.average - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dynamic_groundtruth_mixed_zero_nonzero() {
+        let mut groundtruth: Vec<Vec<u32>> = Vec::new();
+        // First 5 rows: non-empty groundtruth
+        for _ in 0..5 {
+            groundtruth.push((1..=5).collect());
+        }
+        // Last 5 rows: empty groundtruth
+        for _ in 0..5 {
+            groundtruth.push(vec![]);
         }
 
-        // Mixed zero and non-zero groundtruth rows: verify denominator uses only non-zero rows.
-        // 5 queries with groundtruth [1, 2, 3, 4, 5] (all match → recall = 1.0 each)
-        // 5 queries with empty groundtruth [] (excluded from average)
-        // Expected average = (5 * 1.0) / 5 = 1.0
-        {
-            let mut groundtruth: Vec<Vec<u32>> = Vec::new();
-            // First 5 rows: non-empty groundtruth
-            for _ in 0..5 {
-                groundtruth.push((1..=5).collect());
+        let mut results = Matrix::<u32>::new(0, 10, 10);
+        for i in 0..10 {
+            for (j, v) in (1u32..=10).enumerate() {
+                results[(i, j)] = v;
             }
-            // Last 5 rows: empty groundtruth
-            for _ in 0..5 {
-                groundtruth.push(vec![]);
-            }
-
-            let mut results = Matrix::<u32>::new(0, 10, 10);
-            for i in 0..10 {
-                for (j, v) in (1u32..=10).enumerate() {
-                    results[(i, j)] = v;
-                }
-            }
-
-            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-            assert_eq!(recall.num_queries, 10);
-            assert!((recall.average - 1.0).abs() < 1e-10);
         }
 
-        // All queries have zero groundtruth: should return average = 0.0 (not NaN/inf).
-        {
-            let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
-            let results = Matrix::<u32>::new(0, 10, 10);
+        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        assert_eq!(recall.num_queries, 10);
+        assert!((recall.average - 1.0).abs() < 1e-10);
+    }
 
-            let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-            assert_eq!(recall.num_queries, 10);
-            assert_eq!(recall.average, 0.0);
-            assert!(!recall.average.is_nan());
-            assert!(!recall.average.is_infinite());
-        }
+    #[test]
+    fn test_dynamic_groundtruth_all_zero() {
+        let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
+        let results = Matrix::<u32>::new(0, 10, 10);
 
-        // Distance Row Mismatch
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 10);
-            let distances = Matrix::<f32>::new(0.0, 9, 10);
-            let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(
-                &groundtruth,
-                Some(distances.as_view().into()),
-                &results,
-                10,
-                10,
-                false,
-            )
-            .unwrap_err();
-            assert!(matches!(err, ComputeRecallError::DistanceRowsMismatch(..)));
-        }
+        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        assert_eq!(recall.num_queries, 10);
+        assert_eq!(recall.average, 0.0);
+        assert!(!recall.average.is_nan());
+        assert!(!recall.average.is_infinite());
+    }
 
-        // Distance Cols Mismatch
-        {
-            let groundtruth = Matrix::<u32>::new(0, 10, 10);
-            let distances = Matrix::<f32>::new(0.0, 10, 9);
-            let results = Matrix::<u32>::new(0, 10, 10);
-            let err = knn(
-                &groundtruth,
-                Some(distances.as_view().into()),
-                &results,
-                10,
-                10,
-                false,
-            )
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                ComputeRecallError::NotEnoughGroundTruthDistances(..)
-            ));
-        }
+    #[test]
+    fn test_error_distance_rows_mismatch() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let distances = Matrix::<f32>::new(0.0, 9, 10);
+        let results = Matrix::<u32>::new(0, 10, 10);
+        let err = knn(
+            &groundtruth,
+            Some(distances.as_view().into()),
+            &results,
+            10,
+            10,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ComputeRecallError::DistanceRowsMismatch(..)));
+    }
+
+    #[test]
+    fn test_error_distance_cols_mismatch() {
+        let groundtruth = Matrix::<u32>::new(0, 10, 10);
+        let distances = Matrix::<f32>::new(0.0, 10, 9);
+        let results = Matrix::<u32>::new(0, 10, 10);
+        let err = knn(
+            &groundtruth,
+            Some(distances.as_view().into()),
+            &results,
+            10,
+            10,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ComputeRecallError::NotEnoughGroundTruthDistances(..)
+        ));
+    }
+
+    #[test]
+    fn test_error_result_distance_mismatch() {
+        // groundtruth: 2 rows, first row has 3 elements, second row has 2
+        let groundtruth: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5]];
+        // distances: first row has 2 elements (should be 3), second row has 2 (matches)
+        let distances: Vec<Vec<f32>> = vec![vec![0.1, 0.2], vec![0.3, 0.4]];
+        let distances = Matrix::try_from(
+            distances.into_iter().flatten().collect::<Vec<_>>().into(),
+            2,
+            2,
+        ).unwrap();
+        // results: 2 rows, each with 3 elements
+        let results: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let err = knn(
+            &groundtruth,
+            Some(distances.as_view().into()),
+            &results,
+            3,
+            3,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ComputeRecallError::GroundTruthDistanceMismatch(2, 3, 0)
+        ));
     }
 }
