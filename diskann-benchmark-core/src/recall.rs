@@ -41,6 +41,8 @@ pub enum ComputeRecallError {
     NotEnoughGroundTruth(usize, usize),
     #[error("number of groundtruth distances {0} does not match groundtruth entries {1}")]
     NotEnoughGroundTruthDistances(usize, usize),
+    #[error("number of result distances {0} for query {2} does not match result entries {1}")]
+    ResultDistanceMismatch(usize, usize, usize),
 }
 
 /// An abstraction over data-structures such as vector-of-vectors.
@@ -188,8 +190,6 @@ where
     let mut this_groundtruth = HashSet::new();
     let mut this_results = HashSet::new();
 
-    let mut num_nonzero = 0;
-
     for i in 0..results.nrows() {
         let result = results.row(i);
         if !allow_insufficient_results && result.len() < recall_n {
@@ -197,58 +197,62 @@ where
         }
 
         let gt_row = groundtruth.row(i);
-        // groundtruth does not have to be fixed-size, so we compute recall_k for this row based on its gt length
+        // `groundtruth` does not have to be fixed-size,
+        // so we compute `recall_k` for this row based on its gt length
         let this_recall_k = gt_row.len().min(recall_k);
 
-        let recall = if this_recall_k > 0 {
-            num_nonzero += 1;
+        if this_recall_k == 0 {
+            continue;
+        }
 
-            // Populate the groundtruth using the top-k
-            this_groundtruth.clear();
-            this_groundtruth.extend(gt_row.iter().take(this_recall_k).cloned());
+        // Populate the groundtruth using the top-k
+        this_groundtruth.clear();
+        this_groundtruth.extend(gt_row.iter().take(this_recall_k).cloned());
 
-            // If we have distances, then continue to append distances as long as the distance
-            // value is constant
-            if let Some(distances) = groundtruth_distances
-                && this_recall_k > 0
-            {
-                let distances_row = distances.row(i);
-                if distances_row.len() > this_recall_k - 1 && gt_row.len() > this_recall_k - 1 {
-                    let last_distance = distances_row[this_recall_k - 1];
-                    for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
-                        if *d == last_distance {
-                            this_groundtruth.insert(g.clone());
-                        } else {
-                            break;
-                        }
-                    }
+        // If we have distances, then continue to append distances as long as the distance
+        // value is constant
+        if let Some(distances) = groundtruth_distances {
+            let distances_row = distances.row(i);
+            if distances_row.len() != gt_row.len() {
+                return Err(ComputeRecallError::ResultDistanceMismatch(
+                    distances_row.len(),
+                    gt_row.len(),
+                    i,
+                ));
+            }
+            // we've already checked that `results` and `distances` have at lesat
+            // `this_recall_k` entries, so it's safe to access `distances_row[this_recall_k - 1]`
+            let last_distance = distances_row[this_recall_k - 1];
+            for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
+                if *d == last_distance {
+                    this_groundtruth.insert(g.clone());
+                } else {
+                    break;
                 }
             }
+        }
 
-            this_results.clear();
-            this_results.extend(result.iter().take(recall_n).cloned());
+        this_results.clear();
+        this_results.extend(result.iter().take(recall_n).cloned());
 
-            // Count the overlap
-            let r = this_groundtruth
-                .iter()
-                .filter(|i| this_results.contains(i))
-                .count()
-                .min(this_recall_k);
+        // Count the overlap
+        let r = this_groundtruth
+            .iter()
+            .filter(|i| this_results.contains(i))
+            .count()
+            .min(this_recall_k);
 
-            (r as f64) / (this_recall_k as f64)
-        } else {
-            0.0
-        };
+        let recall = (r as f64) / (this_recall_k as f64);
 
         recall_values.push(recall);
     }
 
     // Compute the average recall
     let total: f64 = recall_values.iter().sum();
-    let average = if num_nonzero == 0 {
+    let average = if recall_values.is_empty() {
         0.0
     } else {
-        total / (num_nonzero as f64)
+        total / (recall_values.len() as f64)
     };
 
     Ok(RecallMetrics {
