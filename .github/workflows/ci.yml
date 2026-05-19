@@ -523,11 +523,11 @@ jobs:
 
       - name: Generate baseline LLVM lines
         working-directory: baseline
-        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../baseline-llvm-lines.txt
+        run: cargo llvm-lines --package diskann-benchmark --all-features --release | head -100 | tee ../baseline-llvm-lines.txt
 
       - name: Generate current LLVM lines
         working-directory: pr
-        run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../current-llvm-lines.txt
+        run: cargo llvm-lines --package diskann-benchmark --all-features --release | head -100 | tee ../current-llvm-lines.txt
 
       - name: Compare LLVM lines
         run: bash pr/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
