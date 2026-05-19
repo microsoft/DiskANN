@@ -6,7 +6,7 @@ use diskann_quantization::{
     algorithms::{Transform, TransformKind, transforms::NewTransformError},
     alloc::{GlobalAllocator, ScopedAllocator},
     minmax,
-    num::Positive,
+    num::POSITIVE_ONE_F32,
     spherical::{
         self, Data, PreScale, SphericalQuantizer, SupportedMetric,
         iface::{self, Opaque, OpaqueMut, Quantizer},
@@ -38,14 +38,14 @@ pub(crate) enum GarnetQuantizerError {
 
 /// Quantizer trait that all diskann-garnet quantizers must implement
 pub(crate) trait GarnetQuantizer: Send + Sync {
-    /// Check whether the quantizer is ready to be used
-    fn is_prepared(&self) -> bool;
     /// Returns the number of vectors needed before the quantizer can be trained
     fn required_vectors(&self) -> usize;
     /// Returns the size of a quantized vector
-    fn canonical_bytes(&self) -> usize;
+    fn bytes(&self) -> usize;
     /// Train the quantizer.
-    /// Each row of the matrix will be a vector
+    /// Each row of the matrix will be a vector.
+    /// Returns a lock guard for purposes of synchronization; after the guard is released, the
+    /// quantizer will be accessible to all threads.
     fn train(&self, metric: Metric, data: MatrixView<f32>) -> Result<(), GarnetQuantizerError>;
     /// Quantize a vector
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError>;
@@ -85,15 +85,11 @@ impl Spherical1Bit {
 }
 
 impl GarnetQuantizer for Spherical1Bit {
-    fn is_prepared(&self) -> bool {
-        self.inner.read().unwrap().is_some()
-    }
-
     fn required_vectors(&self) -> usize {
         1000
     }
 
-    fn canonical_bytes(&self) -> usize {
+    fn bytes(&self) -> usize {
         Data::<1, GlobalAllocator>::canonical_bytes(self.dim)
     }
 
@@ -195,10 +191,9 @@ impl DynQueryComputer for iface::QueryComputer {
 
 /// 8-bit scalar quantizer using MinMax
 ///
-/// This quantizer requires no training at all and is usable immediately on the first first. Each
+/// This quantizer requires no training at all and is usable immediately on the first vector. Each
 /// quantized vector has 8 bits per dimension and 20 bytes of overhead.
 pub(crate) struct MinMax8Bit {
-    dim: usize,
     metric: Metric,
     inner: minmax::MinMaxQuantizer,
 }
@@ -218,10 +213,9 @@ impl MinMax8Bit {
             Some(&mut rng),
             GlobalAllocator,
         )?;
-        let grid_scale = Positive::new(1.0).unwrap();
+        let grid_scale = POSITIVE_ONE_F32;
 
         Ok(Self {
-            dim: dim.get(),
             metric,
             inner: minmax::MinMaxQuantizer::new(transform, grid_scale),
         })
@@ -229,16 +223,12 @@ impl MinMax8Bit {
 }
 
 impl GarnetQuantizer for MinMax8Bit {
-    fn is_prepared(&self) -> bool {
-        true
-    }
-
     fn required_vectors(&self) -> usize {
         0
     }
 
-    fn canonical_bytes(&self) -> usize {
-        minmax::Data::<8>::canonical_bytes(self.dim)
+    fn bytes(&self) -> usize {
+        minmax::Data::<8>::canonical_bytes(self.inner.dim())
     }
 
     fn train(&self, _metric: Metric, _data: MatrixView<f32>) -> Result<(), GarnetQuantizerError> {
@@ -246,7 +236,7 @@ impl GarnetQuantizer for MinMax8Bit {
     }
 
     fn compress(&self, v: &[f32], into: &mut [u8]) -> Result<(), GarnetQuantizerError> {
-        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.dim)
+        let into = minmax::DataMutRef::<8>::from_canonical_front_mut(into, self.inner.dim())
             .map_err(|e| GarnetQuantizerError::Compression(Box::new(e)))?;
         self.inner
             .compress_into(v, into)
@@ -258,7 +248,7 @@ impl GarnetQuantizer for MinMax8Bit {
         let computer = GarnetDistanceComputer::new(
             <diskann_providers::common::MinMax8 as VectorRepr>::distance(
                 self.metric,
-                Some(self.dim),
+                Some(self.inner.dim()),
             ),
         );
         Ok(computer)
@@ -268,7 +258,7 @@ impl GarnetQuantizer for MinMax8Bit {
         let computer = GarnetQueryComputer::new(MinMax8BitQueryComputer::new(
             &self.inner,
             query,
-            self.dim,
+            self.inner.dim(),
             self.metric,
         )?);
         Ok(computer)

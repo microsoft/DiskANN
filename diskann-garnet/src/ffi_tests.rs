@@ -9,8 +9,8 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use crate::{
-        VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
-        garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
+        VectorQuantType, card, check_external_id_valid, create_index, drop_index, garnet::Context,
+        insert, remove, search_vector, set_attribute, test_utils::Store,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
@@ -132,7 +132,6 @@ mod tests {
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
@@ -195,7 +194,6 @@ mod tests {
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_bytes.len() / 4,
                 attributes1.as_ptr(),
@@ -281,7 +279,6 @@ mod tests {
                 index_ptr,
                 eid1_bytes.as_ptr(),
                 eid1_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
@@ -314,7 +311,6 @@ mod tests {
                 index_ptr,
                 eid2_bytes.as_ptr(),
                 eid2_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
@@ -347,9 +343,9 @@ mod tests {
         let (index_ptr, ctx) = create_test_index(&store);
 
         let id1 = 1234u64;
-        let v1 = &[1u8, 0u8];
+        let v1 = &[1.0f32, 0.0];
         let id2 = 5678u64;
-        let v2 = &[0u8, 1u8];
+        let v2 = &[0.0f32, 1.0];
 
         let id1_bytes = bytemuck::bytes_of(&id1);
         let id2_bytes = bytemuck::bytes_of(&id2);
@@ -361,8 +357,7 @@ mod tests {
                     index_ptr,
                     id1_bytes.as_ptr(),
                     id1_bytes.len(),
-                    VectorValueType::XB8,
-                    v1.as_ptr(),
+                    bytemuck::cast_slice::<f32, u8>(v1).as_ptr(),
                     v1.len(),
                     b"".as_ptr(),
                     0,
@@ -377,8 +372,7 @@ mod tests {
                     index_ptr,
                     id2_bytes.as_ptr(),
                     id2_bytes.len(),
-                    VectorValueType::XB8,
-                    v2.as_ptr(),
+                    bytemuck::cast_slice::<f32, u8>(v2).as_ptr(),
                     v2.len(),
                     b"".as_ptr(),
                     0,
@@ -386,7 +380,7 @@ mod tests {
             } > 0
         );
 
-        let qv = &[0u8, 0u8];
+        let qv = &[0.0f32, 0.0];
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
 
@@ -394,8 +388,7 @@ mod tests {
             search_vector(
                 ctx.get(),
                 index_ptr,
-                VectorValueType::XB8,
-                qv.as_ptr(),
+                bytemuck::cast_slice::<f32, u8>(qv).as_ptr(),
                 qv.len(),
                 2.0,
                 10,
@@ -467,7 +460,6 @@ mod tests {
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
@@ -497,7 +489,6 @@ mod tests {
             search_vector(
                 ctx.get(),
                 index_ptr,
-                VectorValueType::FP32,
                 query_bytes.as_ptr(),
                 query.len(),
                 0.0,

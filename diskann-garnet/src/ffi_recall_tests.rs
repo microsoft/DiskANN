@@ -10,8 +10,8 @@ mod tests {
     use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
-        VectorQuantType, VectorValueType, create_index, drop_index, garnet::Context, insert,
-        search_vector, test_utils::Store,
+        VectorQuantType, create_index, drop_index, garnet::Context, insert, search_vector,
+        test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -29,7 +29,6 @@ mod tests {
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
@@ -206,7 +205,6 @@ mod tests {
                 search_vector(
                     ctx.get(),
                     index_ptr,
-                    VectorValueType::FP32,
                     query_bytes.as_ptr(),
                     vec.len(),
                     delta,
