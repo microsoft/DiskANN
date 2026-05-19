@@ -73,14 +73,9 @@ where
     }
 
     fn populate(&mut self, query: &[f32]) -> ANNResult<()> {
-        let mut local_query: Vec<f32> = query.to_vec();
-
-        // Center the data by subtracting the corpus centroid (no-op if zero).
-        self.parent.preprocess_query(&mut local_query);
-
         // Compute the partial distances into the lookup-table.
         self.parent
-            .populate_chunk_distances(&local_query, &mut self.lookup_table)
+            .populate_chunk_distances(query, &mut self.lookup_table)
     }
 
     /// Compute the distance between a PQ code that the query provided to the most recent

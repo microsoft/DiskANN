@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use diskann_benchmark_runner::Registry;
+
 mod build;
 mod search;
 mod streaming;
@@ -15,6 +17,6 @@ mod product;
 mod scalar;
 mod spherical;
 
-pub(crate) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks::register_benchmarks(benchmarks)
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    benchmarks::register_benchmarks(registry)
 }
