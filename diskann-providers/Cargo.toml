@@ -36,7 +36,7 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 bf-tree = { workspace = true, optional = true }
 prost = "0.14.1"
-futures-util.workspace = true
+futures-util = { workspace = true, features = ["async-await"] }
 serde_json = { workspace = true, optional = true }
 vfs = { workspace = true, optional = true }
 
