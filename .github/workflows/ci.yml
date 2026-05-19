@@ -499,7 +499,7 @@ jobs:
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:
-          path: diskann_rust
+          path: pr
 
       - name: Checkout baseline (main)
         uses: actions/checkout@v4
@@ -510,7 +510,7 @@ jobs:
       - name: Install Rust
         shell: bash
         run: rustup show
-        working-directory: diskann_rust
+        working-directory: pr
 
       - name: Install cargo-llvm-lines
         run: cargo install cargo-llvm-lines --locked
@@ -518,7 +518,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            diskann_rust -> target
+            pr -> target
             baseline -> target
 
       - name: Generate baseline LLVM lines
@@ -526,11 +526,11 @@ jobs:
         run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../baseline-llvm-lines.txt
 
       - name: Generate current LLVM lines
-        working-directory: diskann_rust
+        working-directory: pr
         run: cargo llvm-lines --package diskann-benchmark --release | head -100 | tee ../current-llvm-lines.txt
 
       - name: Compare LLVM lines
-        run: bash diskann_rust/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
+        run: bash pr/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
 
       - name: Check LLVM lines growth threshold
         run: |
