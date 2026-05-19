@@ -695,7 +695,8 @@ mod tests {
             distances.into_iter().flatten().collect::<Vec<_>>().into(),
             2,
             2,
-        ).unwrap();
+        )
+        .unwrap();
         // results: 2 rows, each with 3 elements
         let results: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5, 6]];
         let err = knn(
