@@ -5,15 +5,56 @@
 
 //! Multi-vector MaxSim distance benchmarks with regression detection.
 //!
-//! Registers one `Benchmark` entry per supported element type; the JSON `isa`
-//! field selects the kernel at run time via the library's
-//! [`build_max_sim_f32`] / [`build_max_sim_f16`] factories.
+//! Registers one `Benchmark` entry per supported element type; the JSON
+//! `isa` field selects the kernel at run time via the library's
+//! [`build_max_sim`] factory. The set of accepted element types is gated by
+//! the sealed [`MaxSimElement`] trait.
 //!
-//! See [`README.md`](./README.md) for the in-tree workflow when authoring a new
-//! experimental kernel.
+//! # Adding a new in-tree experimental kernel
 //!
-//! [`build_max_sim_f32`]: diskann_quantization::multi_vector::build_max_sim_f32
-//! [`build_max_sim_f16`]: diskann_quantization::multi_vector::build_max_sim_f16
+//! 1. **Library: variant + dispatch arm.** In
+//!    `diskann-quantization::multi_vector::distance`:
+//!    - Add a new variant to [`MaxSimIsa`] (in `isa.rs`).
+//!    - Implement [`MaxSimKernel<T>`] for your kernel struct (in
+//!      `factory.rs`, next to `Prepared` and `ReferenceKernel`).
+//!    - Add a matching arm to the [`MaxSimElement::build`] impl for each
+//!      element type your kernel supports — the arm constructs your kernel
+//!      and hands it to `erase.erase(...)`.
+//!
+//! 2. **Benchmark: matching shadow variant.** In
+//!    [`crate::inputs::multi_vector`]:
+//!    - Add the same variant to [`BenchIsa`].
+//!    - Add the matching arm to `From<BenchIsa> for MaxSimIsa`.
+//!
+//! 3. **Run.** Set `"isa": "your-variant"` in the JSON job; the existing
+//!    `Kernel<T>` benchmark entries (registered once per element type)
+//!    handle the rest. No new `Benchmark` registration required.
+//!
+//! # Why two enums?
+//!
+//! [`MaxSimIsa`] (library) and [`BenchIsa`] are kept separate so the library
+//! doesn't pin its public API on a serde version or a particular JSON
+//! shape. The benchmark owns its kebab-case JSON layout; the library is
+//! serde-agnostic. Mirroring variant-for-variant is intentional — small
+//! price for keeping the library boundary clean.
+//!
+//! # Background
+//!
+//! The factory follows the BYOTE ("Bring your own type erasure") pattern
+//! described in [RFC #1068]. If you want your kernel packaged as something
+//! other than `Box<dyn MaxSimKernel<T>>` (e.g. composed with chamfer
+//! summing, or wrapped in a custom thin trait), implement your own
+//! [`Erase<T>`] and pass it to the factory in place of [`BoxErase`].
+//!
+//! [`build_max_sim`]: diskann_quantization::multi_vector::build_max_sim
+//! [`MaxSimIsa`]: diskann_quantization::multi_vector::MaxSimIsa
+//! [`MaxSimElement`]: diskann_quantization::multi_vector::MaxSimElement
+//! [`MaxSimElement::build`]: diskann_quantization::multi_vector::MaxSimElement::build
+//! [`MaxSimKernel<T>`]: diskann_quantization::multi_vector::MaxSimKernel
+//! [`Erase<T>`]: diskann_quantization::multi_vector::Erase
+//! [`BoxErase`]: diskann_quantization::multi_vector::BoxErase
+//! [`BenchIsa`]: crate::inputs::multi_vector::BenchIsa
+//! [RFC #1068]: https://github.com/microsoft/DiskANN/pull/1068
 
 use diskann_benchmark_runner::Registry;
 
@@ -47,7 +88,7 @@ mod tests {
     };
 
     use super::driver::{CheckResult, Comparison, MultiVectorTolerance, RunResult};
-    use super::kernels::KernelF32;
+    use super::kernels::Kernel;
     use crate::inputs::multi_vector::{BenchIsa, MultiVectorOp, Run};
 
     fn tiny_run() -> Run {
@@ -86,7 +127,7 @@ mod tests {
 
     #[test]
     fn check_rejects_mismatched_runs() {
-        let kernel = KernelF32;
+        let kernel = Kernel::<f32>::new();
 
         // Build a result whose `run` diverges from `tiny_run()` so the
         // regression check's `b.run == a.run` invariant fires.
@@ -115,7 +156,7 @@ mod tests {
 
     #[test]
     fn check_allows_negative_relative_change() {
-        let kernel = KernelF32;
+        let kernel = Kernel::<f32>::new();
 
         let result = kernel
             .check(
@@ -131,7 +172,7 @@ mod tests {
 
     #[test]
     fn check_passes_on_tolerance_boundary() {
-        let kernel = KernelF32;
+        let kernel = Kernel::<f32>::new();
 
         let result = kernel
             .check(
@@ -147,7 +188,7 @@ mod tests {
 
     #[test]
     fn check_fails_above_tolerance_boundary() {
-        let kernel = KernelF32;
+        let kernel = Kernel::<f32>::new();
 
         let result = kernel
             .check(
@@ -186,7 +227,7 @@ mod tests {
     /// require at least a non-zero value.
     #[test]
     fn zero_values_rejected() {
-        let kernel = KernelF32;
+        let kernel = Kernel::<f32>::new();
 
         let result = kernel
             .check(
@@ -198,5 +239,46 @@ mod tests {
             .unwrap();
 
         assert!(matches!(result, PassFail::Fail(_)));
+    }
+
+    //////////////////////
+    // BoxedKernel      //
+    //////////////////////
+    //
+    // The library's `MaxSimKernel<T>` trait makes no zero-doc / size-assert
+    // guarantees — those contracts live on the `BoxedKernel<T>` wrapper in
+    // `driver.rs`. The tests below pin that wrapper's behaviour.
+
+    use super::driver::{BoxedKernel, Distance};
+    use diskann_quantization::multi_vector::{
+        build_max_sim, BoxErase, MatRef as LibMatRef, MaxSimIsa, Standard as LibStandard,
+    };
+
+    fn boxed_kernel_f32_two_rows() -> BoxedKernel<f32> {
+        let data = [1.0f32, 0.0, 0.0, 1.0];
+        let query = LibMatRef::new(LibStandard::new(2, 2).unwrap(), data.as_slice()).unwrap();
+        BoxedKernel(build_max_sim::<f32, _>(MaxSimIsa::Auto, query, BoxErase).unwrap())
+    }
+
+    #[test]
+    fn boxed_kernel_max_sim_with_zero_docs_leaves_scores_untouched() {
+        let kernel = boxed_kernel_f32_two_rows();
+        let empty: [f32; 0] = [];
+        let doc = LibMatRef::new(LibStandard::new(0, 2).unwrap(), empty.as_slice()).unwrap();
+        let mut scores = vec![0.0f32; 2];
+        kernel.max_sim(doc, &mut scores);
+        for &s in &scores {
+            assert_eq!(s, 0.0, "zero-doc max_sim should leave scores untouched");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "scores buffer not right size")]
+    fn boxed_kernel_max_sim_panics_on_size_mismatch() {
+        let kernel = boxed_kernel_f32_two_rows();
+        let doc_data = [1.0f32, 1.0];
+        let doc = LibMatRef::new(LibStandard::new(1, 2).unwrap(), doc_data.as_slice()).unwrap();
+        let mut scores = vec![0.0f32; 3]; // Wrong size: 3 vs kernel's nrows() = 2.
+        kernel.max_sim(doc, &mut scores);
     }
 }

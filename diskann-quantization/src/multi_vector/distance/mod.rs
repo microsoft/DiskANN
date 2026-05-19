@@ -8,12 +8,14 @@
 //! - [`MaxSim`]: per-query-vector maximum similarities.
 //! - [`Chamfer`]: sum of MaxSim scores (asymmetric Chamfer distance).
 //! - [`MaxSimKernel`]: object-safe interface implemented by every concrete
-//!   kernel constructed through [`build_max_sim_f32`] / [`build_max_sim_f16`].
+//!   kernel constructed through [`build_max_sim`].
 //! - [`Erase`]: BYOTE visitor — caller decides how to type-erase the kernel.
+//! - [`MaxSimElement`]: sealed trait gating which element types the factory
+//!   accepts.
 //!
 //! The fallback path uses a double-loop kernel over
 //! [`InnerProduct`](diskann_vector::distance::InnerProduct). The factory
-//! functions return cache-tiled SIMD kernels selected by [`MaxSimIsa`].
+//! returns cache-tiled SIMD kernels selected by [`MaxSimIsa`].
 //!
 //! # Example
 //!
@@ -56,7 +58,7 @@ mod kernel;
 mod kernels;
 mod max_sim;
 
-pub use factory::{build_max_sim_f16, build_max_sim_f32};
+pub use factory::{MaxSimElement, build_max_sim};
 pub use fallback::QueryMatRef;
 pub use isa::{MaxSimIsa, NotSupported};
 pub use kernel::{BoxErase, Erase, MaxSimKernel};

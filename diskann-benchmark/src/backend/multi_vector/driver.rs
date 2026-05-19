@@ -27,6 +27,7 @@ use rand::{
 use serde::{Deserialize, Serialize};
 
 use crate::inputs::multi_vector::Run;
+use crate::utils::DisplayWrapper;
 
 //////////////////////
 // Tolerance        //
@@ -137,10 +138,7 @@ impl<T: Copy> Distance<T> for BoxedKernel<T> {
 // Timing harness   //
 //////////////////////
 
-fn run_loops<F>(run: &Run, mut body: F) -> RunResult
-where
-    F: FnMut(),
-{
+fn run_loops(run: &Run, body: &mut dyn FnMut()) -> RunResult {
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {
@@ -168,7 +166,7 @@ pub(super) fn run_with_distance<T: Copy>(
     dist: &dyn Distance<T>,
 ) -> RunResult {
     let mut scores = vec![0.0f32; run.num_query_vectors.get()];
-    run_loops(run, || {
+    run_loops(run, &mut || {
         dist.max_sim(doc, &mut scores);
         std::hint::black_box(&mut scores);
     })
@@ -177,16 +175,6 @@ pub(super) fn run_with_distance<T: Copy>(
 //////////////////////
 // Result types     //
 //////////////////////
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct DisplayWrapper<'a, T: ?Sized>(pub(super) &'a T);
-
-impl<T: ?Sized> std::ops::Deref for DisplayWrapper<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        self.0
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct RunResult {

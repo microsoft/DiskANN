@@ -44,9 +44,9 @@ impl std::fmt::Display for MaxSimIsa {
     }
 }
 
-/// Returned by `build_max_sim_*` when the requested ISA cannot be produced on
-/// the current host (e.g. x86_64 V4 requested on a non-AVX512 CPU, or Neon
-/// requested on x86_64).
+/// Returned by [`build_max_sim`](super::build_max_sim) when the requested
+/// ISA cannot be produced on the current host (e.g. x86_64 V4 requested on
+/// a non-AVX512 CPU, or Neon requested on x86_64).
 #[derive(Debug, Clone, Copy)]
 pub struct NotSupported {
     pub isa: MaxSimIsa,
