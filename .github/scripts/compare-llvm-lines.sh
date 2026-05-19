@@ -49,7 +49,7 @@ parse "$current_file" > "$current_parsed_file"
 echo "| Delta | Current | Baseline | Function |"
 echo "|-------|---------|----------|----------|"
 printf "| %+d | %s | %s | (TOTAL) |\n" "$delta_total" "$current_total" "$baseline_total"
-join -t$'\t' -j 2 -a1 -e 0 -o 1.2,1.1,2.1 \
+join -t$'\t' -j 2 -a1 -a2 -e 0 -o 0,1.1,2.1 \
   "$current_parsed_file" "$baseline_parsed_file" | \
   awk -F'\t' '{delta=$2-$3; printf "%d\t%s\t%s\t%s\n", delta, $2, $3, $1}' | \
   sort -t$'\t' -rn | \
