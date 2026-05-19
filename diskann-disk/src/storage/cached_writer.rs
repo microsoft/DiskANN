@@ -4,8 +4,8 @@
  */
 use std::io::{Seek, SeekFrom, Write};
 
-use diskann_providers::storage::StorageWriteProvider;
 use diskann::tracked_info;
+use diskann_providers::storage::StorageWriteProvider;
 
 /// Sequential cached writes with a generic storage provider with write access.
 pub struct CachedWriter<Storage>

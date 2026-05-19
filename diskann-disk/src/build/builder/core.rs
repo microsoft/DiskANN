@@ -179,7 +179,8 @@ where
 
         tracked_info!(
             "Written file: {} with {} points",
-            shard_base_file, num_written
+            shard_base_file,
+            num_written
         );
 
         shard_base_cached_writer.flush()?;
@@ -272,7 +273,8 @@ where
         let output_width: u32 = max_degree;
         tracked_info!(
             "Max input width: {}, output width: {}",
-            max_input_width, output_width
+            max_input_width,
+            output_width
         );
 
         merged_vamana_cached_writer.write(&output_width.to_le_bytes())?;
@@ -336,7 +338,8 @@ where
             if num_nbrs == 0 {
                 tracked_info!(
                     "WARNING: shard #{}, node_id {} has 0 nbrs",
-                    shard_id, node_id
+                    shard_id,
+                    node_id
                 );
             } else {
                 let mut nbrs_bytes = vec![0u8; num_nbrs as usize * mem::size_of::<u32>()];

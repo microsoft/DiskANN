@@ -47,13 +47,15 @@ impl CheckpointRecord {
         if self.stage == stage {
             tracked_info!(
                 "The resumption point is at {} for stage {:?}",
-                self.progress, stage
+                self.progress,
+                stage
             );
             Some(if self.is_valid { self.progress } else { 0 })
         } else {
             tracked_info!(
                 "Failed to get resumption point for {:?} since the current stage is {:?}.",
-                stage, self.stage
+                stage,
+                self.stage
             );
             None
         }
@@ -65,7 +67,8 @@ impl CheckpointRecord {
     pub fn advance_work_type(&self, next_stage: WorkStage) -> ANNResult<CheckpointRecord> {
         tracked_info!(
             "Advancing work type from {:?} to {:?}.",
-            self.stage, next_stage
+            self.stage,
+            next_stage
         );
         Ok(CheckpointRecord {
             stage: next_stage,

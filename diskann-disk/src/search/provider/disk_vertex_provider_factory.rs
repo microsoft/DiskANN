@@ -144,7 +144,8 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
                 if num_nodes_to_cache > graph_metadata.num_pts as usize {
                     tracked_info!(
                         "Reducing nodes to cache from: {} to: {} (total no. of nodes)",
-                        num_nodes_to_cache, graph_metadata.num_pts
+                        num_nodes_to_cache,
+                        graph_metadata.num_pts
                     );
                     num_nodes_to_cache = graph_metadata.num_pts as usize;
                 }

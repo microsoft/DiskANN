@@ -31,7 +31,6 @@ use diskann_providers::{
 use diskann_utils::io::{read_bin, write_bin};
 use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
-use tracing::debug;
 
 use crate::{
     build::{
@@ -61,6 +60,7 @@ use crate::{
     },
     DiskIndexBuildParameters, QuantizationType,
 };
+use diskann::tracked_debug;
 use diskann::tracked_info;
 
 /// Disk index builder that composes with DiskIndexBuilderCore.
@@ -365,7 +365,8 @@ where
             None => {
                 tracked_info!(
                     "[Stage:{:?}] Skip build_shard_index for shard {} - no valid checkpoint exists",
-                    stage, shard_id
+                    stage,
+                    shard_id
                 );
                 return Ok(());
             }
@@ -388,7 +389,8 @@ where
         } else {
             tracked_info!(
                 "[Stage:{:?}] Resume shard {} build with existing data",
-                stage, shard_id
+                stage,
+                shard_id
             );
         }
 
@@ -559,18 +561,18 @@ where
 #[cfg(debug_assertions)]
 /// Log statistics about the build process
 async fn log_build_stats<T: VectorRepr>(index: &Arc<dyn InmemIndexBuilder<T>>) -> ANNResult<()> {
-    debug!(
+    tracked_debug!(
         "Number of points reachable in the graph: {}",
         index.count_reachable_nodes().await?
     );
 
     let (full_vector, quant_vector) = index.counts_for_get_vector();
     let capacity = index.capacity();
-    debug!(
+    tracked_debug!(
         "Number of get vector calls per insert: {}",
         full_vector as f32 / capacity as f32
     );
-    debug!(
+    tracked_debug!(
         "Number of get quantized vector calls per insert: {}",
         quant_vector as f32 / capacity as f32
     );
@@ -594,7 +596,7 @@ where
 
     index.set_start_point(medoid.as_slice())?;
 
-    debug!("Set start point to medoid ID: {}", medoid_id);
+    tracked_debug!("Set start point to medoid ID: {}", medoid_id);
 
     Ok(medoid_id)
 }
@@ -656,7 +658,7 @@ where
     T: VectorRepr,
     Iter: Iterator<Item = (usize, (Box<[T]>, ()))> + Send + 'static,
 {
-    debug!("Processing chunk from #{} to #{}", start, end);
+    tracked_debug!("Processing chunk from #{} to #{}", start, end);
 
     let partitions = async_tools::PartitionIter::new(end - start, num_tasks);
 
@@ -691,7 +693,7 @@ where
         res.map_err(|_| ANNError::log_index_error("A spawned insert task failed"))??;
     }
 
-    debug!("Completed chunk #{} to #{}", start, end);
+    tracked_debug!("Completed chunk #{} to #{}", start, end);
     Ok(())
 }
 
@@ -854,7 +856,7 @@ where
 
         for file in files.iter() {
             if self.storage_provider.exists(file) {
-                debug!("Deleting temporary file: {}", file);
+                tracked_debug!("Deleting temporary file: {}", file);
                 self.storage_provider.delete(file)?;
             }
         }
@@ -886,7 +888,7 @@ impl StartPoint {
             ANNError::log_invalid_file_format(format!("Start point ID file {} is empty", path))
         })?;
 
-        debug!("Loaded start point ID {} from {}", *start_point_id, path);
+        tracked_debug!("Loaded start point ID {} from {}", *start_point_id, path);
         Ok(Self(*start_point_id))
     }
 
@@ -898,7 +900,7 @@ impl StartPoint {
             MatrixView::row_vector(std::slice::from_ref(&self.0)),
             &mut storage_provider.create_for_write(path)?,
         )?;
-        debug!("Saved start point ID {} to {}", self.0, path);
+        tracked_debug!("Saved start point ID {} to {}", self.0, path);
         Ok(())
     }
 

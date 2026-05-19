@@ -5,7 +5,6 @@
 
 use std::{error::Error, thread::sleep};
 
-
 use super::continuation_tracker::{ContinuationGrant, ContinuationTrackerTrait};
 use crate::build::chunking::checkpoint::Progress;
 use diskann::tracked_info;

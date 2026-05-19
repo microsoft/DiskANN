@@ -349,7 +349,10 @@ where
 
     tracked_info!(
         "Partitioned {} with replication factor {} to get {} points across {} shards",
-        num_points, k_base, total_count, num_parts
+        num_points,
+        k_base,
+        total_count,
+        num_parts
     );
 
     Ok(())

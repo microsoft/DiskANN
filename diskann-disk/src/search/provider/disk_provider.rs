@@ -46,7 +46,6 @@ use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;
 use tokio::runtime::Runtime;
-use tracing::debug;
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
@@ -59,6 +58,7 @@ use crate::{
     utils::AlignedFileReaderFactory,
     utils::QueryStatistics,
 };
+use diskann::tracked_debug;
 
 ///////////////////
 // Disk Provider //
@@ -135,7 +135,7 @@ where
     where
         P: StorageReadProvider,
     {
-        debug!(
+        tracked_debug!(
             "DiskProvider::load_with() called with file: {:?}",
             get_disk_index_file(ctx.quant_load_context.metadata.prefix())
         );
@@ -870,7 +870,7 @@ where
         )
         .build()?;
 
-        debug!("Creating DiskIndexSearcher with index_config: {:?}", config);
+        tracked_debug!("Creating DiskIndexSearcher with index_config: {:?}", config);
 
         let graph_header = vertex_provider_factory.get_header()?;
         let pq_data = disk_index_reader.get_pq_data();

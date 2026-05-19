@@ -12,6 +12,7 @@ use diskann_platform::{
 
 use super::traits::AlignedFileReader;
 use crate::utils::aligned_file_reader::{AlignedRead, A512};
+use diskann::tracked_debug;
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
 pub const IO_COMPLETION_TIMEOUT: DWORD = u32::MAX; // Infinite timeout.
@@ -32,7 +33,7 @@ pub struct WindowsAlignedFileReader {
 impl WindowsAlignedFileReader {
     pub fn new(fname: &str) -> ANNResult<Self> {
         let mut io_context = IOContext::new();
-        tracing::debug!("Creating file handle for {}", fname);
+        tracked_debug!("Creating file handle for {}", fname);
         match unsafe { FileHandle::new(fname, AccessMode::Read, ShareMode::Read) } {
             Ok(file_handle) => io_context.file_handle = file_handle,
             Err(err) => {
