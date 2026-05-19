@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     benchmark::{self, Benchmark, FailureScore, MatchScore, Regression},
-    input, Any, Checkpoint, Input, Output,
+    input, Checkpoint, Input, Output,
 };
 
 /// A registered benchmark entry: a name paired with a type-erased benchmark.
@@ -41,7 +41,7 @@ impl RegisteredBenchmark {
 /// A collection of registered inputs and benchmarks.
 pub struct Registry {
     // Inputs keyed by their tag type.
-    inputs: HashMap<&'static str, Box<dyn input::DynInput>>,
+    inputs: HashMap<&'static str, Box<dyn input::internal::DynInput>>,
     benchmarks: Vec<RegisteredBenchmark>,
 }
 
@@ -105,7 +105,7 @@ impl Registry {
     }
 
     /// Return `true` if `job` matches with any registered benchmark. Otherwise, return `false`.
-    pub fn has_match(&self, job: &Any) -> bool {
+    pub(crate) fn has_match(&self, job: &input::internal::Any) -> bool {
         self.find_best_match(job).is_some()
     }
 
@@ -114,9 +114,9 @@ impl Registry {
     /// Returns the results of the benchmark if successful.
     ///
     /// Errors if a suitable method could not be found or if the invoked benchmark failed.
-    pub fn call(
+    pub(crate) fn call(
         &self,
-        job: &Any,
+        job: &input::internal::Any,
         checkpoint: Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<serde_json::Value> {
@@ -132,7 +132,11 @@ impl Registry {
     /// reasons.
     ///
     /// Returns `Ok(())` if a match was found.
-    pub fn debug(&self, job: &Any, max_methods: usize) -> Result<(), Vec<Mismatch>> {
+    pub(crate) fn debug(
+        &self,
+        job: &input::internal::Any,
+        max_methods: usize,
+    ) -> Result<(), Vec<Mismatch>> {
         if self.has_match(job) {
             return Ok(());
         }
@@ -166,7 +170,7 @@ impl Registry {
     }
 
     /// Find the best matching benchmark for `job` by score.
-    fn find_best_match(&self, job: &Any) -> Option<&RegisteredBenchmark> {
+    fn find_best_match(&self, job: &input::internal::Any) -> Option<&RegisteredBenchmark> {
         self.benchmarks
             .iter()
             .filter_map(|entry| {
@@ -180,7 +184,7 @@ impl Registry {
             .map(|(entry, _)| entry)
     }
 
-    fn _input(&self, tag: &str) -> Option<&dyn input::DynInput> {
+    fn _input(&self, tag: &str) -> Option<&dyn input::internal::DynInput> {
         self.inputs.get(tag).map(|v| &**v)
     }
 
@@ -189,16 +193,16 @@ impl Registry {
         T: Input + 'static,
     {
         let tag = T::tag();
-        let wrapper = crate::input::Wrapper::<T>::new();
+        let wrapper = crate::input::internal::Wrapper::<T>::new();
         match self.inputs.entry(tag) {
             Entry::Vacant(v) => {
                 v.insert(Box::new(wrapper));
                 Ok(())
             }
             Entry::Occupied(o) => {
-                use input::DynInput;
+                use input::internal::DynInput;
 
-                if o.get().as_any().is::<crate::input::Wrapper<T>>() {
+                if o.get().as_any().is::<crate::input::internal::Wrapper<T>>() {
                     Ok(())
                 } else {
                     Err(RegistryError {
@@ -334,14 +338,17 @@ impl RegressionBenchmark<'_> {
         self.regression.input_tag()
     }
 
-    pub(crate) fn try_match(&self, input: &Any) -> Result<MatchScore, FailureScore> {
+    pub(crate) fn try_match(
+        &self,
+        input: &input::internal::Any,
+    ) -> Result<MatchScore, FailureScore> {
         self.benchmark.benchmark().try_match(input)
     }
 
     pub(crate) fn check(
         &self,
-        tolerance: &Any,
-        input: &Any,
+        tolerance: &input::internal::Any,
+        input: &input::internal::Any,
         before: &serde_json::Value,
         after: &serde_json::Value,
     ) -> anyhow::Result<benchmark::internal::CheckedPassFail> {
@@ -360,7 +367,10 @@ pub(crate) struct RegisteredTolerance<'a> {
 }
 
 /// Helper to capture a `Benchmark::description` call into a `String` via `Display`.
-struct Capture<'a>(&'a dyn benchmark::internal::Benchmark, Option<&'a Any>);
+struct Capture<'a>(
+    &'a dyn benchmark::internal::Benchmark,
+    Option<&'a input::internal::Any>,
+);
 
 impl std::fmt::Display for Capture<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -386,19 +396,21 @@ mod tests {
 
     macro_rules! input {
         ($T:ident, $tag:literal) => {
+            #[derive(Debug)]
             struct $T;
 
             impl Input for $T {
+                type Raw = ();
                 fn tag() -> &'static str {
                     $tag
                 }
-                fn try_deserialize(
-                    _serialized: &serde_json::Value,
-                    _checker: &mut Checker,
-                ) -> anyhow::Result<Any> {
+                fn from_raw(_raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<$T> {
                     unimplemented!("this struct is for test only");
                 }
-                fn example() -> anyhow::Result<serde_json::Value> {
+                fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+                    unimplemented!("this struct is for test only");
+                }
+                fn example() -> Self::Raw {
                     unimplemented!("this struct is for test only");
                 }
             }
@@ -422,7 +434,7 @@ mod tests {
 
         {
             let a = registry._input(A::tag()).unwrap();
-            assert!(a.as_any().is::<input::Wrapper<A>>());
+            assert!(a.as_any().is::<input::internal::Wrapper<A>>());
 
             let name = a.type_name();
             assert!(name.contains("A"), "{}", name);
@@ -430,7 +442,7 @@ mod tests {
 
         {
             let b = registry._input(B::tag()).unwrap();
-            assert!(b.as_any().is::<input::Wrapper<B>>());
+            assert!(b.as_any().is::<input::internal::Wrapper<B>>());
 
             let name = b.type_name();
             assert!(name.contains("B"), "{}", name);

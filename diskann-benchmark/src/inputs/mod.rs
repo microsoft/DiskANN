@@ -15,29 +15,38 @@ pub(crate) trait Example {
     fn example() -> Self;
 }
 
-// NOTE: The input registration and dispatching isn't prefect. It uses a pattern (like
-// the use of `'static` on the benchmark types) as a byproduct of older ways of doing
-// benchmark selection.
-//
-// In the future, these can be migrated to reduce this legacy cruft.
+/// Implement [`diskann_benchmark_runner::Input`] for `$T` using `Raw = $T`.
+///
+/// Requires `$T` to:
+/// - implement [`Example`];
+/// - provide an inherent `fn tag() -> &'static str` method;
+/// - provide a
+///   `fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()>` method; and
+/// - implement the serde traits required by
+///   [`diskann_benchmark_runner::Input`] and `serde_json::to_value(self)`.
 macro_rules! as_input {
     ($T:ty) => {
         impl diskann_benchmark_runner::Input for $T {
+            type Raw = $T;
+
             fn tag() -> &'static str {
                 <$T>::tag()
             }
 
-            fn try_deserialize(
-                serialized: &serde_json::Value,
+            fn from_raw(
+                mut raw: Self::Raw,
                 checker: &mut diskann_benchmark_runner::Checker,
-            ) -> anyhow::Result<diskann_benchmark_runner::Any> {
-                checker.any(<$T as serde::Deserialize>::deserialize(serialized)?)
+            ) -> anyhow::Result<Self> {
+                raw.validate(checker)?;
+                Ok(raw)
             }
 
-            fn example() -> anyhow::Result<serde_json::Value> {
-                Ok(serde_json::to_value(
-                    <$T as $crate::inputs::Example>::example(),
-                )?)
+            fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+                Ok(serde_json::to_value(self)?)
+            }
+
+            fn example() -> Self {
+                <$T as $crate::inputs::Example>::example()
             }
         }
     };

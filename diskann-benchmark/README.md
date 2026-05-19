@@ -206,20 +206,20 @@ this is usually easily done with a small code change.
 
 With the example of adding Range search to the `f16` index, the registration site:
 ```rust
-benchmarks.register(
+registry.register(
     "async-full-precision-f16",
     FullPrecision::<f16>::new()
         .search(plugins::Topk),
-);
+)?;
 ```
 Can be updated to:
 ```rust
-benchmarks.register(
+registry.register(
     "async-full-precision-f16",
     FullPrecision::<f16>::new()
         .search(plugins::Topk)
         .search(plugins::Range),
-);
+)?;
 ```
 This will both compile the range search implementation and make it available for benchmark
 matching.
@@ -337,53 +337,49 @@ pub(crate) struct ComputeGroundTruth {
     pub(crate) num_nearest_neighbors: usize,
 }
 ```
-We need to implement a few traits related to this input type:
+We need to implement `diskann_benchmark_runner::Input` for the type. This trait associates
+a tag name used for deserialization and benchmark matching, a `Raw` type for JSON
+serialization/deserialization, a `from_raw` constructor that performs post-deserialization
+validation (e.g., resolving file paths via the `Checker`), and an `example` that supplies
+sample JSON layouts for the CLI.
 
-* `diskann_benchmark_runner::Input`: A type-name for this input that is used to identify it for
-  deserialization and benchmark matching. To make this easier, `benchmark` defines
-  `benchmark::inputs::Input` that can be used to express type level implementation (shown
-  below)
-
-* `CheckDeserialization`: This trait performs post-deserialization invariant checking.
-  In the context of the `ComputeGroundTruth` type, we use this to check that the input
-  files are valid.
+In the context of the `ComputeGroundTruth` type, we use `from_raw` to check that the input
+files are valid.
 
 ```rust
-impl diskann_benchmark_runner::Input for crate::inputs::Input<ComputeGroundTruth> {
+impl diskann_benchmark_runner::Input for ComputeGroundTruth {
+    // The raw form is just `Self` since the struct is directly deserializable.
+    type Raw = Self;
+
     // This gets associated with the JSON representation returned by `example` and at run
-    // time, inputs tagged with this value will be given to `try_deserialize`.
+    // time, inputs tagged with this value will be given to `from_raw`.
     fn tag() -> &'static str {
         "compute_groundtruth"
     }
 
-    // Attempt to deserialize `Self` from raw JSON.
-    //
-    // Implementors can assume that `serialized` looks similar in structure to what is
-    // returned by `example`.
-    fn try_deserialize(
-        serialized: &serde_json::Value,
+    // Construct from the raw deserialized form, performing file path resolution.
+    fn from_raw(
+        mut raw: Self::Raw,
         checker: &mut diskann_benchmark_runner::Checker,
-    ) -> anyhow::Result<diskann_benchmark_runner::Any> {
-        checker.any(ComputeGroundTruth::deserialize(serialized)?)
+    ) -> anyhow::Result<Self> {
+        raw.data.resolve(checker)?;
+        raw.queries.resolve(checker)?;
+        Ok(raw)
     }
 
-    // Return a serialized representation of `self` to help users create an input file.
-    fn example() -> anyhow::Result<serde_json::Value> {
-        serde_json::to_value(Self {
+    // Serialize `self` to JSON.
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    // Return an example input to help users create an input file.
+    fn example() -> Self {
+        Self {
             data_type: DataType::Float32,
             data: InputFile::new("path/to/data"),
             queries: InputFile::new("path/to/queries"),
             num_nearest_neighbors: 100,
-        })
-    }
-}
-
-impl CheckDeserialization for ComputeGroundTruth {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Forward the deserialization check to the input files.
-        self.data.check_deserialization(checker)?;
-        self.queries.check_deserialization(checker)?;
-        Ok(())
+        }
     }
 }
 ```
@@ -409,8 +405,8 @@ To implement benchmarks, we register them with the `diskann_benchmark_runner::Re
 The simplest thing we can do is something like this:
 ```rust
 use diskann_benchmark_runner::{
-    dispatcher::{MatchScore, FailureScore},
-    Any, Benchmark, Checkpoint, Output, Registry,
+    benchmark::{MatchScore, FailureScore},
+    Benchmark, Checkpoint, Output,
 };
 
 // Benchmarks can be stateful.
@@ -427,6 +423,15 @@ impl Benchmark for RunGroundTruth {
     // Always match the input.
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
         Ok(MatchScore::new(0))
+    }
+
+    // Describe the benchmark for CLI display and debugging.
+    fn description(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        _input: Option<&Self::Input>,
+    ) -> std::fmt::Result {
+        write!(f, "compute groundtruth")
     }
 
     // Run the benchmark (for this example, nothing happens).
