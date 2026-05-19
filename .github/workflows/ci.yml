@@ -461,6 +461,12 @@ jobs:
             --workspace \
             --lcov --output-path lcov.info
 
+      - name: Check diff coverage
+        if: github.event_name == 'pull_request'
+        run: |
+          pip install diff-cover
+          diff-cover lcov.info --compare-branch=origin/main --fail-under=90
+
       - name: Generate miri code coverage
         env:
           RUSTFLAGS: "--cfg=miri"
