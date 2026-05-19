@@ -26,15 +26,15 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, Benchmark, CheckDeserialization, Checker, Input,
+    Benchmark, Checker, Input, Registry,
 };
 
 ////////////////
 // Public API //
 ////////////////
 
-pub fn register(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    register_benchmarks_impl(dispatcher)
+pub fn register(registry: &mut Registry) -> anyhow::Result<()> {
+    Ok(register_benchmarks_impl(registry)?)
 }
 
 ///////////
@@ -118,12 +118,6 @@ pub struct SimdOp {
     runs: Vec<Run>,
 }
 
-impl CheckDeserialization for SimdOp {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 macro_rules! write_field {
     ($f:ident, $field:tt, $($expr:tt)*) => {
         writeln!($f, "{:>18}: {}", $field, $($expr)*)
@@ -149,18 +143,21 @@ impl std::fmt::Display for SimdOp {
 }
 
 impl Input for SimdOp {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-op"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
         const DIM: [NonZeroUsize; 2] = [
             NonZeroUsize::new(128).unwrap(),
             NonZeroUsize::new(150).unwrap(),
@@ -191,12 +188,12 @@ impl Input for SimdOp {
             },
         ];
 
-        Ok(serde_json::to_value(&Self {
+        Self {
             query_type: DataType::Float32,
             data_type: DataType::Float32,
             arch: Arch::X86_64_V3,
             runs,
-        })?)
+        }
     }
 }
 
@@ -213,33 +210,30 @@ struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }
 
-impl CheckDeserialization for SimdTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for SimdTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const EXAMPLE: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite please"),
         };
 
-        Ok(serde_json::to_value(SimdTolerance {
+        SimdTolerance {
             min_time_regression: EXAMPLE,
-        })?)
+        }
     }
 }
 
@@ -301,105 +295,108 @@ impl std::fmt::Display for CheckResult {
 // Benchmark Registration //
 ////////////////////////////
 
-fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
+fn register_benchmarks_impl(
+    registry: &mut diskann_benchmark_runner::Registry,
+) -> Result<(), diskann_benchmark_runner::RegistryError> {
     // x86-64-v4
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, i8, i8>::new(),
-        );
+        )?;
     }
 
     // x86-64-v3
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, i8, i8>::new(),
-        );
+        )?;
     }
 
     // aarch64-neon
     #[cfg(target_arch = "aarch64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, i8, i8>::new(),
-        );
+        )?;
     }
 
     // scalar
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-scalar",
         Kernel::<diskann_wide::arch::Scalar, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-scalar",
         Kernel::<diskann_wide::arch::Scalar, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-scalar",
         Kernel::<diskann_wide::arch::Scalar, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-scalar",
         Kernel::<diskann_wide::arch::Scalar, i8, i8>::new(),
-    );
+    )?;
 
     // reference
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-reference",
         Kernel::<Reference, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-reference",
         Kernel::<Reference, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-reference",
         Kernel::<Reference, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-reference",
         Kernel::<Reference, i8, i8>::new(),
-    );
+    )?;
+    Ok(())
 }
 
 //////////////

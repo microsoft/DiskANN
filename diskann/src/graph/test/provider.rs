@@ -1111,13 +1111,6 @@ impl glue::SearchExt for Accessor<'_> {
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
-impl glue::IdIterator<std::vec::IntoIter<u32>> for Accessor<'_> {
-    async fn id_iterator(&mut self) -> Result<std::vec::IntoIter<u32>, ANNError> {
-        let ids: Vec<u32> = self.provider.terms.iter().map(|r| *r.key()).collect();
-        Ok(ids.into_iter())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Strategy {
     // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded

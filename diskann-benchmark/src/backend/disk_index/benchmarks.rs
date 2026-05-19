@@ -15,7 +15,7 @@ use diskann_benchmark_runner::{
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input,
+    Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -123,11 +123,12 @@ where
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register_regression("disk-index-f32", DiskIndex::<f32>::new());
-    benchmarks.register_regression("disk-index-f16", DiskIndex::<f16>::new());
-    benchmarks.register_regression("disk-index-u8", DiskIndex::<u8>::new());
-    benchmarks.register_regression("disk-index-i8", DiskIndex::<i8>::new());
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
+    registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
+    registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;
+    registry.register_regression("disk-index-i8", DiskIndex::<i8>::new())?;
+    Ok(())
 }
 
 /////////////////////////
@@ -164,25 +165,22 @@ impl DiskIndexTolerance {
     }
 }
 
-impl CheckDeserialization for DiskIndexTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for DiskIndexTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         Self::tag()
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const DEFAULT: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite value"),
@@ -192,7 +190,7 @@ impl Input for DiskIndexTolerance {
             Err(_) => panic!("use a non-negative finite value"),
         };
 
-        Ok(serde_json::to_value(DiskIndexTolerance {
+        DiskIndexTolerance {
             build_time_regression: DEFAULT,
             qps_regression: DEFAULT,
             recall_regression: RECALL,
@@ -200,7 +198,7 @@ impl Input for DiskIndexTolerance {
             mean_comps_regression: DEFAULT,
             mean_latency_regression: DEFAULT,
             p95_latency_regression: DEFAULT,
-        })?)
+        }
     }
 }
 
