@@ -322,6 +322,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkAdaptiveLFilter(MultiHopSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -348,6 +349,7 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkAdaptiveLFilter(_) => SearchPhaseKind::TopkAdaptiveLFilter,
         }
     }
 
@@ -392,6 +394,16 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_adaptive_l_filter(&self) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkAdaptiveLFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkAdaptiveLFilter,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl CheckDeserialization for SearchPhase {
@@ -401,6 +413,7 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::Range(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::TopkAdaptiveLFilter(phase) => phase.check_deserialization(checker),
         }
     }
 }
@@ -411,6 +424,7 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkAdaptiveLFilter,
 }
 
 impl SearchPhaseKind {
@@ -420,6 +434,7 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkAdaptiveLFilter => "topk-adaptive-l-filter",
         }
     }
 }
