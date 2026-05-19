@@ -490,6 +490,7 @@ jobs:
   # LLVM IR bloat check: compare monomorphization cost against baseline.
   # This job is not part of the required CI gate, so it won't block PR merges.
   llvm-lines:
+    if: github.event_name == 'pull_request'
     needs: basics
     name: LLVM Lines Regression Check
     runs-on: ubuntu-latest
@@ -501,10 +502,10 @@ jobs:
         with:
           path: pr
 
-      - name: Checkout baseline (main)
+      - name: Checkout base ref
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
 
       - name: Install Rust
