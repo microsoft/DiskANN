@@ -100,8 +100,9 @@ use serde_json::Value;
 
 use crate::{
     benchmark::{internal::CheckedPassFail, PassFail},
+    input::internal::Any,
     internal::load_from_disk,
-    jobs, registry, result, Any, Checker,
+    jobs, registry, result, Checker,
 };
 
 ////////////
@@ -348,7 +349,6 @@ impl Raw {
                     .with_context(context);
                 }
 
-                checker.set_tag(entry.tolerance.tag());
                 let tolerance = entry
                     .tolerance
                     .try_deserialize(&unprocessed.tolerance.content, &mut checker)
