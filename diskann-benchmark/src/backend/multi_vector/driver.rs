@@ -16,7 +16,7 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, CheckDeserialization, Checker, Input,
+    Checker, Input,
 };
 use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Standard};
 use rand::{
@@ -42,33 +42,30 @@ pub(super) struct MultiVectorTolerance {
     pub(super) min_time_regression: NonNegativeFinite,
 }
 
-impl CheckDeserialization for MultiVectorTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for MultiVectorTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "multi-vector-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const EXAMPLE: NonNegativeFinite = match NonNegativeFinite::new(0.05) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite please"),
         };
 
-        Ok(serde_json::to_value(MultiVectorTolerance {
+        MultiVectorTolerance {
             min_time_regression: EXAMPLE,
-        })?)
+        }
     }
 }
 

@@ -5,17 +5,9 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_benchmark_runner::{utils::datatype::DataType, CheckDeserialization, Checker};
+use diskann_benchmark_runner::{utils::datatype::DataType, Checker, Input};
 use diskann_quantization::multi_vector::MaxSimIsa;
 use serde::{Deserialize, Serialize};
-
-use crate::inputs::{as_input, Example};
-
-//////////////
-// Registry //
-//////////////
-
-as_input!(MultiVectorOp);
 
 ////////////////
 // Enum types //
@@ -100,13 +92,21 @@ impl MultiVectorOp {
     }
 }
 
-impl CheckDeserialization for MultiVectorOp {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
+impl Input for MultiVectorOp {
+    type Raw = Self;
 
-impl Example for MultiVectorOp {
+    fn tag() -> &'static str {
+        Self::tag()
+    }
+
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
     fn example() -> Self {
         const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
         const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
