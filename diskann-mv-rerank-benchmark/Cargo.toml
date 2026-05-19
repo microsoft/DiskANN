@@ -1,0 +1,34 @@
+[package]
+name = "diskann-mv-rerank-benchmark"
+version.workspace = true
+description = "End-to-end benchmark: build a full-precision DiskANN graph on single-vectors, search, then rerank top-N with multi-vector MaxSim."
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytemuck.workspace = true
+clap = { workspace = true, features = ["derive"] }
+diskann.workspace = true
+diskann-benchmark-core.workspace = true
+diskann-benchmark-runner.workspace = true
+diskann-providers.workspace = true
+diskann-quantization.workspace = true
+diskann-utils.workspace = true
+diskann-vector.workspace = true
+diskann-wide.workspace = true
+half = { workspace = true, features = ["num-traits"] }
+indicatif = "0.18.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"

@@ -820,6 +820,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-mv-rerank-benchmark"
+version = "0.52.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "clap",
+ "diskann",
+ "diskann-benchmark-core",
+ "diskann-benchmark-runner",
+ "diskann-providers",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "diskann-wide",
+ "half",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+]
+
+[[package]]
 name = "diskann-platform"
 version = "0.52.0"
 dependencies = [
