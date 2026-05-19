@@ -484,7 +484,7 @@ impl HashPrune {
     ) -> Self {
         let t1 = std::time::Instant::now();
         let reservoirs = (0..npoints)
-            .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
+            .map(|_| Mutex::new(HashPruneReservoir::new_with_capacity(l_max, 16)))
             .collect();
         tracing::debug!(
             elapsed_secs = t1.elapsed().as_secs_f64(),

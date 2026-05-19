@@ -757,22 +757,38 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();
                 for leaf in chunk {
-                    let indices_usize: Vec<usize> =
-                        leaf.indices.iter().map(|&i| i as usize).collect();
-                    let edges = if let Some(ref q) = qdata {
-                        leaf_build::build_leaf_quantized(q, &indices_usize, config.k)
+                    // Reuse indices_usize buffer (avoids per-leaf .collect() alloc).
+                    bufs.indices_usize.clear();
+                    bufs.indices_usize
+                        .extend(leaf.indices.iter().map(|&i| i as usize));
+
+                    if let Some(ref q) = qdata {
+                        let edges = leaf_build::build_leaf_quantized(
+                            q,
+                            &bufs.indices_usize,
+                            config.k,
+                        );
+                        total_edges.fetch_add(edges.len(), Ordering::Relaxed);
+                        hash_prune.add_edges_batched(&edges);
                     } else {
-                        leaf_build::build_leaf_with_buffers(
+                        // Capture indices slice before mutable borrow of bufs.
+                        let idx_ptr = bufs.indices_usize.as_ptr();
+                        let idx_len = bufs.indices_usize.len();
+                        // SAFETY: indices_usize is populated above and not modified
+                        // by build_leaf_into (it only writes to other bufs fields).
+                        let indices_ref =
+                            unsafe { std::slice::from_raw_parts(idx_ptr, idx_len) };
+                        let edge_count = leaf_build::build_leaf_into(
                             data,
                             ndims,
-                            &indices_usize,
+                            indices_ref,
                             config.k,
                             config.metric,
                             &mut bufs,
-                        )
-                    };
-                    total_edges.fetch_add(edges.len(), Ordering::Relaxed);
-                    hash_prune.add_edges_batched(&edges);
+                        );
+                        total_edges.fetch_add(edge_count, Ordering::Relaxed);
+                        hash_prune.add_edges_batched(&bufs.edges[..edge_count]);
+                    }
                 }
             });
         });
