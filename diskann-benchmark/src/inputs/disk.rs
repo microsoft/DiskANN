@@ -6,9 +6,7 @@
 use std::{fmt, num::NonZeroUsize, path::Path};
 
 use anyhow::Context;
-use diskann_benchmark_runner::{
-    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
-};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 #[cfg(feature = "disk-index")]
 use diskann_disk::BuildAlgorithm;
 #[cfg(feature = "disk-index")]
@@ -94,29 +92,19 @@ impl DiskIndexOperation {
     pub(crate) const fn tag() -> &'static str {
         "disk-index"
     }
-}
 
-///////////////////////////
-// Check Deserialization //
-///////////////////////////
-
-impl CheckDeserialization for DiskIndexOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // validate the source
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match &mut self.source {
-            DiskIndexSource::Load(load) => load.check_deserialization(checker)?,
-            DiskIndexSource::Build(build) => build.check_deserialization(checker)?,
+            DiskIndexSource::Load(load) => load.validate(checker)?,
+            DiskIndexSource::Build(build) => build.validate(checker)?,
         }
-
-        // validate the search phase
-        self.search_phase.check_deserialization(checker)?;
-
+        self.search_phase.validate(checker)?;
         Ok(())
     }
 }
 
-impl CheckDeserialization for DiskIndexLoad {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
+impl DiskIndexLoad {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
         let files = [
             (get_pq_pivot_file(&self.load_path), "pq pivot file"),
             (
@@ -137,12 +125,9 @@ impl CheckDeserialization for DiskIndexLoad {
     }
 }
 
-impl CheckDeserialization for DiskIndexBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // file input
-        self.data
-            .check_deserialization(checker)
-            .context("invalid data file")?;
+impl DiskIndexBuild {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.data.resolve(checker).context("invalid data file")?;
 
         // basic constraints
         if self.dim == 0 {
@@ -189,18 +174,16 @@ impl CheckDeserialization for DiskIndexBuild {
     }
 }
 
-impl CheckDeserialization for DiskSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // inputs
+impl DiskSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries
-            .check_deserialization(checker)
+            .resolve(checker)
             .context("invalid queries file")?;
         self.groundtruth
-            .check_deserialization(checker)
+            .resolve(checker)
             .context("invalid groundtruth file")?;
         if let Some(vf) = self.vector_filters_file.as_mut() {
-            vf.check_deserialization(checker)
-                .context("invalid vector_filters_file")?;
+            vf.resolve(checker).context("invalid vector_filters_file")?;
         }
 
         // basic numeric sanity checks
