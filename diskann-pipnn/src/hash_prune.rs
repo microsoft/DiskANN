@@ -483,8 +483,11 @@ impl HashPrune {
         max_degree: usize,
     ) -> Self {
         let t1 = std::time::Instant::now();
+        // Pre-allocate at l_max capacity (one alloc per reservoir, no growth on push).
+        // Previous Phase 1 used cap=16 which incurred 2 reallocs per reservoir × 10M
+        // reservoirs = severe glibc malloc-arena contention (kernel spinlock 21%).
         let reservoirs = (0..npoints)
-            .map(|_| Mutex::new(HashPruneReservoir::new_with_capacity(l_max, 16)))
+            .map(|_| Mutex::new(HashPruneReservoir::new(l_max)))
             .collect();
         tracing::debug!(
             elapsed_secs = t1.elapsed().as_secs_f64(),

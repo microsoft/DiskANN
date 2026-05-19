@@ -62,8 +62,10 @@ impl LeafBuffers {
         }
     }
 
-    /// Ensure all buffers are large enough for a leaf of size n x ndims.
-    fn ensure_capacity(&mut self, n: usize, ndims: usize) {
+    /// Ensure all buffers are large enough for a leaf of size n × ndims with leaf_k=k.
+    /// Pre-allocates Phase 1 buffers (knn_result, edges, indices_usize, select_indices)
+    /// to their max-shape sizes so per-leaf push/extend hits no Vec realloc.
+    fn ensure_capacity(&mut self, n: usize, ndims: usize, k: usize) {
         let nd = n * ndims;
         let nn = n * n;
         if self.local_data.len() < nd {
@@ -84,6 +86,24 @@ impl LeafBuffers {
         #[cfg(feature = "mkl-fp16")]
         if self.local_data_f16.len() < nd {
             self.local_data_f16.resize(nd, half::f16::ZERO);
+        }
+        // Phase 1 reuse buffers — pre-size to max-leaf shape so per-leaf clear()+push()
+        // never triggers Vec realloc (which contends on the glibc malloc arena at high
+        // thread count and shows up as kernel spinlock waits).
+        let actual_k = k.min(n.saturating_sub(1));
+        let max_knn = n * actual_k.max(1);
+        let max_edges = 2 * max_knn; // bidirected = 2x knn
+        if self.knn_result.capacity() < max_knn {
+            self.knn_result.reserve(max_knn - self.knn_result.capacity());
+        }
+        if self.edges.capacity() < max_edges {
+            self.edges.reserve(max_edges - self.edges.capacity());
+        }
+        if self.indices_usize.capacity() < n {
+            self.indices_usize.reserve(n - self.indices_usize.capacity());
+        }
+        if self.select_indices.capacity() < n {
+            self.select_indices.reserve(n - self.select_indices.capacity());
         }
     }
 }
@@ -599,7 +619,7 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     bufs: &mut LeafBuffers,
 ) -> Vec<Edge> {
     let n = indices.len();
-    bufs.ensure_capacity(n, ndims);
+    bufs.ensure_capacity(n, ndims, k);
 
     // Determine if we can use MKL f16f16f32 path (T == f16 + feature enabled).
     #[cfg(feature = "mkl-fp16")]
