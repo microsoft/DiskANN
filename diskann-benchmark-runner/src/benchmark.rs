@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Any, Checkpoint, Input, Output};
+use crate::{Checkpoint, Input, Output};
 
 /// A registered benchmark.
 ///
@@ -134,6 +134,8 @@ pub enum PassFail<P, F> {
 pub(crate) mod internal {
     use super::*;
 
+    use crate::input::internal::Any;
+
     use anyhow::Context;
     use thiserror::Error;
 
@@ -179,7 +181,7 @@ pub(crate) mod internal {
     pub(crate) type CheckedPassFail = PassFail<Checked, Checked>;
 
     pub(crate) trait Regression {
-        fn tolerance(&self) -> &dyn crate::input::DynInput;
+        fn tolerance(&self) -> &dyn crate::input::internal::DynInput;
         fn input_tag(&self) -> &'static str;
         fn check(
             &self,
@@ -228,8 +230,8 @@ pub(crate) mod internal {
     where
         T: super::Regression,
     {
-        fn tolerance(&self) -> &dyn crate::input::DynInput {
-            &crate::input::Wrapper::<T::Tolerances>::INSTANCE
+        fn tolerance(&self) -> &dyn crate::input::internal::DynInput {
+            &crate::input::internal::Wrapper::<T::Tolerances>::INSTANCE
         }
 
         fn input_tag(&self) -> &'static str {
