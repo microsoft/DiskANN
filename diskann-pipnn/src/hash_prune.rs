@@ -147,9 +147,10 @@ struct ReservoirEntry {
 
 /// HashPrune reservoir for a single point.
 ///
-/// Uses a flat sorted Vec for O(log l) hash lookups instead of HashMap.
-/// Caches the farthest entry for O(1) eviction checks.
-/// Insertion is O(l) due to element shifting, but cache-friendly at typical l_max ~128.
+/// Stores at most `l_max` entries keyed by their hash bucket. Insertion is O(1)
+/// (push or swap_remove); lookups are O(l_max) linear scan, vectorised by
+/// [`find_hash`] (AVX-512 8-way / AVX2 4-way / scalar fallback). The farthest
+/// entry is cached so a full-reservoir reject path is O(1).
 pub(crate) struct HashPruneReservoir {
     entries: Vec<ReservoirEntry>,
     /// Maximum reservoir size.
@@ -461,7 +462,9 @@ impl HashPrune {
     }
 
     /// Add edges from a leaf build result, batching by source point.
-    /// Sorts edges by source to acquire each lock once per unique source.
+    /// Caches the lock on the last source seen, so callers whose edges are
+    /// grouped by source acquire each reservoir mutex once per group (rather
+    /// than once per edge). Leaf-build emits edges in this grouped order.
     pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
         if edges.is_empty() {
             return;
@@ -469,18 +472,20 @@ impl HashPrune {
 
         // Process edges directly. Cache last reservoir lock to avoid redundant
         // lock ops for consecutive edges with the same source.
-        let mut last_src = usize::MAX;
+        let mut last_src = u32::MAX;
         let mut last_reservoir: Option<parking_lot::MutexGuard<'_, HashPruneReservoir>> = None;
 
         for edge in edges {
             if edge.src != last_src {
                 drop(last_reservoir.take());
                 last_src = edge.src;
-                last_reservoir = Some(self.reservoirs[edge.src].lock());
+                last_reservoir = Some(self.reservoirs[edge.src as usize].lock());
             }
             let reservoir = last_reservoir.as_mut().unwrap();
-            let hash = self.sketches.relative_hash(edge.src, edge.dst);
-            reservoir.insert(hash, edge.dst as u32, edge.distance);
+            let hash = self
+                .sketches
+                .relative_hash(edge.src as usize, edge.dst as usize);
+            reservoir.insert(hash, edge.dst, edge.distance);
         }
     }
 
@@ -706,24 +711,28 @@ mod tests {
     }
 
     #[test]
-    fn test_lsh_sketches_different_seeds() {
-        let data = vec![1.0f32, 0.0, 0.0, 1.0];
-        let s1 = LshSketches::new(&data, 2, 2, 4, 42);
-        let s2 = LshSketches::new(&data, 2, 2, 4, 99);
-        let h1 = s1.relative_hash(0, 1);
-        let h2 = s2.relative_hash(0, 1);
-        // Different seeds should generally produce different hashes (not guaranteed but very likely)
-        let _ = (h1, h2); // Just verify they compile and don't panic
+    fn test_lsh_sketches_different_seeds_give_different_hashes() {
+        // Aggregate across many point pairs so the assertion is statistical:
+        // with 4 planes and random hyperplanes from two distinct seeds, at
+        // least one pair must hash differently.
+        let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
+        let s1 = LshSketches::new(&data, 32, 4, 12, 42);
+        let s2 = LshSketches::new(&data, 32, 4, 12, 99);
+        let any_diff = (0..32).any(|p| (p + 1..32).any(|c|
+            s1.relative_hash(p, c) != s2.relative_hash(p, c)
+        ));
+        assert!(any_diff, "different seeds should give at least one different pair hash");
     }
 
     #[test]
-    fn test_relative_hash_symmetry_broken() {
+    fn test_relative_hash_is_asymmetric() {
+        // h_p(c) is sign(Sketch(c) - Sketch(p)), so h(p,c) and h(c,p) differ
+        // wherever any plane gives Sketch(p) != Sketch(c).
         let data = vec![1.0f32, 0.0, 0.0, 1.0, -1.0, 0.0];
         let sketches = LshSketches::new(&data, 3, 2, 4, 42);
         let h01 = sketches.relative_hash(0, 1);
         let h10 = sketches.relative_hash(1, 0);
-        // h_p(c) != h_c(p) in general because relative_hash is asymmetric
-        let _ = (h01, h10);
+        assert_ne!(h01, h10, "relative_hash must be asymmetric for distinct points");
     }
 
     #[test]

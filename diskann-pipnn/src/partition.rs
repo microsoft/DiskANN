@@ -84,7 +84,14 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     let mut iteration = 0;
     while !work.is_empty() {
         iteration += 1;
-        assert!(iteration <= 50, "partition exceeded 50 iterations");
+        // 50 iterations is a safety net against a partitioning loop divergence.
+        // Leaves halve in size each level, so 50 covers > 2^50 points in
+        // healthy runs. If we hit this the partition config is degenerate.
+        assert!(
+            iteration <= 50,
+            "partition diverged at iteration {} (npoints={}, c_max={}, c_min={}, fanout={:?})",
+            iteration, npoints, config.c_max, config.c_min, config.fanout
+        );
 
         let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
             .into_par_iter()

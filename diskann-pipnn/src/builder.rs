@@ -34,8 +34,32 @@ use diskann_vector::distance::{Distance, DistanceProvider, Metric};
 /// - `Cosine` → `Cosine` (normalizes + 1 - dot)
 /// - `CosineNormalized` → `CosineNormalized` (1 - dot, assumes pre-normalized)
 /// - `InnerProduct` → `InnerProduct` (-dot)
-fn make_dist_fn(metric: Metric) -> Distance<f32, f32> {
-    <f32 as DistanceProvider<f32>>::distance_comparer(metric, None)
+fn make_dist_fn(metric: Metric, ndims: usize) -> Distance<f32, f32> {
+    <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims))
+}
+
+/// Log which SIMD tier the hand-written kernels in partition / leaf_build /
+/// hash_prune were compiled against (AVX-512 needs `target-cpu=cascadelake` or
+/// `+avx512f`; AVX2 is enabled by `target-cpu=x86-64-v3` which is the workspace
+/// default in `.cargo/config.toml`).
+fn log_simd_tier() {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    const TIER: &str = "AVX-512";
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(target_feature = "avx512f"),
+        target_feature = "avx2"
+    ))]
+    const TIER: &str = "AVX2";
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(target_feature = "avx512f"),
+        not(target_feature = "avx2")
+    ))]
+    const TIER: &str = "scalar";
+    #[cfg(not(target_arch = "x86_64"))]
+    const TIER: &str = "scalar (non-x86)";
+    tracing::info!(simd_tier = TIER, "PiPNN SIMD tier");
 }
 
 /// Timing breakdown for the PiPNN build phases.
@@ -209,11 +233,11 @@ impl PiPNNGraph {
             return Vec::new();
         }
 
-        let dist_fn = make_dist_fn(self.metric);
+        let dist_fn = make_dist_fn(self.metric, ndims);
 
         let start = self.medoid;
 
-        // Greedy beam search.
+        // Greedy best-first search with a sorted candidate list of size L.
         let l = search_list_size.max(k);
         let mut visited = vec![false; npoints];
         let mut candidates: Vec<(usize, f32)> = Vec::with_capacity(l + 1);
@@ -268,7 +292,7 @@ impl PiPNNGraph {
 /// is a geometric center, so L2 is the natural metric regardless of the
 /// build distance metric.
 fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
-    let dist_fn = make_dist_fn(Metric::L2);
+    let dist_fn = make_dist_fn(Metric::L2, ndims);
 
     // Compute centroid.
     let mut centroid = vec![0.0f32; ndims];
@@ -367,26 +391,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 ) -> PiPNNResult<PiPNNGraph> {
     let t_total = Instant::now();
 
-    // Report which SIMD tier the hand-written kernels in partition/leaf_build/
-    // hash_prune were compiled with. AVX-512 needs `target-cpu=cascadelake`
-    // (or +avx512f), AVX2 is enabled by `target-cpu=x86-64-v3` (set in
-    // `.cargo/config.toml` by default). Anything below AVX2 falls back to scalar.
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-    eprintln!("SIMD: AVX-512 (compile-time)");
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(target_feature = "avx512f"),
-        target_feature = "avx2"
-    ))]
-    eprintln!("SIMD: AVX2 (compile-time)");
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(target_feature = "avx512f"),
-        not(target_feature = "avx2")
-    ))]
-    eprintln!("SIMD: scalar (compile-time)");
-    #[cfg(not(target_arch = "x86_64"))]
-    eprintln!("SIMD: scalar (non-x86)");
+    log_simd_tier();
 
     // Compute medoid once upfront.
     let medoid = find_medoid(data, npoints, ndims);
@@ -468,13 +473,10 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();
                 for leaf in chunk {
-                    let indices_usize: Vec<usize> =
-                        leaf.indices.iter().map(|&i| i as usize).collect();
-
                     let edge_count = leaf_build::build_leaf_into(
                         data,
                         ndims,
-                        &indices_usize,
+                        &leaf.indices,
                         config.k,
                         config.metric,
                         &mut bufs,
@@ -533,9 +535,13 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         } else {
             total_candidates as f64 / candidates.len() as f64
         };
-        println!(
-            "  Final prune input: {} nodes, avg {:.1} candidates, max {}, {} nodes over max_degree({})",
-            candidates.len(), avg_cand, max_cand, nodes_over_degree, config.max_degree
+        tracing::info!(
+            nodes = candidates.len(),
+            avg_candidates = avg_cand,
+            max_candidates = max_cand,
+            nodes_over_max_degree = nodes_over_degree,
+            max_degree = config.max_degree,
+            "Final prune input"
         );
 
         let adj = final_prune_from_candidates(
@@ -560,11 +566,11 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             .zip(adj.iter())
             .filter(|(c, a)| a.len() < c.len())
             .count();
-        println!(
-            "  Final prune output: avg degree {:.1}, {} nodes actually pruned ({:.1}%)",
+        tracing::info!(
             avg_degree,
             pruned_count,
-            100.0 * pruned_count as f64 / candidates.len().max(1) as f64
+            pruned_pct = 100.0 * pruned_count as f64 / candidates.len().max(1) as f64,
+            "Final prune output"
         );
 
         let final_prune_secs = t4.elapsed().as_secs_f64();
@@ -612,12 +618,13 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     Ok(graph)
 }
 
-/// Final diversity prune matching DiskANN's occlude_list algorithm:
-/// - Iterative alpha: starts at 1.0, increments by min(alpha, 1.2) each round
-/// - Accumulated occlusion factor per candidate: max(dist_to_point / dist_to_selected)
-/// - Resumable inner loop via last_checked positions
+/// PiPNN paper's single-pass diversity prune (Algorithm 2):
+/// for each candidate in distance-sorted order, select if no earlier selection
+/// occludes it (dist_to_selected < alpha * dist_to_query), else mark occluded.
+/// Optionally saturate the result with occluded candidates until `max_degree`
+/// is filled (controlled by `saturate`).
 ///
-/// Candidates already have distances from HashPrune — sorted by distance ascending.
+/// Candidates are pre-sorted ascending by HashPrune output.
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
@@ -830,7 +837,8 @@ mod tests {
         }
 
         let avg_recall = total_recall / num_queries as f64;
-        eprintln!("Average recall@{}: {:.4}", k, avg_recall);
+        // Test-only println: avoids capturing tracing subscriber config.
+        println!("Average recall@{}: {:.4}", k, avg_recall);
 
         assert!(avg_recall > 0.2, "recall too low: {:.4}", avg_recall);
     }

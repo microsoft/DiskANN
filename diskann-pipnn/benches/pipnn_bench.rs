@@ -80,7 +80,7 @@ fn bench_build_leaf(c: &mut Criterion) {
 
     for &(n, ndims, k) in &[(128, 128, 3), (512, 128, 4), (1024, 128, 4), (512, 384, 5)] {
         let data = random_data(n, ndims, 42);
-        let indices: Vec<usize> = (0..n).collect();
+        let indices: Vec<u32> = (0..n as u32).collect();
 
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(
@@ -112,7 +112,7 @@ fn bench_hash_prune_add_edges(c: &mut Criterion) {
         let leaf_size = 512;
         let k = 4;
         let leaf_data = random_data(leaf_size, ndims, 99);
-        let leaf_indices: Vec<usize> = (0..leaf_size).collect();
+        let leaf_indices: Vec<u32> = (0..leaf_size as u32).collect();
         let edges = leaf_build::build_leaf(&leaf_data, ndims, &leaf_indices, k, Metric::L2);
 
         group.throughput(Throughput::Elements(edges.len() as u64));

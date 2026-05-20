@@ -117,9 +117,9 @@ pub(crate) fn release_thread_buffers() {
 #[derive(Debug, Clone, Copy)]
 pub struct Edge {
     /// Global source point index.
-    pub src: usize,
+    pub src: u32,
     /// Global destination point index.
-    pub dst: usize,
+    pub dst: u32,
     /// Distance from `src` to `dst` under the build metric.
     pub distance: f32,
 }
@@ -131,7 +131,7 @@ pub struct Edge {
 pub fn build_leaf<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
-    indices: &[usize],
+    indices: &[u32],
     k: usize,
     metric: diskann_vector::distance::Metric,
 ) -> Vec<Edge> {
@@ -243,7 +243,7 @@ fn topk_row_small(
 pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
-    indices: &[usize],
+    indices: &[u32],
     k: usize,
     metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
@@ -265,6 +265,7 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     {
         let local_data = &mut bufs.local_data[..n * ndims];
         for (i, &idx) in indices.iter().enumerate() {
+            let idx = idx as usize;
             let src = &data[idx * ndims..(idx + 1) * ndims];
             let dst = &mut local_data[i * ndims..(i + 1) * ndims];
             T::as_f32_into(src, dst).expect("f32 conversion");
@@ -514,7 +515,7 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
 pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
-    indices: &[usize],
+    indices: &[u32],
     k: usize,
     metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
@@ -700,7 +701,7 @@ mod tests {
         let edges = build_leaf(&data, 2, &indices, n, Metric::L2);
 
         // Collect directed edges.
-        let edge_set: std::collections::HashSet<(usize, usize)> =
+        let edge_set: std::collections::HashSet<(u32, u32)> =
             edges.iter().map(|e| (e.src, e.dst)).collect();
 
         // Every pair (i, j) with i != j should be present.
@@ -708,7 +709,7 @@ mod tests {
             for j in 0..n {
                 if i != j {
                     assert!(
-                        edge_set.contains(&(i, j)),
+                        edge_set.contains(&(i as u32, j as u32)),
                         "k >= n: edge ({} -> {}) should exist",
                         i,
                         j
@@ -786,7 +787,7 @@ mod tests {
         let edges = build_leaf(&data, 2, &indices, 2, Metric::L2);
 
         // Collect directed edges as a set.
-        let edge_set: std::collections::HashSet<(usize, usize)> =
+        let edge_set: std::collections::HashSet<(u32, u32)> =
             edges.iter().map(|e| (e.src, e.dst)).collect();
 
         // For every edge (a, b), (b, a) should also exist.
@@ -843,7 +844,7 @@ mod tests {
         let data = vec![0.0f32; 5 * 4];
         let indices = vec![0, 1, 2, 3, 4];
         let edges = build_leaf(&data, 4, &indices, 1000, Metric::L2);
-        let edge_set: std::collections::HashSet<(usize, usize)> =
+        let edge_set: std::collections::HashSet<(u32, u32)> =
             edges.iter().map(|e| (e.src, e.dst)).collect();
         // All pairs should exist.
         for i in 0..5 {
@@ -884,13 +885,13 @@ mod tests {
     fn test_build_leaf_buffer_reuse_different_sizes() {
         // First call with large leaf, second with small — buffers should handle both.
         let data_large = vec![1.0f32; 20 * 4];
-        let indices_large: Vec<usize> = (0..20).collect();
+        let indices_large: Vec<u32> = (0..20).collect();
         let edges1 = build_leaf(&data_large, 4, &indices_large, 2, Metric::L2);
         assert!(!edges1.is_empty());
 
         // Second call with smaller leaf on same thread — should reuse thread-local buffers.
         let data_small = vec![1.0f32; 4 * 4];
-        let indices_small: Vec<usize> = (0..4).collect();
+        let indices_small: Vec<u32> = (0..4).collect();
         let edges2 = build_leaf(&data_small, 4, &indices_small, 2, Metric::L2);
         assert!(
             !edges2.is_empty(),
