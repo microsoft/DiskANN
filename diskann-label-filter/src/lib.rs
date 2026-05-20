@@ -78,3 +78,4 @@ pub use utils::flatten_utils::Attributes;
 pub use utils::jsonl_reader::{
     read_and_parse_queries, read_baselabels, read_ground_truth, read_queries, JsonlReadError,
 };
+pub use utils::compute_bitmap::read_labels_and_compute_bitmap;

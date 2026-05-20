@@ -3,14 +3,14 @@
  * Licensed under the MIT license.
  */
 
-use diskann_label_filter::{read_and_parse_queries, read_baselabels, eval_query_expr};
+use diskann_label_filter::{read_and_parse_queries, read_baselabels, eval_query_expr, read_labels_and_compute_bitmap};
 use rayon::prelude::*;
 use std::env;
 use std::process;
 use std::fs::File;
 use std::io::Write;
+use bit_set::BitSet;
 
-use crate::utils::compute_bitmaps::read_labels_and_compute_bitmap;
 
 pub fn read_labels_and_compute_bitmap_naive(
     base_label_filename: &str,
@@ -50,15 +50,28 @@ fn main() {
     let query_label_file = &args[2];
     let output_file = if args.len() == 4 { Some(&args[3]) } else { None };
 
-    let bitmaps = match read_labels_and_compute_bitmap_naive(base_label_file, query_label_file) {
+    let base_labels = match read_baselabels(base_label_file) {
+        Ok(labels) => labels,
+        Err(e) => {
+            eprintln!("Error reading base labels: {}", e);
+            process::exit(1);
+        }
+    };
+
+    let total_base = base_labels.len() as u64;
+
+    let start = std::time::Instant::now();
+    let bitmaps = match read_labels_and_compute_bitmap(base_label_file, query_label_file) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("Error computing bitmaps: {}", e);
             process::exit(1);
         }
     };
+    let elapsed = start.elapsed();
+    println!("read_labels_and_compute_bitmap_naive took {:.3?}", elapsed);
 
-    let specificities: Vec<f64> = bitmaps
+    let mut specificities: Vec<f64> = bitmaps
         .par_iter()
         .map(|bitmap| {
             let count = bitmap.len();

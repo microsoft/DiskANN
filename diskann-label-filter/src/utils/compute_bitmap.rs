@@ -181,6 +181,14 @@ pub fn read_labels_and_compute_bitmap(
         .map(|base_label| flatten_json_pointers(&base_label.label))
         .collect();
 
+    // print the string in the first document for debugging
+    if let Some(first_doc) = flattened_base_labels.first() {
+        println!("First document flattened labels:");
+        for (key, value) in first_doc {
+            println!("{}: {:?}", key, value);
+        }
+    }
+
     let flattened_base_label_hashmaps: Result<Vec<HashMap<String, AttributeValue>>, anyhow::Error> =
         flattened_base_labels.iter().map(|labels| {
             let mut map = HashMap::new();
@@ -195,7 +203,14 @@ pub fn read_labels_and_compute_bitmap(
 
     let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
 
+    // print all the keys in the global label set for debugging
     let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
+    println!("Global label set:");
+    for (key, value) in &global_label_set {
+        println!("{}: {:?}", key, value);
+    }
+
+    // let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
 
     #[allow(clippy::disallowed_methods)]
     let query_accelerators: Vec<(String, QueryAccelerator)> = global_label_set.par_iter()
