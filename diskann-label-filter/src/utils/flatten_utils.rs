@@ -13,7 +13,7 @@ pub type Attributes = HashMap<String, AttributeValue>;
 /// Configuration for JSON flattening behavior
 #[derive(Debug, Clone)]
 pub struct FlattenConfig {
-    /// Separator used between path segments (default: "/")
+    /// Separator used between path segments (default: ".")
     pub separator: String,
     /// Whether to include array indices in paths (default: true)
     pub include_array_indices: bool,
@@ -24,7 +24,7 @@ pub struct FlattenConfig {
 impl Default for FlattenConfig {
     fn default() -> Self {
         Self {
-            separator: "/".to_string(),
+            separator: ".".to_string(),
             include_array_indices: true,
             root_prefix: "".to_string(),
         }
@@ -191,7 +191,7 @@ pub fn flatten_json_pointers(value: &Value) -> AttributesVec {
 /// Configurable version that uses FlattenConfig
 ///
 /// Example:
-/// With config.separator="/": {"a": {"b": [1, 2]}} -> [ ("/a/b/0", 1), ("/a/b/1", 2) ]
+/// With config.separator=".": {"a": {"b": [1, 2]}} -> [ ("/a/b/0", 1), ("/a/b/1", 2) ]
 pub fn flatten_json_pointers_with_config(value: &Value, config: &FlattenConfig) -> AttributesVec {
     let mut out = Vec::new();
     flatten_json_pointer_inner(value, &config.root_prefix, &mut out, &config.separator);

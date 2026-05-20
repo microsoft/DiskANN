@@ -15,6 +15,7 @@ pub mod parser {
 pub mod utils {
     pub mod flatten_utils;
     pub mod jsonl_reader;
+    pub mod compute_bitmap;
 }
 
 pub mod inline_beta_search {

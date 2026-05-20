@@ -10,6 +10,36 @@ use std::process;
 use std::fs::File;
 use std::io::Write;
 
+use crate::utils::compute_bitmaps::read_labels_and_compute_bitmap;
+
+pub fn read_labels_and_compute_bitmap_naive(
+    base_label_filename: &str,
+    query_label_filename: &str,
+) -> Result<Vec<BitSet>, anyhow::Error> {
+    // Read base labels
+    let base_labels = read_baselabels(base_label_filename)?;
+
+    // Parse queries and evaluate against labels
+    let parsed_queries = read_and_parse_queries(query_label_filename)?;
+
+    // using the global threadpool is fine here
+    #[allow(clippy::disallowed_methods)]
+    let query_bitmaps: Vec<BitSet> = parsed_queries
+        .par_iter()
+        .map(|(_query_id, query_expr)| {
+            let mut bitmap = BitSet::new();
+            for base_label in base_labels.iter() {
+                if eval_query_expr(query_expr, &base_label.label) {
+                    bitmap.insert(base_label.doc_id);
+                }
+            }
+            bitmap
+        })
+        .collect();
+
+    Ok(query_bitmaps)
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 && args.len() != 4 {
@@ -20,51 +50,28 @@ fn main() {
     let query_label_file = &args[2];
     let output_file = if args.len() == 4 { Some(&args[3]) } else { None };
 
-    // Read base labels
-    let base_labels = match read_baselabels(base_label_file) {
-        Ok(labels) => labels,
+    let bitmaps = match read_labels_and_compute_bitmap_naive(base_label_file, query_label_file) {
+        Ok(b) => b,
         Err(e) => {
-            eprintln!("Failed to read base label file: {}", e);
-            process::exit(1);
-        }
-    };
-    let total_base = base_labels.len();
-    if total_base == 0 {
-        eprintln!("No base points found in base label file.");
-        process::exit(1);
-    }
-
-    // Read and parse queries
-    let parsed_queries = match read_and_parse_queries(query_label_file) {
-        Ok(q) => q,
-        Err(e) => {
-            eprintln!("Failed to read query label file: {}", e);
+            eprintln!("Error computing bitmaps: {}", e);
             process::exit(1);
         }
     };
 
-    // Collect query ids and expressions into a vector for parallel iteration
-    let query_vec: Vec<_> = parsed_queries.iter().collect();
-
-    let results: Vec<(usize, usize, f64)> = query_vec
+    let specificities: Vec<f64> = bitmaps
         .par_iter()
-        .map(|(query_id, query_expr)| {
-            let mut count = 0;
-            for base_label in base_labels.iter() {
-                if eval_query_expr(query_expr, &base_label.label) {
-                    count += 1;
-                }
-            }
+        .map(|bitmap| {
+            let count = bitmap.len();
             let specificity = count as f64 / total_base as f64;
-            (**query_id, count, specificity)
+            specificity
         })
         .collect();
 
-    let mut specificities = Vec::with_capacity(results.len());
-    for (query_id, count, specificity) in &results {
-        specificities.push(*specificity);
-        println!("query_id {}: {} matches (specificity {:.6})", query_id, count, specificity);
-    }
+    // let mut specificities = Vec::with_capacity(results.len());
+    // for (query_id, count, specificity) in &results {
+    //     specificities.push(*specificity);
+    //     println!("query_id {}: {} matches (specificity {:.6})", query_id, count, specificity);
+    // }
 
     if let Some(path) = output_file {
         let mut file = match File::create(path) {

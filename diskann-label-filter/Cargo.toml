@@ -23,6 +23,9 @@ scc = "3.3.2"
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector.workspace = true
 tracing.workspace = true
+bit-set.workspace = true
+rayon.workspace = true
+anyhow.workspace = true
 
 
 [dev-dependencies]
