@@ -14,7 +14,6 @@ use diskann_pipnn::gemm;
 use diskann_pipnn::hash_prune::HashPrune;
 use diskann_pipnn::leaf_build;
 use diskann_pipnn::partition::{self, PartitionConfig};
-use diskann_pipnn::quantize;
 use diskann_vector::distance::Metric;
 
 /// Generate random f32 data for benchmarking.
@@ -73,43 +72,6 @@ fn bench_sgemm_abt(c: &mut Criterion) {
 }
 
 // ========================
-// Quantization benchmarks
-// ========================
-
-/// Train SQ parameters and quantize. Benchmark helper.
-fn train_and_quantize(data: &[f32], npoints: usize, ndims: usize) -> quantize::QuantizedData {
-    use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::MatrixView;
-
-    let data_matrix =
-        MatrixView::try_from(data, npoints, ndims).expect("data length must equal npoints * ndims");
-    let quantizer = ScalarQuantizationParameters::default().train(data_matrix);
-    let shift = quantizer.shift().to_vec();
-    let scale = quantizer.scale();
-    let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
-    quantize::quantize_1bit(data, npoints, ndims, &shift, inverse_scale)
-}
-
-fn bench_hamming_distance_matrix(c: &mut Criterion) {
-    let mut group = c.benchmark_group("quantize/hamming_matrix");
-
-    for &n in &[64, 256, 512, 1024] {
-        let ndims = 128;
-        let data = random_data(n, ndims, 42);
-        let qd = train_and_quantize(&data, n, ndims);
-        let indices: Vec<usize> = (0..n).collect();
-
-        group.throughput(Throughput::Elements((n * n) as u64));
-        group.bench_with_input(BenchmarkId::new("n_points", n), &n, |b, _| {
-            b.iter(|| {
-                qd.compute_distance_matrix(&indices);
-            });
-        });
-    }
-    group.finish();
-}
-
-// ========================
 // Leaf build benchmarks
 // ========================
 
@@ -127,28 +89,6 @@ fn bench_build_leaf(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     leaf_build::build_leaf(&data, ndims, &indices, k, Metric::L2);
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-fn bench_build_leaf_quantized(c: &mut Criterion) {
-    let mut group = c.benchmark_group("leaf_build/build_leaf_quantized");
-
-    for &(n, ndims, k) in &[(128, 128, 3), (512, 128, 4), (1024, 128, 4)] {
-        let data = random_data(n, ndims, 42);
-        let qd = train_and_quantize(&data, n, ndims);
-        let indices: Vec<usize> = (0..n).collect();
-
-        group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(
-            BenchmarkId::new("n_d_k", format!("{}x{}x{}", n, ndims, k)),
-            &(),
-            |b, _| {
-                b.iter(|| {
-                    leaf_build::build_leaf_quantized(&qd, &indices, k);
                 });
             },
         );
@@ -256,9 +196,7 @@ fn bench_full_build(c: &mut Criterion) {
 
 criterion_group!(gemm_benches, bench_sgemm_aat, bench_sgemm_abt,);
 
-criterion_group!(quantize_benches, bench_hamming_distance_matrix,);
-
-criterion_group!(leaf_benches, bench_build_leaf, bench_build_leaf_quantized,);
+criterion_group!(leaf_benches, bench_build_leaf,);
 
 criterion_group!(hash_prune_benches, bench_hash_prune_add_edges,);
 
@@ -268,7 +206,6 @@ criterion_group!(build_benches, bench_full_build,);
 
 criterion_main!(
     gemm_benches,
-    quantize_benches,
     leaf_benches,
     hash_prune_benches,
     partition_benches,

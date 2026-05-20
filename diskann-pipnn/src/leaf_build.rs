@@ -88,28 +88,10 @@ impl LeafBuffers {
     }
 }
 
-/// Thread-local reusable buffers for quantized leaf building.
-struct QuantLeafBuffers {
-    local_u64: Vec<u64>,
-    dist_matrix: Vec<f32>,
-    seen: Vec<bool>,
-}
-
-impl QuantLeafBuffers {
-    fn new() -> Self {
-        Self {
-            local_u64: Vec::new(),
-            dist_matrix: Vec::new(),
-            seen: Vec::new(),
-        }
-    }
-}
-
 thread_local! {
     /// Thread-local reusable buffers for leaf building. Public so builder can
     /// batch multiple leaves per TLS access (amortizes the `with()` overhead).
     pub static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
-    static QUANT_BUFFERS: RefCell<QuantLeafBuffers> = RefCell::new(QuantLeafBuffers::new());
 }
 
 /// Release thread-local leaf build buffers on the calling thread.
@@ -130,12 +112,6 @@ pub fn release_thread_buffers() {
         bufs.edges = Vec::new();
         bufs.cosine_denoms = Vec::new();
     });
-    QUANT_BUFFERS.with(|cell| {
-        let mut bufs = cell.borrow_mut();
-        bufs.local_u64 = Vec::new();
-        bufs.dist_matrix = Vec::new();
-        bufs.seen = Vec::new();
-    });
 }
 
 /// An edge produced by leaf building: (source, destination, distance).
@@ -146,210 +122,6 @@ pub struct Edge {
     pub distance: f32,
 }
 
-// ─── Original allocating variants (kept for backward compatibility / tests) ──
-
-/// Extract k nearest neighbors for each point from the distance matrix.
-///
-/// For small k (≤3), uses a direct linear scan tracking top-k — O(n) per row
-/// with minimal overhead. For larger k, uses index-based quickselect.
-fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
-    if n <= 1 || k == 0 {
-        return Vec::new();
-    }
-    let actual_k = k.min(n - 1);
-    if actual_k <= 3 {
-        return extract_knn_small(dist_matrix, n, actual_k);
-    }
-    extract_knn_general(dist_matrix, n, actual_k)
-}
-
-/// Specialized extraction for k ≤ 3: AVX-512 SIMD scan tracking top-k per row.
-/// Processes 16 distances per cycle, only drops to scalar for the rare lanes
-/// that beat the current threshold. Same pattern as the partition SIMD top-k.
-fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
-    debug_assert!(k <= 3 && k < n);
-    let mut edges = Vec::with_capacity(n * k);
-
-    for i in 0..n {
-        let row = &dist_matrix[i * n..(i + 1) * n];
-        let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
-        let threshold_idx = k - 1;
-
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-        {
-            use std::arch::x86_64::*;
-            let chunks = n / 16;
-            unsafe {
-                // Set self-distance slot to MAX so it's never selected.
-                // (dist_matrix diagonal is already MAX, but be safe.)
-                for chunk in 0..chunks {
-                    let base = chunk * 16;
-                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
-                    let dists = _mm512_loadu_ps(row.as_ptr().add(base));
-                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(dists, thresh);
-                    if mask != 0 {
-                        let mut d_arr = [0.0f32; 16];
-                        _mm512_storeu_ps(d_arr.as_mut_ptr(), dists);
-                        let mut m = mask;
-                        while m != 0 {
-                            let lane = m.trailing_zeros() as usize;
-                            m &= m - 1;
-                            let j = base + lane;
-                            if j == i {
-                                continue;
-                            }
-                            let d = d_arr[lane];
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                for t in (1..k).rev() {
-                                    if top[t].1 < top[t - 1].1 {
-                                        top.swap(t, t - 1);
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Remainder
-                for j in (chunks * 16)..n {
-                    if j == i {
-                        continue;
-                    }
-                    let d = *row.get_unchecked(j);
-                    if d < top[threshold_idx].1 {
-                        top[threshold_idx] = (j as u32, d);
-                        for t in (1..k).rev() {
-                            if top[t].1 < top[t - 1].1 {
-                                top.swap(t, t - 1);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
-        {
-            use std::arch::x86_64::*;
-            let chunks = n / 8;
-            // SAFETY: AVX2 intrinsics on x86_64 (v3 baseline). `row.as_ptr().add(base)`
-            // stays in bounds: `base = chunk*8` and `chunk < n/8`, so `base + 8 ≤ n =
-            // row.len()`. Trailing `get_unchecked(j)` has `j < n`.
-            unsafe {
-                for chunk in 0..chunks {
-                    let base = chunk * 8;
-                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
-                    let dists = _mm256_loadu_ps(row.as_ptr().add(base));
-                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(dists, thresh));
-                    if mask != 0 {
-                        let mut d_arr = [0.0f32; 8];
-                        _mm256_storeu_ps(d_arr.as_mut_ptr(), dists);
-                        let mut m = mask as u32;
-                        while m != 0 {
-                            let lane = m.trailing_zeros() as usize;
-                            m &= m - 1;
-                            let j = base + lane;
-                            if j == i {
-                                continue;
-                            }
-                            let d = d_arr[lane];
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                for t in (1..k).rev() {
-                                    if top[t].1 < top[t - 1].1 {
-                                        top.swap(t, t - 1);
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for j in (chunks * 8)..n {
-                    if j == i {
-                        continue;
-                    }
-                    let d = *row.get_unchecked(j);
-                    if d < top[threshold_idx].1 {
-                        top[threshold_idx] = (j as u32, d);
-                        for t in (1..k).rev() {
-                            if top[t].1 < top[t - 1].1 {
-                                top.swap(t, t - 1);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            for j in 0..n {
-                if j == i {
-                    continue;
-                }
-                let d = unsafe { *row.get_unchecked(j) };
-                if d < top[threshold_idx].1 {
-                    top[threshold_idx] = (j as u32, d);
-                    for t in (1..k).rev() {
-                        if top[t].1 < top[t - 1].1 {
-                            top.swap(t, t - 1);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        for tup in top.iter().take(k) {
-            edges.push((i, tup.0 as usize, tup.1));
-        }
-    }
-
-    edges
-}
-
-/// General extraction using quickselect on an index array.
-fn extract_knn_general(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f32)> {
-    let mut edges = Vec::with_capacity(n * k);
-    let mut indices: Vec<u32> = (0..n as u32).collect();
-
-    for i in 0..n {
-        let row = &dist_matrix[i * n..(i + 1) * n];
-
-        for (j, idx) in indices.iter_mut().enumerate().take(n) {
-            *idx = j as u32;
-        }
-
-        if k < n {
-            indices.select_nth_unstable_by(k - 1, |&a, &b| {
-                // SAFETY: `a` and `b` come from `indices` which holds values in `0..n`,
-                // and `row.len() == n`, so both reads are in bounds.
-                let (da, db) = unsafe {
-                    (
-                        *row.get_unchecked(a as usize),
-                        *row.get_unchecked(b as usize),
-                    )
-                };
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        for idx in 0..k {
-            // SAFETY: `idx < k ≤ indices.len() == n`.
-            let j = unsafe { *indices.get_unchecked(idx) } as usize;
-            edges.push((i, j, row[j]));
-        }
-    }
-
-    edges
-}
 
 /// Build a leaf partition: compute all-pairs distances and extract bi-directed k-NN edges.
 ///
@@ -675,11 +447,9 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
                     let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
                     topk_row_small(row, n, global_i, actual_k, out);
                 } else {
-                    // For k > 3 (rare in PiPNN — leaf_k typically 2-3), fall back
-                    // to per-row quickselect via the existing general extractor.
-                    // We need a small adapter since extract_knn_general_into expects
-                    // the whole matrix; do the work inline.
-                    row[global_i] = f32::MAX; // mark self as ineligible
+                    // k > 3 (rare in PiPNN — leaf_k is typically 2-3): per-row
+                    // sort. Mark self as ineligible, then sort indices by distance.
+                    row[global_i] = f32::MAX;
                     let mut idxs: Vec<u32> = (0..n as u32).collect();
                     idxs.sort_unstable_by(|&a, &b| {
                         row[a as usize]
@@ -752,117 +522,6 @@ pub fn build_leaf_into<T: VectorRepr + 'static>(
     // Put the Vec back into bufs for capacity reuse on next call.
     bufs.edges = edges;
     count
-}
-
-/// Build a leaf using 1-bit quantized vectors with Hamming distance.
-pub fn build_leaf_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    indices: &[usize],
-    k: usize,
-) -> Vec<Edge> {
-    let n = indices.len();
-    if n <= 1 {
-        return Vec::new();
-    }
-
-    QUANT_BUFFERS.with(|cell| {
-        let mut bufs = cell.borrow_mut();
-        let u64s = qdata.u64s_per_vec();
-        let nn = n * n;
-
-        // Ensure buffers are large enough, reusing across leaves.
-        if bufs.local_u64.len() < n * u64s {
-            bufs.local_u64.resize(n * u64s, 0);
-        }
-        if bufs.dist_matrix.len() < nn {
-            bufs.dist_matrix.resize(nn, 0.0);
-        }
-        if bufs.seen.len() < nn {
-            bufs.seen.resize(nn, false);
-        }
-
-        // Destructure for simultaneous mutable borrows.
-        let QuantLeafBuffers {
-            local_u64,
-            dist_matrix,
-            seen,
-        } = &mut *bufs;
-
-        // Gather contiguous u64 data.
-        let local = &mut local_u64[..n * u64s];
-        for (i, &idx) in indices.iter().enumerate() {
-            local[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx));
-        }
-
-        // Compute all-pairs Hamming distance in-place.
-        let dist = &mut dist_matrix[..nn];
-        let local_ptr = local.as_ptr();
-        let dist_ptr = dist.as_mut_ptr();
-        for i in 0..n {
-            // SAFETY: `i` is in 0..n, so `i * n + i` is within the n*n-element dist buffer.
-            unsafe {
-                *dist_ptr.add(i * n + i) = f32::MAX;
-            }
-            // SAFETY: `i * u64s` is within the `n * u64s`-element local buffer.
-            let a_base = unsafe { local_ptr.add(i * u64s) };
-            for j in (i + 1)..n {
-                // SAFETY: `j * u64s` is within the `n * u64s`-element local buffer.
-                let b_base = unsafe { local_ptr.add(j * u64s) };
-                let mut h = 0u32;
-                for k_idx in 0..u64s {
-                    // SAFETY: `k_idx` is in 0..u64s, so `a_base.add(k_idx)` and
-                    // `b_base.add(k_idx)` are within their respective vector slices.
-                    unsafe {
-                        h += (*a_base.add(k_idx) ^ *b_base.add(k_idx)).count_ones();
-                    }
-                }
-                let d = h as f32;
-                // SAFETY: `i < j < n`, so both `i * n + j` and `j * n + i` are
-                // within the n*n-element dist buffer.
-                unsafe {
-                    *dist_ptr.add(i * n + j) = d;
-                    *dist_ptr.add(j * n + i) = d;
-                }
-            }
-        }
-
-        let local_edges = extract_knn(dist, n, k);
-        let seen = &mut seen[..nn];
-        seen.fill(false);
-        make_bidirected_edges(&local_edges, dist, n, indices, seen)
-    })
-}
-
-/// Convert k-NN edges to bi-directed global edges, deduplicating via a seen buffer.
-/// For symmetric metrics, dist(a,b) == dist(b,a) but we use the matrix lookup
-/// for the reverse edge to stay correct for any future asymmetric metric.
-fn make_bidirected_edges(
-    local_edges: &[(usize, usize, f32)],
-    dist_matrix: &[f32],
-    n: usize,
-    indices: &[usize],
-    seen: &mut [bool],
-) -> Vec<Edge> {
-    let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
-    for &(src, dst, dist) in local_edges {
-        if !seen[src * n + dst] {
-            seen[src * n + dst] = true;
-            global_edges.push(Edge {
-                src: indices[src],
-                dst: indices[dst],
-                distance: dist,
-            });
-        }
-        if !seen[dst * n + src] {
-            seen[dst * n + src] = true;
-            global_edges.push(Edge {
-                src: indices[dst],
-                dst: indices[src],
-                distance: dist_matrix[dst * n + src],
-            });
-        }
-    }
-    global_edges
 }
 
 /// Brute-force search the dataset using L2 distance.
@@ -954,22 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_knn() {
-        let dist = vec![f32::MAX, 1.0, 4.0, 1.0, f32::MAX, 1.0, 4.0, 1.0, f32::MAX];
-        let edges = extract_knn(&dist, 3, 1);
-
-        assert_eq!(edges.len(), 3);
-
-        let p0_edges: Vec<_> = edges.iter().filter(|e| e.0 == 0).collect();
-        assert_eq!(p0_edges.len(), 1);
-        assert_eq!(p0_edges[0].1, 1);
-
-        let p2_edges: Vec<_> = edges.iter().filter(|e| e.0 == 2).collect();
-        assert_eq!(p2_edges.len(), 1);
-        assert_eq!(p2_edges[0].1, 1);
-    }
-
-    #[test]
     fn test_brute_force_knn() {
         let data = vec![
             0.0, 0.0, // point 0
@@ -1015,39 +658,6 @@ mod tests {
             assert_ne!(edge.src, edge.dst);
             // Cosine distance for normalized vectors is in [0, 2].
             assert!(edge.distance >= 0.0, "negative cosine distance");
-        }
-    }
-
-    #[test]
-    fn test_build_leaf_quantized() {
-        // Build a leaf using quantized data and verify basic correctness.
-        let ndims = 64;
-        let npoints = 10;
-        use rand::{Rng, SeedableRng};
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let data: Vec<f32> = (0..npoints * ndims)
-            .map(|_| rng.random_range(-1.0..1.0))
-            .collect();
-
-        let (shift, inverse_scale) = {
-            use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-            use diskann_utils::views::MatrixView;
-            let dm = MatrixView::try_from(data.as_slice(), npoints, ndims).unwrap();
-            let q = ScalarQuantizationParameters::default().train(dm);
-            let s = q.scale();
-            (q.shift().to_vec(), if s == 0.0 { 1.0 } else { 1.0 / s })
-        };
-        let qdata = crate::quantize::quantize_1bit(&data, npoints, ndims, &shift, inverse_scale);
-        let indices: Vec<usize> = (0..npoints).collect();
-        let edges = build_leaf_quantized(&qdata, &indices, 3);
-
-        assert!(!edges.is_empty(), "quantized leaf should produce edges");
-
-        for edge in &edges {
-            assert!(edge.src < npoints, "src {} out of range", edge.src);
-            assert!(edge.dst < npoints, "dst {} out of range", edge.dst);
-            assert_ne!(edge.src, edge.dst);
-            assert!(edge.distance >= 0.0);
         }
     }
 
@@ -1129,18 +739,6 @@ mod tests {
             edges1.len(),
             edges2.len(),
             "same input should produce same number of edges with reused buffers"
-        );
-    }
-
-    #[test]
-    fn test_extract_knn_k_larger_than_n() {
-        // k > n-1 should be clamped.
-        let dist = vec![f32::MAX, 1.0, 1.0, f32::MAX];
-        let edges = extract_knn(&dist, 2, 100); // k=100 but only 2 points
-        assert_eq!(
-            edges.len(),
-            2,
-            "k > n-1 should be clamped, each point gets 1 neighbor, total 2 edges"
         );
     }
 
@@ -1279,13 +877,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn test_extract_knn_k_zero() {
-        let dist = vec![f32::MAX, 1.0, 1.0, f32::MAX];
-        let edges = extract_knn(&dist, 2, 0);
-        assert!(edges.is_empty(), "k=0 should return no edges");
     }
 
     #[test]

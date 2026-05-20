@@ -14,12 +14,10 @@ diskann-utils = { workspace = true, default-features = false, features = ["rayon
 rayon = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
-bytemuck = { workspace = true, features = ["must_cast"] }
 num-traits = { workspace = true }
 diskann-linalg = { workspace = true }
 faer = { version = "0.23", default-features = false, features = ["std", "rayon"] }
 half = { workspace = true }
-diskann-quantization = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }

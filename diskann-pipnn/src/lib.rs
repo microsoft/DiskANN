@@ -17,7 +17,6 @@ pub mod hash_prune;
 pub mod leaf_build;
 pub mod partition;
 pub mod profile;
-pub mod quantize;
 pub(crate) mod rayon_util;
 
 use diskann_vector::distance::Metric;

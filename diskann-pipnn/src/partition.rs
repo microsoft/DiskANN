@@ -109,62 +109,6 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     global_merge_small(leaves, config.c_min, config.c_max)
 }
 
-/// Quantized partition variant using Hamming distance.
-pub fn partition_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    npoints: usize,
-    config: &PartitionConfig,
-    seed: u64,
-) -> Vec<Leaf> {
-    let initial_indices: Vec<u32> = (0..npoints as u32).collect();
-
-    if npoints <= config.c_max {
-        return vec![Leaf {
-            indices: initial_indices,
-        }];
-    }
-
-    let mut leaves: Vec<Leaf> = Vec::new();
-    let mut work = vec![WorkItem {
-        indices: initial_indices,
-        level: 0,
-        seed,
-    }];
-
-    let mut iteration = 0;
-    while !work.is_empty() {
-        iteration += 1;
-        assert!(
-            iteration <= 50,
-            "quantized partition exceeded 50 iterations"
-        );
-
-        let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
-            .into_par_iter()
-            .map(|item| partition_one_level_quantized(qdata, config, item))
-            .collect_installed();
-
-        let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
-        let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
-        let mut next_work = Vec::with_capacity(total_work);
-        leaves.reserve(total_leaves);
-        for (wi, lv) in results {
-            next_work.extend(wi);
-            leaves.extend(lv);
-        }
-        work = next_work;
-    }
-
-    let leaves = global_merge_small(leaves, config.c_min, config.c_max);
-
-    tracing::info!(
-        total_leaves = leaves.len(),
-        levels = iteration,
-        "Partition complete (quantized)"
-    );
-    leaves
-}
-
 /// Process one cluster: assign to leaders, emit oversized clusters as new work
 /// items and the rest (including under-c_min) as leaves. Cross-work-item small
 /// leaves are then combined by a single global `global_merge_small` pass at
@@ -196,48 +140,6 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
 
     // Assign each point to its `fanout` nearest leaders → per-leader clusters.
     let clusters = assign_to_leaders(data, ndims, &item.indices, &leaders, fanout, config.metric);
-
-    let mut next_work = Vec::new();
-    let mut finished_leaves = Vec::new();
-    for cluster in clusters {
-        if cluster.is_empty() {
-            continue;
-        }
-        if cluster.len() <= config.c_max {
-            finished_leaves.push(Leaf { indices: cluster });
-        } else {
-            next_work.push(WorkItem {
-                indices: cluster,
-                level: item.level + 1,
-                seed,
-            });
-        }
-    }
-    (next_work, finished_leaves)
-}
-
-/// Quantized version of partition_one_level.
-fn partition_one_level_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    config: &PartitionConfig,
-    item: WorkItem,
-) -> (Vec<WorkItem>, Vec<Leaf>) {
-    let n = item.indices.len();
-    debug_assert!(n > config.c_max);
-
-    let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
-    let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
-
-    // Deterministic seed derived from parent: no syscall, reproducible.
-    let seed = item
-        .seed
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(n as u64);
-
-    let stride = (n / num_leaders).max(1);
-    let leaders: Vec<u32> = (0..num_leaders).map(|i| item.indices[i * stride]).collect();
-
-    let clusters = assign_to_leaders_quantized(qdata, &item.indices, &leaders, fanout);
 
     let mut next_work = Vec::new();
     let mut finished_leaves = Vec::new();
@@ -761,88 +663,6 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
         }
         clusters
     }
-}
-
-/// Quantized assignment using Hamming distance.
-fn assign_to_leaders_quantized(
-    qdata: &crate::quantize::QuantizedData,
-    points: &[u32],
-    leaders: &[u32],
-    fanout: usize,
-) -> Vec<Vec<u32>> {
-    let np = points.len();
-    let nl = leaders.len();
-    let num_assign = fanout.min(nl);
-    let u64s = qdata.u64s_per_vec();
-
-    // Pre-extract leader data.
-    let mut leader_data: Vec<u64> = vec![0u64; nl * u64s];
-    for (i, &idx) in leaders.iter().enumerate() {
-        leader_data[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx as usize));
-    }
-
-    let mut assignments = vec![0u32; np * num_assign];
-
-    // 16MB stripe for cache efficiency. clamp(1, np) so np < 256 doesn't panic.
-    let stripe: usize = ((16 * 1024 * 1024)
-        / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
-    .clamp(1, np.max(1));
-
-    assignments
-        .par_chunks_mut(stripe * num_assign)
-        .enumerate()
-        .for_each_installed(|(stripe_idx, assign_chunk)| {
-            let start = stripe_idx * stripe;
-            let end = (start + stripe).min(np);
-            let sn = end - start;
-
-            let mut point_data: Vec<u64> = vec![0u64; sn * u64s];
-            for i in 0..sn {
-                let src = qdata.get_u64(points[start + i] as usize);
-                point_data[i * u64s..(i + 1) * u64s].copy_from_slice(src);
-            }
-
-            let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
-            let ld_ptr = leader_data.as_ptr();
-            let pd_ptr = point_data.as_ptr();
-
-            for i in 0..sn {
-                // SAFETY: point_data has length `sn * u64s` and `i < sn`.
-                let pt_base = unsafe { pd_ptr.add(i * u64s) };
-                buf.clear();
-                for j in 0..nl {
-                    // SAFETY: leader_data has length `nl * u64s` and `j < nl`.
-                    let ld_base = unsafe { ld_ptr.add(j * u64s) };
-                    let mut h = 0u32;
-                    for k in 0..u64s {
-                        // SAFETY: pt_base/ld_base each address `u64s` words and `k < u64s`.
-                        unsafe {
-                            h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones();
-                        }
-                    }
-                    buf.push((j as u32, h as f32));
-                }
-                if num_assign > 0 && num_assign < buf.len() {
-                    buf.select_nth_unstable_by(num_assign - 1, |a, b| {
-                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-
-                let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
-                for k in 0..num_assign {
-                    out[k] = buf[k].0;
-                }
-            }
-        });
-
-    let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
-    for (i, pt) in points.iter().enumerate() {
-        let row = &assignments[i * num_assign..(i + 1) * num_assign];
-        for &leader_local in row {
-            clusters[leader_local as usize].push(*pt);
-        }
-    }
-    clusters
 }
 
 // ─── Global Merge of Small Leaves ────────────────────────────────────────────

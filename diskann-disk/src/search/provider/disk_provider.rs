@@ -233,10 +233,7 @@ where
 struct IOTracker {
     io_time_us: AtomicU64,
     preprocess_time_us: AtomicU64,
-    /// Total vertices requested (cached + uncached).
-    vertices_loaded: AtomicUsize,
-    /// Actual disk IO operations (uncached only).
-    disk_io_count: AtomicUsize,
+    io_count: AtomicUsize,
 }
 
 impl Default for IOTracker {
@@ -244,8 +241,7 @@ impl Default for IOTracker {
         Self {
             io_time_us: AtomicU64::new(0),
             preprocess_time_us: AtomicU64::new(0),
-            vertices_loaded: AtomicUsize::new(0),
-            disk_io_count: AtomicUsize::new(0),
+            io_count: AtomicUsize::new(0),
         }
     }
 }
@@ -259,31 +255,13 @@ impl IOTracker {
         category.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn add_vertices_loaded(&self, count: usize) {
-        self.vertices_loaded
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn vertices_loaded(&self) -> usize {
-        self.vertices_loaded.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    fn add_disk_io(&self, count: usize) {
-        self.disk_io_count
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn disk_io_count(&self) -> usize {
-        self.disk_io_count.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    // Keep old api for search_io_limit check.
     fn add_io_count(&self, count: usize) {
-        self.add_vertices_loaded(count);
+        self.io_count
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn io_count(&self) -> usize {
-        self.vertices_loaded()
+        self.io_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -670,17 +648,13 @@ where
             return Ok(());
         }
         let scratch = &mut self.scratch;
-        let io_before = scratch.vertex_provider.io_operations();
         let timer = Instant::now();
         ensure_vertex_loaded(&mut scratch.vertex_provider, ids)?;
         IOTracker::add_time(
             &self.io_tracker.io_time_us,
             timer.elapsed().as_micros() as u64,
         );
-        // Track total vertices requested and actual disk IOs separately.
-        self.io_tracker.add_vertices_loaded(ids.len());
-        let io_after = scratch.vertex_provider.io_operations();
-        self.io_tracker.add_disk_io((io_after - io_before) as usize);
+        self.io_tracker.add_io_count(ids.len());
         for id in ids {
             let distance = self
                 .provider
@@ -1036,8 +1010,8 @@ where
 
         query_stats.total_execution_time_us = timer.elapsed().as_micros();
         query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
-        query_stats.total_io_operations = strategy.io_tracker.disk_io_count() as u32;
-        query_stats.total_vertices_loaded = strategy.io_tracker.vertices_loaded() as u32;
+        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
         query_stats.query_pq_preprocess_time_us =
             IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
         query_stats.cpu_time_us = query_stats.total_execution_time_us

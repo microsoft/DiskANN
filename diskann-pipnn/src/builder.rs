@@ -335,7 +335,7 @@ pub fn build_typed<T: VectorRepr + Send + Sync>(
         "PiPNN build started (typed)"
     );
 
-    build_internal(data, npoints, ndims, config, None)
+    build_internal(data, npoints, ndims, config)
 }
 
 /// Build a PiPNN index.
@@ -372,254 +372,11 @@ pub fn build(
         "PiPNN build started"
     );
 
-    // The build() path always builds at full precision with f32 data.
-    // For quantized builds, use build_with_sq() which accepts pre-trained SQ params.
-    build_internal::<f32>(data, npoints, ndims, config, None)
+    build_internal::<f32>(data, npoints, ndims, config)
 }
 
-/// Pre-trained scalar quantizer parameters for 1-bit quantization.
-///
-/// These can be extracted from DiskANN's trained `ScalarQuantizer` to ensure
-/// identical quantization between Vamana and PiPNN builds.
-pub struct SQParams {
-    /// Per-dimension shift (length = ndims).
-    pub shift: Vec<f32>,
-    /// Global inverse scale (1.0 / scale).
-    pub inverse_scale: f32,
-}
 
-/// Build a PiPNN index using a pre-trained scalar quantizer for 1-bit mode.
-///
-/// Build a PiPNN index using pre-trained SQ parameters.
-///
-/// Generic over `T: VectorRepr` — works with f16, f32, u8, etc.
-/// Converts T→f32 per-vector streaming during quantization and LSH sketch
-/// computation, without materializing a full f32 copy of the dataset.
-///
-/// `data` is row-major: npoints x ndims in native type T.
-pub fn build_with_sq<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    npoints: usize,
-    ndims: usize,
-    config: &PiPNNConfig,
-    sq_params: &SQParams,
-) -> PiPNNResult<PiPNNGraph> {
-    config.validate()?;
 
-    if data.len() != npoints * ndims {
-        return Err(PiPNNError::DataLengthMismatch {
-            expected: npoints * ndims,
-            actual: data.len(),
-            npoints,
-            ndims,
-        });
-    }
-    if npoints == 0 || ndims == 0 {
-        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
-    }
-    if config.final_prune {
-        return Err(PiPNNError::Config(
-            "final_prune=true is not supported for quantized builds (requires f32 data for distance recomputation)".into(),
-        ));
-    }
-    if sq_params.shift.len() != ndims {
-        return Err(PiPNNError::DimensionMismatch {
-            expected: ndims,
-            actual: sq_params.shift.len(),
-        });
-    }
-
-    tracing::info!(
-        npoints = npoints,
-        ndims = ndims,
-        k = config.k,
-        max_degree = config.max_degree,
-        "PiPNN build started (with pre-trained SQ, native type)"
-    );
-
-    // Quantize from native T (streaming T→f32 per vector, no full f32 copy).
-    // Quantize and compute medoid from native data, then release the borrow.
-    let t = Instant::now();
-    let qdata = crate::quantize::quantize_1bit(
-        data,
-        npoints,
-        ndims,
-        &sq_params.shift,
-        sq_params.inverse_scale,
-    );
-    let medoid = find_medoid(data, npoints, ndims);
-    tracing::info!(
-        elapsed_secs = t.elapsed().as_secs_f64(),
-        "1-bit quantization + medoid complete"
-    );
-    // `data` borrow ends here — caller can drop native T data.
-
-    // Compute LSH sketches from 1-bit vectors directly — no f16/f32 data needed.
-    // dot(1bit_vec, hyperplane) = sum of hyperplane[d] where bit d is set.
-    let sketches = crate::hash_prune::LshSketches::new_from_quantized(
-        &qdata,
-        npoints,
-        ndims,
-        config.num_hash_planes,
-        42,
-    );
-
-    build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
-}
-
-/// Build a PiPNN index from pre-quantized data + pre-computed medoid.
-///
-/// Lowest-memory entry point for SQ builds: the caller quantizes and computes
-/// medoid, then drops native data before calling this. Only the 1-bit quantized
-/// data needs to be in memory during the graph build.
-pub fn build_from_quantized(
-    qdata: crate::quantize::QuantizedData,
-    npoints: usize,
-    ndims: usize,
-    medoid: usize,
-    config: &PiPNNConfig,
-) -> PiPNNResult<PiPNNGraph> {
-    config.validate()?;
-    if npoints == 0 || ndims == 0 {
-        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
-    }
-    if config.final_prune {
-        return Err(PiPNNError::Config(
-            "final_prune=true is not supported for quantized builds (requires f32 data for distance recomputation)".into(),
-        ));
-    }
-    // Validate consistency with QuantizedData metadata.
-    if qdata.npoints() != npoints || qdata.ndims() != ndims {
-        return Err(PiPNNError::DataLengthMismatch {
-            expected: npoints * ndims,
-            actual: qdata.npoints() * qdata.ndims(),
-            npoints,
-            ndims,
-        });
-    }
-
-    tracing::info!(
-        npoints = npoints,
-        ndims = ndims,
-        k = config.k,
-        max_degree = config.max_degree,
-        "PiPNN build from pre-quantized data"
-    );
-
-    let sketches = crate::hash_prune::LshSketches::new_from_quantized(
-        &qdata,
-        npoints,
-        ndims,
-        config.num_hash_planes,
-        42,
-    );
-
-    build_internal_sq(npoints, ndims, config, qdata, sketches, medoid)
-}
-
-fn build_internal_sq(
-    npoints: usize,
-    ndims: usize,
-    config: &PiPNNConfig,
-    qdata: crate::quantize::QuantizedData,
-    sketches: crate::hash_prune::LshSketches,
-    medoid: usize,
-) -> PiPNNResult<PiPNNGraph> {
-    let run =
-        |sketches, qdata| build_internal_sq_impl(npoints, ndims, config, qdata, sketches, medoid);
-    if config.num_threads > 0 {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(config.num_threads)
-            .build()
-            .map_err(|e| PiPNNError::Config(format!("Failed to create thread pool: {}", e)))?;
-        return pool.install(|| run(sketches, qdata));
-    }
-    run(sketches, qdata)
-}
-
-fn build_internal_sq_impl(
-    npoints: usize,
-    ndims: usize,
-    config: &PiPNNConfig,
-    qdata: crate::quantize::QuantizedData,
-    sketches: crate::hash_prune::LshSketches,
-    medoid: usize,
-) -> PiPNNResult<PiPNNGraph> {
-    let t_total = Instant::now();
-
-    let t0 = Instant::now();
-    let hash_prune = HashPrune::from_sketches(sketches, npoints, config.l_max, config.max_degree);
-    let sketch_secs = t0.elapsed().as_secs_f64();
-
-    let mut partition_secs = 0.0f64;
-    let mut leaf_build_secs = 0.0f64;
-    let mut total_leaves = 0usize;
-    let mut total_edges_count = 0usize;
-
-    for replica in 0..config.replicas {
-        let seed = 1000 + replica as u64 * 7919;
-        let t1 = Instant::now();
-        let partition_config = PartitionConfig {
-            c_max: config.c_max,
-            c_min: config.c_min,
-            p_samp: config.p_samp,
-            fanout: config.fanout.clone(),
-            metric: config.metric,
-            leader_cap: config.leader_cap,
-        };
-        let leaves =
-            crate::partition::partition_quantized(&qdata, npoints, &partition_config, seed);
-        total_leaves += leaves.len();
-        partition_secs += t1.elapsed().as_secs_f64();
-
-        let t2 = Instant::now();
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let total_edges = AtomicUsize::new(0);
-        leaves.par_iter().for_each_installed(|leaf| {
-            let indices_usize: Vec<usize> = leaf.indices.iter().map(|&i| i as usize).collect();
-            let edges = crate::leaf_build::build_leaf_quantized(&qdata, &indices_usize, config.k);
-            total_edges.fetch_add(edges.len(), Ordering::Relaxed);
-            hash_prune.add_edges_batched(&edges);
-        });
-        total_edges_count += total_edges.load(Ordering::Relaxed);
-        leaf_build_secs += t2.elapsed().as_secs_f64();
-    }
-
-    (0..rayon::current_num_threads())
-        .into_par_iter()
-        .for_each_installed(|_| {
-            crate::leaf_build::release_thread_buffers();
-        });
-
-    // final_prune=true is rejected at entry points (build_with_sq / build_from_quantized).
-    debug_assert!(!config.final_prune, "SQ path does not support final_prune");
-    let t3 = Instant::now();
-    let adjacency = hash_prune.extract_graph();
-    let extract_secs = t3.elapsed().as_secs_f64();
-    let final_prune_secs = 0.0;
-
-    let total_secs = t_total.elapsed().as_secs_f64();
-    let stats = PiPNNBuildStats {
-        sketch_secs,
-        partition_secs,
-        leaf_build_secs,
-        extract_secs,
-        final_prune_secs,
-        total_secs,
-        num_leaves: total_leaves,
-        total_edges: total_edges_count,
-    };
-    print!("{}", stats);
-
-    Ok(PiPNNGraph {
-        adjacency,
-        npoints,
-        ndims,
-        medoid,
-        metric: config.metric,
-        build_stats: stats,
-    })
-}
 
 /// Internal build logic shared between `build()` and `build_typed()`.
 fn build_internal<T: VectorRepr + Send + Sync>(
@@ -627,7 +384,6 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
-    qdata: Option<crate::quantize::QuantizedData>,
 ) -> PiPNNResult<PiPNNGraph> {
     // Respect num_threads: install a scoped rayon pool so all par_iter() calls
     // within this build use the configured thread count instead of all cores.
@@ -636,9 +392,9 @@ fn build_internal<T: VectorRepr + Send + Sync>(
             .num_threads(config.num_threads)
             .build()
             .map_err(|e| PiPNNError::Config(format!("Failed to create thread pool: {}", e)))?;
-        return pool.install(|| build_internal_impl(data, npoints, ndims, config, qdata));
+        return pool.install(|| build_internal_impl(data, npoints, ndims, config));
     }
-    build_internal_impl(data, npoints, ndims, config, qdata)
+    build_internal_impl(data, npoints, ndims, config)
 }
 
 fn build_internal_impl<T: VectorRepr + Send + Sync>(
@@ -646,7 +402,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
-    qdata: Option<crate::quantize::QuantizedData>,
 ) -> PiPNNResult<PiPNNGraph> {
     let t_total = Instant::now();
 
@@ -707,11 +462,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             leader_cap: config.leader_cap,
         };
 
-        let leaves = if let Some(ref q) = qdata {
-            crate::partition::partition_quantized(q, npoints, &partition_config, seed)
-        } else {
-            crate::partition::partition(data, ndims, npoints, &partition_config, seed)
-        };
+        let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
 
         let total_pts: usize = leaves.iter().map(|l| l.indices.len()).sum();
@@ -758,22 +509,16 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                     let indices_usize: Vec<usize> =
                         leaf.indices.iter().map(|&i| i as usize).collect();
 
-                    if let Some(ref q) = qdata {
-                        let edges = leaf_build::build_leaf_quantized(q, &indices_usize, config.k);
-                        total_edges.fetch_add(edges.len(), Ordering::Relaxed);
-                        hash_prune.add_edges_batched(&edges);
-                    } else {
-                        let edge_count = leaf_build::build_leaf_into(
-                            data,
-                            ndims,
-                            &indices_usize,
-                            config.k,
-                            config.metric,
-                            &mut bufs,
-                        );
-                        total_edges.fetch_add(edge_count, Ordering::Relaxed);
-                        hash_prune.add_edges_batched(&bufs.edges[..edge_count]);
-                    }
+                    let edge_count = leaf_build::build_leaf_into(
+                        data,
+                        ndims,
+                        &indices_usize,
+                        config.k,
+                        config.metric,
+                        &mut bufs,
+                    );
+                    total_edges.fetch_add(edge_count, Ordering::Relaxed);
+                    hash_prune.add_edges_batched(&bufs.edges[..edge_count]);
                 }
             });
         });
@@ -1274,45 +1019,6 @@ mod tests {
         assert!(graph.avg_degree() > 0.0);
     }
 
-    /// Train SQ parameters from data. Test-only helper.
-    fn train_sq_params(data: &[f32], npoints: usize, ndims: usize) -> SQParams {
-        use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-        use diskann_utils::views::MatrixView;
-
-        let data_matrix = MatrixView::try_from(data, npoints, ndims)
-            .expect("data length must equal npoints * ndims");
-        let quantizer = ScalarQuantizationParameters::default().train(data_matrix);
-        let shift = quantizer.shift().to_vec();
-        let scale = quantizer.scale();
-        let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
-        SQParams {
-            shift,
-            inverse_scale,
-        }
-    }
-
-    #[test]
-    fn test_build_with_sq() {
-        let npoints = 100;
-        let ndims = 64; // must be multiple of 64 for u64 alignment in quantize
-        let data = generate_random_data(npoints, ndims, 42);
-
-        let config = PiPNNConfig {
-            c_max: 32,
-            c_min: 8,
-            k: 3,
-            max_degree: 16,
-            replicas: 1,
-            l_max: 32,
-            ..Default::default()
-        };
-
-        let sq_params = train_sq_params(&data, npoints, ndims);
-
-        let graph = super::build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
-        assert_eq!(graph.npoints, npoints);
-        assert!(graph.avg_degree() > 0.0);
-    }
 
     #[test]
     fn test_build_typed_f32() {
@@ -1682,58 +1388,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_build_with_sq_wrong_shift_dims() {
-        let npoints = 50;
-        let ndims = 64;
-        let data = generate_random_data(npoints, ndims, 42);
-        let config = PiPNNConfig {
-            c_max: 32,
-            c_min: 8,
-            k: 3,
-            max_degree: 16,
-            replicas: 1,
-            l_max: 32,
-            ..Default::default()
-        };
-        // Shift length != ndims.
-        let sq_params = SQParams {
-            shift: vec![0.0f32; ndims + 5], // wrong length
-            inverse_scale: 1.0,
-        };
-        let result = build_with_sq(&data, npoints, ndims, &config, &sq_params);
-        assert!(
-            result.is_err(),
-            "shift length != ndims should produce an error"
-        );
-        assert!(
-            matches!(result.unwrap_err(), PiPNNError::DimensionMismatch { .. }),
-            "should be a DimensionMismatch error"
-        );
-    }
-
-    #[test]
-    fn test_build_with_sq_produces_connected_graph() {
-        let npoints = 100;
-        let ndims = 64;
-        let data = generate_random_data(npoints, ndims, 42);
-        let config = PiPNNConfig {
-            c_max: 64,
-            c_min: 16,
-            k: 4,
-            max_degree: 32,
-            replicas: 2,
-            l_max: 64,
-            ..Default::default()
-        };
-        let sq_params = train_sq_params(&data, npoints, ndims);
-        let graph = build_with_sq(&data, npoints, ndims, &config, &sq_params).unwrap();
-        assert_eq!(
-            graph.num_isolated(), 0,
-            "build_with_sq should produce a connected graph with sufficient replicas, found {} isolated nodes",
-            graph.num_isolated()
-        );
-    }
 
     #[test]
     fn test_build_typed_data_length_mismatch() {
