@@ -484,74 +484,21 @@ pub(crate) struct IndexBuild {
 }
 
 /// PiPNN-specific parameters for inmem index build.
-/// Shared params (max_degree, distance/metric, alpha) come from the parent IndexBuild.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PiPNNInmemConfig {
-    #[serde(default = "default_c_max")]
-    pub c_max: usize,
-    #[serde(default = "default_c_min")]
-    pub c_min: usize,
-    #[serde(default = "default_p_samp")]
-    pub p_samp: f64,
-    #[serde(default = "default_fanout")]
-    pub fanout: Vec<usize>,
-    #[serde(default = "default_leaf_k")]
-    pub leaf_k: usize,
-    #[serde(default = "default_replicas")]
-    pub replicas: usize,
-    #[serde(default = "default_l_max")]
-    pub l_max: usize,
-    #[serde(default = "default_num_hash_planes")]
-    pub num_hash_planes: usize,
-    #[serde(default)]
-    pub final_prune: bool,
-}
+///
+/// Reuses the same `BuildAlgorithm::PiPNN` variant shape as the disk path so
+/// JSON configs are identical between inmem and disk builds. Shared knobs
+/// (`max_degree`, `metric`, `num_threads`) come from the parent `IndexBuild`.
+pub(crate) type PiPNNInmemConfig = diskann_disk::build::configuration::BuildAlgorithm;
 
-fn default_c_max() -> usize {
-    1024
-}
-fn default_c_min() -> usize {
-    256
-}
-fn default_p_samp() -> f64 {
-    0.005
-}
-fn default_fanout() -> Vec<usize> {
-    vec![10, 3]
-}
-fn default_leaf_k() -> usize {
-    3
-}
-fn default_replicas() -> usize {
-    1
-}
-fn default_l_max() -> usize {
-    128
-}
-fn default_num_hash_planes() -> usize {
-    12
-}
-
-impl PiPNNInmemConfig {
-    pub fn to_pipnn_config(&self, parent: &IndexBuild) -> diskann_pipnn::PiPNNConfig {
-        diskann_pipnn::PiPNNConfig {
-            num_hash_planes: self.num_hash_planes,
-            c_max: self.c_max,
-            c_min: self.c_min,
-            p_samp: self.p_samp,
-            fanout: self.fanout.clone(),
-            k: self.leaf_k,
-            max_degree: parent.max_degree,
-            replicas: self.replicas,
-            l_max: self.l_max,
-            metric: parent.distance.into(),
-            final_prune: self.final_prune,
-            alpha: parent.alpha,
-            num_threads: parent.num_threads,
-            leader_cap: 1000,
-            saturate_after_prune: true,
-        }
-    }
+/// Convert an inmem PiPNN config into a [`diskann_pipnn::PiPNNConfig`] by
+/// combining it with shared knobs from the parent `IndexBuild`. Panics if
+/// the algorithm isn't `PiPNN` — callers should check the variant first.
+pub(crate) fn inmem_pipnn_config(
+    algo: &PiPNNInmemConfig,
+    parent: &IndexBuild,
+) -> diskann_pipnn::PiPNNConfig {
+    algo.to_pipnn_config(parent.max_degree, parent.distance.into(), parent.num_threads)
+        .expect("PiPNNInmemConfig must be the PiPNN variant")
 }
 
 impl IndexBuild {
@@ -640,13 +587,21 @@ impl IndexBuild {
             None => write_field!(f, "Save Path", "None")?,
             Some(p) => write_field!(f, "Save Path", p)?,
         }
-        if let Some(p) = &self.pipnn {
+        if let Some(diskann_disk::build::configuration::BuildAlgorithm::PiPNN {
+            c_max,
+            c_min,
+            leaf_k,
+            l_max,
+            replicas,
+            ..
+        }) = self.pipnn.as_ref()
+        {
             write_field!(f, "build algorithm", "PiPNN")?;
-            write_field!(f, "pipnn.c_max", p.c_max)?;
-            write_field!(f, "pipnn.c_min", p.c_min)?;
-            write_field!(f, "pipnn.leaf_k", p.leaf_k)?;
-            write_field!(f, "pipnn.l_max", p.l_max)?;
-            write_field!(f, "pipnn.replicas", p.replicas)?;
+            write_field!(f, "pipnn.c_max", c_max)?;
+            write_field!(f, "pipnn.c_min", c_min)?;
+            write_field!(f, "pipnn.leaf_k", leaf_k)?;
+            write_field!(f, "pipnn.l_max", l_max)?;
+            write_field!(f, "pipnn.replicas", replicas)?;
         } else {
             write_field!(f, "build algorithm", "Vamana")?;
         }

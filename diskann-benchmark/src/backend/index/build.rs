@@ -138,7 +138,7 @@ where
         .pipnn
         .as_ref()
         .expect("pipnn_insert called without PiPNN config");
-    let config = pipnn_cfg.to_pipnn_config(input);
+    let config = crate::inputs::async_::inmem_pipnn_config(pipnn_cfg, input);
 
     let npoints = data.nrows();
     let ndims = data.ncols();

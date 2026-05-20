@@ -443,7 +443,6 @@ where
             .to_pipnn_config(
                 self.index_configuration.config.pruned_degree().get(),
                 self.index_configuration.dist_metric,
-                self.index_configuration.config.alpha(),
                 self.index_configuration.num_threads,
             )
             .ok_or_else(|| {
