@@ -26,9 +26,6 @@ pub struct LeafBuffers {
     pub dot_matrix: Vec<f32>,
     pub dist_matrix: Vec<f32>,
     pub seen: Vec<bool>,
-    /// Contiguous f16 gather buffer for MKL f16f16f32 GEMM path.
-    #[cfg(feature = "mkl-fp16")]
-    pub local_data_f16: Vec<half::f16>,
     /// Reusable buffer for knn results: (local_dst_idx, distance) per row×k.
     pub knn_result: Vec<(u32, f32)>,
     /// Reusable buffer for bidirected edges output.
@@ -55,8 +52,6 @@ impl LeafBuffers {
             dot_matrix: Vec::new(),
             dist_matrix: Vec::new(),
             seen: Vec::new(),
-            #[cfg(feature = "mkl-fp16")]
-            local_data_f16: Vec::new(),
             knn_result: Vec::new(),
             edges: Vec::new(),
             indices_usize: Vec::new(),
@@ -85,10 +80,6 @@ impl LeafBuffers {
         }
         if self.seen.len() < nn {
             self.seen.resize(nn, false);
-        }
-        #[cfg(feature = "mkl-fp16")]
-        if self.local_data_f16.len() < nd {
-            self.local_data_f16.resize(nd, half::f16::ZERO);
         }
         // Phase 1 reuse buffers — pre-size to max-leaf shape so per-leaf clear()+push()
         // never triggers Vec realloc (which contends on the glibc malloc arena at high
@@ -153,10 +144,6 @@ pub fn release_thread_buffers() {
         bufs.edges = Vec::new();
         bufs.indices_usize = Vec::new();
         bufs.select_indices = Vec::new();
-        #[cfg(feature = "mkl-fp16")]
-        {
-            bufs.local_data_f16 = Vec::new();
-        }
     });
     QUANT_BUFFERS.with(|cell| {
         let mut bufs = cell.borrow_mut();
@@ -501,56 +488,7 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     let actual_k = if k == 0 || n <= 1 { 0 } else { k.min(n - 1) };
 
     // ───── Gather + compute norms (no full GEMM yet) ─────
-    #[cfg(feature = "mkl-fp16")]
-    let use_mkl = std::any::TypeId::of::<T>() == std::any::TypeId::of::<half::f16>();
-    #[cfg(not(feature = "mkl-fp16"))]
-    let use_mkl = false;
-
     let needs_norms = matches!(metric, Metric::L2 | Metric::Cosine);
-
-    #[cfg(feature = "mkl-fp16")]
-    if use_mkl {
-        let local_f16 = &mut bufs.local_data_f16[..n * ndims];
-        // SAFETY: T is half::f16 (checked via TypeId), same layout.
-        let data_f16: &[half::f16] = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const half::f16, data.len())
-        };
-        for (i, &idx) in indices.iter().enumerate() {
-            let src = &data_f16[idx * ndims..(idx + 1) * ndims];
-            local_f16[i * ndims..(i + 1) * ndims].copy_from_slice(src);
-        }
-        if needs_norms {
-            // Compute norms from f16 source (no full GEMM materialization needed).
-            let norms_sq = &mut bufs.norms_sq[..n];
-            for i in 0..n {
-                let row = &local_f16[i * ndims..(i + 1) * ndims];
-                let mut s = 0.0f32;
-                for &v in row.iter() {
-                    let f = v.to_f32();
-                    s += f * f;
-                }
-                norms_sq[i] = s;
-            }
-        }
-    } else {
-        let local_data = &mut bufs.local_data[..n * ndims];
-        for (i, &idx) in indices.iter().enumerate() {
-            let src = &data[idx * ndims..(idx + 1) * ndims];
-            let dst = &mut local_data[i * ndims..(i + 1) * ndims];
-            T::as_f32_into(src, dst).expect("f32 conversion");
-        }
-        if needs_norms {
-            let norms_sq = &mut bufs.norms_sq[..n];
-            for i in 0..n {
-                let row = &local_data[i * ndims..(i + 1) * ndims];
-                let mut s = 0.0f32;
-                for &v in row.iter() { s += v * v; }
-                norms_sq[i] = s;
-            }
-        }
-    }
-
-    #[cfg(not(feature = "mkl-fp16"))]
     {
         let local_data = &mut bufs.local_data[..n * ndims];
         for (i, &idx) in indices.iter().enumerate() {
@@ -597,25 +535,9 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             let tile_len = mb * n;
 
             // 1. GEMM: dot_tile = A[tile_rows] · A^T (mb × n)
-            #[cfg(feature = "mkl-fp16")]
-            if use_mkl {
-                let a_full = &bufs.local_data_f16[..n * ndims];
-                let a_tile = &a_full[tile_start * ndims..(tile_start + mb) * ndims];
-                let dot_tile = &mut bufs.dot_matrix[..tile_len];
-                crate::gemm::mkl_f16f16f32_abt(a_tile, mb, ndims, a_full, n, dot_tile);
-            } else {
-                let a_full = &bufs.local_data[..n * ndims];
-                let a_tile = &a_full[tile_start * ndims..(tile_start + mb) * ndims];
-                // SAFETY: a_full and dot_tile borrow different fields of bufs.
-                let a_tile_ptr = a_tile.as_ptr();
-                let a_full_ptr = a_full.as_ptr();
-                let a_full_len = a_full.len();
-                let dot_tile = &mut bufs.dot_matrix[..tile_len];
-                let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
-                let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
-                crate::gemm::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
-            }
-            #[cfg(not(feature = "mkl-fp16"))]
+            // SAFETY: a_full and dot_tile borrow different fields of bufs, so we
+            // need raw-pointer slices to avoid the borrow conflict that would otherwise
+            // come from holding `&bufs.local_data` and `&mut bufs.dot_matrix` together.
             {
                 let a_full = &bufs.local_data[..n * ndims];
                 let a_tile_ptr = a_full[tile_start * ndims..].as_ptr();

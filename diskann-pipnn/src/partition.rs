@@ -271,8 +271,6 @@ use std::cell::RefCell;
 struct StripeBuffers {
     p_data: Vec<f32>,
     dots: Vec<f32>,
-    #[cfg(feature = "mkl-fp16")]
-    p_data_f16: Vec<half::f16>,
 }
 
 impl StripeBuffers {
@@ -280,8 +278,6 @@ impl StripeBuffers {
         Self {
             p_data: Vec::new(),
             dots: Vec::new(),
-            #[cfg(feature = "mkl-fp16")]
-            p_data_f16: Vec::new(),
         }
     }
 }
@@ -316,23 +312,6 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
         T::as_f32_into(src, &mut l_data[i * ndims..(i + 1) * ndims]).expect("f32 conversion");
     }
 
-    // Native fp16 path: also extract leaders as raw f16 (zero-cost copy when T = f16).
-    #[cfg(feature = "mkl-fp16")]
-    let use_mkl_fp16 = std::any::TypeId::of::<T>() == std::any::TypeId::of::<half::f16>();
-    #[cfg(feature = "mkl-fp16")]
-    let l_data_f16: Vec<half::f16> = if use_mkl_fp16 {
-        // SAFETY: T is half::f16 (checked via TypeId), same layout.
-        let data_f16: &[half::f16] = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const half::f16, data.len())
-        };
-        let mut buf = vec![half::f16::ZERO; nl * ndims];
-        for (i, &idx) in leaders.iter().enumerate() {
-            let src = &data_f16[idx as usize * ndims..(idx as usize + 1) * ndims];
-            buf[i * ndims..(i + 1) * ndims].copy_from_slice(src);
-        }
-        buf
-    } else { Vec::new() };
-
     // Precompute leader norms for L2/Cosine.
     let l_norms: Vec<f32> = match metric {
         Metric::L2 => l_data
@@ -345,10 +324,6 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             .collect(),
         Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
     };
-
-    // L2/Cosine need f32 point data for norm computation even in MKL path.
-    #[cfg(feature = "mkl-fp16")]
-    let needs_p_data_f32 = matches!(metric, Metric::L2 | Metric::Cosine);
 
     // Flat assignments.
     let mut assignments = vec![0u32; np * num_assign];
@@ -387,24 +362,10 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             if bufs.dots.len() < mb_dots_len {
                 bufs.dots.resize(mb_dots_len, 0.0);
             }
-            #[cfg(feature = "mkl-fp16")]
-            {
-                if bufs.p_data_f16.len() < mb_pd_len {
-                    bufs.p_data_f16.resize(mb_pd_len, half::f16::ZERO);
-                }
-            }
-
             // Destructure to allow simultaneous mutable borrows of different fields.
-            #[cfg(not(feature = "mkl-fp16"))]
             let StripeBuffers {
                 ref mut p_data,
                 ref mut dots,
-            } = *bufs;
-            #[cfg(feature = "mkl-fp16")]
-            let StripeBuffers {
-                ref mut p_data,
-                ref mut dots,
-                ref mut p_data_f16,
             } = *bufs;
 
             // Fused distance + top-k: compute distance AND track top-k in single pass.
@@ -413,7 +374,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             let mut top: [(u32, f32); 16] = [(u32::MAX, f32::MAX); 16];
 
             // Outer loop over mini-batches inside the stripe. Each mini-batch:
-            //  1. Gather mb rows of p_data (and p_data_f16 if MKL path)
+            //  1. Gather mb rows of p_data (f16→f32 via as_f32_into)
             //  2. One GEMM call producing dots[..mb*nl]
             //  3. Top-k pass over mb rows — dots stays in L2 throughout
             let mut mb_start = 0usize;
@@ -421,49 +382,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 let mb = (sn - mb_start).min(MINI_BATCH);
                 let mb_points = &stripe_points[mb_start..mb_start + mb];
 
-                // GEMM: dots[i * nl + j] = dot(point_i, leader_j) for i in 0..mb.
-                // MKL path uses f16f16f32 directly; faer path needs f32 inputs.
-                #[cfg(feature = "mkl-fp16")]
-                if use_mkl_fp16 {
-                    let data_f16: &[half::f16] = unsafe {
-                        // SAFETY: T is half::f16 (checked via TypeId), same layout.
-                        std::slice::from_raw_parts(
-                            data.as_ptr() as *const half::f16,
-                            data.len(),
-                        )
-                    };
-                    let p_f16 = &mut p_data_f16[..mb * ndims];
-                    for (i, &idx) in mb_points.iter().enumerate() {
-                        let src = &data_f16
-                            [idx as usize * ndims..(idx as usize + 1) * ndims];
-                        p_f16[i * ndims..(i + 1) * ndims].copy_from_slice(src);
-                    }
-                    let dots_mb = &mut dots[..mb * nl];
-                    crate::gemm::mkl_f16f16f32_abt(
-                        p_f16, mb, ndims, &l_data_f16, nl, dots_mb,
-                    );
-                    // L2/Cosine also need f32 p_data for norm computation.
-                    if needs_p_data_f32 {
-                        let p32 = &mut p_data[..mb * ndims];
-                        for (i, &idx) in mb_points.iter().enumerate() {
-                            let src = &data
-                                [idx as usize * ndims..(idx as usize + 1) * ndims];
-                            T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
-                                .expect("f32 conversion");
-                        }
-                    }
-                } else {
-                    let p32 = &mut p_data[..mb * ndims];
-                    for (i, &idx) in mb_points.iter().enumerate() {
-                        let src = &data
-                            [idx as usize * ndims..(idx as usize + 1) * ndims];
-                        T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
-                            .expect("f32 conversion");
-                    }
-                    let dots_mb = &mut dots[..mb * nl];
-                    crate::gemm::sgemm_abt(p32, mb, ndims, &l_data, nl, dots_mb);
-                }
-                #[cfg(not(feature = "mkl-fp16"))]
+                // Gather + GEMM: dots[i * nl + j] = dot(point_i, leader_j) for i in 0..mb.
                 {
                     let p32 = &mut p_data[..mb * ndims];
                     for (i, &idx) in mb_points.iter().enumerate() {
