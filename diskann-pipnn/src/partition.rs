@@ -271,6 +271,8 @@ use std::cell::RefCell;
 struct StripeBuffers {
     p_data: Vec<f32>,
     dots: Vec<f32>,
+    #[cfg(feature = "mkl-fp16")]
+    p_data_f16: Vec<half::f16>,
 }
 
 impl StripeBuffers {
@@ -278,6 +280,8 @@ impl StripeBuffers {
         Self {
             p_data: Vec::new(),
             dots: Vec::new(),
+            #[cfg(feature = "mkl-fp16")]
+            p_data_f16: Vec::new(),
         }
     }
 }
@@ -291,7 +295,7 @@ thread_local! {
 /// Assign each point to its `fanout` nearest leaders using native SIMD distance.
 /// Point-by-point: no large temporary matrix, works directly on native type T.
 /// All indices are u32 global IDs. Returns per-leader clusters as Vec<Vec<u32>>.
-fn assign_to_leaders<T: VectorRepr + Send + Sync>(
+fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     data: &[T],
     ndims: usize,
     points: &[u32],
@@ -312,6 +316,23 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
         T::as_f32_into(src, &mut l_data[i * ndims..(i + 1) * ndims]).expect("f32 conversion");
     }
 
+    // Native fp16 path: also extract leaders as raw f16 (zero-cost copy when T = f16).
+    #[cfg(feature = "mkl-fp16")]
+    let use_mkl_fp16 = std::any::TypeId::of::<T>() == std::any::TypeId::of::<half::f16>();
+    #[cfg(feature = "mkl-fp16")]
+    let l_data_f16: Vec<half::f16> = if use_mkl_fp16 {
+        // SAFETY: T is half::f16 (checked via TypeId), same layout.
+        let data_f16: &[half::f16] = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const half::f16, data.len())
+        };
+        let mut buf = vec![half::f16::ZERO; nl * ndims];
+        for (i, &idx) in leaders.iter().enumerate() {
+            let src = &data_f16[idx as usize * ndims..(idx as usize + 1) * ndims];
+            buf[i * ndims..(i + 1) * ndims].copy_from_slice(src);
+        }
+        buf
+    } else { Vec::new() };
+
     // Precompute leader norms for L2/Cosine.
     let l_norms: Vec<f32> = match metric {
         Metric::L2 => l_data
@@ -325,12 +346,24 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
         Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
     };
 
+    // L2/Cosine need f32 point data for norm computation even in MKL path.
+    #[cfg(feature = "mkl-fp16")]
+    let needs_p_data_f32 = matches!(metric, Metric::L2 | Metric::Cosine);
+
     // Flat assignments.
     let mut assignments = vec![0u32; np * num_assign];
 
-    // 16MB dots output fits in cache for the top-k scan.
+    // Outer stripe size: granularity for rayon parallelism only.
+    // We mini-batch INSIDE the stripe so the dots tile stays L2-resident.
     let stripe: usize =
         ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(1, np);
+
+    // Mini-batch size for fused GEMM + top-k. Sized so dots tile (MB × nl × 4 bytes)
+    // stays in private L2 (~2 MB per core): MB ≤ 2 MB / (nl × 4). Pin to 128
+    // when nl ≤ 4096 — gives 2 MB tile ceiling at nl=4096 and good GEMM
+    // throughput per call. Microbench (gemm_bw_bench, c4-48 Granite Rapids):
+    // 1.5-1.85× at T=24-48 vs full-stripe naive at all tested PiPNN shapes.
+    const MINI_BATCH: usize = 128;
 
     // Small clusters: run single-threaded (no rayon overhead).
     // Large clusters: parallel stripes.
@@ -343,49 +376,114 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
             let sn = end - start;
             let stripe_points = &points[start..end];
 
-            // Ensure buffers are large enough (only zeroes on first use / growth).
-            let pd_len = sn * ndims;
-            if bufs.p_data.len() < pd_len {
-                bufs.p_data.resize(pd_len, 0.0);
+            // Buffers sized for one MINI_BATCH only (not full stripe). Was sn*nl*4 = 16 MB
+            // for dots, which spilled to DRAM under T=24+; now ≤ MINI_BATCH*nl*4 ≤ 2 MB
+            // stays in private L2.
+            let mb_pd_len = MINI_BATCH * ndims;
+            if bufs.p_data.len() < mb_pd_len {
+                bufs.p_data.resize(mb_pd_len, 0.0);
             }
-            let dots_len = sn * nl;
-            if bufs.dots.len() < dots_len {
-                bufs.dots.resize(dots_len, 0.0);
+            let mb_dots_len = MINI_BATCH * nl;
+            if bufs.dots.len() < mb_dots_len {
+                bufs.dots.resize(mb_dots_len, 0.0);
+            }
+            #[cfg(feature = "mkl-fp16")]
+            {
+                if bufs.p_data_f16.len() < mb_pd_len {
+                    bufs.p_data_f16.resize(mb_pd_len, half::f16::ZERO);
+                }
             }
 
             // Destructure to allow simultaneous mutable borrows of different fields.
+            #[cfg(not(feature = "mkl-fp16"))]
             let StripeBuffers {
                 ref mut p_data,
                 ref mut dots,
-                ..
+            } = *bufs;
+            #[cfg(feature = "mkl-fp16")]
+            let StripeBuffers {
+                ref mut p_data,
+                ref mut dots,
+                ref mut p_data_f16,
             } = *bufs;
 
-            // Gather stripe to f32 (overwrites p_data — prior contents don't matter).
-            let p_data = &mut p_data[..pd_len];
-            for (i, &idx) in stripe_points.iter().enumerate() {
-                let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
-                T::as_f32_into(src, &mut p_data[i * ndims..(i + 1) * ndims])
-                    .expect("f32 conversion");
-            }
-
-            // GEMM: dots[i * nl + j] = dot(point_i, leader_j).
-            // faer uses Accum::Replace — overwrites output, no pre-zero needed.
-            let dots = &mut dots[..dots_len];
-            crate::gemm::sgemm_abt(p_data, sn, ndims, &l_data, nl, dots);
-
             // Fused distance + top-k: compute distance AND track top-k in single pass.
-            // Keeps hot top-k array in registers. Extra memory pass for separate
-            // distance array was benchmarked and found 23% slower due to bandwidth.
+            // Keeps hot top-k array in registers.
             debug_assert!(num_assign <= 16, "top-k tracker limited to 16");
             let mut top: [(u32, f32); 16] = [(u32::MAX, f32::MAX); 16];
 
-            for i in 0..sn {
-                let dot_row = &dots[i * nl..(i + 1) * nl];
+            // Outer loop over mini-batches inside the stripe. Each mini-batch:
+            //  1. Gather mb rows of p_data (and p_data_f16 if MKL path)
+            //  2. One GEMM call producing dots[..mb*nl]
+            //  3. Top-k pass over mb rows — dots stays in L2 throughout
+            let mut mb_start = 0usize;
+            while mb_start < sn {
+                let mb = (sn - mb_start).min(MINI_BATCH);
+                let mb_points = &stripe_points[mb_start..mb_start + mb];
 
-                for t in top[..num_assign].iter_mut() {
-                    *t = (u32::MAX, f32::MAX);
+                // GEMM: dots[i * nl + j] = dot(point_i, leader_j) for i in 0..mb.
+                // MKL path uses f16f16f32 directly; faer path needs f32 inputs.
+                #[cfg(feature = "mkl-fp16")]
+                if use_mkl_fp16 {
+                    let data_f16: &[half::f16] = unsafe {
+                        // SAFETY: T is half::f16 (checked via TypeId), same layout.
+                        std::slice::from_raw_parts(
+                            data.as_ptr() as *const half::f16,
+                            data.len(),
+                        )
+                    };
+                    let p_f16 = &mut p_data_f16[..mb * ndims];
+                    for (i, &idx) in mb_points.iter().enumerate() {
+                        let src = &data_f16
+                            [idx as usize * ndims..(idx as usize + 1) * ndims];
+                        p_f16[i * ndims..(i + 1) * ndims].copy_from_slice(src);
+                    }
+                    let dots_mb = &mut dots[..mb * nl];
+                    crate::gemm::mkl_f16f16f32_abt(
+                        p_f16, mb, ndims, &l_data_f16, nl, dots_mb,
+                    );
+                    // L2/Cosine also need f32 p_data for norm computation.
+                    if needs_p_data_f32 {
+                        let p32 = &mut p_data[..mb * ndims];
+                        for (i, &idx) in mb_points.iter().enumerate() {
+                            let src = &data
+                                [idx as usize * ndims..(idx as usize + 1) * ndims];
+                            T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
+                                .expect("f32 conversion");
+                        }
+                    }
+                } else {
+                    let p32 = &mut p_data[..mb * ndims];
+                    for (i, &idx) in mb_points.iter().enumerate() {
+                        let src = &data
+                            [idx as usize * ndims..(idx as usize + 1) * ndims];
+                        T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
+                            .expect("f32 conversion");
+                    }
+                    let dots_mb = &mut dots[..mb * nl];
+                    crate::gemm::sgemm_abt(p32, mb, ndims, &l_data, nl, dots_mb);
                 }
-                let threshold_idx = num_assign - 1;
+                #[cfg(not(feature = "mkl-fp16"))]
+                {
+                    let p32 = &mut p_data[..mb * ndims];
+                    for (i, &idx) in mb_points.iter().enumerate() {
+                        let src = &data
+                            [idx as usize * ndims..(idx as usize + 1) * ndims];
+                        T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
+                            .expect("f32 conversion");
+                    }
+                    let dots_mb = &mut dots[..mb * nl];
+                    crate::gemm::sgemm_abt(p32, mb, ndims, &l_data, nl, dots_mb);
+                }
+
+                for i in 0..mb {
+                    // dots is f32 (both MKL f16f16f32 and faer paths produce f32).
+                    let dot_row = &dots[i * nl..(i + 1) * nl];
+
+                    for t in top[..num_assign].iter_mut() {
+                        *t = (u32::MAX, f32::MAX);
+                    }
+                    let threshold_idx = num_assign - 1;
 
                 match metric {
                     Metric::CosineNormalized => {
@@ -658,10 +756,15 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync>(
                     }
                 }
 
-                let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
-                for k in 0..num_assign {
-                    out[k] = top[k].0;
+                    let global_i = mb_start + i;
+                    let out = &mut assign_chunk
+                        [global_i * num_assign..(global_i + 1) * num_assign];
+                    for k in 0..num_assign {
+                        out[k] = top[k].0;
+                    }
                 }
+
+                mb_start += mb;
             }
         });
     };
