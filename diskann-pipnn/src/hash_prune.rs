@@ -483,11 +483,14 @@ impl HashPrune {
         max_degree: usize,
     ) -> Self {
         let t1 = std::time::Instant::now();
-        // Pre-allocate at l_max capacity (one alloc per reservoir, no growth on push).
-        // Previous Phase 1 used cap=16 which incurred 2 reallocs per reservoir × 10M
-        // reservoirs = severe glibc malloc-arena contention (kernel spinlock 21%).
+        // Lazy allocation: each reservoir allocates its entry Vec at l_max capacity
+        // on first push, not upfront. Pre-allocating npoints × l_max bytes upfront
+        // is ~7 GB at BigANN 10M scale and adds ~3s of malloc time; spreading the
+        // allocs over insertions is net cheaper on faer. The MKL fp16 path saw
+        // glibc arena contention with this pattern at high thread count
+        // (see pipnn-mkl-fp16 branch — uses `new(l_max)` there).
         let reservoirs = (0..npoints)
-            .map(|_| Mutex::new(HashPruneReservoir::new(l_max)))
+            .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
         tracing::debug!(
             elapsed_secs = t1.elapsed().as_secs_f64(),
