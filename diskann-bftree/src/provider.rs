@@ -2031,11 +2031,19 @@ mod tests {
         let index = create_quant_index();
         let ctx = &DefaultContext;
 
-        let mut counter = 0.0f32;
         let data = Matrix::new(
-            Init(move || {
-                counter += 1.0;
-                counter
+            Init({
+                let mut row = 0usize;
+                let mut col = 0usize;
+                move || {
+                    let val = row as f32;
+                    col += 1;
+                    if col == 5 {
+                        col = 0;
+                        row += 1;
+                    }
+                    val
+                }
             }),
             15,
             5,
@@ -2066,6 +2074,13 @@ mod tests {
             res.result_count, 5,
             "there are 15 points and we're asking for 5, we expect 5"
         );
+        let neighbor_ids: Vec<u32> = neighbors.iter().map(|n| n.id).collect();
+        for expected in 1u32..=5 {
+            assert!(
+                neighbor_ids.contains(&expected),
+                "expected id {expected} in results, got {neighbor_ids:?}"
+            );
+        }
     }
 
     #[tokio::test]
