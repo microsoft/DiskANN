@@ -487,29 +487,59 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  miri:
+  # LLVM IR bloat check: compare monomorphization cost against baseline.
+  # This job is not part of the required CI gate, so it won't block PR merges.
+  llvm-lines:
+    if: github.event_name == 'pull_request'
     needs: basics
-    name: miri-test
-    # This step is slow, so it only runs after a PR merge to avoid slowing down pre-merge checks.
-    if: ${{ github.event_name == 'push' }}
+    name: LLVM Lines Regression Check
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      LLVM_LINES_GROWTH_THRESHOLD: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout current branch
+        uses: actions/checkout@v4
         with:
-          lfs: true
+          path: pr
 
-      - name: Install Rust nightly with miri
-        run: rustup toolchain install nightly --component miri
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+      - name: Checkout base ref
+        uses: actions/checkout@v4
         with:
-          tool: cargo-nextest
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Install Rust
+        shell: bash
+        run: rustup show
+        working-directory: pr
+
+      - name: Install cargo-llvm-lines
+        run: cargo install cargo-llvm-lines --locked
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            pr -> target
+            baseline -> target
 
-      - name: miri
-        run: cargo +nightly miri nextest run --locked --package diskann-quantization
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - name: Generate baseline LLVM lines
+        working-directory: baseline
+        run: cargo llvm-lines --package diskann-benchmark --all-features --release | head -100 | tee ../baseline-llvm-lines.txt
+
+      - name: Generate current LLVM lines
+        working-directory: pr
+        run: cargo llvm-lines --package diskann-benchmark --all-features --release | head -100 | tee ../current-llvm-lines.txt
+
+      - name: Compare LLVM lines
+        run: bash pr/.github/scripts/compare-llvm-lines.sh baseline-llvm-lines.txt current-llvm-lines.txt
+
+      - name: Check LLVM lines growth threshold
+        run: |
+          baseline_total=$(awk '/\(TOTAL\)/{print $1}' baseline-llvm-lines.txt)
+          current_total=$(awk '/\(TOTAL\)/{print $1}' current-llvm-lines.txt)
+          growth=$(( (current_total - baseline_total) * 100 / baseline_total ))
+
+          if [ "$growth" -gt "$LLVM_LINES_GROWTH_THRESHOLD" ]; then
+            echo "::error::LLVM IR grew ${growth}% ($baseline_total → $current_total lines), threshold is ${LLVM_LINES_GROWTH_THRESHOLD}%"
+            exit 1
+          fi

@@ -8,15 +8,14 @@ use std::{fmt, io::Write};
 
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     output::Output,
     utils::{
-        datatype::{DataType, Type},
+        datatype::AsDataType,
         fmt::Table,
         num::{relative_change, NonNegativeFinite},
     },
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input,
+    Benchmark, Checker, Checkpoint, Input, Registry,
 };
 use diskann_providers::storage::FileStorageProvider;
 use half::f16;
@@ -53,17 +52,17 @@ where
 
 impl<T> Benchmark for DiskIndex<T>
 where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
+    T: VectorRepr + AsDataType,
 {
     type Input = DiskIndexOperation;
     type Output = DiskIndexStats;
 
     fn try_match(&self, input: &DiskIndexOperation) -> Result<MatchScore, FailureScore> {
-        match &input.source {
-            DiskIndexSource::Load(load) => Type::<T>::try_match(&load.data_type),
-            DiskIndexSource::Build(build) => Type::<T>::try_match(&build.data_type),
-        }
+        let data_type = match &input.source {
+            DiskIndexSource::Load(load) => load.data_type,
+            DiskIndexSource::Build(build) => build.data_type,
+        };
+        crate::utils::match_data_type::<T>(data_type)
     }
 
     fn description(
@@ -72,11 +71,14 @@ where
         input: Option<&DiskIndexOperation>,
     ) -> std::fmt::Result {
         match input {
-            Some(arg) => match &arg.source {
-                DiskIndexSource::Load(load) => Type::<T>::description(f, Some(&load.data_type)),
-                DiskIndexSource::Build(build) => Type::<T>::description(f, Some(&build.data_type)),
-            },
-            None => Type::<T>::description(f, None::<&DataType>),
+            Some(arg) => {
+                let desc = match &arg.source {
+                    DiskIndexSource::Load(load) => T::describe(load.data_type),
+                    DiskIndexSource::Build(build) => T::describe(build.data_type),
+                };
+                write!(f, "{}", desc)
+            }
+            None => write!(f, "{}", T::DATA_TYPE),
         }
     }
 
@@ -121,11 +123,12 @@ where
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    benchmarks.register_regression("disk-index-f32", DiskIndex::<f32>::new());
-    benchmarks.register_regression("disk-index-f16", DiskIndex::<f16>::new());
-    benchmarks.register_regression("disk-index-u8", DiskIndex::<u8>::new());
-    benchmarks.register_regression("disk-index-i8", DiskIndex::<i8>::new());
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register_regression("disk-index-f32", DiskIndex::<f32>::new())?;
+    registry.register_regression("disk-index-f16", DiskIndex::<f16>::new())?;
+    registry.register_regression("disk-index-u8", DiskIndex::<u8>::new())?;
+    registry.register_regression("disk-index-i8", DiskIndex::<i8>::new())?;
+    Ok(())
 }
 
 /////////////////////////
@@ -162,25 +165,22 @@ impl DiskIndexTolerance {
     }
 }
 
-impl CheckDeserialization for DiskIndexTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for DiskIndexTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         Self::tag()
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const DEFAULT: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite value"),
@@ -190,7 +190,7 @@ impl Input for DiskIndexTolerance {
             Err(_) => panic!("use a non-negative finite value"),
         };
 
-        Ok(serde_json::to_value(DiskIndexTolerance {
+        DiskIndexTolerance {
             build_time_regression: DEFAULT,
             qps_regression: DEFAULT,
             recall_regression: RECALL,
@@ -198,7 +198,7 @@ impl Input for DiskIndexTolerance {
             mean_comps_regression: DEFAULT,
             mean_latency_regression: DEFAULT,
             p95_latency_regression: DEFAULT,
-        })?)
+        }
     }
 }
 
@@ -297,8 +297,7 @@ fn check_metric(
 
 impl<T> Regression for DiskIndex<T>
 where
-    T: VectorRepr + 'static,
-    Type<T>: DispatchRule<DataType>,
+    T: VectorRepr + AsDataType,
 {
     type Tolerances = DiskIndexTolerance;
     type Pass = DiskIndexCheckResult;

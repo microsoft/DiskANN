@@ -155,10 +155,7 @@ pub(crate) fn seed_pivot_table(config: TableConfig) -> FixedChunkPQTable {
     }
 
     assert_eq!(pivots.len(), config.dim * config.num_pivots);
-
-    let centroid = vec![0.0f32; config.dim];
-
-    FixedChunkPQTable::new(config.dim, pivots.into(), centroid.into(), offsets.into()).unwrap()
+    FixedChunkPQTable::new(config.dim, pivots.into(), offsets.into()).unwrap()
 }
 
 /// Generate a random PQ code spanning the requested number of pivots and chunks.
@@ -203,9 +200,6 @@ pub(super) fn test_l2_inner<'a, F, R>(
 {
     for _ in 0..num_trials {
         let input_query: Vec<f32> = f32::generate(config.dim, rng);
-        let mut input_f32 = input_query.clone();
-
-        table.preprocess_query(&mut input_f32);
 
         let computer = create(table, &input_query);
         for _ in 0..num_trials {
@@ -214,7 +208,7 @@ pub(super) fn test_l2_inner<'a, F, R>(
                 generate_expected_vector(&code, table.get_chunk_offsets(), config.start_value);
 
             let got = computer.evaluate_similarity(&code);
-            let expected = SquaredL2::evaluate(input_f32.as_slice(), expected_vector.as_slice());
+            let expected = SquaredL2::evaluate(input_query.as_slice(), expected_vector.as_slice());
 
             // This doesn't need to be exact due to rounding differences.
             assert_relative_eq!(

@@ -6,11 +6,9 @@
 use half::f16;
 use serde::{Deserialize, Serialize};
 
-use crate::dispatcher::{DispatchRule, FailureScore, MatchScore};
-
 /// An enum representation for common DiskANN data types.
 ///
-/// [`DispatchRule]`s are defined for each type here and it's corresponding [`Type`].
+/// See also: [`AsDataType`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
@@ -56,78 +54,96 @@ impl std::fmt::Display for DataType {
     }
 }
 
-/// Lifting the enum `DataType` into the Rust type domain.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Type<T>(std::marker::PhantomData<T>);
+/// Associate a primitive type `T` with a [`DataType`] enum variant.
+pub trait AsDataType: 'static {
+    /// The [`DataType`] this type is associated with.
+    const DATA_TYPE: DataType;
 
-pub const MATCH_FAIL: FailureScore = FailureScore(1000);
+    /// Return `true` only if `data_type == Self::DATA_TYPE`.
+    fn is_match(data_type: DataType) -> bool {
+        data_type == Self::DATA_TYPE
+    }
 
-macro_rules! dispatch_rule {
-    ($type:ty, $var:ident) => {
-        impl DispatchRule<DataType> for Type<$type> {
-            type Error = std::convert::Infallible;
+    /// Return a [`std::fmt::Display`] compatible struct describing the match with `data_type`.
+    /// ```
+    /// use diskann_benchmark_runner::utils::datatype::{DataType, AsDataType};
+    ///
+    /// // Matched data type.
+    /// let desc = f32::describe(DataType::Float32);
+    /// assert!(desc.is_match());
+    /// assert_eq!(desc.to_string(), "successful match");
+    ///
+    /// // Mismatched data type.
+    /// let desc = f32::describe(DataType::Float16);
+    /// assert!(!desc.is_match());
+    /// assert_eq!(desc.to_string(), "expected \"float32\" but found \"float16\"");
+    /// ```
+    fn describe(data_type: DataType) -> Describe {
+        if data_type == Self::DATA_TYPE {
+            Describe(DescribeInner::Match)
+        } else {
+            Describe(DescribeInner::Mismatch {
+                expected: Self::DATA_TYPE,
+                got: data_type,
+            })
+        }
+    }
+}
 
-            fn try_match(from: &DataType) -> Result<MatchScore, FailureScore> {
-                match from {
-                    DataType::$var => Ok(MatchScore(0)),
-                    _ => Err(MATCH_FAIL),
-                }
-            }
+/// A [`std::fmt::Display`] compatible result for [`AsDataType::describe`].
+#[derive(Debug, Clone, Copy)]
+pub struct Describe(DescribeInner);
 
-            fn convert(from: DataType) -> Result<Self, Self::Error> {
-                assert!(matches!(from, DataType::$var), "invalid dispatch");
-                Ok(Self::default())
-            }
+impl Describe {
+    /// Return `true` if the data type match was successful.
+    pub fn is_match(&self) -> bool {
+        matches!(self.0, DescribeInner::Match)
+    }
+}
 
-            fn description(
-                f: &mut std::fmt::Formatter<'_>,
-                v: Option<&DataType>,
-            ) -> std::fmt::Result {
-                match v {
-                    Some(v) => match Self::try_match(v) {
-                        Ok(_) => write!(f, "successful match"),
-                        Err(_) => write!(
-                            f,
-                            "expected \"{}\" but found {:?}",
-                            stringify!($var).to_lowercase(),
-                            v.as_str()
-                        ),
-                    },
-                    None => write!(f, "{}", stringify!($var).to_lowercase()),
-                }
+impl std::fmt::Display for Describe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DescribeInner {
+    Match,
+    Mismatch { expected: DataType, got: DataType },
+}
+
+impl std::fmt::Display for DescribeInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Match => write!(f, "successful match"),
+            Self::Mismatch { expected, got } => {
+                write!(f, "expected \"{}\" but found \"{}\"", expected, got)
             }
         }
+    }
+}
 
-        impl DispatchRule<&DataType> for Type<$type> {
-            type Error = std::convert::Infallible;
-            fn try_match(from: &&DataType) -> Result<MatchScore, FailureScore> {
-                Self::try_match(*from)
-            }
-            fn convert(from: &DataType) -> Result<Self, Self::Error> {
-                Self::convert(*from)
-            }
-            fn description(
-                f: &mut std::fmt::Formatter<'_>,
-                v: Option<&&DataType>,
-            ) -> std::fmt::Result {
-                Self::description(f, v.map(|v| *v))
-            }
+macro_rules! as_data_type {
+    ($type:ty, $var:ident) => {
+        impl AsDataType for $type {
+            const DATA_TYPE: DataType = DataType::$var;
         }
     };
 }
 
-dispatch_rule!(f64, Float64);
-dispatch_rule!(f32, Float32);
-dispatch_rule!(f16, Float16);
-dispatch_rule!(u8, UInt8);
-dispatch_rule!(u16, UInt16);
-dispatch_rule!(u32, UInt32);
-dispatch_rule!(u64, UInt64);
-dispatch_rule!(i8, Int8);
-dispatch_rule!(i16, Int16);
-dispatch_rule!(i32, Int32);
-dispatch_rule!(i64, Int64);
-dispatch_rule!(bool, Bool);
+as_data_type!(f64, Float64);
+as_data_type!(f32, Float32);
+as_data_type!(f16, Float16);
+as_data_type!(u8, UInt8);
+as_data_type!(u16, UInt16);
+as_data_type!(u32, UInt32);
+as_data_type!(u64, UInt64);
+as_data_type!(i8, Int8);
+as_data_type!(i16, Int16);
+as_data_type!(i32, Int32);
+as_data_type!(i64, Int64);
+as_data_type!(bool, Bool);
 
 ///////////
 // Tests //
@@ -136,8 +152,6 @@ dispatch_rule!(bool, Bool);
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::dispatcher::{Description, Why};
 
     #[test]
     fn test_as_str() {
@@ -164,34 +178,28 @@ mod tests {
 
     fn test_description<T>(typename: &str)
     where
-        Type<T>: DispatchRule<DataType>,
+        T: AsDataType,
     {
-        assert_eq!(
-            Description::<DataType, Type<T>>::new().to_string(),
-            typename
-        );
+        assert_eq!(T::DATA_TYPE.as_str(), typename);
     }
 
     fn test_dispatch_fail<T>(datatype: DataType, typename: &str)
     where
-        Type<T>: DispatchRule<DataType>,
+        T: AsDataType,
     {
-        assert_eq!(<Type<T>>::try_match(&datatype), Err(MATCH_FAIL));
+        assert!(!T::is_match(datatype));
         assert_eq!(
-            Why::<DataType, Type<T>>::new(&datatype).to_string(),
+            T::describe(datatype).to_string(),
             format!("expected \"{}\" but found \"{}\"", typename, datatype)
         );
     }
 
     fn test_dispatch_success<T>(datatype: DataType)
     where
-        Type<T>: DispatchRule<DataType>,
+        T: AsDataType,
     {
-        assert_eq!(<Type<T>>::try_match(&datatype), Ok(MatchScore(0)));
-        assert_eq!(
-            Why::<DataType, Type<T>>::new(&datatype).to_string(),
-            "successful match",
-        );
+        assert!(T::is_match(datatype));
+        assert_eq!(T::describe(datatype).to_string(), "successful match",);
     }
 
     macro_rules! type_test {
