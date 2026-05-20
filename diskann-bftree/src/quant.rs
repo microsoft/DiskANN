@@ -156,6 +156,7 @@ impl QuantVectorProvider {
     }
 
     /// Return the quant vector at index `i`.
+    #[cfg(test)]
     pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<u8>, AccessError> {
         let mut value = vec![0u8; self.quantizer.bytes()];
         self.get_vector_into(i, &mut value)?;

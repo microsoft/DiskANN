@@ -27,7 +27,7 @@ use diskann::{
             InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
         strategy::{FullPrecision, Quantized},
-        workingset::{self, map, Map},
+        workingset::{map, Map},
         AdjacencyList, SearchOutputBuffer,
     },
     neighbor::Neighbor,
@@ -245,7 +245,7 @@ where
     ///
     /// # Type Constraints
     /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
-    pub fn new_empty<TQ>(params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
+    fn new_empty<TQ>(params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
     where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
@@ -1129,29 +1129,6 @@ impl<'short> diskann_utils::Reborrow<'short> for OwnedOpaque {
 impl<'a> From<Opaque<'a>> for OwnedOpaque {
     fn from(value: Opaque<'a>) -> Self {
         OwnedOpaque(value.to_vec())
-    }
-}
-
-// Pass-through view — reads quantized vectors directly from the provider.
-impl<T> workingset::View<u32> for &QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type ElementRef<'a> = Opaque<'a>;
-    type Element<'a>
-        = OwnedOpaque
-    where
-        Self: 'a;
-
-    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
-        match self.provider.quant_vectors.get_vector_sync(id.into_usize()) {
-            Ok(v) => Some(OwnedOpaque(v)),
-            Err(RankedError::Transient(_)) => None,
-            Err(RankedError::Error(_)) => {
-                // View::get returns Option — can't propagate; treat as missing.
-                None
-            }
-        }
     }
 }
 
