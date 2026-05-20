@@ -97,9 +97,9 @@ impl Provider {
     }
 
     /// Snapshot of the per-provider counters.
-    pub fn metrics(&self) -> Metrics {
-        Metrics {
-            get_element: self.get_element.value(),
+    pub fn metrics(&self) -> ElementCounter {
+        ElementCounter {
+            count: self.get_element.value(),
         }
     }
 
@@ -112,13 +112,13 @@ impl Provider {
 /// Counters tracked by [`Provider`].
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
-pub struct Metrics {
+pub struct ElementCounter {
     /// The number of times any [`Visitor`] yielded an element.
-    pub get_element: usize,
+    pub count: usize,
 }
 
 #[cfg(test)]
-crate::test::cmp::verbose_eq!(Metrics { get_element });
+crate::test::cmp::verbose_eq!(ElementCounter { count });
 
 /////////////
 // Context //
@@ -332,6 +332,7 @@ impl HasId for Visitor<'_> {
 
 impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Visitor<'_> {
     type ElementRef<'a> = &'a [f32];
+    type Id = <Self as HasId>::Id;
     type Error = AccessError;
 
     fn distances_unordered<F>(
@@ -408,6 +409,7 @@ impl Strategy {
 
 impl SearchStrategy<Provider, &[f32]> for Strategy {
     type ElementRef<'a> = &'a [f32];
+    type Id = u32;
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
     type QueryComputerError = StrategyError;
     type Visitor<'a> = Visitor<'a>;

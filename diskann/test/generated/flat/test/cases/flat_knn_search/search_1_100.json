@@ -15,7 +15,7 @@
       ],
       "k": 1,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         -1.0
@@ -50,7 +50,7 @@
       ],
       "k": 4,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         -1.0
@@ -112,7 +112,7 @@
       ],
       "k": 10,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         -1.0
@@ -144,7 +144,7 @@
       ],
       "k": 1,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         99.0
@@ -179,7 +179,7 @@
       ],
       "k": 4,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         99.0
@@ -241,7 +241,7 @@
       ],
       "k": 10,
       "metrics": {
-        "get_element": 100
+        "count": 100
       },
       "query": [
         99.0

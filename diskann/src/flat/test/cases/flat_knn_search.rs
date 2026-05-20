@@ -15,7 +15,7 @@ use crate::{
         FlatIndex,
         test::{
             harness,
-            provider::{self as flat_provider, Metrics, Strategy},
+            provider::{self as flat_provider, ElementCounter, Strategy},
         },
     },
     graph::test::synthetic::Grid,
@@ -72,7 +72,7 @@ struct FlatKnnBaseline {
     result_count: usize,
 
     /// Per-provider metrics observed for this row (see [`Metrics`]).
-    metrics: Metrics,
+    metrics: ElementCounter,
 }
 
 verbose_eq!(FlatKnnBaseline {
@@ -125,14 +125,14 @@ fn run_row(
     );
 
     let metrics_after = index.provider().metrics();
-    let metrics = Metrics {
-        get_element: metrics_after.get_element - metrics_before.get_element,
+    let metrics = ElementCounter {
+        count: metrics_after.count - metrics_before.count,
     };
     // `get_element` is incremented only by the [`Visitor`] used during `knn_search`;
     // the brute-force oracle iterates `Provider::items()` directly and does not touch
     // the visitor, so we expect exactly one scan's worth of increments per row.
     assert_eq!(
-        metrics.get_element, len,
+        metrics.count, len,
         "expected exactly one scan (from knn_search) to increment get_element",
     );
 

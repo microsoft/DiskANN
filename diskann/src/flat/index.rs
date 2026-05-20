@@ -14,7 +14,7 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     flat::{DistancesUnordered, SearchStrategy},
     graph::SearchOutputBuffer,
-    neighbor::{Neighbor, NeighborPriorityQueue},
+    neighbor::{Neighbor, NeighborPriorityQueue, NeighborPriorityQueueIdType},
     provider::DataProvider,
 };
 
@@ -61,8 +61,9 @@ impl<P: DataProvider> FlatIndex<P> {
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
         S: SearchStrategy<P, T>,
+        S::Id: NeighborPriorityQueueIdType,
         T: Send + Sync,
-        OB: SearchOutputBuffer<P::InternalId> + Send + ?Sized,
+        OB: SearchOutputBuffer<S::Id> + Send + ?Sized,
     {
         async move {
             let mut visitor = strategy
@@ -91,9 +92,9 @@ impl<P: DataProvider> FlatIndex<P> {
     }
 }
 
-/////////////
-// Tests ///
-/////////////
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod tests {

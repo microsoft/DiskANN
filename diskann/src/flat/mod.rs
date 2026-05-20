@@ -23,11 +23,9 @@
 //! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
 //!
 pub mod index;
-pub mod iterator;
 pub mod strategy;
 
 pub use index::{FlatIndex, SearchStats};
-pub use iterator::{FlatIterator, Iterated};
 pub use strategy::{DistancesUnordered, SearchStrategy};
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 |------------------|--------------------------------|
 | **Authors**      | Aditya Krishnan, Alex Razumov, Dongliang Wu                |
 | **Created**      | 2026-04-24                     |
-| **Updated**      | 2026-05-18                     |
+| **Updated**      | 2026-05-20                     |
 
 ## 1. Motivation
 
@@ -29,7 +29,7 @@ The problem-statement here is simple: provide first-class support for sequential
 
 ## 2. Proposal
 
-The only shared surface between graph and flat search are the `DataProvider` (for id-mapping / context) and `HasId`.
+The only shared surface between graph and flat search is the `DataProvider` (for id-mapping / context).
 
 The module exposes three layers:
 
@@ -39,9 +39,6 @@ The module exposes three layers:
 | Factory | `SearchStrategy<P, T>` | Per-query visitor + computer construction |
 | Algorithm | `FlatIndex::knn_search` | Brute-force top-k |
 
-An opt-in `FlatIterator` trait plus the `Iterated<I>` adapter exist for backends that
-naturally expose element-at-a-time iteration.
-
 ### 2.1 `DistancesUnordered<C>` — the core scanning trait
 
 The single required trait for flat search. It is generic over a **computer type** `C`
@@ -49,11 +46,12 @@ rather than a query type — the algorithm supplies a pre-built computer and the
 drives the scan.
 
 ```rust
-pub trait DistancesUnordered<C>: HasId + Send + Sync
+pub trait DistancesUnordered<C>: Send + Sync
 where
     C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
 {
     type ElementRef<'a>;
+    type Id;
     type Error: ToRanked + Debug + Send + Sync + 'static;
 
     fn distances_unordered<F>(
@@ -62,14 +60,18 @@ where
         f: F,
     ) -> impl SendFuture<Result<(), Self::Error>>
     where
-        F: Send + FnMut(<Self as HasId>::Id, f32);
+        F: Send + FnMut(Self::Id, f32);
 }
 ```
 
 Key differences from the graph-side `Accessor` path:
 
 - No random access — the visitor drives the entire scan internally.
-- `ElementRef<'a>` lives on `DistancesUnordered` itself (not on a shared `HasElementRef` trait).
+- `ElementRef<'a>` and `Id` live on `DistancesUnordered` itself, decoupling the
+  scan-and-score primitive from `HasId` and from any provider-specific id type. A
+  visitor is free to yield ids derived from but not equal to its provider's
+  `InternalId`. We expect this constraint to go away once we're able to clean up the `VectorId` trait 
+  and its restrictive bounds - i.e. expects id to be scalar-like. 
 
 ### 2.2 `SearchStrategy<P, T>` — per-query factory
 
@@ -81,6 +83,7 @@ where
     P: DataProvider,
 {
     type ElementRef<'a>;
+    type Id;
     type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
         + Send + Sync + 'static;
     type QueryComputerError: StandardError;
@@ -88,7 +91,7 @@ where
     type Visitor<'a>: for<'b> DistancesUnordered<
             Self::QueryComputer,
             ElementRef<'b> = Self::ElementRef<'b>,
-            Id = P::InternalId,
+            Id = Self::Id,
         >
     where Self: 'a, P: 'a;
 
@@ -128,8 +131,9 @@ impl<P: DataProvider> FlatIndex<P> {
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
         S: SearchStrategy<P, T>,
+        S::Id: NeighborPriorityQueueIdType,
         T: Send + Sync,
-        OB: SearchOutputBuffer<P::InternalId> + Send + ?Sized;
+        OB: SearchOutputBuffer<S::Id> + Send + ?Sized;
 }
 ```
 
@@ -141,31 +145,11 @@ Algorithm:
 4. Drain the priority queue into `output` in best-first order.
 
 **No post-processing parameter (yet).** Currently `knn_search` writes
-`(P::InternalId, f32)` directly into the `SearchOutputBuffer`. Once the
-graph-search trait refactor in [PR #1076](https://github.com/microsoft/DiskANN/pull/1076)
+`(S::Id, f32)` directly into the `SearchOutputBuffer`. Once the graph-search
+trait refactor in [PR #1076](https://github.com/microsoft/DiskANN/pull/1076)
 lands, `knn_search` will accept an optional `SearchPostProcess` parameter
 (the same trait graph search uses), enabling id remapping, re-ranking, and
 other transformations as a composable layer.
-
-### 2.4 `FlatIterator` and `Iterated` — convenience adapter
-
-For backends that naturally expose element-at-a-time iteration:
-
-```rust
-pub trait FlatIterator: HasId + Send + Sync {
-    type ElementRef<'a>;
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
-        where Self: 'a;
-    type Error: ToRanked + Debug + Send + Sync + 'static;
-
-    fn next(&mut self)
-        -> impl SendFuture<Result<Option<(Self::Id, Self::Element<'_>)>, Self::Error>>;
-}
-```
-
-`Iterated<I>` wraps any `FlatIterator` and implements `DistancesUnordered<C>` for any
-computer `C` whose `PreprocessedDistanceFunction` target matches the iterator's
-`ElementRef`. The adapter loops `next()`, reborrows each element, and scores it.
 
 #### Call-chain diagram
 
@@ -211,12 +195,11 @@ The design requires implementations to provide `InternalId` / `ExternalId` conve
 This is arguably too restrictive for some flat-index consumers, but avoids introducing a
 second provider trait.
 
-### Expand `Element` to support batched distance computation?
+### Expand `ElementRef` and `QueryComputer` to support batched distance computation?
 
-`FlatIterator` yields one element per `next()` call. An alternative is to yield batches,
-enabling (potentially) better cache utilization. Backends that need this can implement `DistancesUnordered<C>`
-directly with an optimized bulk loop, so the single-element `FlatIterator` path is not a
-bottleneck — it's a convenience default.
+The design for `DistancesUnordered` assumes the computer acts on single vectors. An alternative is to allow the computer to work 
+over batches, enabling (potentially) better cache utilization. Backends that need this can implement `DistancesUnordered<C>`
+directly with an optimized bulk loop. Some refactoring for the bounds on `DistancesUnordered` is needed here.  
 
 ### Intra-query parallelism
 
