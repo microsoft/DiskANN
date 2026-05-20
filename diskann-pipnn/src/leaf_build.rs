@@ -325,7 +325,7 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
                 let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
                 // SAFETY: see preceding block — same source slice and lifetime.
                 let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
-                crate::gemm::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
+                diskann_linalg::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
             }
 
             // 2 + 3. Convert dot row to dist inline + extract top-k per row.
@@ -570,7 +570,7 @@ mod tests {
         // [32 77]
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let mut result = vec![0.0; 4];
-        crate::gemm::sgemm_aat(&a, 2, 3, &mut result);
+        diskann_linalg::sgemm_aat(&a, 2, 3, &mut result);
 
         assert!((result[0] - 14.0).abs() < 1e-6);
         assert!((result[1] - 32.0).abs() < 1e-6);

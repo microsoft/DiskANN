@@ -322,11 +322,56 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
     best_idx
 }
 
+/// Builder-pattern handle for constructing a PiPNN index.
+///
+/// Mirrors the shape of `diskann_disk::build::builder::DiskIndexBuilder` so
+/// callers that work across Vamana and PiPNN can write similar code. For
+/// quick one-shot use the free function [`build_typed`] is equivalent.
+///
+/// ```ignore
+/// let graph = PiPNNBuilder::new(config).build_typed(&data, npoints, ndims)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct PiPNNBuilder {
+    config: PiPNNConfig,
+}
+
+impl PiPNNBuilder {
+    /// Create a builder from the given config. The config is validated on `build_typed`.
+    pub fn new(config: PiPNNConfig) -> Self {
+        Self { config }
+    }
+
+    /// Mutable access to the config — useful for tweaking a tuned-default
+    /// baseline before building.
+    pub fn config_mut(&mut self) -> &mut PiPNNConfig {
+        &mut self.config
+    }
+
+    /// Borrow the config.
+    pub fn config(&self) -> &PiPNNConfig {
+        &self.config
+    }
+
+    /// Build the index from typed vector data, keeping `T` in native form.
+    pub fn build_typed<T: VectorRepr + Send + Sync>(
+        self,
+        data: &[T],
+        npoints: usize,
+        ndims: usize,
+    ) -> PiPNNResult<PiPNNGraph> {
+        build_typed(data, npoints, ndims, &self.config)
+    }
+}
+
 /// Build a PiPNN index from typed vector data.
 ///
 /// Keeps data in its native type T and converts to f32 on-the-fly at each access point,
 /// avoiding a full f32 copy of the dataset.
 /// `data` is a flat slice of `T` in row-major order: npoints x ndims.
+///
+/// See [`PiPNNBuilder`] for a stateful builder API that matches the
+/// `DiskIndexBuilder` pattern used elsewhere in DiskANN.
 pub fn build_typed<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,

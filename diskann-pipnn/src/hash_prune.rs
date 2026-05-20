@@ -9,126 +9,32 @@
 //! Maintains a reservoir of l_max entries per point, keyed by hash bucket.
 //! Effectively order-independent: the hash-keyed eviction makes results stable regardless of insertion order, up to bf16 distance quantization ties (which are rare in practice).
 
-use std::cell::RefCell;
-
 use parking_lot::Mutex;
 
 use crate::rayon_util::ParIterInstalled;
 use diskann::utils::VectorRepr;
-use rand::SeedableRng;
-use rand_distr::{Distribution, StandardNormal};
+use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
+use diskann_vector::lsh::LshSketches;
 use rayon::prelude::*;
 
-/// Precomputed LSH sketches for a set of vectors.
-///
-/// For each vector v, Sketch(v) = [v . H_i for i=0..m] where H_i are random hyperplanes.
-/// Sketches are computed via parallel dot products.
-pub(crate) struct LshSketches {
-    /// Number of hyperplanes (m).
-    num_planes: usize,
-    /// Precomputed sketches: npoints x m, stored row-major.
-    /// sketch[i * m + j] = dot(point_i, hyperplane_j)
-    sketches: Vec<f32>,
-    /// Number of points.
+// LshSketches now lives in diskann-vector::lsh — see that module for the
+// random-hyperplane projection. PiPNN consumes it by passing a `fill_point`
+// closure that does the per-point f16/u8 → f32 conversion lazily, so we
+// don't need a full upfront f32 copy of the dataset.
+
+/// Compute LSH sketches over `data` (row-major `npoints × ndims` of `T`).
+/// Convenience wrapper that wires `VectorRepr::as_f32_into` into
+/// [`LshSketches::new`]'s `fill_point` closure.
+fn sketches_from_data<T: VectorRepr + Send + Sync>(
+    data: &[T],
     npoints: usize,
-}
-
-impl LshSketches {
-    /// Create new LSH sketches for the given data using parallel dot products.
-    ///
-    /// `data` is row-major: npoints x ndims.
-    pub(crate) fn new<T: VectorRepr + Send + Sync>(
-        data: &[T],
-        npoints: usize,
-        ndims: usize,
-        num_planes: usize,
-        seed: u64,
-    ) -> Self {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-
-        // Generate random hyperplanes from standard normal distribution.
-        // Stored as num_planes x ndims (row-major).
-        let hyperplanes: Vec<f32> = (0..num_planes * ndims)
-            .map(|_| StandardNormal.sample(&mut rng))
-            .collect();
-
-        // Compute sketches in parallel using direct dot products.
-        // For tall-thin output (npoints x 12), this is faster than GEMM.
-        let mut sketches = vec![0.0f32; npoints * num_planes];
-
-        sketches
-            .par_chunks_mut(num_planes)
-            .enumerate()
-            .for_each_installed(|(i, sketch_row)| {
-                // Thread-local buffer for T -> f32 conversion.
-                thread_local! {
-                    static SKETCH_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
-                }
-                SKETCH_BUF.with(|cell| {
-                    let mut buf = cell.borrow_mut();
-                    buf.resize(ndims, 0.0);
-                    T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf)
-                        .expect("f32 conversion");
-                    for j in 0..num_planes {
-                        let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
-                        let mut dot = 0.0f32;
-                        for d in 0..ndims {
-                            // SAFETY: `d` is in 0..ndims, buf.len() == ndims (from resize above),
-                            // and plane.len() == ndims (sliced from hyperplanes). Both accesses
-                            // are within bounds.
-                            unsafe {
-                                dot += *buf.get_unchecked(d) * *plane.get_unchecked(d);
-                            }
-                        }
-                        sketch_row[j] = dot;
-                    }
-                });
-            });
-
-        Self {
-            num_planes,
-            sketches,
-            npoints,
-        }
-    }
-
-    /// Compute the hash of candidate c relative to point p.
-    ///
-    /// h_p(c) = concat of sign bits of (Sketch(c) - Sketch(p))
-    /// Returns a u16 hash (supports up to 16 hyperplanes, matching paper's 8-byte entry).
-    #[inline(always)]
-    pub fn relative_hash(&self, p: usize, c: usize) -> u16 {
-        debug_assert!(p < self.npoints);
-        debug_assert!(c < self.npoints);
-        debug_assert!(self.num_planes <= 16);
-
-        let m = self.num_planes;
-        let p_sketch = &self.sketches[p * m..(p + 1) * m];
-        let c_sketch = &self.sketches[c * m..(c + 1) * m];
-
-        let mut hash: u16 = 0;
-        for j in 0..m {
-            let diff = c_sketch[j] - p_sketch[j];
-            if diff >= 0.0 {
-                hash |= 1u16 << j;
-            }
-        }
-        hash
-    }
-}
-
-/// Convert f32 distance to bf16 (truncate lower 16 mantissa bits).
-/// For non-negative values, bf16 bit ordering matches f32 ordering,
-/// so u16 comparison gives correct distance ordering.
-#[inline(always)]
-fn f32_to_bf16(v: f32) -> u16 {
-    (v.to_bits() >> 16) as u16
-}
-
-/// Convert bf16 back to f32 (zero-fill lower mantissa bits).
-#[inline(always)]
-fn bf16_to_f32(v: u16) -> f32 {
-    f32::from_bits((v as u32) << 16)
+    ndims: usize,
+    num_planes: usize,
+    seed: u64,
+) -> LshSketches {
+    LshSketches::new(npoints, ndims, num_planes, seed, |i, out| {
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out).expect("f32 conversion");
+    })
 }
 
 /// A single entry in the HashPrune reservoir.
@@ -413,7 +319,7 @@ impl HashPrune {
         seed: u64,
     ) -> Self {
         let t0 = std::time::Instant::now();
-        let sketches = LshSketches::new(data, npoints, ndims, num_planes, seed);
+        let sketches = sketches_from_data(data, npoints, ndims, num_planes, seed);
         tracing::debug!(
             elapsed_secs = t0.elapsed().as_secs_f64(),
             "sketch computation"
@@ -581,7 +487,7 @@ mod tests {
             -1.0, 0.0, // point 2
             0.0, -1.0, // point 3
         ];
-        let sketches = LshSketches::new(&data, 4, 2, 4, 42);
+        let sketches = sketches_from_data(&data, 4, 2, 4, 42);
 
         // Relative hash of a point with itself: all diffs are 0, 0.0 >= 0.0 is true.
         let h00 = sketches.relative_hash(0, 0);
@@ -716,8 +622,8 @@ mod tests {
         // with 4 planes and random hyperplanes from two distinct seeds, at
         // least one pair must hash differently.
         let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
-        let s1 = LshSketches::new(&data, 32, 4, 12, 42);
-        let s2 = LshSketches::new(&data, 32, 4, 12, 99);
+        let s1 = sketches_from_data(&data, 32, 4, 12, 42);
+        let s2 = sketches_from_data(&data, 32, 4, 12, 99);
         let any_diff = (0..32).any(|p| (p + 1..32).any(|c|
             s1.relative_hash(p, c) != s2.relative_hash(p, c)
         ));
@@ -729,7 +635,7 @@ mod tests {
         // h_p(c) is sign(Sketch(c) - Sketch(p)), so h(p,c) and h(c,p) differ
         // wherever any plane gives Sketch(p) != Sketch(c).
         let data = vec![1.0f32, 0.0, 0.0, 1.0, -1.0, 0.0];
-        let sketches = LshSketches::new(&data, 3, 2, 4, 42);
+        let sketches = sketches_from_data(&data, 3, 2, 4, 42);
         let h01 = sketches.relative_hash(0, 1);
         let h10 = sketches.relative_hash(1, 0);
         assert_ne!(h01, h10, "relative_hash must be asymmetric for distinct points");

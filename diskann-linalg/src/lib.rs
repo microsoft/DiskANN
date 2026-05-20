@@ -173,6 +173,37 @@ pub fn random_distance_preserving_matrix<T: Rng + ?Sized>(dim: usize, rng: &mut 
     random_distance_preserving_matrix_impl(dim, rng)
 }
 
+// ─── Convenience GEMM helpers ──────────────────────────────────────────────
+// Common shapes for row-major all-pairs dot-product matrices used by graph
+// builders (PiPNN's leaf k-NN, etc.).
+
+/// `C = A · Bᵀ` where `A` is `m × k` and `B` is `n × k` (both row-major).
+/// Output `C` is `m × n` (row-major).
+#[inline]
+pub fn sgemm_abt(a: &[f32], m: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
+    debug_assert_eq!(a.len(), m * k);
+    debug_assert_eq!(b.len(), n * k);
+    debug_assert_eq!(c.len(), m * n);
+    sgemm(
+        Transpose::None,
+        Transpose::Ordinary,
+        m,
+        n,
+        k,
+        1.0,
+        a,
+        b,
+        None,
+        c,
+    );
+}
+
+/// `C = A · Aᵀ` where `A` is `m × k` (row-major). Output `C` is `m × m`.
+#[inline]
+pub fn sgemm_aat(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
+    sgemm_abt(a, m, k, a, m, c);
+}
+
 #[cfg(test)]
 mod tests {
     use approx::{assert_abs_diff_eq, assert_relative_eq};

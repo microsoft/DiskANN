@@ -44,27 +44,7 @@ fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
         .min(n)
 }
 
-/// Insert `(idx, dist)` into the sorted top-K tracker if it beats the
-/// current worst entry. `top[..K]` is kept sorted ascending by distance;
-/// `threshold_idx = K - 1` is the worst slot. Used by the per-metric
-/// fused-distance-and-topk loops in `assign_to_leaders`.
-#[inline(always)]
-fn topk_insert<const K: usize>(
-    top: &mut [(u32, f32); K],
-    threshold_idx: usize,
-    idx: u32,
-    dist: f32,
-) {
-    if dist >= top[threshold_idx].1 {
-        return;
-    }
-    top[threshold_idx] = (idx, dist);
-    let mut t = threshold_idx;
-    while t > 0 && top[t].1 < top[t - 1].1 {
-        top.swap(t, t - 1);
-        t -= 1;
-    }
-}
+use diskann_vector::topk::topk_insert;
 
 /// A cluster that needs further partitioning.
 struct WorkItem {
@@ -314,7 +294,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                             .expect("f32 conversion");
                     }
                     let dots_mb = &mut dots[..mb * nl];
-                    crate::gemm::sgemm_abt(p32, mb, ndims, &l_data, nl, dots_mb);
+                    diskann_linalg::sgemm_abt(p32, mb, ndims, &l_data, nl, dots_mb);
                 }
 
                 for i in 0..mb {

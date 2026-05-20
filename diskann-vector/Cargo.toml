@@ -15,13 +15,16 @@ license.workspace = true
 cfg-if.workspace = true
 half.workspace = true
 diskann-wide.workspace = true
+# Required by the `lsh` module — keeping these here lets PiPNN and any future
+# graph-builder share a single LSH primitive instead of inlining their own.
+rand.workspace = true
+rand_distr.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
 iai-callgrind.workspace = true
-rand.workspace = true
 criterion.workspace = true
-rand_distr.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits"] }
 
 [[bench]]

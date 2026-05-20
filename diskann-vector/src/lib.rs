@@ -29,10 +29,13 @@ pub use traits::{
 mod value;
 pub use value::{MathematicalValue, SimilarityScore};
 
+pub mod bf16;
 pub mod contains;
 pub mod conversion;
 pub mod distance;
+pub mod lsh;
 pub mod norm;
+pub mod topk;
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {

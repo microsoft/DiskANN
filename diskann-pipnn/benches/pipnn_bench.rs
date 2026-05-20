@@ -10,7 +10,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::{Rng, SeedableRng};
 
-use diskann_pipnn::gemm;
+use diskann_linalg as gemm;
 use diskann_pipnn::hash_prune::HashPrune;
 use diskann_pipnn::leaf_build;
 use diskann_pipnn::partition::{self, PartitionConfig};
