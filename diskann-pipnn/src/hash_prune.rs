@@ -23,7 +23,7 @@ use rayon::prelude::*;
 ///
 /// For each vector v, Sketch(v) = [v . H_i for i=0..m] where H_i are random hyperplanes.
 /// Sketches are computed via parallel dot products.
-pub struct LshSketches {
+pub(crate) struct LshSketches {
     /// Number of hyperplanes (m).
     num_planes: usize,
     /// Precomputed sketches: npoints x m, stored row-major.
@@ -37,7 +37,7 @@ impl LshSketches {
     /// Create new LSH sketches for the given data using parallel dot products.
     ///
     /// `data` is row-major: npoints x ndims.
-    pub fn new<T: VectorRepr + Send + Sync>(
+    pub(crate) fn new<T: VectorRepr + Send + Sync>(
         data: &[T],
         npoints: usize,
         ndims: usize,
@@ -150,7 +150,7 @@ struct ReservoirEntry {
 /// Uses a flat sorted Vec for O(log l) hash lookups instead of HashMap.
 /// Caches the farthest entry for O(1) eviction checks.
 /// Insertion is O(l) due to element shifting, but cache-friendly at typical l_max ~128.
-pub struct HashPruneReservoir {
+pub(crate) struct HashPruneReservoir {
     entries: Vec<ReservoirEntry>,
     /// Maximum reservoir size.
     l_max: usize,
@@ -160,7 +160,10 @@ pub struct HashPruneReservoir {
 }
 
 impl HashPruneReservoir {
-    pub fn new(l_max: usize) -> Self {
+    /// Eagerly pre-allocate capacity for `l_max` entries (test-only — production
+    /// uses [`HashPruneReservoir::new_lazy`] to avoid the upfront RSS spike).
+    #[cfg(test)]
+    pub(crate) fn new(l_max: usize) -> Self {
         Self {
             entries: Vec::with_capacity(l_max),
             l_max,
@@ -170,7 +173,7 @@ impl HashPruneReservoir {
     }
 
     /// Create a reservoir without pre-allocating capacity.
-    pub fn new_lazy(l_max: usize) -> Self {
+    pub(crate) fn new_lazy(l_max: usize) -> Self {
         Self {
             entries: Vec::new(),
             l_max,
@@ -354,8 +357,11 @@ impl HashPruneReservoir {
             .collect()
     }
 
-    /// Get all neighbors in the reservoir, sorted by distance (no saturation).
-    pub fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
+    /// Get all neighbors in the reservoir, sorted by distance (no truncation).
+    /// Test-only — production calls [`get_neighbors_saturated`] which truncates
+    /// to `max_degree`.
+    #[cfg(test)]
+    pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
         let mut neighbors: Vec<(u32, u16)> = self
             .entries
             .iter()
@@ -368,13 +374,13 @@ impl HashPruneReservoir {
             .collect()
     }
 
-    /// Get the number of entries in the reservoir.
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Check if the reservoir is empty.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
@@ -418,7 +424,7 @@ impl HashPrune {
     /// Create a HashPrune from pre-computed LSH sketches.
     /// Allows the caller to compute sketches from f32 data, drop the data,
     /// then create HashPrune without holding the f32 borrow.
-    pub fn from_sketches(
+    pub(crate) fn from_sketches(
         sketches: LshSketches,
         npoints: usize,
         l_max: usize,
@@ -444,10 +450,12 @@ impl HashPrune {
         }
     }
 
-    /// Add an edge from point `p` to candidate `c` with the given distance.
-    /// Thread-safe: acquires lock on p's reservoir only.
+    /// Add a single edge from point `p` to candidate `c` (test-only — production
+    /// uses [`add_edges_batched`] which amortizes lock acquisition across edges
+    /// sharing the same source).
+    #[cfg(test)]
     #[inline]
-    pub fn add_edge(&self, p: usize, c: usize, distance: f32) {
+    pub(crate) fn add_edge(&self, p: usize, c: usize, distance: f32) {
         let hash = self.sketches.relative_hash(p, c);
         self.reservoirs[p].lock().insert(hash, c as u32, distance);
     }

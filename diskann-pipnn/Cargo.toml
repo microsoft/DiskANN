@@ -10,21 +10,14 @@ edition = "2021"
 [dependencies]
 diskann = { workspace = true }
 diskann-vector = { workspace = true }
-diskann-utils = { workspace = true, default-features = false, features = ["rayon"] }
 rayon = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
-num-traits = { workspace = true }
 diskann-linalg = { workspace = true }
-faer = { version = "0.23", default-features = false, features = ["std", "rayon"] }
-half = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
-
-[features]
-bench-profiling = []
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -15,16 +15,17 @@
 use std::cell::RefCell;
 
 use diskann::utils::VectorRepr;
+#[cfg(test)]
 use diskann_vector::distance::SquaredL2;
+#[cfg(test)]
 use diskann_vector::PureDistanceFunction;
 
 /// Thread-local reusable buffers for leaf building.
 /// Avoids repeated allocation/deallocation of large matrices.
-pub struct LeafBuffers {
+pub(crate) struct LeafBuffers {
     pub local_data: Vec<f32>,
     pub norms_sq: Vec<f32>,
     pub dot_matrix: Vec<f32>,
-    pub dist_matrix: Vec<f32>,
     pub seen: Vec<bool>,
     /// Reusable buffer for knn results: (local_dst_idx, distance) per row×k.
     pub knn_result: Vec<(u32, f32)>,
@@ -46,7 +47,6 @@ impl LeafBuffers {
             local_data: Vec::new(),
             norms_sq: Vec::new(),
             dot_matrix: Vec::new(),
-            dist_matrix: Vec::new(),
             seen: Vec::new(),
             knn_result: Vec::new(),
             edges: Vec::new(),
@@ -66,9 +66,6 @@ impl LeafBuffers {
         }
         if self.dot_matrix.len() < nn {
             self.dot_matrix.resize(nn, 0.0);
-        }
-        if self.dist_matrix.len() < nn {
-            self.dist_matrix.resize(nn, 0.0);
         }
         if self.seen.len() < nn {
             self.seen.resize(nn, false);
@@ -91,7 +88,7 @@ impl LeafBuffers {
 thread_local! {
     /// Thread-local reusable buffers for leaf building. Public so builder can
     /// batch multiple leaves per TLS access (amortizes the `with()` overhead).
-    pub static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
+    pub(crate) static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
 }
 
 /// Release thread-local leaf build buffers on the calling thread.
@@ -100,13 +97,12 @@ thread_local! {
 /// per-thread arenas, preventing `malloc_trim` from returning freed
 /// reservoir memory to the OS. Calling this from each rayon thread
 /// helps glibc reclaim arena pages (best-effort: depends on rayon work-stealing touching all workers).
-pub fn release_thread_buffers() {
+pub(crate) fn release_thread_buffers() {
     LEAF_BUFFERS.with(|cell| {
         let mut bufs = cell.borrow_mut();
         bufs.local_data = Vec::new();
         bufs.norms_sq = Vec::new();
         bufs.dot_matrix = Vec::new();
-        bufs.dist_matrix = Vec::new();
         bufs.seen = Vec::new();
         bufs.knn_result = Vec::new();
         bufs.edges = Vec::new();
@@ -114,11 +110,17 @@ pub fn release_thread_buffers() {
     });
 }
 
-/// An edge produced by leaf building: (source, destination, distance).
+/// An edge produced by leaf building: `(source, destination, distance)`.
+///
+/// Returned by [`build_leaf`] for benchmarking. Production code uses
+/// [`build_leaf_into`] which writes edges into a caller-provided buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct Edge {
+    /// Global source point index.
     pub src: usize,
+    /// Global destination point index.
     pub dst: usize,
+    /// Distance from `src` to `dst` under the build metric.
     pub distance: f32,
 }
 
@@ -238,7 +240,7 @@ fn topk_row_small(
 /// Tiles the leaf GEMM in MR-row chunks (≤ 2 MB dot buffer → L2-resident),
 /// converts to distance and extracts top-k inline. Never materializes the
 /// full m×m dist matrix.
-pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
+pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
     indices: &[usize],
@@ -509,7 +511,7 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
 
 /// Build a leaf into `bufs.edges` without allocating. Returns edge count.
 /// The caller reads edges from `bufs.edges[..returned_count]`.
-pub fn build_leaf_into<T: VectorRepr + 'static>(
+pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
     indices: &[usize],
@@ -524,10 +526,9 @@ pub fn build_leaf_into<T: VectorRepr + 'static>(
     count
 }
 
-/// Brute-force search the dataset using L2 distance.
-///
-/// Returns the `k` nearest neighbor indices and distances for the query.
-pub fn brute_force_knn(
+/// Brute-force exact k-NN under squared-L2 distance. Test-only helper.
+#[cfg(test)]
+pub(crate) fn brute_force_knn(
     data: &[f32],
     ndims: usize,
     npoints: usize,

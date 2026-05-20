@@ -338,44 +338,6 @@ pub fn build_typed<T: VectorRepr + Send + Sync>(
     build_internal(data, npoints, ndims, config)
 }
 
-/// Build a PiPNN index.
-///
-/// `data` is row-major: npoints x ndims.
-pub fn build(
-    data: &[f32],
-    npoints: usize,
-    ndims: usize,
-    config: &PiPNNConfig,
-) -> PiPNNResult<PiPNNGraph> {
-    config.validate()?;
-
-    if npoints == 0 || ndims == 0 {
-        return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
-    }
-
-    if data.len() != npoints * ndims {
-        return Err(PiPNNError::DataLengthMismatch {
-            expected: npoints * ndims,
-            actual: data.len(),
-            npoints,
-            ndims,
-        });
-    }
-
-    tracing::info!(
-        npoints = npoints,
-        ndims = ndims,
-        k = config.k,
-        max_degree = config.max_degree,
-        c_max = config.c_max,
-        replicas = config.replicas,
-        "PiPNN build started"
-    );
-
-    build_internal::<f32>(data, npoints, ndims, config)
-}
-
-
 
 
 /// Internal build logic shared between `build()` and `build_typed()`.
@@ -776,7 +738,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
@@ -788,7 +750,7 @@ mod tests {
         let data = vec![0.0f32; 10];
         let config = PiPNNConfig::default();
 
-        let result = build(&data, 5, 3, &config);
+        let result = build_typed::<f32>(&data, 5, 3, &config);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, PiPNNError::DataLengthMismatch { .. }));
@@ -810,7 +772,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         let query = &data[0..ndims];
         let results = graph.search(&data, query, 10, 50);
@@ -838,7 +800,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         let k = 10;
         let search_l = 100;
@@ -1013,7 +975,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert!(matches!(graph.metric, Metric::Cosine));
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
@@ -1036,7 +998,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph_direct = build(&data, npoints, ndims, &config).unwrap();
+        let graph_direct = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         let graph_typed = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         // Both should produce the same npoints and medoid.
@@ -1060,7 +1022,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         let dir = std::env::temp_dir().join("pipnn_test_save_graph");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1103,7 +1065,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert!(
             graph.medoid < npoints,
             "medoid {} is out of range [0, {})",
@@ -1129,7 +1091,7 @@ mod tests {
             ..Default::default()
         };
 
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         // With these settings no node should be completely isolated.
         assert_eq!(
@@ -1144,7 +1106,7 @@ mod tests {
     fn test_build_zero_npoints() {
         let data: Vec<f32> = vec![];
         let config = PiPNNConfig::default();
-        let result = build(&data, 0, 8, &config);
+        let result = build_typed::<f32>(&data, 0, 8, &config);
         assert!(result.is_err(), "npoints=0 should error");
     }
 
@@ -1152,7 +1114,7 @@ mod tests {
     fn test_build_zero_ndims() {
         let data: Vec<f32> = vec![];
         let config = PiPNNConfig::default();
-        let result = build(&data, 10, 0, &config);
+        let result = build_typed::<f32>(&data, 10, 0, &config);
         assert!(result.is_err(), "ndims=0 should error");
     }
 
@@ -1168,7 +1130,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, 1, 4, &config).unwrap();
+        let graph = build_typed::<f32>(&data, 1, 4, &config).unwrap();
         assert_eq!(graph.npoints, 1, "should have 1 point");
         assert_eq!(
             graph.adjacency[0].len(),
@@ -1189,7 +1151,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, 2, 2, &config).unwrap();
+        let graph = build_typed::<f32>(&data, 2, 2, &config).unwrap();
         assert_eq!(graph.npoints, 2, "should have 2 points");
         // With 2 points, they should connect to each other.
         let total_edges: usize = graph.adjacency.iter().map(|a| a.len()).sum();
@@ -1214,7 +1176,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert_eq!(
             graph.npoints, npoints,
             "should build successfully with duplicate points"
@@ -1235,7 +1197,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert_eq!(graph.npoints, npoints, "k=1 should produce valid graph");
         assert!(
             graph.avg_degree() > 0.0,
@@ -1258,7 +1220,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert_eq!(
             graph.npoints, npoints,
             "k > c_max should still produce valid graph"
@@ -1297,7 +1259,7 @@ mod tests {
             l_max: 32,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         let query = &data[0..ndims];
         // Request more neighbors than points exist.
         let results = graph.search(&data, query, 100, 200);
@@ -1322,7 +1284,7 @@ mod tests {
             l_max: 64,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         // Query with the medoid point itself.
         let medoid = graph.medoid;
         let query = &data[medoid * ndims..(medoid + 1) * ndims];
@@ -1358,7 +1320,7 @@ mod tests {
             l_max: 64,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         let k = 10;
         let query = &data[0..ndims];
@@ -1453,7 +1415,7 @@ mod tests {
             l_max: 64,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         let dir = std::env::temp_dir().join("pipnn_test_save_large");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1607,8 +1569,8 @@ mod tests {
             ..config_no_prune.clone()
         };
 
-        let graph_no = build(&data, npoints, ndims, &config_no_prune).unwrap();
-        let graph_yes = build(&data, npoints, ndims, &config_with_prune).unwrap();
+        let graph_no = build_typed::<f32>(&data, npoints, ndims, &config_no_prune).unwrap();
+        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &config_with_prune).unwrap();
 
         // Final prune should not increase max degree beyond max_degree.
         assert!(
@@ -1689,8 +1651,8 @@ mod tests {
             ..config_aggressive.clone()
         };
 
-        let graph_aggressive = build(&data, npoints, ndims, &config_aggressive).unwrap();
-        let graph_relaxed = build(&data, npoints, ndims, &config_relaxed).unwrap();
+        let graph_aggressive = build_typed::<f32>(&data, npoints, ndims, &config_aggressive).unwrap();
+        let graph_relaxed = build_typed::<f32>(&data, npoints, ndims, &config_relaxed).unwrap();
 
         // Relaxed alpha should yield denser graph (more edges survive pruning).
         assert!(
@@ -1724,8 +1686,8 @@ mod tests {
             ..config_no_prune.clone()
         };
 
-        let graph_no = build(&data, npoints, ndims, &config_no_prune).unwrap();
-        let graph_yes = build(&data, npoints, ndims, &config_prune).unwrap();
+        let graph_no = build_typed::<f32>(&data, npoints, ndims, &config_no_prune).unwrap();
+        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &config_prune).unwrap();
 
         // Both should have non-trivial degree.
         assert!(graph_no.avg_degree() > 1.0);
@@ -1777,7 +1739,7 @@ mod tests {
             metric: Metric::CosineNormalized,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::CosineNormalized);
 
@@ -1813,7 +1775,7 @@ mod tests {
             metric: Metric::InnerProduct,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::InnerProduct);
 
@@ -1852,7 +1814,7 @@ mod tests {
             max_degree: 16,
             ..Default::default()
         };
-        let graph = build(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
 
         assert_eq!(graph.npoints, npoints);
         assert_eq!(graph.ndims, ndims);

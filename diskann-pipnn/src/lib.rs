@@ -16,7 +16,6 @@ pub mod gemm;
 pub mod hash_prune;
 pub mod leaf_build;
 pub mod partition;
-pub mod profile;
 pub(crate) mod rayon_util;
 
 use diskann_vector::distance::Metric;
@@ -25,13 +24,13 @@ use thiserror::Error;
 
 /// Errors that can occur during PiPNN index construction.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PiPNNError {
+    /// PiPNNConfig validation failed (e.g. `c_max < c_min`, `alpha < 1.0`).
     #[error("configuration error: {0}")]
     Config(String),
 
-    #[error("data dimension mismatch: expected {expected}, got {actual}")]
-    DimensionMismatch { expected: usize, actual: usize },
-
+    /// `data.len() != npoints * ndims` at a builder entry point.
     #[error(
         "data length mismatch: expected {expected} elements ({npoints} x {ndims}), got {actual}"
     )]
@@ -42,6 +41,7 @@ pub enum PiPNNError {
         ndims: usize,
     },
 
+    /// I/O error from `PiPNNGraph::save_graph`.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

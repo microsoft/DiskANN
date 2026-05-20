@@ -186,7 +186,7 @@ fn bench_full_build(c: &mut Criterion) {
             &(),
             |b, _| {
                 b.iter(|| {
-                    diskann_pipnn::builder::build(&data, npoints, ndims, &config).unwrap();
+                    diskann_pipnn::builder::build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
                 });
             },
         );
