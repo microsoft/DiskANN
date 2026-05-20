@@ -115,6 +115,10 @@ pub(crate) struct TopkSearchPhase {
 }
 
 impl TopkSearchPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
         self.groundtruth.resolve(checker)?;

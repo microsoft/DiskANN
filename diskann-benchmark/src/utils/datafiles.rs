@@ -95,7 +95,7 @@ impl ConvertingLoad for f32 {
 }
 
 /// Load a groundtruth set from disk and return the  result as a row-major matrix.
-pub(crate) fn load_groundtruth(path: BinFile<'_>) -> anyhow::Result<Matrix<u32>> {
+pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::Result<Matrix<u32>> {
     let provider = diskann_providers::storage::FileStorageProvider;
     let mut file = provider
         .open_reader(&path.0.to_string_lossy())
@@ -114,6 +114,17 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>) -> anyhow::Result<Matrix<u32>>
     let mut groundtruth = Matrix::<u32>::new(0, num_points, dim);
     let groundtruth_slice: &mut [u8] = bytemuck::cast_slice_mut(groundtruth.as_mut_slice());
     file.read_exact(groundtruth_slice)?;
+
+    if let Some(expected_k) = k {
+        if groundtruth.ncols() < expected_k {
+            return Err(anyhow::anyhow!(
+                "Each row of groundtruth must have at least {} neighbors (got {})",
+                expected_k,
+                groundtruth.ncols()
+            ));
+        }
+    }
+
     Ok(groundtruth)
 }
 
@@ -167,5 +178,37 @@ impl From<&BitSet> for SerializableBitSet {
 impl From<SerializableBitSet> for BitSet {
     fn from(val: SerializableBitSet) -> Self {
         BitSet::from_bytes(&val.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_load_groundtruth_with_expected_k() {
+        // Prepare a temporary .bin file with a valid groundtruth header and data
+        let num_points: u32 = 2;
+        let dim: u32 = 3;
+        let data: Vec<u32> = vec![1, 2, 3, 4, 5, 6];
+        let mut file = NamedTempFile::new().expect("Failed to create temp file");
+        file.write_all(&num_points.to_le_bytes()).unwrap();
+        file.write_all(&dim.to_le_bytes()).unwrap();
+        for v in &data {
+            file.write_all(&v.to_le_bytes()).unwrap();
+        }
+        let path = PathBuf::from(file.path());
+        let bin_file = BinFile(&path);
+        // Should succeed for k <= dim
+        let mat = load_groundtruth(bin_file, Some(3)).expect("Should succeed for k <= dim");
+        assert_eq!(mat.nrows(), 2);
+        assert_eq!(mat.ncols(), 3);
+        // Should fail for k > dim
+        let bin_file = BinFile(&path);
+        let err = load_groundtruth(bin_file, Some(4)).unwrap_err();
+        assert!(err.to_string().contains("at least 4 neighbors"));
     }
 }

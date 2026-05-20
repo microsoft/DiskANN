@@ -140,6 +140,7 @@ mod tests {
 
     use super::*;
 
+    use crate::recall::GroundTruthMode;
     use diskann::graph::{index::QueryLabelProvider, test::provider};
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
@@ -224,7 +225,12 @@ mod tests {
         let all = search::search_all(
             multihop,
             parameters,
-            search::graph::knn::Aggregator::new(rows, recall_k, recall_n),
+            search::graph::knn::Aggregator::new(
+                rows,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Flexible,
+            ),
         )
         .unwrap();
 
