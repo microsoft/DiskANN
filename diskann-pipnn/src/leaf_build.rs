@@ -37,6 +37,8 @@ pub struct LeafBuffers {
     pub indices_usize: Vec<usize>,
     /// Reusable scratch indices for extract_knn_general (quickselect).
     pub select_indices: Vec<u32>,
+    /// Reusable Cosine sqrt-of-norms scratch (only filled for `Metric::Cosine`).
+    pub cosine_denoms: Vec<f32>,
 }
 
 impl Default for LeafBuffers {
@@ -59,6 +61,7 @@ impl LeafBuffers {
             edges: Vec::new(),
             indices_usize: Vec::new(),
             select_indices: Vec::new(),
+            cosine_denoms: Vec::new(),
         }
     }
 
@@ -169,235 +172,6 @@ pub struct Edge {
     pub src: usize,
     pub dst: usize,
     pub distance: f32,
-}
-
-// ─── Allocation-free _into variants ─────────────────────────────────────────
-
-/// Extract k nearest neighbors into a caller-provided buffer.
-/// Output format: `out[i * actual_k + t] = (dst_local_idx, distance)` for row i, t-th neighbor.
-/// Returns `actual_k` (= `k.min(n-1)`).
-fn extract_knn_into(
-    dist_matrix: &[f32],
-    n: usize,
-    k: usize,
-    out: &mut Vec<(u32, f32)>,
-    select_scratch: &mut Vec<u32>,
-) -> usize {
-    out.clear();
-    if n <= 1 || k == 0 {
-        return 0;
-    }
-    let actual_k = k.min(n - 1);
-    if actual_k <= 3 {
-        extract_knn_small_into(dist_matrix, n, actual_k, out);
-    } else {
-        extract_knn_general_into(dist_matrix, n, actual_k, out, select_scratch);
-    }
-    actual_k
-}
-
-/// Specialized extraction for k ≤ 3 into caller buffer.
-fn extract_knn_small_into(dist_matrix: &[f32], n: usize, k: usize, out: &mut Vec<(u32, f32)>) {
-    debug_assert!(k <= 3 && k < n);
-    out.reserve(n * k);
-
-    for i in 0..n {
-        let row = &dist_matrix[i * n..(i + 1) * n];
-        let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
-        let threshold_idx = k - 1;
-
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-        {
-            use std::arch::x86_64::*;
-            let chunks = n / 16;
-            unsafe {
-                for chunk in 0..chunks {
-                    let base = chunk * 16;
-                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
-                    let dists = _mm512_loadu_ps(row.as_ptr().add(base));
-                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(dists, thresh);
-                    if mask != 0 {
-                        let mut d_arr = [0.0f32; 16];
-                        _mm512_storeu_ps(d_arr.as_mut_ptr(), dists);
-                        let mut m = mask;
-                        while m != 0 {
-                            let lane = m.trailing_zeros() as usize;
-                            m &= m - 1;
-                            let j = base + lane;
-                            if j == i { continue; }
-                            let d = d_arr[lane];
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                for t in (1..k).rev() {
-                                    if top[t].1 < top[t - 1].1 {
-                                        top.swap(t, t - 1);
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for j in (chunks * 16)..n {
-                    if j == i { continue; }
-                    let d = *row.get_unchecked(j);
-                    if d < top[threshold_idx].1 {
-                        top[threshold_idx] = (j as u32, d);
-                        for t in (1..k).rev() {
-                            if top[t].1 < top[t - 1].1 {
-                                top.swap(t, t - 1);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
-        {
-            use std::arch::x86_64::*;
-            let chunks = n / 8;
-            unsafe {
-                for chunk in 0..chunks {
-                    let base = chunk * 8;
-                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
-                    let dists = _mm256_loadu_ps(row.as_ptr().add(base));
-                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(dists, thresh));
-                    if mask != 0 {
-                        let mut d_arr = [0.0f32; 8];
-                        _mm256_storeu_ps(d_arr.as_mut_ptr(), dists);
-                        let mut m = mask as u32;
-                        while m != 0 {
-                            let lane = m.trailing_zeros() as usize;
-                            m &= m - 1;
-                            let j = base + lane;
-                            if j == i { continue; }
-                            let d = d_arr[lane];
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                for t in (1..k).rev() {
-                                    if top[t].1 < top[t - 1].1 {
-                                        top.swap(t, t - 1);
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for j in (chunks * 8)..n {
-                    if j == i { continue; }
-                    let d = *row.get_unchecked(j);
-                    if d < top[threshold_idx].1 {
-                        top[threshold_idx] = (j as u32, d);
-                        for t in (1..k).rev() {
-                            if top[t].1 < top[t - 1].1 {
-                                top.swap(t, t - 1);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            for j in 0..n {
-                if j == i { continue; }
-                let d = unsafe { *row.get_unchecked(j) };
-                if d < top[threshold_idx].1 {
-                    top[threshold_idx] = (j as u32, d);
-                    for t in (1..k).rev() {
-                        if top[t].1 < top[t - 1].1 {
-                            top.swap(t, t - 1);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        for t in 0..k {
-            out.push((top[t].0, top[t].1));
-        }
-    }
-}
-
-/// General extraction for k > 3, reusing a scratch index buffer.
-fn extract_knn_general_into(
-    dist_matrix: &[f32],
-    n: usize,
-    k: usize,
-    out: &mut Vec<(u32, f32)>,
-    indices: &mut Vec<u32>,
-) {
-    out.reserve(n * k);
-    indices.clear();
-    indices.extend(0..n as u32);
-
-    for i in 0..n {
-        let row = &dist_matrix[i * n..(i + 1) * n];
-
-        for j in 0..n {
-            unsafe { *indices.get_unchecked_mut(j) = j as u32; }
-        }
-
-        if k < n {
-            indices.select_nth_unstable_by(k - 1, |&a, &b| {
-                let da = unsafe { *row.get_unchecked(a as usize) };
-                let db = unsafe { *row.get_unchecked(b as usize) };
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        for idx in 0..k {
-            let j = unsafe { *indices.get_unchecked(idx) } as usize;
-            out.push((j as u32, row[j]));
-        }
-    }
-}
-
-/// Bidirect knn results into caller-provided edge buffer.
-/// `knn` has `n * actual_k` entries: row i's neighbors are at `knn[i*actual_k..(i+1)*actual_k]`.
-fn make_bidirected_edges_into(
-    knn: &[(u32, f32)],
-    actual_k: usize,
-    dist_matrix: &[f32],
-    n: usize,
-    indices: &[usize],
-    seen: &mut [bool],
-    out: &mut Vec<Edge>,
-) {
-    out.clear();
-    out.reserve(knn.len() * 2);
-    for i in 0..n {
-        let row_knn = &knn[i * actual_k..(i + 1) * actual_k];
-        for &(dst_local, dist) in row_knn {
-            let dst = dst_local as usize;
-            if !seen[i * n + dst] {
-                seen[i * n + dst] = true;
-                out.push(Edge {
-                    src: indices[i],
-                    dst: indices[dst],
-                    distance: dist,
-                });
-            }
-            let rev_dist = dist_matrix[dst * n + i];
-            if !seen[dst * n + i] {
-                seen[dst * n + i] = true;
-                out.push(Edge {
-                    src: indices[dst],
-                    dst: indices[i],
-                    distance: rev_dist,
-                });
-            }
-        }
-    }
 }
 
 // ─── Original allocating variants (kept for backward compatibility / tests) ──
@@ -608,8 +382,104 @@ pub fn build_leaf<T: VectorRepr + 'static>(
     })
 }
 
+/// Fused per-row top-k for k<=3, scanning AVX-512 16-wide over a dist row.
+/// Writes `actual_k` entries into `out[..actual_k]`.
+#[inline]
+fn topk_row_small(
+    dist_row: &[f32],
+    n: usize,
+    self_idx: usize,
+    actual_k: usize,
+    out: &mut [(u32, f32)],
+) {
+    debug_assert!(actual_k <= 3);
+    let mut top: [(u32, f32); 3] = [(u32::MAX, f32::MAX); 3];
+    let threshold_idx = actual_k - 1;
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        use std::arch::x86_64::*;
+        let chunks = n / 16;
+        unsafe {
+            for chunk in 0..chunks {
+                let base = chunk * 16;
+                let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                let dists = _mm512_loadu_ps(dist_row.as_ptr().add(base));
+                let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(dists, thresh);
+                if mask != 0 {
+                    let mut d_arr = [0.0f32; 16];
+                    _mm512_storeu_ps(d_arr.as_mut_ptr(), dists);
+                    let mut m = mask;
+                    while m != 0 {
+                        let lane = m.trailing_zeros() as usize;
+                        m &= m - 1;
+                        let j = base + lane;
+                        if j == self_idx { continue; }
+                        let d = d_arr[lane];
+                        if d < top[threshold_idx].1 {
+                            top[threshold_idx] = (j as u32, d);
+                            for t in (1..actual_k).rev() {
+                                if top[t].1 < top[t - 1].1 {
+                                    top.swap(t, t - 1);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for j in (chunks * 16)..n {
+                if j == self_idx { continue; }
+                let d = *dist_row.get_unchecked(j);
+                if d < top[threshold_idx].1 {
+                    top[threshold_idx] = (j as u32, d);
+                    for t in (1..actual_k).rev() {
+                        if top[t].1 < top[t - 1].1 {
+                            top.swap(t, t - 1);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+    {
+        for j in 0..n {
+            if j == self_idx { continue; }
+            let d = dist_row[j];
+            if d < top[threshold_idx].1 {
+                top[threshold_idx] = (j as u32, d);
+                for t in (1..actual_k).rev() {
+                    if top[t].1 < top[t - 1].1 {
+                        top.swap(t, t - 1);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    for t in 0..actual_k {
+        out[t] = top[t];
+    }
+}
+
 /// Build a leaf using caller-provided buffers, bypassing thread-local access.
-/// Use this when processing multiple leaves in a batch to amortize TLS overhead.
+///
+/// Tiles the leaf GEMM in MR-row chunks: per tile, runs `A_tile · A^T` to a small
+/// `mb × n` dot buffer (≤ 2 MB → L2-resident), converts to distance row-by-row
+/// (AVX-512 SIMD where available), and extracts top-k inline. Never materializes
+/// the full m×m dist matrix — that pass was the dominant bottleneck for large
+/// leaves (n ≥ 1024) per the leaf_hp microbench. All four PiPNN metrics are
+/// supported via inline match.
+///
+/// Targeted shape: leaf sizes c_max ∈ [1024, 2048] per the PiPNN paper. At very
+/// small leaf sizes (n ≤ ~256), the per-tile dispatch overhead trades against
+/// memory-traffic savings — see leaf_hp_bench for measurements.
 pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
@@ -618,21 +488,30 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
 ) -> Vec<Edge> {
+    use diskann_vector::distance::Metric;
+
     let n = indices.len();
     bufs.ensure_capacity(n, ndims, k);
 
-    // Determine if we can use MKL f16f16f32 path (T == f16 + feature enabled).
+    // Fused row-tile size: tile output (mb × n × 4) targets L2 (≤2 MB/core).
+    // At MR=256, n=1024 → 1 MB; at n=2048 → 2 MB. Falls back to MR=n for small n.
+    const MR: usize = 256;
+    let mr = MR.min(n);
+
+    let actual_k = if k == 0 || n <= 1 { 0 } else { k.min(n - 1) };
+
+    // ───── Gather + compute norms (no full GEMM yet) ─────
     #[cfg(feature = "mkl-fp16")]
     let use_mkl = std::any::TypeId::of::<T>() == std::any::TypeId::of::<half::f16>();
+    #[cfg(not(feature = "mkl-fp16"))]
+    let use_mkl = false;
 
-    // GEMM: produce dot_matrix = local_data * local_data^T.
-    // MKL path: gather f16 → f16f16f32 GEMM → f32 dots directly.
-    // faer path: gather f16→f32 → sgemm → f32 dots.
+    let needs_norms = matches!(metric, Metric::L2 | Metric::Cosine);
+
     #[cfg(feature = "mkl-fp16")]
-    let used_mkl = if use_mkl {
-        // Gather f16 data contiguously (zero-cost copy, no type conversion).
+    if use_mkl {
         let local_f16 = &mut bufs.local_data_f16[..n * ndims];
-        // SAFETY: T is half::f16 (checked via TypeId above), same layout.
+        // SAFETY: T is half::f16 (checked via TypeId), same layout.
         let data_f16: &[half::f16] = unsafe {
             std::slice::from_raw_parts(data.as_ptr() as *const half::f16, data.len())
         };
@@ -640,149 +519,288 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             let src = &data_f16[idx * ndims..(idx + 1) * ndims];
             local_f16[i * ndims..(i + 1) * ndims].copy_from_slice(src);
         }
-
-        // f16 input → f32 output GEMM.
-        let dot_matrix = &mut bufs.dot_matrix[..n * n];
-        crate::gemm::mkl_f16f16f32_aat(local_f16, n, ndims, dot_matrix);
-
-        // For L2/Cosine, we need f32 norms. Compute from the GEMM diagonal
-        // (dot(a,a) = ||a||²) which avoids a separate f16→f32 conversion pass.
-        let needs_norms = matches!(
-            metric,
-            diskann_vector::distance::Metric::L2 | diskann_vector::distance::Metric::Cosine
-        );
         if needs_norms {
+            // Compute norms from f16 source (no full GEMM materialization needed).
             let norms_sq = &mut bufs.norms_sq[..n];
             for i in 0..n {
-                norms_sq[i] = dot_matrix[i * n + i];
+                let row = &local_f16[i * ndims..(i + 1) * ndims];
+                let mut s = 0.0f32;
+                for &v in row.iter() {
+                    let f = v.to_f32();
+                    s += f * f;
+                }
+                norms_sq[i] = s;
             }
         }
-
-        true
     } else {
-        false
-    };
-
-    #[cfg(not(feature = "mkl-fp16"))]
-    let used_mkl = false;
-
-    if !used_mkl {
-        // faer path: convert T → f32, then sgemm.
         let local_data = &mut bufs.local_data[..n * ndims];
         for (i, &idx) in indices.iter().enumerate() {
             let src = &data[idx * ndims..(idx + 1) * ndims];
             let dst = &mut local_data[i * ndims..(i + 1) * ndims];
             T::as_f32_into(src, dst).expect("f32 conversion");
         }
-
-        let needs_norms = matches!(
-            metric,
-            diskann_vector::distance::Metric::L2 | diskann_vector::distance::Metric::Cosine
-        );
         if needs_norms {
             let norms_sq = &mut bufs.norms_sq[..n];
             for i in 0..n {
                 let row = &local_data[i * ndims..(i + 1) * ndims];
-                let mut norm = 0.0f32;
-                for &v in row.iter() {
-                    norm += v * v;
-                }
-                norms_sq[i] = norm;
+                let mut s = 0.0f32;
+                for &v in row.iter() { s += v * v; }
+                norms_sq[i] = s;
             }
         }
-
-        let dot_matrix = &mut bufs.dot_matrix[..n * n];
-        crate::gemm::sgemm_aat(local_data, n, ndims, dot_matrix);
     }
 
-    let norms_sq = &bufs.norms_sq[..n];
+    #[cfg(not(feature = "mkl-fp16"))]
+    {
+        let local_data = &mut bufs.local_data[..n * ndims];
+        for (i, &idx) in indices.iter().enumerate() {
+            let src = &data[idx * ndims..(idx + 1) * ndims];
+            let dst = &mut local_data[i * ndims..(i + 1) * ndims];
+            T::as_f32_into(src, dst).expect("f32 conversion");
+        }
+        if needs_norms {
+            let norms_sq = &mut bufs.norms_sq[..n];
+            for i in 0..n {
+                let row = &local_data[i * ndims..(i + 1) * ndims];
+                let mut s = 0.0f32;
+                for &v in row.iter() { s += v * v; }
+                norms_sq[i] = s;
+            }
+        }
+    }
 
-    // Convert to distance matrix using the target metric.
-    use diskann_vector::distance::Metric;
-    let dot_matrix = &mut bufs.dot_matrix[..n * n];
-    let dist_matrix = match metric {
-        Metric::CosineNormalized => {
-            for i in 0..n {
-                let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for val in row.iter_mut() {
-                    *val = (1.0 - *val).max(0.0);
-                }
-                row[i] = f32::MAX;
-            }
-            &mut bufs.dot_matrix[..n * n]
+    // For Cosine, precompute sqrt(norms_sq) once into the reusable buf (no per-leaf alloc).
+    if matches!(metric, Metric::Cosine) {
+        if bufs.cosine_denoms.len() < n {
+            bufs.cosine_denoms.resize(n, 0.0);
         }
-        Metric::Cosine => {
-            let dist = &mut bufs.dist_matrix[..n * n];
-            for i in 0..n {
-                let ni_sqrt = norms_sq[i].sqrt();
-                for j in 0..n {
-                    let denom = ni_sqrt * norms_sq[j].sqrt();
-                    let cos_sim = if denom > 0.0 {
-                        dot_matrix[i * n + j] / denom
-                    } else {
-                        0.0
-                    };
-                    dist[i * n + j] = (1.0 - cos_sim).max(0.0);
-                }
-                dist[i * n + i] = f32::MAX;
-            }
-            dist
+        for i in 0..n {
+            bufs.cosine_denoms[i] = bufs.norms_sq[i].sqrt();
         }
-        Metric::L2 => {
-            let dist = &mut bufs.dist_matrix[..n * n];
-            for i in 0..n {
-                let ni = norms_sq[i];
-                for j in 0..n {
-                    dist[i * n + j] = (ni + norms_sq[j] - 2.0 * dot_matrix[i * n + j]).max(0.0);
-                }
-                dist[i * n + i] = f32::MAX;
-            }
-            dist
-        }
-        Metric::InnerProduct => {
-            for i in 0..n {
-                let row = &mut dot_matrix[i * n..(i + 1) * n];
-                for val in row.iter_mut() {
-                    *val = -*val;
-                }
-                row[i] = f32::MAX;
-            }
-            &mut bufs.dot_matrix[..n * n]
-        }
-    };
+    }
 
-    // Extract knn and bidirect edges using reusable buffers (zero allocation).
-    // Split borrow: dist_matrix borrows from bufs.dot_matrix or bufs.dist_matrix,
-    // but knn_result, edges, seen, and select_indices are separate fields.
-    // We need to reborrow dist_matrix as a raw pointer to break the split.
-    let dist_ptr = dist_matrix.as_ptr();
-    let dist_len = n * n;
+    // ───── Reset knn_result to hold n × actual_k slots ─────
+    bufs.knn_result.clear();
+    if actual_k > 0 {
+        bufs.knn_result.resize(n * actual_k, (u32::MAX, f32::MAX));
+    }
 
-    let actual_k = extract_knn_into(
-        // SAFETY: dist_ptr points to either bufs.dot_matrix or bufs.dist_matrix,
-        // both of which remain valid and unmodified during extract_knn_into.
-        unsafe { std::slice::from_raw_parts(dist_ptr, dist_len) },
-        n,
-        k,
-        &mut bufs.knn_result,
-        &mut bufs.select_indices,
-    );
+    // ───── Fused tile loop: GEMM row-tile → dist convert → top-k ─────
+    // dot_tile reuses bufs.dot_matrix prefix (capacity n*n ≥ mr*n).
+    // Avoid borrow conflict by capturing raw pointers to disjoint bufs fields.
+    if actual_k > 0 {
+        let norms_sq_ptr = bufs.norms_sq.as_ptr();
+        let cosine_denoms_ptr = bufs.cosine_denoms.as_ptr();
+        let mut tile_start = 0usize;
+        while tile_start < n {
+            let mb = (n - tile_start).min(mr);
+            let tile_len = mb * n;
+
+            // 1. GEMM: dot_tile = A[tile_rows] · A^T (mb × n)
+            #[cfg(feature = "mkl-fp16")]
+            if use_mkl {
+                let a_full = &bufs.local_data_f16[..n * ndims];
+                let a_tile = &a_full[tile_start * ndims..(tile_start + mb) * ndims];
+                let dot_tile = &mut bufs.dot_matrix[..tile_len];
+                crate::gemm::mkl_f16f16f32_abt(a_tile, mb, ndims, a_full, n, dot_tile);
+            } else {
+                let a_full = &bufs.local_data[..n * ndims];
+                let a_tile = &a_full[tile_start * ndims..(tile_start + mb) * ndims];
+                // SAFETY: a_full and dot_tile borrow different fields of bufs.
+                let a_tile_ptr = a_tile.as_ptr();
+                let a_full_ptr = a_full.as_ptr();
+                let a_full_len = a_full.len();
+                let dot_tile = &mut bufs.dot_matrix[..tile_len];
+                let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
+                let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
+                crate::gemm::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
+            }
+            #[cfg(not(feature = "mkl-fp16"))]
+            {
+                let a_full = &bufs.local_data[..n * ndims];
+                let a_tile_ptr = a_full[tile_start * ndims..].as_ptr();
+                let a_full_ptr = a_full.as_ptr();
+                let a_full_len = a_full.len();
+                let dot_tile = &mut bufs.dot_matrix[..tile_len];
+                let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
+                let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
+                crate::gemm::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
+            }
+
+            // 2 + 3. Convert dot row to dist inline + extract top-k per row.
+            // Output: bufs.knn_result[(tile_start+local_i) * actual_k..]
+            let dot_tile = &mut bufs.dot_matrix[..tile_len];
+            for local_i in 0..mb {
+                let global_i = tile_start + local_i;
+                let row = &mut dot_tile[local_i * n..(local_i + 1) * n];
+
+                // SAFETY: norms_sq_ptr and cosine_denoms_ptr point to bufs fields that
+                // are disjoint from bufs.dot_matrix (which `row` borrows). All reads are
+                // in-bounds (i < n, j < n).
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                let simd_dist = true;
+                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                let simd_dist = false;
+
+                match metric {
+                    Metric::CosineNormalized => {
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                        if simd_dist {
+                            use std::arch::x86_64::*;
+                            unsafe {
+                                let one = _mm512_set1_ps(1.0);
+                                let zero = _mm512_setzero_ps();
+                                let chunks = n / 16;
+                                for c in 0..chunks {
+                                    let base = c * 16;
+                                    let d = _mm512_loadu_ps(row.as_ptr().add(base));
+                                    let v = _mm512_max_ps(_mm512_sub_ps(one, d), zero);
+                                    _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
+                                }
+                                for j in (chunks * 16)..n {
+                                    row[j] = (1.0 - row[j]).max(0.0);
+                                }
+                            }
+                        }
+                        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                        for val in row.iter_mut() {
+                            *val = (1.0 - *val).max(0.0);
+                        }
+                        let _ = simd_dist;
+                    }
+                    Metric::L2 => {
+                        let ni = unsafe { *norms_sq_ptr.add(global_i) };
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                        if simd_dist {
+                            use std::arch::x86_64::*;
+                            unsafe {
+                                let ni_v = _mm512_set1_ps(ni);
+                                let two = _mm512_set1_ps(2.0);
+                                let zero = _mm512_setzero_ps();
+                                let chunks = n / 16;
+                                for c in 0..chunks {
+                                    let base = c * 16;
+                                    let dot = _mm512_loadu_ps(row.as_ptr().add(base));
+                                    let norm = _mm512_loadu_ps(norms_sq_ptr.add(base));
+                                    // d = ni + norm - 2*dot  (fnmadd: -2*dot + norm + ni)
+                                    let d = _mm512_add_ps(ni_v, _mm512_fnmadd_ps(two, dot, norm));
+                                    let v = _mm512_max_ps(d, zero);
+                                    _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
+                                }
+                                for j in (chunks * 16)..n {
+                                    let nj = *norms_sq_ptr.add(j);
+                                    row[j] = (ni + nj - 2.0 * row[j]).max(0.0);
+                                }
+                            }
+                        }
+                        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                        for j in 0..n {
+                            let nj = unsafe { *norms_sq_ptr.add(j) };
+                            row[j] = (ni + nj - 2.0 * row[j]).max(0.0);
+                        }
+                        let _ = simd_dist;
+                    }
+                    Metric::Cosine => {
+                        let ni_sqrt = unsafe { *cosine_denoms_ptr.add(global_i) };
+                        // Cosine path is rare in PiPNN (BigANN uses L2, Enron uses
+                        // CosineNormalized). Keep scalar — the sqrt+div would dominate
+                        // any SIMD savings anyway.
+                        for j in 0..n {
+                            let nj = unsafe { *cosine_denoms_ptr.add(j) };
+                            let denom = ni_sqrt * nj;
+                            let cos = if denom > 0.0 { row[j] / denom } else { 0.0 };
+                            row[j] = (1.0 - cos).max(0.0);
+                        }
+                    }
+                    Metric::InnerProduct => {
+                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                        if simd_dist {
+                            use std::arch::x86_64::*;
+                            unsafe {
+                                let sign = _mm512_set1_ps(-0.0f32);
+                                let chunks = n / 16;
+                                for c in 0..chunks {
+                                    let base = c * 16;
+                                    let d = _mm512_loadu_ps(row.as_ptr().add(base));
+                                    let v = _mm512_xor_ps(d, sign);
+                                    _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
+                                }
+                                for j in (chunks * 16)..n {
+                                    row[j] = -row[j];
+                                }
+                            }
+                        }
+                        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                        for val in row.iter_mut() {
+                            *val = -*val;
+                        }
+                        let _ = simd_dist;
+                    }
+                }
+
+                if actual_k <= 3 {
+                    let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
+                    topk_row_small(row, n, global_i, actual_k, out);
+                } else {
+                    // For k > 3 (rare in PiPNN — leaf_k typically 2-3), fall back
+                    // to per-row quickselect via the existing general extractor.
+                    // We need a small adapter since extract_knn_general_into expects
+                    // the whole matrix; do the work inline.
+                    row[global_i] = f32::MAX; // mark self as ineligible
+                    let mut idxs: Vec<u32> = (0..n as u32).collect();
+                    idxs.sort_unstable_by(|&a, &b| {
+                        row[a as usize]
+                            .partial_cmp(&row[b as usize])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
+                    for t in 0..actual_k {
+                        let j = idxs[t] as usize;
+                        out[t] = (j as u32, row[j]);
+                    }
+                }
+            }
+
+            tile_start += mb;
+        }
+    }
+
+    // ───── Bidirected edges (symmetric metric: rev_dist = dist) ─────
+    // All four PiPNN metrics yield symmetric distances:
+    //   - L2: ||a-b||^2 = ||b-a||^2
+    //   - Cosine / CosineNormalized: cos(a,b) = cos(b,a)
+    //   - InnerProduct: dot(a,b) = dot(b,a)
+    // So we can skip the dist_matrix[dst*n+i] lookup and reuse the forward `dist`.
     let seen = &mut bufs.seen[..n * n];
     seen.fill(false);
-    make_bidirected_edges_into(
-        &bufs.knn_result,
-        actual_k,
-        // SAFETY: same pointer, still valid and unmodified.
-        unsafe { std::slice::from_raw_parts(dist_ptr, dist_len) },
-        n,
-        indices,
-        seen,
-        &mut bufs.edges,
-    );
+    bufs.edges.clear();
+    bufs.edges.reserve(n * actual_k.max(1) * 2);
+    for i in 0..n {
+        let row_knn = &bufs.knn_result[i * actual_k..(i + 1) * actual_k];
+        for &(dst_local, dist) in row_knn {
+            if dst_local == u32::MAX {
+                continue;
+            }
+            let dst = dst_local as usize;
+            if !seen[i * n + dst] {
+                seen[i * n + dst] = true;
+                bufs.edges.push(Edge {
+                    src: indices[i],
+                    dst: indices[dst],
+                    distance: dist,
+                });
+            }
+            if !seen[dst * n + i] {
+                seen[dst * n + i] = true;
+                bufs.edges.push(Edge {
+                    src: indices[dst],
+                    dst: indices[i],
+                    distance: dist,
+                });
+            }
+        }
+    }
 
-    // Move edges out, leaving an empty (but allocated) Vec in bufs for reuse.
-    // The caller consumes the Vec; next call to build_leaf_with_buffers will
-    // find bufs.edges empty but with capacity from prior use.
     std::mem::take(&mut bufs.edges)
 }
 
