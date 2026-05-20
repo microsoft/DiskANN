@@ -10,6 +10,7 @@ edition = "2021"
 [dependencies]
 diskann = { workspace = true }
 diskann-vector = { workspace = true }
+diskann-providers = { workspace = true }
 rayon = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }

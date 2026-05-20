@@ -85,7 +85,7 @@ pub(crate) trait SetAdjacencyList {
 ///
 /// Furthermore, these are meant for data structures that use the identity mapping between
 /// internal and external IDs.
-pub(crate) trait GetAdjacencyList {
+pub trait GetAdjacencyList {
     /// The element type of output slices.
     type Element;
 
@@ -326,7 +326,7 @@ where
 /// After the header, each adjacency list in stored densely, consisting of a `u32` encoding
 /// the length `L` of the adjacency list followed by `L` u32-values containing the
 /// out-neighbors of this node. These adjacency lists are stored in-order.
-pub(crate) fn save_graph<S, P>(
+pub fn save_graph<S, P>(
     graph: &S,
     provider: &P,
     start_point: u32,
@@ -336,9 +336,25 @@ where
     S: GetAdjacencyList<Element = u32>,
     P: StorageWriteProvider,
 {
-    let file = provider.create_for_write(path)?;
+    save_graph_to_writer(graph, start_point, provider.create_for_write(path)?)
+}
 
-    let mut out = BufWriter::new(file);
+/// Lower-level variant that writes the canonical graph layout to any
+/// `Write + Seek` sink (e.g. a `std::fs::File`). Use this from contexts that
+/// don't have (or don't need) a `StorageWriteProvider`, such as graph
+/// builders that produce a final on-disk index directly.
+///
+/// The on-disk format is identical to [`save_graph`].
+pub fn save_graph_to_writer<S, W>(
+    graph: &S,
+    start_point: u32,
+    writer: W,
+) -> ANNResult<usize>
+where
+    S: GetAdjacencyList<Element = u32>,
+    W: Write + Seek,
+{
+    let mut out = BufWriter::new(writer);
 
     let mut index_size: u64 = 24;
     let mut observed_max_degree: u32 = 0;

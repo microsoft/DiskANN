@@ -826,6 +826,7 @@ dependencies = [
  "criterion",
  "diskann",
  "diskann-linalg",
+ "diskann-providers",
  "diskann-vector",
  "parking_lot",
  "rand 0.9.2",

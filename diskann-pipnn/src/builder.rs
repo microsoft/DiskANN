@@ -140,71 +140,49 @@ impl PiPNNGraph {
 
     /// Save the graph in DiskANN's canonical graph format.
     ///
-    /// Format:
-    ///   Header (24 bytes):
-    ///     - u64 LE: total file size (header + data)
-    ///     - u32 LE: max degree (observed)
-    ///     - u32 LE: start point ID (medoid)
-    ///     - u64 LE: number of additional/frozen points
-    ///   Per node:
-    ///     - u32 LE: number of neighbors
-    ///     - N x u32 LE: neighbor IDs
+    /// Delegates to [`diskann_providers::storage::bin::save_graph_to_writer`]
+    /// — pipnn doesn't re-implement the file format, it just satisfies the
+    /// [`GetAdjacencyList`](diskann_providers::storage::bin::GetAdjacencyList)
+    /// trait that the workspace serializer expects.
     pub fn save_graph(&self, path: &std::path::Path) -> PiPNNResult<()> {
-        use std::fs::File;
-        use std::io::{BufWriter, Seek, SeekFrom, Write};
-
-        let mut f = BufWriter::new(File::create(path)?);
-
-        let mut index_size: u64 = 24;
-        let mut observed_max_degree: u32 = 0;
-        let start_point = self.medoid as u32;
-
-        // Write placeholder header
-        f.write_all(&index_size.to_le_bytes())?;
-        f.write_all(&observed_max_degree.to_le_bytes())?;
-        f.write_all(&start_point.to_le_bytes())?;
-        // Must be 1 to indicate the medoid is a frozen/start point.
-        // The disk layout writer uses this to record the frozen point location.
-        let num_additional: u64 = 1;
-        f.write_all(&num_additional.to_le_bytes())?;
-
-        // Write per-node adjacency lists (npoints real nodes + 1 frozen start point)
-        for adj in &self.adjacency {
-            let num_neighbors = adj.len() as u32;
-            f.write_all(&num_neighbors.to_le_bytes())?;
-            for &neighbor in adj {
-                f.write_all(&neighbor.to_le_bytes())?;
-            }
-            observed_max_degree = observed_max_degree.max(num_neighbors);
-            index_size += (4 + adj.len() * 4) as u64;
-        }
-
-        // Write the frozen start point (copy of medoid's adjacency list).
-        // The header declares num_additional=1, so loaders expect exactly one
-        // extra node after the npoints real nodes.
-        let medoid_adj = &self.adjacency[self.medoid];
-        let num_neighbors = medoid_adj.len() as u32;
-        f.write_all(&num_neighbors.to_le_bytes())?;
-        for &neighbor in medoid_adj {
-            f.write_all(&neighbor.to_le_bytes())?;
-        }
-        index_size += (4 + medoid_adj.len() * 4) as u64;
-
-        // Seek back and write correct header
-        f.seek(SeekFrom::Start(0))?;
-        f.write_all(&index_size.to_le_bytes())?;
-        f.write_all(&observed_max_degree.to_le_bytes())?;
-        f.flush()?;
+        let file = std::fs::File::create(path)?;
+        diskann_providers::storage::bin::save_graph_to_writer(self, self.medoid as u32, file)
+            .map_err(|e| PiPNNError::Config(format!("save_graph failed: {}", e)))?;
 
         tracing::info!(
             path = %path.display(),
             npoints = self.npoints,
-            max_degree = observed_max_degree,
-            start_point = start_point,
+            start_point = self.medoid as u32,
             "Saved PiPNN graph in DiskANN format"
         );
-
         Ok(())
+    }
+}
+
+/// Hook into the workspace graph serializer. Pipnn appends one frozen
+/// start-point node after the `npoints` real nodes; the frozen node duplicates
+/// the medoid's adjacency list (DiskANN's loader expects exactly
+/// `additional_points()` such nodes after the real ones).
+impl diskann_providers::storage::bin::GetAdjacencyList for PiPNNGraph {
+    type Element = u32;
+    type Item<'a> = &'a [u32];
+
+    fn get_adjacency_list(&self, i: usize) -> diskann::ANNResult<Self::Item<'_>> {
+        // Index `npoints` is the synthetic frozen start point.
+        let idx = if i == self.npoints { self.medoid } else { i };
+        Ok(self.adjacency[idx].as_slice())
+    }
+
+    fn total(&self) -> usize {
+        self.npoints + 1 // +1 for the frozen start point
+    }
+
+    fn additional_points(&self) -> u64 {
+        1
+    }
+
+    fn max_degree(&self) -> Option<u32> {
+        None // use observed max
     }
 }
 
