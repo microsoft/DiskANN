@@ -73,15 +73,12 @@ impl PartialEq for PivotContainer {
 
 impl Eq for PivotContainer {}
 
-/// The implementation of computing L2-squared norm of a vector
-fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
-    let start = index * dim;
-    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr().add(start), dim) };
+/// Compute the L2-squared norm of a single vector slice.
+fn compute_vec_l2sq(slice: &[f32]) -> f32 {
     let mut sum_squared = 0.0;
     for &value in slice {
         sum_squared += value * value;
     }
-
     sum_squared
 }
 
@@ -110,15 +107,15 @@ pub fn compute_vecs_l2sq(
     }
 
     if dim < 5 {
-        for (i, vec_l2sq) in vecs_l2sq.iter_mut().enumerate() {
-            *vec_l2sq = compute_vec_l2sq(data, i, dim);
+        for (vec_l2sq, chunk) in vecs_l2sq.iter_mut().zip(data.chunks_exact(dim)) {
+            *vec_l2sq = compute_vec_l2sq(chunk);
         }
     } else {
         vecs_l2sq
             .par_iter_mut()
-            .enumerate()
-            .for_each_in_pool(pool, |(i, vec_l2sq)| {
-                *vec_l2sq = compute_vec_l2sq(data, i, dim);
+            .zip(data.par_chunks_exact(dim))
+            .for_each_in_pool(pool, |(vec_l2sq, chunk)| {
+                *vec_l2sq = compute_vec_l2sq(chunk);
             });
     }
 
