@@ -33,16 +33,12 @@ pub enum ComputeRecallError {
     DistanceRowsMismatch(usize, usize),
     #[error("recall k value {0} must be less than or equal to recall n {1}")]
     RecallKAndNError(usize, usize),
-    #[error("number of results per query {0} must be at least the specified recall k {1}")]
-    NotEnoughResults(usize, usize),
     #[error(
         "number of groundtruth values per query {0} must be at least the specified recall n {1}"
     )]
     NotEnoughGroundTruth(usize, usize),
     #[error("number of groundtruth distances {0} does not match groundtruth entries {1}")]
-    NotEnoughGroundTruthDistances(usize, usize),
-    #[error("number of groundtruth distances {0} for query {2} does not match groundtruth ids {1}")]
-    GroundTruthDistanceMismatch(usize, usize, usize),
+    GroundTruthDistanceMismatch(usize, usize),
 }
 
 /// An abstraction over data-structures such as vector-of-vectors.
@@ -120,6 +116,12 @@ pub trait RecallCompatible: Eq + Hash + Clone + std::fmt::Debug {}
 
 impl<T> RecallCompatible for T where T: Eq + Hash + Clone + std::fmt::Debug {}
 
+#[derive(Copy, Clone)]
+pub enum GroundTruthMode {
+    Fixed,
+    Flexible,
+}
+
 /// Compute the K-nearest-neighbors recall value "K-recall-at-N".
 ///
 /// For each entry in `groundtruth` and `results`, this computes the `recall_k` number of
@@ -129,7 +131,7 @@ impl<T> RecallCompatible for T where T: Eq + Hash + Clone + std::fmt::Debug {}
 /// the last values of each entry of `results`. Values will be counted towards the recall if
 /// they have the same distance as the last ordered candidate.
 ///
-/// If `allow_insufficient_results`, an error will not be given if an entry in `results`
+/// Note that an error will NOT be given if an entry in `results`
 /// has fewer than `recall_n` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
@@ -137,7 +139,7 @@ pub fn knn<T>(
     results: &dyn Rows<T>,
     recall_k: usize,
     recall_n: usize,
-    allow_insufficient_results: bool,
+    ground_truth_mode: GroundTruthMode,
 ) -> Result<RecallMetrics, ComputeRecallError>
 where
     T: RecallCompatible,
@@ -151,21 +153,22 @@ where
         return Err(ComputeRecallError::RowsMismatch(nrows, groundtruth.nrows()));
     }
 
-    if let Some(cols) = results.ncols()
-        && cols < recall_n
-        && !allow_insufficient_results
-    {
-        return Err(ComputeRecallError::NotEnoughResults(cols, recall_n));
-    }
-
-    // Validate groundtruth size for fixed-size sources
-    match groundtruth.ncols() {
-        Some(ncols) if ncols < recall_k => {
-            return Err(ComputeRecallError::NotEnoughGroundTruth(ncols, recall_k));
+    if let GroundTruthMode::Fixed = ground_truth_mode {
+        // Validate that all rows in `groundtruth` have at least `recall_k` entries.
+        for i in 0..nrows {
+            let gt_row = groundtruth.row(i);
+            if gt_row.len() < recall_k {
+                return Err(ComputeRecallError::NotEnoughGroundTruth(
+                    gt_row.len(),
+                    recall_k,
+                ));
+            }
         }
-        _ => {}
     }
 
+    // If `groundtruth_distances` are present, validate that there are
+    // enough rows and that each row has the same
+    // number of entries as the corresponding row in `groundtruth`.
     if let Some(distances) = groundtruth_distances {
         if nrows != distances.nrows() {
             return Err(ComputeRecallError::DistanceRowsMismatch(
@@ -174,14 +177,15 @@ where
             ));
         }
 
-        match groundtruth.ncols() {
-            Some(ncols) if distances.ncols() != ncols => {
-                return Err(ComputeRecallError::NotEnoughGroundTruthDistances(
-                    distances.ncols(),
-                    ncols,
+        for i in 0..nrows {
+            let gt_row = groundtruth.row(i);
+            let distances_row = distances.row(i);
+            if gt_row.len() != distances_row.len() {
+                return Err(ComputeRecallError::GroundTruthDistanceMismatch(
+                    distances_row.len(),
+                    gt_row.len(),
                 ));
             }
-            _ => {}
         }
     }
 
@@ -192,9 +196,6 @@ where
 
     for i in 0..results.nrows() {
         let result = results.row(i);
-        if !allow_insufficient_results && result.len() < recall_n {
-            return Err(ComputeRecallError::NotEnoughResults(result.len(), recall_n));
-        }
 
         let gt_row = groundtruth.row(i);
         // `groundtruth` does not have to be fixed-size,
@@ -213,15 +214,9 @@ where
         // value is constant
         if let Some(distances) = groundtruth_distances {
             let distances_row = distances.row(i);
-            if distances_row.len() != gt_row.len() {
-                return Err(ComputeRecallError::GroundTruthDistanceMismatch(
-                    distances_row.len(),
-                    gt_row.len(),
-                    i,
-                ));
-            }
+
             // we've already checked that `results` and `distances` have at lesat
-            // `this_recall_k` entries, so it's safe to access `distances_row[this_recall_k - 1]`
+            // `recall_k >= this_recall_k` entries, so it's safe to access `distances_row[this_recall_k - 1]`
             let last_distance = distances_row[this_recall_k - 1];
             for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
                 if *d == last_distance {
@@ -454,7 +449,7 @@ mod tests {
                 &our_results,
                 expected.recall_k,
                 expected.recall_n,
-                false,
+                GroundTruthMode::Fixed,
             )
             .unwrap();
 
@@ -499,7 +494,7 @@ mod tests {
                 &our_results,
                 expected.recall_k,
                 expected.recall_n,
-                false,
+                GroundTruthMode::Fixed,
             )
             .unwrap();
 
@@ -523,7 +518,7 @@ mod tests {
     fn test_error_recall_k_and_n() {
         let groundtruth = Matrix::<u32>::new(0, 10, 10);
         let results = Matrix::<u32>::new(0, 10, 10);
-        let err = knn(&groundtruth, None, &results, 11, 10, false).unwrap_err();
+        let err = knn(&groundtruth, None, &results, 11, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RecallKAndNError(..)));
     }
 
@@ -531,10 +526,10 @@ mod tests {
     fn test_error_rows_mismatch() {
         let groundtruth = Matrix::<u32>::new(0, 11, 10);
         let results = Matrix::<u32>::new(0, 10, 10);
-        let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
+        let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::RowsMismatch(..)));
         let err_allow_insufficient_results =
-            knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
+            knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(
             err_allow_insufficient_results,
             ComputeRecallError::RowsMismatch(..)
@@ -542,31 +537,13 @@ mod tests {
     }
 
     #[test]
-    fn test_error_not_enough_results() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 10);
-        let results = Matrix::<u32>::new(0, 10, 5);
-        let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
-        assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
-        let _ = knn(&groundtruth, None, &results, 5, 10, true);
-    }
-
-    #[test]
-    fn test_error_not_enough_results_dynamic() {
-        let groundtruth = Matrix::<u32>::new(0, 10, 10);
-        let results: Vec<_> = (0..10).map(|_| vec![0; 5]).collect();
-        let err = knn(&groundtruth, None, &results, 5, 10, false).unwrap_err();
-        assert!(matches!(err, ComputeRecallError::NotEnoughResults(..)));
-        let _ = knn(&groundtruth, None, &results, 5, 10, true);
-    }
-
-    #[test]
     fn test_error_not_enough_groundtruth() {
         let groundtruth = Matrix::<u32>::new(0, 10, 5);
         let results = Matrix::<u32>::new(0, 10, 10);
-        let err = knn(&groundtruth, None, &results, 10, 10, false).unwrap_err();
+        let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
         let err_allow_insufficient_results =
-            knn(&groundtruth, None, &results, 10, 10, true).unwrap_err();
+            knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
         assert!(matches!(
             err_allow_insufficient_results,
             ComputeRecallError::NotEnoughGroundTruth(..)
@@ -578,8 +555,21 @@ mod tests {
         let groundtruth: Vec<_> = (0..10).map(|_| vec![0u32; 5]).collect();
         let results = Matrix::<u32>::new(0, 10, 10);
         // Should succeed: each row uses this_recall_k = min(5, 10) = 5
-        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
-        assert_eq!(recall.num_queries, 10);
+        // Should succeed in Flexible mode, but fail in Fixed mode
+        let recall_flexible = knn(
+            &groundtruth,
+            None,
+            &results,
+            10,
+            10,
+            GroundTruthMode::Flexible,
+        )
+        .unwrap();
+        assert_eq!(recall_flexible.num_queries, 10);
+        // Should fail in Fixed mode
+        let err = knn(&groundtruth, None, &results, 10, 10, GroundTruthMode::Fixed).unwrap_err();
+        assert!(matches!(err, ComputeRecallError::NotEnoughGroundTruth(..)));
+        assert_eq!(recall_flexible.num_queries, 10);
     }
 
     #[test]
@@ -592,7 +582,15 @@ mod tests {
                 results[(i, j)] = v;
             }
         }
-        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        let recall = knn(
+            &groundtruth,
+            None,
+            &results,
+            10,
+            10,
+            GroundTruthMode::Flexible,
+        )
+        .unwrap();
         assert!((recall.average - 1.0).abs() < 1e-10);
     }
 
@@ -608,7 +606,15 @@ mod tests {
                 results[(i, j)] = v;
             }
         }
-        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        let recall = knn(
+            &groundtruth,
+            None,
+            &results,
+            10,
+            10,
+            GroundTruthMode::Flexible,
+        )
+        .unwrap();
         assert!((recall.average - 0.6).abs() < 1e-10);
     }
 
@@ -631,7 +637,15 @@ mod tests {
             }
         }
 
-        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        let recall = knn(
+            &groundtruth,
+            None,
+            &results,
+            10,
+            10,
+            GroundTruthMode::Flexible,
+        )
+        .unwrap();
         assert_eq!(recall.num_queries, 10);
         assert!((recall.average - 1.0).abs() < 1e-10);
     }
@@ -641,7 +655,15 @@ mod tests {
         let groundtruth: Vec<Vec<u32>> = (0..10).map(|_| vec![]).collect();
         let results = Matrix::<u32>::new(0, 10, 10);
 
-        let recall = knn(&groundtruth, None, &results, 10, 10, false).unwrap();
+        let recall = knn(
+            &groundtruth,
+            None,
+            &results,
+            10,
+            10,
+            GroundTruthMode::Flexible,
+        )
+        .unwrap();
         assert_eq!(recall.num_queries, 10);
         assert_eq!(recall.average, 0.0);
         assert!(!recall.average.is_nan());
@@ -659,7 +681,7 @@ mod tests {
             &results,
             10,
             10,
-            false,
+            GroundTruthMode::Fixed,
         )
         .unwrap_err();
         assert!(matches!(err, ComputeRecallError::DistanceRowsMismatch(..)));
@@ -676,17 +698,17 @@ mod tests {
             &results,
             10,
             10,
-            false,
+            GroundTruthMode::Fixed,
         )
         .unwrap_err();
         assert!(matches!(
             err,
-            ComputeRecallError::NotEnoughGroundTruthDistances(..)
+            ComputeRecallError::GroundTruthDistanceMismatch(..)
         ));
     }
 
     #[test]
-    fn test_error_result_distance_mismatch() {
+    fn test_error_distance_cols_mismatch_variable_size_groundtruth() {
         // groundtruth: 2 rows, first row has 3 elements, second row has 2
         let groundtruth: Vec<Vec<u32>> = vec![vec![1, 2, 3], vec![4, 5]];
         // distances: first row has 2 elements (should be 3), second row has 2 (matches)
@@ -705,12 +727,15 @@ mod tests {
             &results,
             3,
             3,
-            false,
+            GroundTruthMode::Flexible,
         )
         .unwrap_err();
+
+        println!("{err}");
+
         assert!(matches!(
             err,
-            ComputeRecallError::GroundTruthDistanceMismatch(2, 3, 0)
+            ComputeRecallError::GroundTruthDistanceMismatch(2, 3)
         ));
     }
 }
