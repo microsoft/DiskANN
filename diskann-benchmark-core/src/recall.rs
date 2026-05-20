@@ -116,7 +116,10 @@ pub trait RecallCompatible: Eq + Hash + Clone + std::fmt::Debug {}
 
 impl<T> RecallCompatible for T where T: Eq + Hash + Clone + std::fmt::Debug {}
 
-#[derive(Copy, Clone)]
+// Enum representing whether the ground truth has fixed size 
+// (every row should have the same number, >= recall_k entries)
+// or flexible size (row may have any number of entries, including none)
+#[derive(Copy, Clone, Debug)]
 pub enum GroundTruthMode {
     Fixed,
     Flexible,
@@ -133,6 +136,10 @@ pub enum GroundTruthMode {
 ///
 /// Note that an error will NOT be given if an entry in `results`
 /// has fewer than `recall_n` candidates.
+///
+/// If `ground_truth_mode` is `GroundTruthMode::Fixed`, then an 
+/// error will be given if any entry in `groundtruth` has fewer 
+/// than `recall_k` candidates.
 pub fn knn<T>(
     groundtruth: &dyn Rows<T>,
     groundtruth_distances: Option<StridedView<'_, f32>>,
