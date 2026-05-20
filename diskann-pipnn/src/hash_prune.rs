@@ -13,6 +13,7 @@ use std::cell::RefCell;
 
 use parking_lot::Mutex;
 
+use crate::rayon_util::ParIterInstalled;
 use diskann::utils::VectorRepr;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -55,13 +56,10 @@ impl LshSketches {
         // For tall-thin output (npoints x 12), this is faster than GEMM.
         let mut sketches = vec![0.0f32; npoints * num_planes];
 
-        // Allow: callers (`build_internal`, `build_internal_sq`) wrap this in
-        // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
-        #[allow(clippy::disallowed_methods)]
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
-            .for_each(|(i, sketch_row)| {
+            .for_each_installed(|(i, sketch_row)| {
                 // Thread-local buffer for T -> f32 conversion.
                 thread_local! {
                     static SKETCH_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
@@ -112,13 +110,10 @@ impl LshSketches {
 
         let mut sketches = vec![0.0f32; npoints * num_planes];
 
-        // Allow: callers (`build_internal`, `build_internal_sq`) wrap this in
-        // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
-        #[allow(clippy::disallowed_methods)]
         sketches
             .par_chunks_mut(num_planes)
             .enumerate()
-            .for_each(|(i, sketch_row)| {
+            .for_each_installed(|(i, sketch_row)| {
                 let bits = qdata.get(i);
                 for j in 0..num_planes {
                     let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
@@ -231,16 +226,6 @@ impl HashPruneReservoir {
         }
     }
 
-    /// Create a reservoir with a specific initial capacity hint.
-    pub fn new_with_capacity(l_max: usize, initial_capacity: usize) -> Self {
-        Self {
-            entries: Vec::with_capacity(initial_capacity),
-            l_max,
-            farthest_dist: 0,
-            farthest_idx: 0,
-        }
-    }
-
     /// Find entry with matching hash.
     /// Uses AVX-512 to compare 8 entries per instruction by loading the hash+distance
     /// word (upper 32 bits of each 8-byte entry) and masking to the hash field.
@@ -251,6 +236,10 @@ impl HashPruneReservoir {
         {
             use std::arch::x86_64::*;
             if n >= 8 {
+                // SAFETY: AVX-512 intrinsics gated by target_feature cfg. ReservoirEntry
+                // is `#[repr(C)]` with size 8 = sizeof(u64), so the u64 cast aliases bytes
+                // legally. `ptr.add(base)` stays within `entries` since `base + 8 ≤ n`.
+                // Trailing `get_unchecked(i)` has `i < n`.
                 unsafe {
                     let ptr = self.entries.as_ptr() as *const u64;
                     let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
@@ -279,6 +268,10 @@ impl HashPruneReservoir {
         {
             use std::arch::x86_64::*;
             if n >= 4 {
+                // SAFETY: AVX2 intrinsics — `target_arch = "x86_64"` guarantees the
+                // ISA on a v3 baseline (.cargo/config.toml). ReservoirEntry is `#[repr(C)]`
+                // sized 8 bytes; `ptr.add(base)` stays in bounds because `base + 4 ≤ n`.
+                // `get_unchecked(i)` has `i < n`.
                 unsafe {
                     let ptr = self.entries.as_ptr() as *const u64;
                     let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
@@ -335,21 +328,17 @@ impl HashPruneReservoir {
     /// Try to insert a candidate neighbor with the given hash and distance.
     /// Distance is converted to bf16 at the boundary for compact storage.
     ///
-    /// Uses unsorted storage: find_hash is O(l_max) linear scan but insert/evict
-    /// are O(1) via push/swap_remove. Eliminates the O(l_max) memmove per insert
-    /// that dominated HashPrune time at 10M+ scale (~10s → ~3s for BigANN 10M).
+    /// Unsorted storage: find_hash is O(l_max) linear scan but insert/evict
+    /// are O(1) via push/swap_remove.
     #[inline]
     pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
         let dist_bf16 = f32_to_bf16(distance);
 
-        // Early rejection: if reservoir is full and new entry is farther than the
-        // worst current entry, it can't improve any bucket. This skips the O(l_max)
-        // find_hash scan for ~30%+ of edges at 10M scale, where reservoirs fill
-        // quickly and most late-arriving edges are worse than the current worst.
+        // Early rejection: if reservoir is full and the new entry is farther
+        // than the worst current entry, it can't improve any bucket.
         //
         // Correctness: if hash exists with distance X, then X <= farthest_dist.
-        // If dist_bf16 >= farthest_dist >= X, then dist_bf16 >= X, so we wouldn't
-        // update the existing entry anyway.
+        // If dist_bf16 >= farthest_dist >= X, dist_bf16 wouldn't replace X anyway.
         if self.entries.len() >= self.l_max && dist_bf16 >= self.farthest_dist {
             return false;
         }
@@ -483,12 +472,9 @@ impl HashPrune {
         max_degree: usize,
     ) -> Self {
         let t1 = std::time::Instant::now();
-        // Lazy allocation: each reservoir allocates its entry Vec at l_max capacity
-        // on first push, not upfront. Pre-allocating npoints × l_max bytes upfront
-        // is ~7 GB at BigANN 10M scale and adds ~3s of malloc time; spreading the
-        // allocs over insertions is net cheaper on faer. The MKL fp16 path saw
-        // glibc arena contention with this pattern at high thread count
-        // (see pipnn-mkl-fp16 branch — uses `new(l_max)` there).
+        // Lazy: each reservoir allocates its entry Vec on first push, not upfront.
+        // Upfront alloc of npoints × l_max bytes spikes peak RSS and adds serial
+        // malloc time; spreading the allocs over parallel inserts is net cheaper.
         let reservoirs = (0..npoints)
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
@@ -511,15 +497,6 @@ impl HashPrune {
     pub fn add_edge(&self, p: usize, c: usize, distance: f32) {
         let hash = self.sketches.relative_hash(p, c);
         self.reservoirs[p].lock().insert(hash, c as u32, distance);
-    }
-
-    /// Add a batch of edges in parallel. Each edge is (point_idx, neighbor_idx, distance).
-    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
-    #[allow(clippy::disallowed_methods)]
-    pub fn add_edges_parallel(&self, edges: &[(usize, usize, f32)]) {
-        edges.par_iter().for_each(|&(p, c, dist)| {
-            self.add_edge(p, c, dist);
-        });
     }
 
     /// Add edges from a leaf build result, batching by source point.
@@ -551,14 +528,11 @@ impl HashPrune {
     /// Consumes self so that reservoirs and sketches are freed as extraction proceeds,
     /// rather than staying alive until the caller drops HashPrune.
     /// Each reservoir is dropped immediately after its neighbors are extracted.
-    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
-    #[allow(clippy::disallowed_methods)]
     pub fn extract_graph(self) -> Vec<Vec<u32>> {
         let max_degree = self.max_degree;
-        let npoints = self.reservoirs.len();
-        // Drop sketches first (~50 MB for 1M points × 12 planes).
+        // Drop sketches first to free memory before the parallel extract scan.
         drop(self.sketches);
-        let result: Vec<Vec<u32>> = self.reservoirs
+        self.reservoirs
             .into_par_iter()
             .map(|mutex| {
                 let res = mutex.into_inner();
@@ -566,16 +540,12 @@ impl HashPrune {
                 neighbors.truncate(max_degree);
                 neighbors.into_iter().map(|(id, _)| id).collect()
             })
-            .collect();
-
-        result
+            .collect_installed()
     }
 
     /// Extract the full reservoir (up to l_max) with distances for final_prune.
     /// Returns (neighbor_id, distance) pairs sorted by distance.
     /// Final_prune selects max_degree from this larger candidate pool using diversity.
-    // Allow: callers run within `pool.install(|| ...)`, so parallel work uses the correct pool.
-    #[allow(clippy::disallowed_methods)]
     pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
         let l_max = self.l_max;
         drop(self.sketches);
@@ -586,12 +556,7 @@ impl HashPrune {
                 // Saturate up to l_max so final_prune gets the full candidate pool.
                 res.get_neighbors_saturated(l_max)
             })
-            .collect()
-    }
-
-    /// Get the number of points.
-    pub fn num_points(&self) -> usize {
-        self.reservoirs.len()
+            .collect_installed()
     }
 }
 
@@ -736,12 +701,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
     fn test_hash_prune_parallel_safety() {
         use rayon::prelude::*;
         let data = vec![0.0f32; 100 * 4];
         let hp = HashPrune::new(&data, 100, 4, 4, 10, 5, 42);
-        (0..50).into_par_iter().for_each(|i| {
+        (0..50).into_par_iter().for_each_installed(|i| {
             hp.add_edge(i, (i + 1) % 100, 1.0);
             hp.add_edge((i + 1) % 100, i, 1.0);
         });

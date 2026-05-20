@@ -8,6 +8,7 @@
 //! Recursively partitions the dataset into overlapping clusters using an iterative
 //! work-queue approach. All oversized clusters at each level are processed in parallel.
 
+use crate::rayon_util::ParIterInstalled;
 use diskann::utils::VectorRepr;
 use rand::prelude::IndexedRandom;
 use rand::SeedableRng;
@@ -35,7 +36,6 @@ pub struct PartitionConfig {
     pub leader_cap: usize,
 }
 
-
 /// Compute the number of leaders to sample, capped by leader_cap.
 #[inline]
 fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
@@ -56,8 +56,6 @@ struct WorkItem {
 /// Uses an iterative work-queue: each round processes all oversized clusters in parallel,
 /// producing new work items for the next round. Completed leaves are pushed to a shared
 /// result vec. No recursion, parallel at every level.
-// Allow: callers wrap this in `pool.install(|| ...)`, so parallel work uses the correct pool.
-#[allow(clippy::disallowed_methods)]
 pub fn partition<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
@@ -91,7 +89,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
             .into_par_iter()
             .map(|item| partition_one_level(data, ndims, config, item))
-            .collect();
+            .collect_installed();
 
         let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
         let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
@@ -108,13 +106,10 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     // Eliminates the bug where per-call `merge_small` would leave one
     // < c_min remainder per partition_one_level call (10s of thousands of
     // tiny leaves at deep BFS levels in the prior implementation).
-    let leaves = global_merge_small(leaves, config.c_min, config.c_max);
-
-    leaves
+    global_merge_small(leaves, config.c_min, config.c_max)
 }
 
 /// Quantized partition variant using Hamming distance.
-#[allow(clippy::disallowed_methods)]
 pub fn partition_quantized(
     qdata: &crate::quantize::QuantizedData,
     npoints: usize,
@@ -139,12 +134,15 @@ pub fn partition_quantized(
     let mut iteration = 0;
     while !work.is_empty() {
         iteration += 1;
-        assert!(iteration <= 50, "quantized partition exceeded 50 iterations");
+        assert!(
+            iteration <= 50,
+            "quantized partition exceeded 50 iterations"
+        );
 
         let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
             .into_par_iter()
             .map(|item| partition_one_level_quantized(qdata, config, item))
-            .collect();
+            .collect_installed();
 
         let total_work: usize = results.iter().map(|(w, _)| w.len()).sum();
         let total_leaves: usize = results.iter().map(|(_, l)| l.len()).sum();
@@ -159,7 +157,11 @@ pub fn partition_quantized(
 
     let leaves = global_merge_small(leaves, config.c_min, config.c_max);
 
-    tracing::info!(total_leaves = leaves.len(), levels = iteration, "Partition complete (quantized)");
+    tracing::info!(
+        total_leaves = leaves.len(),
+        levels = iteration,
+        "Partition complete (quantized)"
+    );
     leaves
 }
 
@@ -177,16 +179,14 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
     let n = item.indices.len();
     debug_assert!(n > config.c_max);
 
-    let fanout = config
-        .fanout
-        .get(item.level)
-        .copied()
-        .unwrap_or(1)
-        .min(n);
+    let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
     let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
-    let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
+    let seed = item
+        .seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(n as u64);
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let leaders: Vec<u32> = item
         .indices
@@ -225,21 +225,17 @@ fn partition_one_level_quantized(
     let n = item.indices.len();
     debug_assert!(n > config.c_max);
 
-    let fanout = config
-        .fanout
-        .get(item.level)
-        .copied()
-        .unwrap_or(1)
-        .min(n);
+    let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
     let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
-    let seed = item.seed.wrapping_mul(6364136223846793005).wrapping_add(n as u64);
+    let seed = item
+        .seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(n as u64);
 
     let stride = (n / num_leaders).max(1);
-    let leaders: Vec<u32> = (0..num_leaders)
-        .map(|i| item.indices[i * stride])
-        .collect();
+    let leaders: Vec<u32> = (0..num_leaders).map(|i| item.indices[i * stride]).collect();
 
     let clusters = assign_to_leaders_quantized(qdata, &item.indices, &leaders, fanout);
 
@@ -267,7 +263,7 @@ fn partition_one_level_quantized(
 use std::cell::RefCell;
 
 /// Reusable per-thread buffers for partition stripe processing.
-/// Avoids per-stripe alloc + memset that accounted for ~9% of partition time.
+/// Avoids per-stripe alloc + memset on hot path.
 struct StripeBuffers {
     p_data: Vec<f32>,
     dots: Vec<f32>,
@@ -333,11 +329,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     let stripe: usize =
         ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>())).clamp(1, np);
 
-    // Mini-batch size for fused GEMM + top-k. Sized so dots tile (MB × nl × 4 bytes)
-    // stays in private L2 (~2 MB per core): MB ≤ 2 MB / (nl × 4). Pin to 128
-    // when nl ≤ 4096 — gives 2 MB tile ceiling at nl=4096 and good GEMM
-    // throughput per call. Microbench (gemm_bw_bench, c4-48 Granite Rapids):
-    // 1.5-1.85× at T=24-48 vs full-stripe naive at all tested PiPNN shapes.
+    // Mini-batch size for fused GEMM + top-k. Sized so the dots tile
+    // (MB × nl × 4 bytes) stays in private L2 (~2 MB per core).
     const MINI_BATCH: usize = 128;
 
     // Small clusters: run single-threaded (no rayon overhead).
@@ -351,9 +344,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             let sn = end - start;
             let stripe_points = &points[start..end];
 
-            // Buffers sized for one MINI_BATCH only (not full stripe). Was sn*nl*4 = 16 MB
-            // for dots, which spilled to DRAM under T=24+; now ≤ MINI_BATCH*nl*4 ≤ 2 MB
-            // stays in private L2.
+            // Buffers sized for one MINI_BATCH only (not full stripe) so the
+            // dots tile stays in private L2.
             let mb_pd_len = MINI_BATCH * ndims;
             if bufs.p_data.len() < mb_pd_len {
                 bufs.p_data.resize(mb_pd_len, 0.0);
@@ -386,8 +378,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 {
                     let p32 = &mut p_data[..mb * ndims];
                     for (i, &idx) in mb_points.iter().enumerate() {
-                        let src = &data
-                            [idx as usize * ndims..(idx as usize + 1) * ndims];
+                        let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
                         T::as_f32_into(src, &mut p32[i * ndims..(i + 1) * ndims])
                             .expect("f32 conversion");
                     }
@@ -396,7 +387,6 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 }
 
                 for i in 0..mb {
-                    // dots is f32 (both MKL f16f16f32 and faer paths produce f32).
                     let dot_row = &dots[i * nl..(i + 1) * nl];
 
                     for t in top[..num_assign].iter_mut() {
@@ -404,42 +394,107 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     }
                     let threshold_idx = num_assign - 1;
 
-                match metric {
-                    Metric::CosineNormalized => {
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-                        {
-                            use std::arch::x86_64::*;
-                            let chunks = nl / 16;
-                            unsafe {
-                                let one = _mm512_set1_ps(1.0);
-                                for chunk in 0..chunks {
-                                    let base = chunk * 16;
-                                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
-                                    let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
-                                    let d = _mm512_sub_ps(one, dots);
-                                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
-                                    if mask != 0 {
-                                        let mut d_arr = [0.0f32; 16];
-                                        _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
-                                        let mut m = mask;
-                                        while m != 0 {
-                                            let lane = m.trailing_zeros() as usize;
-                                            m &= m - 1;
-                                            let j = base + lane;
-                                            let dist = d_arr[lane];
-                                            if dist < top[threshold_idx].1 {
-                                                top[threshold_idx] = (j as u32, dist);
-                                                let mut t = threshold_idx;
-                                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                                    top.swap(t, t - 1);
-                                                    t -= 1;
+                    match metric {
+                        Metric::CosineNormalized => {
+                            #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                            {
+                                use std::arch::x86_64::*;
+                                let chunks = nl / 16;
+                                unsafe {
+                                    let one = _mm512_set1_ps(1.0);
+                                    for chunk in 0..chunks {
+                                        let base = chunk * 16;
+                                        let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                                        let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
+                                        let d = _mm512_sub_ps(one, dots);
+                                        let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
+                                        if mask != 0 {
+                                            let mut d_arr = [0.0f32; 16];
+                                            _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
+                                            let mut m = mask;
+                                            while m != 0 {
+                                                let lane = m.trailing_zeros() as usize;
+                                                m &= m - 1;
+                                                let j = base + lane;
+                                                let dist = d_arr[lane];
+                                                if dist < top[threshold_idx].1 {
+                                                    top[threshold_idx] = (j as u32, dist);
+                                                    let mut t = threshold_idx;
+                                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                                        top.swap(t, t - 1);
+                                                        t -= 1;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                    for j in (chunks * 16)..nl {
+                                        let d = 1.0 - *dot_row.get_unchecked(j);
+                                        if d < top[threshold_idx].1 {
+                                            top[threshold_idx] = (j as u32, d);
+                                            let mut t = threshold_idx;
+                                            while t > 0 && top[t].1 < top[t - 1].1 {
+                                                top.swap(t, t - 1);
+                                                t -= 1;
+                                            }
+                                        }
+                                    }
                                 }
-                                for j in (chunks * 16)..nl {
-                                    let d = 1.0 - *dot_row.get_unchecked(j);
+                            }
+                            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                            {
+                                use std::arch::x86_64::*;
+                                let chunks = nl / 8;
+                                // SAFETY: AVX2 cfg-gated. `dot_row.as_ptr().add(base)`
+                                // stays in bounds because `base + 8 ≤ nl = dot_row.len()`.
+                                // Tail loop uses `j < nl` and `get_unchecked`.
+                                unsafe {
+                                    let one = _mm256_set1_ps(1.0);
+                                    for chunk in 0..chunks {
+                                        let base = chunk * 8;
+                                        let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                        let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                        let d = _mm256_sub_ps(one, dots);
+                                        let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(
+                                            d, thresh,
+                                        ));
+                                        if mask != 0 {
+                                            let mut d_arr = [0.0f32; 8];
+                                            _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                            let mut m = mask as u32;
+                                            while m != 0 {
+                                                let lane = m.trailing_zeros() as usize;
+                                                m &= m - 1;
+                                                let j = base + lane;
+                                                let dist = d_arr[lane];
+                                                if dist < top[threshold_idx].1 {
+                                                    top[threshold_idx] = (j as u32, dist);
+                                                    let mut t = threshold_idx;
+                                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                                        top.swap(t, t - 1);
+                                                        t -= 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    for j in (chunks * 8)..nl {
+                                        let d = 1.0 - *dot_row.get_unchecked(j);
+                                        if d < top[threshold_idx].1 {
+                                            top[threshold_idx] = (j as u32, d);
+                                            let mut t = threshold_idx;
+                                            while t > 0 && top[t].1 < top[t - 1].1 {
+                                                top.swap(t, t - 1);
+                                                t -= 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_arch = "x86_64"))]
+                            {
+                                for j in 0..nl {
+                                    let d = 1.0 - unsafe { *dot_row.get_unchecked(j) };
                                     if d < top[threshold_idx].1 {
                                         top[threshold_idx] = (j as u32, d);
                                         let mut t = threshold_idx;
@@ -451,204 +506,168 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                 }
                             }
                         }
-                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
-                        {
-                            use std::arch::x86_64::*;
-                            let chunks = nl / 8;
-                            unsafe {
-                                let one = _mm256_set1_ps(1.0);
-                                for chunk in 0..chunks {
-                                    let base = chunk * 8;
-                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
-                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
-                                    let d = _mm256_sub_ps(one, dots);
-                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
-                                    if mask != 0 {
-                                        let mut d_arr = [0.0f32; 8];
-                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
-                                        let mut m = mask as u32;
-                                        while m != 0 {
-                                            let lane = m.trailing_zeros() as usize;
-                                            m &= m - 1;
-                                            let j = base + lane;
-                                            let dist = d_arr[lane];
-                                            if dist < top[threshold_idx].1 {
-                                                top[threshold_idx] = (j as u32, dist);
-                                                let mut t = threshold_idx;
-                                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                                    top.swap(t, t - 1);
-                                                    t -= 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                for j in (chunks * 8)..nl {
-                                    let d = 1.0 - *dot_row.get_unchecked(j);
-                                    if d < top[threshold_idx].1 {
-                                        top[threshold_idx] = (j as u32, d);
-                                        let mut t = threshold_idx;
-                                        while t > 0 && top[t].1 < top[t - 1].1 {
-                                            top.swap(t, t - 1);
-                                            t -= 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            for j in 0..nl {
-                                let d = 1.0 - unsafe { *dot_row.get_unchecked(j) };
-                                if d < top[threshold_idx].1 {
-                                    top[threshold_idx] = (j as u32, d);
-                                    let mut t = threshold_idx;
-                                    while t > 0 && top[t].1 < top[t - 1].1 {
-                                        top.swap(t, t - 1);
-                                        t -= 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Metric::Cosine => {
-                        let pi_sqrt: f32 = p_data[i * ndims..(i + 1) * ndims]
-                            .iter()
-                            .map(|v| v * v)
-                            .sum::<f32>()
-                            .sqrt();
-                        for j in 0..nl {
-                            let dot = unsafe { *dot_row.get_unchecked(j) };
-                            let denom = pi_sqrt * l_norms[j];
-                            let cos = if denom > 0.0 { dot / denom } else { 0.0 };
-                            let d = 1.0 - cos;
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                let mut t = threshold_idx;
-                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                    top.swap(t, t - 1);
-                                    t -= 1;
-                                }
-                            }
-                        }
-                    }
-                    Metric::L2 => {
-                        let pi: f32 = p_data[i * ndims..(i + 1) * ndims]
-                            .iter()
-                            .map(|v| v * v)
-                            .sum();
-                        // Process 16 leaders at a time using AVX-512: compute
-                        // distances in SIMD, only drop to scalar for the rare
-                        // lanes that beat the current threshold.
-                        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-                        {
-                            use std::arch::x86_64::*;
-                            let chunks = nl / 16;
-                            let remainder = nl % 16;
-                            unsafe {
-                                let pi_v = _mm512_set1_ps(pi);
-                                let two = _mm512_set1_ps(2.0);
-                                for chunk in 0..chunks {
-                                    let base = chunk * 16;
-                                    let thresh = _mm512_set1_ps(top[threshold_idx].1);
-                                    let norms = _mm512_loadu_ps(l_norms.as_ptr().add(base));
-                                    let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
-                                    // d = pi + norms - 2*dots
-                                    let d = _mm512_add_ps(pi_v, _mm512_fnmadd_ps(two, dots, norms));
-                                    // mask = lanes where d < threshold
-                                    let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
-                                    if mask != 0 {
-                                        // Extract passing lanes to scalar for top-k insertion.
-                                        // Typically 0-2 lanes pass out of 16.
-                                        let mut d_arr = [0.0f32; 16];
-                                        _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
-                                        let mut m = mask;
-                                        while m != 0 {
-                                            let lane = m.trailing_zeros() as usize;
-                                            m &= m - 1; // clear lowest bit
-                                            let j = base + lane;
-                                            let dist = d_arr[lane];
-                                            if dist < top[threshold_idx].1 {
-                                                top[threshold_idx] = (j as u32, dist);
-                                                let mut t = threshold_idx;
-                                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                                    top.swap(t, t - 1);
-                                                    t -= 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // Handle remainder with scalar loop.
-                                for j in (chunks * 16)..nl {
-                                    let dot = *dot_row.get_unchecked(j);
-                                    let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
-                                    if d < top[threshold_idx].1 {
-                                        top[threshold_idx] = (j as u32, d);
-                                        let mut t = threshold_idx;
-                                        while t > 0 && top[t].1 < top[t - 1].1 {
-                                            top.swap(t, t - 1);
-                                            t -= 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
-                        {
-                            use std::arch::x86_64::*;
-                            let chunks = nl / 8;
-                            unsafe {
-                                let pi_v = _mm256_set1_ps(pi);
-                                let two = _mm256_set1_ps(2.0);
-                                for chunk in 0..chunks {
-                                    let base = chunk * 8;
-                                    let thresh = _mm256_set1_ps(top[threshold_idx].1);
-                                    let norms = _mm256_loadu_ps(l_norms.as_ptr().add(base));
-                                    let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
-                                    // d = pi + norms - 2*dots
-                                    let two_dots = _mm256_mul_ps(two, dots);
-                                    let d = _mm256_add_ps(pi_v, _mm256_sub_ps(norms, two_dots));
-                                    let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh));
-                                    if mask != 0 {
-                                        let mut d_arr = [0.0f32; 8];
-                                        _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
-                                        let mut m = mask as u32;
-                                        while m != 0 {
-                                            let lane = m.trailing_zeros() as usize;
-                                            m &= m - 1;
-                                            let j = base + lane;
-                                            let dist = d_arr[lane];
-                                            if dist < top[threshold_idx].1 {
-                                                top[threshold_idx] = (j as u32, dist);
-                                                let mut t = threshold_idx;
-                                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                                    top.swap(t, t - 1);
-                                                    t -= 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                for j in (chunks * 8)..nl {
-                                    let dot = *dot_row.get_unchecked(j);
-                                    let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
-                                    if d < top[threshold_idx].1 {
-                                        top[threshold_idx] = (j as u32, d);
-                                        let mut t = threshold_idx;
-                                        while t > 0 && top[t].1 < top[t - 1].1 {
-                                            top.swap(t, t - 1);
-                                            t -= 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            for j in 0..nl {
+                        Metric::Cosine => {
+                            let pi_sqrt: f32 = p_data[i * ndims..(i + 1) * ndims]
+                                .iter()
+                                .map(|v| v * v)
+                                .sum::<f32>()
+                                .sqrt();
+                            for (j, &ln) in l_norms.iter().enumerate().take(nl) {
+                                // SAFETY: `dot_row.len() == nl` and `j < nl`.
                                 let dot = unsafe { *dot_row.get_unchecked(j) };
-                                let d = pi + unsafe { *l_norms.get_unchecked(j) } - 2.0 * dot;
+                                let denom = pi_sqrt * ln;
+                                let cos = if denom > 0.0 { dot / denom } else { 0.0 };
+                                let d = 1.0 - cos;
+                                if d < top[threshold_idx].1 {
+                                    top[threshold_idx] = (j as u32, d);
+                                    let mut t = threshold_idx;
+                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                        top.swap(t, t - 1);
+                                        t -= 1;
+                                    }
+                                }
+                            }
+                        }
+                        Metric::L2 => {
+                            let pi: f32 = p_data[i * ndims..(i + 1) * ndims]
+                                .iter()
+                                .map(|v| v * v)
+                                .sum();
+                            // Process 16 leaders at a time using AVX-512: compute
+                            // distances in SIMD, only drop to scalar for the rare
+                            // lanes that beat the current threshold.
+                            #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                            {
+                                use std::arch::x86_64::*;
+                                let chunks = nl / 16;
+                                // SAFETY: AVX-512 cfg-gated. `dot_row.as_ptr().add(base)` and
+                                // `l_norms.as_ptr().add(base)` stay in bounds: `base + 16 ≤ nl`,
+                                // and both slices span ≥ nl floats.
+                                unsafe {
+                                    let pi_v = _mm512_set1_ps(pi);
+                                    let two = _mm512_set1_ps(2.0);
+                                    for chunk in 0..chunks {
+                                        let base = chunk * 16;
+                                        let thresh = _mm512_set1_ps(top[threshold_idx].1);
+                                        let norms = _mm512_loadu_ps(l_norms.as_ptr().add(base));
+                                        let dots = _mm512_loadu_ps(dot_row.as_ptr().add(base));
+                                        // d = pi + norms - 2*dots
+                                        let d =
+                                            _mm512_add_ps(pi_v, _mm512_fnmadd_ps(two, dots, norms));
+                                        // mask = lanes where d < threshold
+                                        let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
+                                        if mask != 0 {
+                                            // Extract passing lanes to scalar for top-k insertion.
+                                            // Typically 0-2 lanes pass out of 16.
+                                            let mut d_arr = [0.0f32; 16];
+                                            _mm512_storeu_ps(d_arr.as_mut_ptr(), d);
+                                            let mut m = mask;
+                                            while m != 0 {
+                                                let lane = m.trailing_zeros() as usize;
+                                                m &= m - 1; // clear lowest bit
+                                                let j = base + lane;
+                                                let dist = d_arr[lane];
+                                                if dist < top[threshold_idx].1 {
+                                                    top[threshold_idx] = (j as u32, dist);
+                                                    let mut t = threshold_idx;
+                                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                                        top.swap(t, t - 1);
+                                                        t -= 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Handle remainder with scalar loop.
+                                    for j in (chunks * 16)..nl {
+                                        let dot = *dot_row.get_unchecked(j);
+                                        let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
+                                        if d < top[threshold_idx].1 {
+                                            top[threshold_idx] = (j as u32, d);
+                                            let mut t = threshold_idx;
+                                            while t > 0 && top[t].1 < top[t - 1].1 {
+                                                top.swap(t, t - 1);
+                                                t -= 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+                            {
+                                use std::arch::x86_64::*;
+                                let chunks = nl / 8;
+                                // SAFETY: AVX2 cfg-gated. `dot_row.as_ptr().add(base)` and
+                                // `l_norms.as_ptr().add(base)` stay in bounds: `base + 8 ≤
+                                // nl`, and both slices span ≥ nl floats.
+                                unsafe {
+                                    let pi_v = _mm256_set1_ps(pi);
+                                    let two = _mm256_set1_ps(2.0);
+                                    for chunk in 0..chunks {
+                                        let base = chunk * 8;
+                                        let thresh = _mm256_set1_ps(top[threshold_idx].1);
+                                        let norms = _mm256_loadu_ps(l_norms.as_ptr().add(base));
+                                        let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
+                                        // d = pi + norms - 2*dots
+                                        let two_dots = _mm256_mul_ps(two, dots);
+                                        let d = _mm256_add_ps(pi_v, _mm256_sub_ps(norms, two_dots));
+                                        let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(
+                                            d, thresh,
+                                        ));
+                                        if mask != 0 {
+                                            let mut d_arr = [0.0f32; 8];
+                                            _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
+                                            let mut m = mask as u32;
+                                            while m != 0 {
+                                                let lane = m.trailing_zeros() as usize;
+                                                m &= m - 1;
+                                                let j = base + lane;
+                                                let dist = d_arr[lane];
+                                                if dist < top[threshold_idx].1 {
+                                                    top[threshold_idx] = (j as u32, dist);
+                                                    let mut t = threshold_idx;
+                                                    while t > 0 && top[t].1 < top[t - 1].1 {
+                                                        top.swap(t, t - 1);
+                                                        t -= 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    for j in (chunks * 8)..nl {
+                                        let dot = *dot_row.get_unchecked(j);
+                                        let d = pi + *l_norms.get_unchecked(j) - 2.0 * dot;
+                                        if d < top[threshold_idx].1 {
+                                            top[threshold_idx] = (j as u32, d);
+                                            let mut t = threshold_idx;
+                                            while t > 0 && top[t].1 < top[t - 1].1 {
+                                                top.swap(t, t - 1);
+                                                t -= 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_arch = "x86_64"))]
+                            {
+                                for j in 0..nl {
+                                    let dot = unsafe { *dot_row.get_unchecked(j) };
+                                    let d = pi + unsafe { *l_norms.get_unchecked(j) } - 2.0 * dot;
+                                    if d < top[threshold_idx].1 {
+                                        top[threshold_idx] = (j as u32, d);
+                                        let mut t = threshold_idx;
+                                        while t > 0 && top[t].1 < top[t - 1].1 {
+                                            top.swap(t, t - 1);
+                                            t -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Metric::InnerProduct => {
+                            for j in 0..nl {
+                                // SAFETY: `dot_row.len() == nl` and `j < nl`.
+                                let d = -(unsafe { *dot_row.get_unchecked(j) });
                                 if d < top[threshold_idx].1 {
                                     top[threshold_idx] = (j as u32, d);
                                     let mut t = threshold_idx;
@@ -660,24 +679,9 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                             }
                         }
                     }
-                    Metric::InnerProduct => {
-                        for j in 0..nl {
-                            let d = -(unsafe { *dot_row.get_unchecked(j) });
-                            if d < top[threshold_idx].1 {
-                                top[threshold_idx] = (j as u32, d);
-                                let mut t = threshold_idx;
-                                while t > 0 && top[t].1 < top[t - 1].1 {
-                                    top.swap(t, t - 1);
-                                    t -= 1;
-                                }
-                            }
-                        }
-                    }
-                }
 
                     let global_i = mb_start + i;
-                    let out = &mut assign_chunk
-                        [global_i * num_assign..(global_i + 1) * num_assign];
+                    let out = &mut assign_chunk[global_i * num_assign..(global_i + 1) * num_assign];
                     for k in 0..num_assign {
                         out[k] = top[k].0;
                     }
@@ -693,27 +697,19 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
         process_stripe((0, &mut assignments));
     } else {
         // Multiple stripes — parallel.
-        #[allow(clippy::disallowed_methods)]
         assignments
             .par_chunks_mut(stripe * num_assign)
             .enumerate()
-            .for_each(process_stripe);
+            .for_each_installed(process_stripe);
     }
 
     // Aggregate into per-leader clusters using global point IDs. For large
-    // np, the serial scatter (np × num_assign pushes into per-leader Vecs,
-    // each growing via realloc) is a real serial tail in the partition wall.
-    // Measured ~100ms at np=1M nl=1000 on EPYC WSL — small fraction at 16t
-    // but a real chunk of level-1 wall. Parallelize via per-thread partial
-    // clusters + 2-phase merge: each thread scatters its chunk into local
-    // Vecs, then a parallel join concatenates per-leader.
+    // np, the serial scatter (np × num_assign pushes into per-leader Vecs)
+    // is a real serial tail — parallelize via per-thread partial clusters
+    // + per-leader merge.
     if np >= 100_000 {
-        // Parallel path: split points into N_THREAD chunks, each thread
-        // builds local partial clusters. Then for each leader, concatenate
-        // its slices across threads in parallel (per-leader work is
-        // independent, no atomics needed).
         let n_threads = rayon::current_num_threads().max(1);
-        let chunk_size = (np + n_threads - 1) / n_threads;
+        let chunk_size = np.div_ceil(n_threads);
 
         let partials: Vec<Vec<Vec<u32>>> = (0..n_threads)
             .into_par_iter()
@@ -721,7 +717,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 let start = t * chunk_size;
                 let end = ((t + 1) * chunk_size).min(np);
                 let mut local: Vec<Vec<u32>> = (0..nl)
-                    .map(|_| Vec::with_capacity(((end - start) * num_assign + nl - 1) / nl))
+                    .map(|_| Vec::with_capacity(((end - start) * num_assign).div_ceil(nl)))
                     .collect();
                 for i in start..end {
                     let pt = points[i];
@@ -732,7 +728,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 }
                 local
             })
-            .collect();
+            .collect_installed();
 
         // Sum per-leader sizes once so each final Vec is allocated with
         // exact capacity (no realloc churn).
@@ -743,7 +739,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             }
         }
 
-        let mut clusters: Vec<Vec<u32>> = sizes
+        let clusters: Vec<Vec<u32>> = sizes
             .par_iter()
             .enumerate()
             .map(|(li, &sz)| {
@@ -753,10 +749,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                 }
                 out
             })
-            .collect();
-        // Borrow-checker workaround: par_iter().map returns Vec in order.
-        // Move out (clusters already owned).
-        let _ = &mut clusters;
+            .collect_installed();
         clusters
     } else {
         let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nl];
@@ -790,16 +783,15 @@ fn assign_to_leaders_quantized(
 
     let mut assignments = vec![0u32; np * num_assign];
 
-    // 16MB stripe for cache efficiency.
+    // 16MB stripe for cache efficiency. clamp(1, np) so np < 256 doesn't panic.
     let stripe: usize = ((16 * 1024 * 1024)
         / (nl.max(1) * std::mem::size_of::<u64>() * u64s.max(1)))
-    .clamp(256, np);
+    .clamp(1, np.max(1));
 
-    #[allow(clippy::disallowed_methods)]
     assignments
         .par_chunks_mut(stripe * num_assign)
         .enumerate()
-        .for_each(|(stripe_idx, assign_chunk)| {
+        .for_each_installed(|(stripe_idx, assign_chunk)| {
             let start = stripe_idx * stripe;
             let end = (start + stripe).min(np);
             let sn = end - start;
@@ -815,13 +807,15 @@ fn assign_to_leaders_quantized(
             let pd_ptr = point_data.as_ptr();
 
             for i in 0..sn {
-                // SAFETY: bounds checked by construction.
+                // SAFETY: point_data has length `sn * u64s` and `i < sn`.
                 let pt_base = unsafe { pd_ptr.add(i * u64s) };
                 buf.clear();
                 for j in 0..nl {
+                    // SAFETY: leader_data has length `nl * u64s` and `j < nl`.
                     let ld_base = unsafe { ld_ptr.add(j * u64s) };
                     let mut h = 0u32;
                     for k in 0..u64s {
+                        // SAFETY: pt_base/ld_base each address `u64s` words and `k < u64s`.
                         unsafe {
                             h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones();
                         }
@@ -890,15 +884,11 @@ fn global_merge_small(leaves: Vec<Leaf>, c_min: usize, c_max: usize) -> Vec<Leaf
                 }
             }
         }
-        good.push(Leaf {
-            indices: remainder,
-        });
+        good.push(Leaf { indices: remainder });
     }
 
     good
 }
-
-
 
 #[cfg(test)]
 mod tests {

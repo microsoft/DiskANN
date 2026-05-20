@@ -38,58 +38,6 @@ pub fn sgemm_aat(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
     sgemm_abt(a, m, k, a, m, c);
 }
 
-use std::sync::OnceLock;
-
-/// Inner thread pool for parallel GEMM. Separate from the outer rayon pool
-/// so leaf_build's par_iter doesn't contend with GEMM's parallelism.
-static GEMM_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-
-/// Initialize the GEMM pool with the given thread count.
-/// Call once before leaf_build. If not called, parallel GEMM falls back to sequential.
-pub fn init_gemm_pool(nthreads: usize) {
-    GEMM_POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(nthreads)
-            .thread_name(|i| format!("gemm-{}", i))
-            .build()
-            .expect("failed to create GEMM thread pool")
-    });
-}
-
-/// Parallel GEMM: C = A * B^T using faer with rayon threading on the current pool.
-pub fn sgemm_abt_par(a: &[f32], m: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
-    debug_assert_eq!(a.len(), m * k);
-    debug_assert_eq!(b.len(), n * k);
-    debug_assert_eq!(c.len(), m * n);
-
-    let a_mat = faer::mat::MatRef::from_row_major_slice(a, m, k);
-    let b_mat = faer::mat::MatRef::from_row_major_slice(b, n, k).transpose();
-    let mut c_mat = faer::mat::MatMut::from_row_major_slice_mut(c, m, n);
-
-    let nt = std::num::NonZeroUsize::new(rayon::current_num_threads())
-        .unwrap_or(std::num::NonZeroUsize::new(1).unwrap());
-    faer::linalg::matmul::matmul(c_mat, faer::Accum::Replace, a_mat, b_mat, 1.0, faer::Par::Rayon(nt));
-}
-
-/// Parallel C = A * A^T.
-#[inline]
-pub fn sgemm_aat_par(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
-    sgemm_abt_par(a, m, k, a, m, c);
-}
-
-/// Parallel GEMM with explicit thread count.
-pub fn sgemm_aat_par_n(a: &[f32], m: usize, k: usize, c: &mut [f32], nthreads: usize) {
-    debug_assert_eq!(a.len(), m * k);
-    debug_assert_eq!(c.len(), m * m);
-
-    let a_mat = faer::mat::MatRef::from_row_major_slice(a, m, k);
-    let b_mat = faer::mat::MatRef::from_row_major_slice(a, m, k).transpose();
-    let mut c_mat = faer::mat::MatMut::from_row_major_slice_mut(c, m, m);
-
-    let nt = std::num::NonZeroUsize::new(nthreads).unwrap_or(std::num::NonZeroUsize::new(1).unwrap());
-    faer::linalg::matmul::matmul(c_mat, faer::Accum::Replace, a_mat, b_mat, 1.0, faer::Par::Rayon(nt));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

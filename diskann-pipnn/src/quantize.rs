@@ -8,6 +8,7 @@
 //! Reuses diskann-quantization's ScalarQuantizer for training (shift/scale),
 //! then packs vectors into compact bit arrays for fast Hamming distance.
 
+use crate::rayon_util::ParIterInstalled;
 use rayon::prelude::*;
 use std::cell::RefCell;
 
@@ -68,12 +69,9 @@ pub fn quantize_1bit<T: diskann::utils::VectorRepr + Send + Sync>(
     };
 
     // Parallel quantization: convert T→f32 per-vector streaming (no full f32 copy).
-    // Allow: callers (e.g. `build_from_quantized`, `build_typed`) wrap this in
-    // `pool.install(|| ...)`, so parallel work already runs on the correct pool.
-    #[allow(clippy::disallowed_methods)]
     bits.par_chunks_mut(bytes_per_vec)
         .enumerate()
-        .for_each(|(i, out)| {
+        .for_each_installed(|(i, out)| {
             let src = &data[i * ndims..(i + 1) * ndims];
             QUANT_F32_BUF.with(|cell| {
                 let mut buf = cell.borrow_mut();

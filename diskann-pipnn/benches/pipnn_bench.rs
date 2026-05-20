@@ -190,12 +190,11 @@ fn bench_hash_prune_add_edges(c: &mut Criterion) {
 // ==========================
 
 fn bench_partition(c: &mut Criterion) {
-    let mut group = c.benchmark_group("partition/parallel_partition");
+    let mut group = c.benchmark_group("partition/partition");
     group.sample_size(10);
 
     for &(npoints, ndims) in &[(10_000, 128), (50_000, 128), (10_000, 384)] {
         let data = random_data(npoints, ndims, 42);
-        let indices: Vec<usize> = (0..npoints).collect();
         let config = PartitionConfig {
             c_max: 1024,
             c_min: 256,
@@ -211,7 +210,7 @@ fn bench_partition(c: &mut Criterion) {
             &(),
             |b, _| {
                 b.iter(|| {
-                    partition::parallel_partition(&data, ndims, &indices, &config, 42);
+                    partition::partition(&data, ndims, npoints, &config, 42);
                 });
             },
         );

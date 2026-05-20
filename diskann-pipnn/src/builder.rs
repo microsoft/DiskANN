@@ -22,10 +22,10 @@ use rayon::prelude::*;
 use crate::hash_prune::HashPrune;
 use crate::leaf_build;
 use crate::partition::PartitionConfig;
+use crate::rayon_util::ParIterInstalled;
 use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
 
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
-
 
 /// Create a DiskANN distance functor for the given metric.
 ///
@@ -537,9 +537,6 @@ fn build_internal_sq(
     run(sketches, qdata)
 }
 
-// The caller (`build_internal_sq`) installs a dedicated rayon thread pool via
-// `pool.install(|| ...)`, so all `par_iter` work here already executes on that pool.
-#[allow(clippy::disallowed_methods)]
 fn build_internal_sq_impl(
     npoints: usize,
     ndims: usize,
@@ -570,19 +567,15 @@ fn build_internal_sq_impl(
             metric: config.metric,
             leader_cap: config.leader_cap,
         };
-        let leaves = crate::partition::partition_quantized(
-            &qdata,
-            npoints,
-            &partition_config,
-            seed,
-        );
+        let leaves =
+            crate::partition::partition_quantized(&qdata, npoints, &partition_config, seed);
         total_leaves += leaves.len();
         partition_secs += t1.elapsed().as_secs_f64();
 
         let t2 = Instant::now();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let total_edges = AtomicUsize::new(0);
-        leaves.par_iter().for_each(|leaf| {
+        leaves.par_iter().for_each_installed(|leaf| {
             let indices_usize: Vec<usize> = leaf.indices.iter().map(|&i| i as usize).collect();
             let edges = crate::leaf_build::build_leaf_quantized(&qdata, &indices_usize, config.k);
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
@@ -594,7 +587,7 @@ fn build_internal_sq_impl(
 
     (0..rayon::current_num_threads())
         .into_par_iter()
-        .for_each(|_| {
+        .for_each_installed(|_| {
             crate::leaf_build::release_thread_buffers();
         });
 
@@ -648,9 +641,6 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     build_internal_impl(data, npoints, ndims, config, qdata)
 }
 
-// The caller (`build_internal`) installs a dedicated rayon thread pool via
-// `pool.install(|| ...)`, so all `par_iter` work here already executes on that pool.
-#[allow(clippy::disallowed_methods)]
 fn build_internal_impl<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
@@ -666,9 +656,17 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     // `.cargo/config.toml` by default). Anything below AVX2 falls back to scalar.
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     eprintln!("SIMD: AVX-512 (compile-time)");
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f"), target_feature = "avx2"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(target_feature = "avx512f"),
+        target_feature = "avx2"
+    ))]
     eprintln!("SIMD: AVX2 (compile-time)");
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f"), not(target_feature = "avx2")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(target_feature = "avx512f"),
+        not(target_feature = "avx2")
+    ))]
     eprintln!("SIMD: scalar (compile-time)");
     #[cfg(not(target_arch = "x86_64"))]
     eprintln!("SIMD: scalar (non-x86)");
@@ -753,26 +751,15 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
         // overhead across multiple leaves.
         const LEAF_BATCH: usize = 64;
-        leaves.par_chunks(LEAF_BATCH).for_each(|chunk| {
+        leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();
                 for leaf in chunk {
-                    // Per-leaf u32→usize conversion (~2KB at c_max=256).
-                    // Phase 1 attempted to reuse bufs.indices_usize but the
-                    // raw-pointer aliasing with `&mut bufs` violated Rust's
-                    // mut/immut borrow rules — UB that broke the MKL path.
-                    // Cost of fresh allocation is negligible vs the genuine
-                    // buffer reuse inside build_leaf_with_buffers
-                    // (knn_result, edges, select_indices).
                     let indices_usize: Vec<usize> =
                         leaf.indices.iter().map(|&i| i as usize).collect();
 
                     if let Some(ref q) = qdata {
-                        let edges = leaf_build::build_leaf_quantized(
-                            q,
-                            &indices_usize,
-                            config.k,
-                        );
+                        let edges = leaf_build::build_leaf_quantized(q, &indices_usize, config.k);
                         total_edges.fetch_add(edges.len(), Ordering::Relaxed);
                         hash_prune.add_edges_batched(&edges);
                     } else {
@@ -806,7 +793,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     // Release thread-local leaf buffers so their arena pages can be reclaimed.
     (0..rayon::current_num_threads())
         .into_par_iter()
-        .for_each(|_| {
+        .for_each_installed(|_| {
             leaf_build::release_thread_buffers();
         });
 
@@ -829,9 +816,16 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         );
         // Log candidate stats before pruning.
         let total_candidates: usize = candidates.iter().map(|c| c.len()).sum();
-        let nodes_over_degree = candidates.iter().filter(|c| c.len() > config.max_degree).count();
+        let nodes_over_degree = candidates
+            .iter()
+            .filter(|c| c.len() > config.max_degree)
+            .count();
         let max_cand = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
-        let avg_cand = if candidates.is_empty() { 0.0 } else { total_candidates as f64 / candidates.len() as f64 };
+        let avg_cand = if candidates.is_empty() {
+            0.0
+        } else {
+            total_candidates as f64 / candidates.len() as f64
+        };
         println!(
             "  Final prune input: {} nodes, avg {:.1} candidates, max {}, {} nodes over max_degree({})",
             candidates.len(), avg_cand, max_cand, nodes_over_degree, config.max_degree
@@ -849,11 +843,21 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
         // Log output stats after pruning.
         let total_edges: usize = adj.iter().map(|a| a.len()).sum();
-        let avg_degree = if adj.is_empty() { 0.0 } else { total_edges as f64 / adj.len() as f64 };
-        let pruned_count = candidates.iter().zip(adj.iter()).filter(|(c, a)| a.len() < c.len()).count();
+        let avg_degree = if adj.is_empty() {
+            0.0
+        } else {
+            total_edges as f64 / adj.len() as f64
+        };
+        let pruned_count = candidates
+            .iter()
+            .zip(adj.iter())
+            .filter(|(c, a)| a.len() < c.len())
+            .count();
         println!(
             "  Final prune output: avg degree {:.1}, {} nodes actually pruned ({:.1}%)",
-            avg_degree, pruned_count, 100.0 * pruned_count as f64 / candidates.len().max(1) as f64
+            avg_degree,
+            pruned_count,
+            100.0 * pruned_count as f64 / candidates.len().max(1) as f64
         );
 
         let final_prune_secs = t4.elapsed().as_secs_f64();
@@ -907,9 +911,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 /// - Resumable inner loop via last_checked positions
 ///
 /// Candidates already have distances from HashPrune — sorted by distance ascending.
-// Called from within `build_internal_impl` which already runs inside a dedicated rayon
-// thread pool installed by `build_internal`, so `par_iter` work executes on that pool.
-#[allow(clippy::disallowed_methods)]
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
@@ -939,9 +940,8 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             }
 
             // Precompute f32 data for all candidates once, instead of converting
-            // per-comparison. With l_max=128 and max_degree=64, the inner loop
-            // does O(l_max × max_degree) comparisons — converting per-comparison
-            // was O(l_max² × ndims) f16→f32 conversions (42s at 10M scale).
+            // Pre-converting once is O(nc × ndims); per-comparison conversion
+            // was O(l_max × max_degree × ndims) — quadratic in l_max.
             let mut cand_f32 = vec![0.0f32; nc * ndims];
             for (ci, &(id, _)) in candidates.iter().enumerate() {
                 let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
@@ -1000,7 +1000,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
             selected
         })
-        .collect()
+        .collect_installed()
 }
 
 #[cfg(test)]
@@ -1835,9 +1835,12 @@ mod tests {
             total_parsed_nodes += 1;
         }
         assert_eq!(
-            total_parsed_nodes, npoints + 1, // +1 for frozen start point
+            total_parsed_nodes,
+            npoints + 1, // +1 for frozen start point
             "expected to parse {} nodes ({}+1 frozen) but got {}",
-            npoints + 1, npoints, total_parsed_nodes
+            npoints + 1,
+            npoints,
+            total_parsed_nodes
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -2056,7 +2059,7 @@ mod tests {
             c_min: 32,
             k: 3,
             max_degree: 32,
-            replicas: 1,
+            replicas: 2,
             l_max: 64,
             final_prune: false,
             ..Default::default()
@@ -2116,6 +2119,7 @@ mod tests {
             c_min: 8,
             k: 3,
             max_degree: 16,
+            replicas: 2,
             metric: Metric::CosineNormalized,
             ..Default::default()
         };
@@ -2132,12 +2136,36 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validate_inner_product_rejected() {
+    fn test_config_validate_inner_product_accepted() {
         let config = PiPNNConfig {
             metric: Metric::InnerProduct,
             ..Default::default()
         };
-        assert!(config.validate().is_err());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_build_inner_product_end_to_end() {
+        let npoints = 200;
+        let ndims = 8;
+        let data = generate_random_data(npoints, ndims, 42);
+
+        let config = PiPNNConfig {
+            c_max: 64,
+            c_min: 16,
+            k: 3,
+            max_degree: 16,
+            replicas: 2,
+            metric: Metric::InnerProduct,
+            ..Default::default()
+        };
+        let graph = build(&data, npoints, ndims, &config).unwrap();
+        assert!(graph.avg_degree() > 0.0);
+        assert_eq!(graph.metric, Metric::InnerProduct);
+
+        let query = &data[0..ndims];
+        let results = graph.search(&data, query, 5, 20);
+        assert!(!results.is_empty());
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub mod leaf_build;
 pub mod partition;
 pub mod profile;
 pub mod quantize;
+pub(crate) mod rayon_util;
 
 use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
@@ -72,8 +73,12 @@ mod metric_serde {
 }
 
 /// Configuration for the PiPNN index builder.
-fn default_leader_cap() -> usize { 1000 }
-fn default_true() -> bool { true }
+fn default_leader_cap() -> usize {
+    1000
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiPNNConfig {
@@ -171,11 +176,6 @@ impl PiPNNConfig {
         }
         if !self.alpha.is_finite() {
             return Err(PiPNNError::Config("alpha must be finite".into()));
-        }
-        if self.metric == Metric::InnerProduct {
-            return Err(PiPNNError::Config(
-                "InnerProduct metric is not supported by PiPNN; use L2, Cosine, or CosineNormalized".into(),
-            ));
         }
         Ok(())
     }

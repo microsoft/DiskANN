@@ -25,6 +25,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
 
+[features]
+bench-profiling = []
+
 [dev-dependencies]
 criterion = { workspace = true }
 rand = { workspace = true }

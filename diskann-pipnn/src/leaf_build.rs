@@ -30,10 +30,6 @@ pub struct LeafBuffers {
     pub knn_result: Vec<(u32, f32)>,
     /// Reusable buffer for bidirected edges output.
     pub edges: Vec<Edge>,
-    /// Reusable buffer for u32→usize index conversion.
-    pub indices_usize: Vec<usize>,
-    /// Reusable scratch indices for extract_knn_general (quickselect).
-    pub select_indices: Vec<u32>,
     /// Reusable Cosine sqrt-of-norms scratch (only filled for `Metric::Cosine`).
     pub cosine_denoms: Vec<f32>,
 }
@@ -54,15 +50,11 @@ impl LeafBuffers {
             seen: Vec::new(),
             knn_result: Vec::new(),
             edges: Vec::new(),
-            indices_usize: Vec::new(),
-            select_indices: Vec::new(),
             cosine_denoms: Vec::new(),
         }
     }
 
     /// Ensure all buffers are large enough for a leaf of size n × ndims with leaf_k=k.
-    /// Pre-allocates Phase 1 buffers (knn_result, edges, indices_usize, select_indices)
-    /// to their max-shape sizes so per-leaf push/extend hits no Vec realloc.
     fn ensure_capacity(&mut self, n: usize, ndims: usize, k: usize) {
         let nd = n * ndims;
         let nn = n * n;
@@ -81,23 +73,17 @@ impl LeafBuffers {
         if self.seen.len() < nn {
             self.seen.resize(nn, false);
         }
-        // Phase 1 reuse buffers — pre-size to max-leaf shape so per-leaf clear()+push()
-        // never triggers Vec realloc (which contends on the glibc malloc arena at high
-        // thread count and shows up as kernel spinlock waits).
+        // Pre-size knn_result and edges so per-leaf push/extend hits no realloc
+        // (Vec realloc contends on the glibc malloc arena at high thread count).
         let actual_k = k.min(n.saturating_sub(1));
         let max_knn = n * actual_k.max(1);
-        let max_edges = 2 * max_knn; // bidirected = 2x knn
+        let max_edges = 2 * max_knn;
         if self.knn_result.capacity() < max_knn {
-            self.knn_result.reserve(max_knn - self.knn_result.capacity());
+            self.knn_result
+                .reserve(max_knn - self.knn_result.capacity());
         }
         if self.edges.capacity() < max_edges {
             self.edges.reserve(max_edges - self.edges.capacity());
-        }
-        if self.indices_usize.capacity() < n {
-            self.indices_usize.reserve(n - self.indices_usize.capacity());
-        }
-        if self.select_indices.capacity() < n {
-            self.select_indices.reserve(n - self.select_indices.capacity());
         }
     }
 }
@@ -142,8 +128,7 @@ pub fn release_thread_buffers() {
         bufs.seen = Vec::new();
         bufs.knn_result = Vec::new();
         bufs.edges = Vec::new();
-        bufs.indices_usize = Vec::new();
-        bufs.select_indices = Vec::new();
+        bufs.cosine_denoms = Vec::new();
     });
     QUANT_BUFFERS.with(|cell| {
         let mut bufs = cell.borrow_mut();
@@ -210,7 +195,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
                             let lane = m.trailing_zeros() as usize;
                             m &= m - 1;
                             let j = base + lane;
-                            if j == i { continue; }
+                            if j == i {
+                                continue;
+                            }
                             let d = d_arr[lane];
                             if d < top[threshold_idx].1 {
                                 top[threshold_idx] = (j as u32, d);
@@ -227,7 +214,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
                 }
                 // Remainder
                 for j in (chunks * 16)..n {
-                    if j == i { continue; }
+                    if j == i {
+                        continue;
+                    }
                     let d = *row.get_unchecked(j);
                     if d < top[threshold_idx].1 {
                         top[threshold_idx] = (j as u32, d);
@@ -246,6 +235,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
         {
             use std::arch::x86_64::*;
             let chunks = n / 8;
+            // SAFETY: AVX2 intrinsics on x86_64 (v3 baseline). `row.as_ptr().add(base)`
+            // stays in bounds: `base = chunk*8` and `chunk < n/8`, so `base + 8 ≤ n =
+            // row.len()`. Trailing `get_unchecked(j)` has `j < n`.
             unsafe {
                 for chunk in 0..chunks {
                     let base = chunk * 8;
@@ -260,7 +252,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
                             let lane = m.trailing_zeros() as usize;
                             m &= m - 1;
                             let j = base + lane;
-                            if j == i { continue; }
+                            if j == i {
+                                continue;
+                            }
                             let d = d_arr[lane];
                             if d < top[threshold_idx].1 {
                                 top[threshold_idx] = (j as u32, d);
@@ -276,7 +270,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
                     }
                 }
                 for j in (chunks * 8)..n {
-                    if j == i { continue; }
+                    if j == i {
+                        continue;
+                    }
                     let d = *row.get_unchecked(j);
                     if d < top[threshold_idx].1 {
                         top[threshold_idx] = (j as u32, d);
@@ -294,7 +290,9 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
         #[cfg(not(target_arch = "x86_64"))]
         {
             for j in 0..n {
-                if j == i { continue; }
+                if j == i {
+                    continue;
+                }
                 let d = unsafe { *row.get_unchecked(j) };
                 if d < top[threshold_idx].1 {
                     top[threshold_idx] = (j as u32, d);
@@ -309,8 +307,8 @@ fn extract_knn_small(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usi
             }
         }
 
-        for t in 0..k {
-            edges.push((i, top[t].0 as usize, top[t].1));
+        for tup in top.iter().take(k) {
+            edges.push((i, tup.0 as usize, tup.1));
         }
     }
 
@@ -325,21 +323,26 @@ fn extract_knn_general(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, u
     for i in 0..n {
         let row = &dist_matrix[i * n..(i + 1) * n];
 
-        for j in 0..n {
-            unsafe {
-                *indices.get_unchecked_mut(j) = j as u32;
-            }
+        for (j, idx) in indices.iter_mut().enumerate().take(n) {
+            *idx = j as u32;
         }
 
         if k < n {
             indices.select_nth_unstable_by(k - 1, |&a, &b| {
-                let da = unsafe { *row.get_unchecked(a as usize) };
-                let db = unsafe { *row.get_unchecked(b as usize) };
+                // SAFETY: `a` and `b` come from `indices` which holds values in `0..n`,
+                // and `row.len() == n`, so both reads are in bounds.
+                let (da, db) = unsafe {
+                    (
+                        *row.get_unchecked(a as usize),
+                        *row.get_unchecked(b as usize),
+                    )
+                };
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
 
         for idx in 0..k {
+            // SAFETY: `idx < k ≤ indices.len() == n`.
             let j = unsafe { *indices.get_unchecked(idx) } as usize;
             edges.push((i, j, row[j]));
         }
@@ -401,7 +404,9 @@ fn topk_row_small(
                         let lane = m.trailing_zeros() as usize;
                         m &= m - 1;
                         let j = base + lane;
-                        if j == self_idx { continue; }
+                        if j == self_idx {
+                            continue;
+                        }
                         let d = d_arr[lane];
                         if d < top[threshold_idx].1 {
                             top[threshold_idx] = (j as u32, d);
@@ -417,7 +422,9 @@ fn topk_row_small(
                 }
             }
             for j in (chunks * 16)..n {
-                if j == self_idx { continue; }
+                if j == self_idx {
+                    continue;
+                }
                 let d = *dist_row.get_unchecked(j);
                 if d < top[threshold_idx].1 {
                     top[threshold_idx] = (j as u32, d);
@@ -434,9 +441,10 @@ fn topk_row_small(
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
     {
-        for j in 0..n {
-            if j == self_idx { continue; }
-            let d = dist_row[j];
+        for (j, &d) in dist_row.iter().enumerate().take(n) {
+            if j == self_idx {
+                continue;
+            }
             if d < top[threshold_idx].1 {
                 top[threshold_idx] = (j as u32, d);
                 for t in (1..actual_k).rev() {
@@ -450,23 +458,14 @@ fn topk_row_small(
         }
     }
 
-    for t in 0..actual_k {
-        out[t] = top[t];
-    }
+    out[..actual_k].copy_from_slice(&top[..actual_k]);
 }
 
 /// Build a leaf using caller-provided buffers, bypassing thread-local access.
 ///
-/// Tiles the leaf GEMM in MR-row chunks: per tile, runs `A_tile · A^T` to a small
-/// `mb × n` dot buffer (≤ 2 MB → L2-resident), converts to distance row-by-row
-/// (AVX-512 SIMD where available), and extracts top-k inline. Never materializes
-/// the full m×m dist matrix — that pass was the dominant bottleneck for large
-/// leaves (n ≥ 1024) per the leaf_hp microbench. All four PiPNN metrics are
-/// supported via inline match.
-///
-/// Targeted shape: leaf sizes c_max ∈ [1024, 2048] per the PiPNN paper. At very
-/// small leaf sizes (n ≤ ~256), the per-tile dispatch overhead trades against
-/// memory-traffic savings — see leaf_hp_bench for measurements.
+/// Tiles the leaf GEMM in MR-row chunks (≤ 2 MB dot buffer → L2-resident),
+/// converts to distance and extracts top-k inline. Never materializes the
+/// full m×m dist matrix.
 pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
@@ -501,7 +500,9 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             for i in 0..n {
                 let row = &local_data[i * ndims..(i + 1) * ndims];
                 let mut s = 0.0f32;
-                for &v in row.iter() { s += v * v; }
+                for &v in row.iter() {
+                    s += v * v;
+                }
                 norms_sq[i] = s;
             }
         }
@@ -535,16 +536,19 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             let tile_len = mb * n;
 
             // 1. GEMM: dot_tile = A[tile_rows] · A^T (mb × n)
-            // SAFETY: a_full and dot_tile borrow different fields of bufs, so we
-            // need raw-pointer slices to avoid the borrow conflict that would otherwise
-            // come from holding `&bufs.local_data` and `&mut bufs.dot_matrix` together.
+            // Raw-pointer slices needed because a_full and dot_tile borrow disjoint
+            // fields of bufs but the borrow checker can't see that through indexing.
             {
                 let a_full = &bufs.local_data[..n * ndims];
                 let a_tile_ptr = a_full[tile_start * ndims..].as_ptr();
                 let a_full_ptr = a_full.as_ptr();
                 let a_full_len = a_full.len();
                 let dot_tile = &mut bufs.dot_matrix[..tile_len];
+                // SAFETY: a_tile_ptr/a_full_ptr come from the live `&bufs.local_data`
+                // borrow above; lengths `mb*ndims` and `a_full_len` match the slice
+                // they were taken from. Disjoint from `dot_tile` (different field).
                 let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
+                // SAFETY: see preceding block — same source slice and lifetime.
                 let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
                 crate::gemm::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
             }
@@ -591,10 +595,15 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
                         let _ = simd_dist;
                     }
                     Metric::L2 => {
+                        // SAFETY: norms_sq_ptr points to bufs.norms_sq, sized `n`, and
+                        // `global_i = tile_start + local_i < n`.
                         let ni = unsafe { *norms_sq_ptr.add(global_i) };
                         #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
                         if simd_dist {
                             use std::arch::x86_64::*;
+                            // SAFETY: AVX-512 cfg-gated. Pointer arithmetic stays in
+                            // bounds: chunks = n/16, base = c*16, so base+16 ≤ n; row
+                            // and norms_sq_ptr both span ≥ n floats.
                             unsafe {
                                 let ni_v = _mm512_set1_ps(ni);
                                 let two = _mm512_set1_ps(2.0);
@@ -616,22 +625,24 @@ pub fn build_leaf_with_buffers<T: VectorRepr + 'static>(
                             }
                         }
                         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-                        for j in 0..n {
+                        for (j, val) in row.iter_mut().enumerate() {
+                            // SAFETY: norms_sq_ptr spans `n` floats and `j < n`.
                             let nj = unsafe { *norms_sq_ptr.add(j) };
-                            row[j] = (ni + nj - 2.0 * row[j]).max(0.0);
+                            *val = (ni + nj - 2.0 * *val).max(0.0);
                         }
                         let _ = simd_dist;
                     }
                     Metric::Cosine => {
+                        // SAFETY: cosine_denoms_ptr spans `n` floats, `global_i < n`.
                         let ni_sqrt = unsafe { *cosine_denoms_ptr.add(global_i) };
-                        // Cosine path is rare in PiPNN (BigANN uses L2, Enron uses
-                        // CosineNormalized). Keep scalar — the sqrt+div would dominate
-                        // any SIMD savings anyway.
-                        for j in 0..n {
+                        // Cosine path is rare in PiPNN. Keep scalar — the sqrt+div
+                        // would dominate any SIMD savings anyway.
+                        for (j, val) in row.iter_mut().enumerate() {
+                            // SAFETY: same as above — `j < n` and ptr spans `n`.
                             let nj = unsafe { *cosine_denoms_ptr.add(j) };
                             let denom = ni_sqrt * nj;
-                            let cos = if denom > 0.0 { row[j] / denom } else { 0.0 };
-                            row[j] = (1.0 - cos).max(0.0);
+                            let cos = if denom > 0.0 { *val / denom } else { 0.0 };
+                            *val = (1.0 - cos).max(0.0);
                         }
                     }
                     Metric::InnerProduct => {
