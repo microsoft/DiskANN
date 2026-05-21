@@ -13,9 +13,9 @@ pub mod parser {
 
 // Utils
 pub mod utils {
+    pub mod compute_bitmap;
     pub mod flatten_utils;
     pub mod jsonl_reader;
-    pub mod compute_bitmap;
 }
 
 pub mod inline_beta_search {
@@ -74,8 +74,8 @@ pub use parser::query_parser::{get_value_by_path, parse_query_filter};
 pub use traits::inverted_index_trait::InvertedIndexProvider;
 pub use traits::key_codec::DefaultKeyCodec;
 pub use traits::kv_store_traits::KvStore;
+pub use utils::compute_bitmap::compute_query_bitmaps;
 pub use utils::flatten_utils::Attributes;
 pub use utils::jsonl_reader::{
     read_and_parse_queries, read_baselabels, read_ground_truth, read_queries, JsonlReadError,
 };
-pub use utils::compute_bitmap::read_labels_and_compute_bitmap;

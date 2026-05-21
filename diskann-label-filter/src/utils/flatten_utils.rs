@@ -13,7 +13,7 @@ pub type Attributes = HashMap<String, AttributeValue>;
 /// Configuration for JSON flattening behavior
 #[derive(Debug, Clone)]
 pub struct FlattenConfig {
-    /// Separator used between path segments (default: ".")
+    /// Separator used between path segments (default: "/")
     pub separator: String,
     /// Whether to include array indices in paths (default: true)
     pub include_array_indices: bool,
@@ -24,7 +24,7 @@ pub struct FlattenConfig {
 impl Default for FlattenConfig {
     fn default() -> Self {
         Self {
-            separator: ".".to_string(),
+            separator: "/".to_string(),
             include_array_indices: true,
             root_prefix: "".to_string(),
         }
