@@ -1,0 +1,61 @@
+{
+  "quantized_dim": 128,
+  "quantized_bytes": 22,
+  "original_dim": 128,
+  "recalls": [
+    {
+      "layout": "same_as_data",
+      "recall_k": 5,
+      "recall_n": 5,
+      "num_queries": 10,
+      "average": 0.44,
+      "minimum": 0,
+      "maximum": 4
+    },
+    {
+      "layout": "same_as_data",
+      "recall_k": 5,
+      "recall_n": 10,
+      "num_queries": 10,
+      "average": 0.6,
+      "minimum": 1,
+      "maximum": 5
+    },
+    {
+      "layout": "same_as_data",
+      "recall_k": 10,
+      "recall_n": 10,
+      "num_queries": 10,
+      "average": 0.49,
+      "minimum": 2,
+      "maximum": 8
+    },
+    {
+      "layout": "four_bit_transposed",
+      "recall_k": 5,
+      "recall_n": 5,
+      "num_queries": 10,
+      "average": 0.52,
+      "minimum": 1,
+      "maximum": 4
+    },
+    {
+      "layout": "four_bit_transposed",
+      "recall_k": 5,
+      "recall_n": 10,
+      "num_queries": 10,
+      "average": 0.78,
+      "minimum": 2,
+      "maximum": 5
+    },
+    {
+      "layout": "four_bit_transposed",
+      "recall_k": 10,
+      "recall_n": 10,
+      "num_queries": 10,
+      "average": 0.62,
+      "minimum": 3,
+      "maximum": 9
+    }
+  ]
+}
