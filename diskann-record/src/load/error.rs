@@ -7,59 +7,92 @@ use std::fmt::{Debug, Display};
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
+/// Load-side error.
+///
+/// Carries an inner [`anyhow::Error`] for rich diagnostics (chained context,
+/// backtraces) along with a single `recoverable` bit. Recoverable errors are
+/// the contract for probing APIs: a caller that tries multiple load strategies
+/// (e.g. current version, then legacy) can distinguish "this attempt didn't
+/// match, try another" from "the data is broken, stop now".
+///
+/// Most constructors produce *critical* (non-recoverable) errors. Probing
+/// call sites use the explicit `*_recoverable` constructors, or rely on the
+/// [`From<Kind>`] impl which classifies each [`Kind`] variant according to
+/// [`Kind::is_recoverable`].
 #[derive(Debug)]
 pub struct Error {
-    inner: ErrorInner,
+    inner: anyhow::Error,
+    recoverable: bool,
 }
 
 impl Error {
+    /// Construct a critical error from an underlying source error.
     pub fn new<E>(err: E) -> Self
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        Error {
-            inner: ErrorInner::Heavy(anyhow::Error::new(err)),
+        Self {
+            inner: anyhow::Error::new(err),
+            recoverable: false,
         }
     }
 
+    /// Construct a critical error from a display message.
     pub fn message<D>(message: D) -> Self
     where
         D: Display + Debug + Send + Sync + 'static,
     {
-        Error {
-            inner: ErrorInner::Heavy(anyhow::Error::msg(message)),
+        Self {
+            inner: anyhow::Error::msg(message),
+            recoverable: false,
         }
     }
 
+    /// Construct a recoverable error from an underlying source. Suitable for
+    /// probing APIs that may attempt an alternative load strategy.
+    pub fn new_recoverable<E>(err: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            inner: anyhow::Error::new(err),
+            recoverable: true,
+        }
+    }
+
+    /// Construct a recoverable error from a display message. Suitable for
+    /// probing APIs that may attempt an alternative load strategy.
+    pub fn message_recoverable<D>(message: D) -> Self
+    where
+        D: Display + Debug + Send + Sync + 'static,
+    {
+        Self {
+            inner: anyhow::Error::msg(message),
+            recoverable: true,
+        }
+    }
+
+    /// Attach additional context. The `recoverable` flag is preserved.
     pub fn context<D>(self, message: D) -> Self
     where
         D: Display + Send + Sync + 'static,
     {
-        // TODO: Should we do something clever with "light" errors to avoid context
-        // proliferation?
-        match self.inner {
-            ErrorInner::Light(kind) => Self {
-                inner: ErrorInner::Light(kind),
-            },
-            ErrorInner::Heavy(kind) => Self {
-                inner: ErrorInner::Heavy(kind.context(message)),
-            },
+        Self {
+            inner: self.inner.context(message),
+            recoverable: self.recoverable,
         }
+    }
+
+    /// Returns `true` if this error is recoverable. Probing call sites should
+    /// only fall back to alternative load strategies when this is `true`.
+    pub fn is_recoverable(&self) -> bool {
+        self.recoverable
     }
 }
 
-#[derive(Debug)]
-enum ErrorInner {
-    Light(Kind),
-    Heavy(anyhow::Error),
-}
-
-impl std::fmt::Display for Error {
+impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.inner {
-            ErrorInner::Light(kind) => write!(f, "Load Error: {}", kind),
-            ErrorInner::Heavy(error) => write!(f, "Load Error: {:?}", error),
-        }
+        write!(f, "Load Error: {:?}", self.inner)
     }
 }
 
@@ -101,6 +134,28 @@ impl Kind {
             Self::MissingFile => "handle references a file not present in the manifest",
         }
     }
+
+    /// Whether an error of this kind should be treated as recoverable by
+    /// probing APIs (i.e., suitable for triggering a fallback to an alternative
+    /// load strategy).
+    ///
+    /// Recoverable kinds describe "the data did not match what this loader
+    /// expected" (a different version or shape might still succeed). Critical
+    /// kinds describe structural or integrity problems where retrying would be
+    /// pointless or unsafe.
+    pub const fn is_recoverable(self) -> bool {
+        match self {
+            // Shape/version probing signals — another loader might succeed.
+            Self::VersionMismatch | Self::MissingField | Self::TypeMismatch => true,
+            // Structural / integrity failures — give up.
+            Self::UnknownVersion
+            | Self::UnexpectedVariant
+            | Self::MissingVariant
+            | Self::UnknownVariant
+            | Self::NumberOutOfRange
+            | Self::MissingFile => false,
+        }
+    }
 }
 
 impl std::fmt::Display for Kind {
@@ -111,7 +166,9 @@ impl std::fmt::Display for Kind {
 
 impl From<Kind> for Error {
     fn from(kind: Kind) -> Self {
-        let inner = ErrorInner::Light(kind);
-        Self { inner }
+        Self {
+            inner: anyhow::Error::msg(kind.as_str()),
+            recoverable: kind.is_recoverable(),
+        }
     }
 }

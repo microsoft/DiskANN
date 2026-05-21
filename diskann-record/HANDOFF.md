@@ -63,10 +63,16 @@ Everything is by-reference into the deserialized `Value` tree ("parse once, prob
 
 **Save errors:** `save::Error` wraps `anyhow::Error`. Simple — something went wrong.
 
-**Load errors:** `load::Error` has a light/heavy split:
-- `Light(Kind)` — cheap, `Copy` enum (`TypeMismatch`, `MissingField`, etc.) for speculative
-  probing (try one version, fall back to another without allocating error context).
-- `Heavy(anyhow::Error)` — rich diagnostics with context chaining for actual failures.
+**Load errors:** `load::Error` wraps `anyhow::Error` plus a `recoverable: bool` flag:
+- Most constructors (`Error::new`, `Error::message`) produce *critical* errors.
+- Probing call sites use `Error::new_recoverable` / `Error::message_recoverable`, or
+  the `From<Kind>` impl which classifies each `Kind` variant via `Kind::is_recoverable()`.
+  Shape/version probing kinds (`TypeMismatch`, `MissingField`, `VersionMismatch`) are
+  recoverable; structural/integrity kinds (`UnknownVersion`, `UnknownVariant`,
+  `MissingFile`, etc.) are critical.
+- `Error::context(...)` always preserves the `recoverable` flag.
+- Consumers query `Error::is_recoverable()` to decide whether to attempt a fallback
+  load strategy.
 
 ### Macros
 
@@ -94,10 +100,10 @@ inherently safe — no runtime check needed in the macro path.
 - Primitive `bool` support via `Value::Bool`, including nested `Vec<bool>` round-trips
 - `Option<T>` support via an explicit `Value::Null` variant
 - Tempfile isolation in tests (`tempfile::tempdir()`) to ensure cleanup of artifacts and manifest
-- Light/heavy error split on load path
+- Recoverable/critical error split on load path (single struct with a `recoverable` bit)
 - `Writer::finish()` consumes the inner `BufWriter` and propagates buffered write/flush errors via `save::Result<Handle>`
 - Compile-time `const` assertion in `src/lib.rs` that rejects targets where `usize::BITS != 64`.
-- Propagate light errors for duplicate filenames/creation failure, manifest finish, attempting to write to reserved  keys, missing files on `load`, out-of-range values for numerics (light errors)
+- Propagate recoverable errors at probing seams (type/field/version mismatches) and critical errors for duplicate filenames/creation failure, manifest finish, attempting to write to reserved keys, missing files on `load`, out-of-range values for numerics
 - Enum support via internally-tagged objects (`$variant` alongside `$version`). Save side
   exposes `Save::variant() -> Option<Cow<'_, str>>` (default `None` = struct), and
   `save_fields!` has a two-argument form (`save_fields!(context, [...])`) for use inside
@@ -123,7 +129,7 @@ field(s) to a struct variant, or bind to a local before constructing the record.
 Multi-field tuple variants are intentionally out of scope — name your fields.
 
 Open follow-ups: derive macro support for the `variant()` / `IS_ENUM` boilerplate,
-and a clearer error for the `UnknownVariant` case (currently a light error with the
+and a clearer error for the `UnknownVariant` case (currently a critical error with the
 string `"unknown variant"` and no embedded name).
 
 ### SemVer Version Dispatch
@@ -186,7 +192,7 @@ diskann-record/
         ├── mod.rs          # Load/Loadable traits, blanket impl, load_fields! macro,
         │                   # primitive impls, load_from_disk entry point
         ├── context.rs      # ContextInner, Context, Object, Array, Iter, Reader
-        └── error.rs        # load::Error (light/heavy split), Kind enum
+        └── error.rs        # load::Error (anyhow + `recoverable: bool`), Kind enum
 ```
 
 ## Key Design Rationale
@@ -199,14 +205,16 @@ Decisions that may not be obvious from the code alone:
 2. **Why `Cow` in `Value`?** Save path borrows from structs (`Cow::Borrowed`). Load path
    owns from JSON (`Cow::Owned`). Same type, different usage patterns.
 
-3. **Why light/heavy errors on load?** Loading tries the current version first, falls back
-   to legacy. The first attempt's failure should be near-free (just a `Kind` enum) since
-   it's expected to fail for older data. Only the final failure needs rich diagnostics.
+3. **Why a `recoverable` flag on load errors?** Loading tries the current version first,
+   then falls back to legacy. The probing API needs to distinguish "this loader didn't
+   match, try another" from "the data is broken, stop now". A single bit on a uniform
+   anyhow-backed `Error` is enough — the previously-planned light/heavy split was overkill
+   for the actual use case.
 
 4. **Why eager tree building?** The manifest is metadata (kilobytes). Lazy/deferred
    serialization adds lifetime complexity for no practical gain. Artifacts (gigabytes)
    stream directly to files — they're never in the tree.
 
-5. **Why separate save/load error types?** The light/heavy split only makes sense for
+5. **Why separate save/load error types?** The `recoverable` flag only makes sense for
    loading (speculative probing). Save errors are always "something went wrong." Unifying
    them would force the save side to carry unused machinery.
