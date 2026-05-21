@@ -18,10 +18,6 @@ pub(crate) struct RecallMetrics {
     pub(crate) num_queries: usize,
     /// The average recall across all queries.
     pub(crate) average: f64,
-    /// The minimum observed recall (max possible value: `recall_n`).
-    pub(crate) minimum: usize,
-    /// The maximum observed recall (max possible value: `recall_k`).
-    pub(crate) maximum: usize,
 }
 
 impl From<&benchmark_core::recall::RecallMetrics> for RecallMetrics {
@@ -31,8 +27,6 @@ impl From<&benchmark_core::recall::RecallMetrics> for RecallMetrics {
             recall_n: m.recall_n,
             num_queries: m.num_queries,
             average: m.average,
-            minimum: m.minimum,
-            maximum: m.maximum,
         }
     }
 }
@@ -62,7 +56,14 @@ where
                 continue;
             }
 
-            let recall = benchmark_core::recall::knn(groundtruth, None, results, *k, *n, false)?;
+            let recall = benchmark_core::recall::knn(
+                groundtruth,
+                None,
+                results,
+                *k,
+                *n,
+                benchmark_core::recall::GroundTruthMode::Fixed,
+            )?;
             result.push((&recall).into());
         }
     }
