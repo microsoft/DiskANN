@@ -7,6 +7,9 @@ mod backend;
 mod inputs;
 mod utils;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use diskann_benchmark_runner as runner;
 
 fn main() -> Result<(), anyhow::Error> {

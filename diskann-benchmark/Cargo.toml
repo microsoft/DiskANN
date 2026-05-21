@@ -9,6 +9,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+mimalloc = { version = "0.1", default-features = false }
 bf-tree.workspace = true
 bit-set.workspace = true
 bytemuck.workspace = true

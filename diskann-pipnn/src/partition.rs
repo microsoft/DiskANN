@@ -700,9 +700,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                         let thresh = _mm256_set1_ps(top[threshold_idx].1);
                                         let norms = _mm256_loadu_ps(l_norms.as_ptr().add(base));
                                         let dots = _mm256_loadu_ps(dot_row.as_ptr().add(base));
-                                        // d = pi + norms - 2*dots
-                                        let two_dots = _mm256_mul_ps(two, dots);
-                                        let d = _mm256_add_ps(pi_v, _mm256_sub_ps(norms, two_dots));
+                                        // d = pi + (norms - 2*dots) via fnmadd: norms - 2*dots
+                                        let d = _mm256_add_ps(pi_v, _mm256_fnmadd_ps(two, dots, norms));
                                         let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(
                                             d, thresh,
                                         ));

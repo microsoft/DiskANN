@@ -450,7 +450,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         // Leaves processed in parallel via par_chunks. Each chunk shares one
         // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
         // overhead across multiple leaves.
-        const LEAF_BATCH: usize = 64;
+        const LEAF_BATCH: usize = 256;
         leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();

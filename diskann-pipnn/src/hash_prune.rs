@@ -92,7 +92,7 @@ impl HashPruneReservoir {
     /// Find entry with matching hash.
     /// Uses AVX-512 to compare 8 entries per instruction by loading the hash+distance
     /// word (upper 32 bits of each 8-byte entry) and masking to the hash field.
-    #[inline]
+    #[inline(always)]
     fn find_hash(&self, hash: u16) -> Option<usize> {
         let n = self.entries.len();
         #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
@@ -194,6 +194,7 @@ impl HashPruneReservoir {
     /// Unsorted storage: find_hash is O(l_max) linear scan but insert/evict
     /// are O(1) via push/swap_remove.
     #[inline]
+    #[inline(always)]
     pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
         let dist_bf16 = f32_to_bf16(distance);
 
@@ -222,6 +223,12 @@ impl HashPruneReservoir {
 
         // If reservoir is not full, append (O(1), no memmove).
         if self.entries.len() < self.l_max {
+            // First push: allocate full l_max upfront to avoid grow-doublings
+            // (Vec::push otherwise reallocs at 4 → 8 → 16 → 32 → 64 → 128).
+            // Saves ~1 KB of memcpy per fully-filled reservoir.
+            if self.entries.is_empty() {
+                self.entries.reserve_exact(self.l_max);
+            }
             let new_idx = self.entries.len();
             self.entries.push(ReservoirEntry {
                 neighbor,
