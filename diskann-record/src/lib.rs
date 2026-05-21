@@ -43,6 +43,7 @@ mod tests {
     use super::*;
 
     use std::io::{Read, Write};
+    use std::path::{Path, PathBuf};
 
     #[derive(Debug, PartialEq)]
     struct Test {
@@ -394,6 +395,89 @@ mod tests {
         assert!(
             msg.contains("unknown variant"),
             "expected UnknownVariant error, got: {msg}"
+        );
+        Ok(())
+    }
+
+    ///////////////////////////////
+    // Manifest directory escape //
+    ///////////////////////////////
+
+    /// Minimal loadable type with a single handle field. Used by the
+    /// directory-escape tests below to drive `Object::read` against a
+    /// hand-crafted manifest.
+    #[derive(Debug)]
+    struct HandleOnly {
+        _blob: Vec<u8>,
+    }
+
+    impl load::Load<'_> for HandleOnly {
+        const VERSION: Version = Version::new(0, 0, 0);
+        fn load(object: load::Object<'_>) -> load::Result<Self> {
+            load_fields!(object, [blob: save::Handle]);
+            let mut io = object.read(&blob)?;
+            let mut buf = Vec::new();
+            io.read_to_end(&mut buf).map_err(load::Error::new)?;
+            Ok(Self { _blob: buf })
+        }
+        fn load_legacy(_object: load::Object<'_>) -> load::Result<Self> {
+            panic!("nope!");
+        }
+    }
+
+    /// Write a hand-crafted manifest into `dir` whose root object exposes a
+    /// `blob` field referencing `handle_target`. Returns the metadata path.
+    fn write_handle_manifest(dir: &Path, handle_target: &str) -> std::io::Result<PathBuf> {
+        let manifest = serde_json::json!({
+            // Register the same target in `files` so the membership check
+            // would otherwise let it through — this isolates the new
+            // path-shape check as the thing rejecting the load.
+            "files": [handle_target],
+            "value": {
+                "$version": { "major": 0, "minor": 0, "patch": 0 },
+                "blob": { "$handle": handle_target },
+            },
+        });
+        let metadata = dir.join("metadata.json");
+        std::fs::write(&metadata, serde_json::to_vec(&manifest)?)?;
+        Ok(metadata)
+    }
+
+    #[test]
+    fn handle_with_parent_traversal_is_rejected() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        let metadata = write_handle_manifest(dir, "../escape.bin")?;
+
+        let err = load::load_from_disk::<HandleOnly>(&metadata, dir)
+            .expect_err("handle escaping the manifest directory must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("escapes the manifest directory"),
+            "expected manifest-escape rejection, got: {msg}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn handle_with_absolute_path_is_rejected() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let dir = temp_dir.path();
+        // Use a platform-appropriate absolute path. Both shapes should be
+        // rejected on their respective platforms; we test the native one.
+        let absolute = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/passwd"
+        };
+        let metadata = write_handle_manifest(dir, absolute)?;
+
+        let err = load::load_from_disk::<HandleOnly>(&metadata, dir)
+            .expect_err("absolute-path handle must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("escapes the manifest directory"),
+            "expected manifest-escape rejection, got: {msg}"
         );
         Ok(())
     }
