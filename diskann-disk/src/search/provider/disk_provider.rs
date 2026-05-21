@@ -928,6 +928,17 @@ where
         // Derive the batch size from the scratch data structure. Providing too many vectors
         // will panic.
         let batch_size = accessor.scratch.pq_scratch.max_vectors();
+
+        // This check should always hold since `graph_degree` comes from
+        // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
+        // against misconfiguration.
+        if batch_size == 0 {
+            return Err(ANNError::message(
+                diskann::ANNErrorKind::IndexError,
+                "pq scratch must support at least one vector",
+            ));
+        }
+
         let mut id_buffer = Vec::with_capacity(batch_size);
 
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
