@@ -43,7 +43,7 @@ use crate::{
 };
 
 mod knn_search;
-mod multihop_search;
+pub(crate) mod multihop_search;
 mod range_search;
 
 pub mod record;
