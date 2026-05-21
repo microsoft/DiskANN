@@ -167,7 +167,7 @@ pub(crate) mod tests {
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
                 SearchStrategy,
             },
-            index::{PartitionedNeighbors, QueryLabelProvider},
+            index::QueryLabelProvider,
             search::Range,
             search_output_buffer,
         },
