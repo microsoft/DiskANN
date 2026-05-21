@@ -509,29 +509,30 @@ where
 ////////////
 
 /// Perform a search entirely in the quantized space.
-impl<T, D, Ctx> SearchStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]> for Hybrid
+impl<'a, T, D, Ctx> SearchStrategy<'a, FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &'a [T]>
+    for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type SearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = Panics;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
 }
 
 /// Starting points are filtered out of the final results and results are reranked using
 /// the full-precision data.
-impl<T, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]>
-    for Hybrid
+impl<'a, T, D, Ctx>
+    DefaultPostProcessor<'a, FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &'a [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -567,7 +568,8 @@ where
     }
 }
 
-impl<T, D, Ctx> InsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &[T]> for Hybrid
+impl<'a, T, D, Ctx> InsertStrategy<'a, FullPrecisionProvider<T, DefaultQuant, D, Ctx>, &'a [T]>
+    for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -587,6 +589,7 @@ where
     Ctx: ExecutionContext,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+            'a,
             FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,
@@ -658,27 +661,28 @@ where
 /// Perform a search entirely in the quantized space.
 ///
 /// Starting points are filtered out of the final results.
-impl<T, D, Ctx> SearchStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]> for Quantized
+impl<'a, T, D, Ctx> SearchStrategy<'a, DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type SearchAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
     type SearchAccessorError = Panics;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
 }
 
-impl<T, D, Ctx> DefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]>
-    for Quantized
+impl<'a, T, D, Ctx>
+    DefaultPostProcessor<'a, DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &'a [T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -710,7 +714,8 @@ where
     }
 }
 
-impl<T, D, Ctx> InsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &[T]> for Quantized
+impl<'a, T, D, Ctx> InsertStrategy<'a, DefaultProvider<NoStore, DefaultQuant, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -729,6 +734,7 @@ where
     Ctx: ExecutionContext,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+            'a,
             DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,

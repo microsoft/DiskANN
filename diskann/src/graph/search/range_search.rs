@@ -157,26 +157,26 @@ impl Range {
     }
 }
 
-impl<DP, S, T> Search<DP, S, T> for Range
+impl<'a, DP, S, T> Search<'a, DP, S, T> for Range
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
-    T: Copy + Send + Sync,
+    S: SearchStrategy<'a, DP, T>,
+    T: Copy + Send + Sync + 'a,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

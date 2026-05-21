@@ -289,16 +289,17 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
 ///
 /// This trait should be overloaded by data providers wishing to extend
 /// (search)[`crate::graph::DiskANNIndex::search`].
-pub trait SearchStrategy<Provider, T>: Send + Sync
+pub trait SearchStrategy<'a, Provider, T>: Send + Sync
 where
     Provider: DataProvider,
+    T: 'a,
 {
     /// The computer used by the associated accessor.
     ///
     /// We could grab this type from the `SearchAccessor` associated type, but it's
     /// useful enough that we move it up here.
-    type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::SearchAccessor<'a> as Accessor>::ElementRef<'b>,
+    type QueryComputer: for<'b> PreprocessedDistanceFunction<
+            <Self::SearchAccessor as Accessor>::ElementRef<'b>,
             f32,
         > + Send
         + Sync
@@ -310,15 +311,15 @@ where
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor<'a>: ExpandBeam<T, QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
+    type SearchAccessor: ExpandBeam<T, QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
         + SearchExt;
 
     /// Construct and return the search accessor.
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
 }
 
 /// Opt-in trait for strategies that have a default post-processor.
@@ -329,33 +330,36 @@ where
 /// post-processor is specified. The search infrastructure will call
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
-pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T>
+pub trait DefaultPostProcessor<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<'a, Provider, T>
 where
     Provider: DataProvider,
     O: Send,
+    T: 'a,
 {
     /// The default post-processor type.
-    type Processor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
+    type Processor: SearchPostProcess<Self::SearchAccessor, T, O> + Send + Sync;
 
     /// Create the default post-processor.
-    fn default_post_processor(&self) -> Self::Processor;
+    fn default_post_processor(&'a self) -> Self::Processor;
 }
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
-pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>
+pub trait DefaultSearchStrategy<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>
 where
     Provider: DataProvider,
     O: Send,
+    T: 'a,
 {
 }
 
-impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
+impl<'a, S, Provider, T, O> DefaultSearchStrategy<'a, Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>,
+    S: SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>,
     Provider: DataProvider,
     O: Send,
+    T: 'a,
 {
 }
 
@@ -567,9 +571,10 @@ where
 /// This strategy is used during the greedy search portion of index construction.
 /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
 /// is used for the rest.
-pub trait InsertStrategy<Provider, T>: SearchStrategy<Provider, T> + 'static
+pub trait InsertStrategy<'a, Provider, T>: SearchStrategy<'a, Provider, T> + 'static
 where
     Provider: DataProvider,
+    T: 'a,
 {
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
@@ -584,11 +589,11 @@ where
     /// [`InsertStrategy`] can customize the implementation if the behavior of the search
     /// accessor needs to be slightly different between searches for build and regular
     /// searches.
-    fn insert_search_accessor<'a>(
+    fn insert_search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         self.search_accessor(provider, context)
     }
 }
@@ -674,6 +679,7 @@ where
 
     /// The delegated [`InsertStrategy`] for most insertion related decisions.
     type InsertStrategy: for<'a> InsertStrategy<
+            'a,
             Provider,
             B::Element<'a>,
             PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
@@ -795,9 +801,10 @@ where
 
     /// The type of the search strategy to use for graph traversal.
     type SearchStrategy: for<'a> SearchStrategy<
+            'a,
             Provider,
             Self::DeleteElement<'a>,
-            SearchAccessor<'a> = Self::DeleteSearchAccessor<'a>,
+            SearchAccessor = Self::DeleteSearchAccessor<'a>,
         >;
 
     /// Construct the prune strategy object.
@@ -964,21 +971,21 @@ mod tests {
     // implementation.
     struct Strategy;
 
-    impl SearchStrategy<SimpleProvider, f32> for Strategy {
+    impl<'a> SearchStrategy<'a, SimpleProvider, f32> for Strategy {
         type QueryComputer = QueryComputer;
         type SearchAccessorError = ANNError;
-        type SearchAccessor<'a> = Retriever<'a>;
+        type SearchAccessor = Retriever<'a>;
 
-        fn search_accessor<'a>(
+        fn search_accessor(
             &'a self,
             provider: &'a SimpleProvider,
             context: &'a CountGetVector,
-        ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
             Ok(Retriever::new(provider, context))
         }
     }
 
-    impl DefaultPostProcessor<SimpleProvider, f32> for Strategy {
+    impl<'a> DefaultPostProcessor<'a, SimpleProvider, f32> for Strategy {
         default_post_processor!(CopyIds);
     }
 

@@ -111,15 +111,16 @@ where
 ///
 /// The [`BetaComputer`] then uses this ID to consult the filter predicate and adjust the
 /// distance accordingly.
-impl<Provider, Strategy, T, I> SearchStrategy<Provider, T> for BetaFilter<Strategy, I>
+impl<'a, Provider, Strategy, T, I> SearchStrategy<'a, Provider, T> for BetaFilter<Strategy, I>
 where
     I: VectorId,
     Provider: DataProvider<InternalId = I>,
-    Strategy: SearchStrategy<Provider, T>,
+    Strategy: SearchStrategy<'a, Provider, T>,
+    T: 'a,
 {
     /// An accessor that returns the ID in addition to the element yielded by the inner
     /// accessor.
-    type SearchAccessor<'a> = BetaAccessor<Strategy::SearchAccessor<'a>>;
+    type SearchAccessor = BetaAccessor<Strategy::SearchAccessor>;
 
     /// A [`PreprocessedDistanceFunction`] that combines applies the beta filtering factor
     /// if the vector ID portion of `Element` satisfies the filter predicate.
@@ -128,11 +129,11 @@ where
     type SearchAccessorError = Strategy::SearchAccessorError;
 
     /// Compose the [`BetaAccessor`] with the inner search strategy's [`Accessor`].
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(BetaAccessor {
             inner: self.strategy.search_accessor(provider, context)?,
             labels: self.labels.clone(),
@@ -143,17 +144,18 @@ where
 
 /// [`DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<Provider, Strategy, T, I, O> glue::DefaultPostProcessor<Provider, T, O>
+impl<'a, Provider, Strategy, T, I, O> glue::DefaultPostProcessor<'a, Provider, T, O>
     for BetaFilter<Strategy, I>
 where
     I: VectorId,
     O: Send,
     Provider: DataProvider<InternalId = I>,
-    Strategy: glue::DefaultPostProcessor<Provider, T, O>,
+    Strategy: glue::DefaultPostProcessor<'a, Provider, T, O>,
+    T: 'a,
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
-    fn default_post_processor(&self) -> Self::Processor {
+    fn default_post_processor(&'a self) -> Self::Processor {
         glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
@@ -501,21 +503,21 @@ mod tests {
     #[derive(Debug)]
     struct SimpleStrategy;
 
-    impl SearchStrategy<SimpleProvider, u64> for SimpleStrategy {
-        type SearchAccessor<'a> = Doubler;
+    impl<'a> SearchStrategy<'a, SimpleProvider, u64> for SimpleStrategy {
+        type SearchAccessor = Doubler;
         type QueryComputer = AddingComputer;
         type SearchAccessorError = ANNError;
 
-        fn search_accessor<'a>(
+        fn search_accessor(
             &'a self,
             _provider: &'a SimpleProvider,
             _context: &'a DefaultContext,
-        ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
             Ok(Doubler::default())
         }
     }
 
-    impl glue::DefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
+    impl<'a> glue::DefaultPostProcessor<'a, SimpleProvider, u64> for SimpleStrategy {
         diskann::default_post_processor!(CopyIds);
     }
 

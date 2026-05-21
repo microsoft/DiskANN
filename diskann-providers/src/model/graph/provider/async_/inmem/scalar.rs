@@ -594,36 +594,37 @@ where
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
 /// approximate search, so the post-processing step includes a [`Rerank`] stage.
-impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T>
+    SearchStrategy<'a, FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+    QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
     type QueryComputer = QueryComputer<NBITS>;
-    type SearchAccessor<'a> = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
 }
 
-impl<const NBITS: usize, D, Ctx, T>
-    DefaultPostProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T>
+    DefaultPostProcessor<'a, FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+    QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
     default_post_processor!(Pipeline<FilterStartPoints, Rerank>);
 }
@@ -631,36 +632,37 @@ where
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
 /// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
-impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T>
+    SearchStrategy<'a, DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+    QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
     type QueryComputer = QueryComputer<NBITS>;
-    type SearchAccessor<'a> = QuantAccessor<'a, NBITS, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NBITS, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
 }
 
-impl<const NBITS: usize, D, Ctx, T>
-    DefaultPostProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+impl<'a, const NBITS: usize, D, Ctx, T>
+    DefaultPostProcessor<'a, DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+    QueryComputer<NBITS>: for<'b> PreprocessedDistanceFunction<CVRef<'b, NBITS>, f32>,
 {
     default_post_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
@@ -739,8 +741,8 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx, T>
-    InsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
+impl<'a, const NBITS: usize, V, D, Ctx, T>
+    InsertStrategy<'a, DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]> for Quantized
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -748,9 +750,9 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
-    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
-    DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
-    Quantized: for<'a> SearchStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
+    QueryComputer<NBITS>: for<'x> PreprocessedDistanceFunction<CVRef<'x, NBITS>, f32>,
+    DistanceComputer: for<'x, 'y> DistanceFunction<CVRef<'x, NBITS>, CVRef<'y, NBITS>, f32>,
+    Quantized: SearchStrategy<'a, DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
 {
     type PruneStrategy = Self;
 
@@ -768,6 +770,7 @@ where
     B: glue::Batch,
     Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, WorkingSet = PassThrough>
         + for<'a> InsertStrategy<
+            'a,
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,

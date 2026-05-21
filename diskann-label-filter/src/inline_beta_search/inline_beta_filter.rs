@@ -29,23 +29,24 @@ pub struct InlineBetaStrategy<Strategy> {
 
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
+        'q,
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, &'q Q>,
-    Q: Send + Sync,
+    Strategy: SearchStrategy<'q, DP, &'q Q>,
+    Q: Send + Sync + 'q,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
-    type SearchAccessor<'a> = EncodedDocumentAccessor<Strategy::SearchAccessor<'a>>;
+    type SearchAccessor = EncodedDocumentAccessor<Strategy::SearchAccessor>;
 
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        context: &'a DP::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    fn search_accessor(
+        &'q self,
+        provider: &'q DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        context: &'q DP::Context,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let inner_accessor = self
             .inner
             .search_accessor(provider.inner_provider(), context)
@@ -66,17 +67,18 @@ where
 /// the inner strategy's default processor with [`FilterResults`].
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
+        'q,
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         &'q FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, &'q Q>,
-    Q: Send + Sync,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<'q, DP, &'q Q>,
+    Q: Send + Sync + 'q,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
-    fn default_post_processor(&self) -> Self::Processor {
+    fn default_post_processor(&'q self) -> Self::Processor {
         FilterResults {
             inner_post_processor: self.inner.default_post_processor(),
         }

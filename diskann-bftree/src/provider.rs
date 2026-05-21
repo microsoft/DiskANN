@@ -1139,25 +1139,25 @@ impl<'a> From<Opaque<'a>> for OwnedOpaque {
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q> SearchStrategy<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> SearchStrategy<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
     type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q>;
+    type SearchAccessor = FullAccessor<'a, T, Q>;
     type SearchAccessorError = Infallible;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a BfTreeProvider<T, Q>,
         _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
 }
 
-impl<T, Q> DefaultPostProcessor<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> DefaultPostProcessor<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1189,7 +1189,7 @@ where
     }
 }
 
-impl<T, Q> InsertStrategy<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> InsertStrategy<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1276,7 +1276,7 @@ where
 /// Perform a search entirely in the quantized space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T> SearchStrategy<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> SearchStrategy<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
@@ -1284,26 +1284,26 @@ where
         spherical_iface::QueryComputer<GlobalAllocator>,
         spherical_iface::QueryDistanceError,
     >;
-    type SearchAccessor<'a> = QuantAccessor<'a, T>;
+    type SearchAccessor = QuantAccessor<'a, T>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a BfTreeProvider<T, QuantVectorProvider>,
         _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
 }
 
-impl<T> DefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> DefaultPostProcessor<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
-impl<T> InsertStrategy<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> InsertStrategy<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
@@ -1318,6 +1318,7 @@ where
     T: VectorRepr,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+        'a,
         BfTreeProvider<T, QuantVectorProvider>,
         B::Element<'a>,
         PruneStrategy = Self,
@@ -1999,7 +2000,7 @@ mod tests {
         for i in 0..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(Quantized, ctx, &i, point.as_slice())
+                .insert(&Quantized, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2091,7 +2092,7 @@ mod tests {
         for i in 0..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(Quantized, ctx, &i, point.as_slice())
+                .insert(&Quantized, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2169,7 +2170,7 @@ mod tests {
         for i in 0u32..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(FullPrecision, ctx, &i, point.as_slice())
+                .insert(&FullPrecision, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2204,7 +2205,7 @@ mod tests {
         for i in 0u32..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(FullPrecision, ctx, &i, point.as_slice())
+                .insert(&FullPrecision, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
