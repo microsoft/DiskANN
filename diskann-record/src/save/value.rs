@@ -116,9 +116,8 @@ impl<'de> Deserialize<'de> for Value<'static> {
             where
                 A: MapAccess<'de>,
             {
-                // TODO: Handle invaiants that only one of our reserved words are present.
+                // TODO: Handle invariants that only one of our reserved words are present.
                 let mut version: Option<Version> = None;
-                let mut variant: Option<Cow<'static, str>> = None;
                 let mut handle_name: Option<String> = None;
                 let mut fields: HashMap<Cow<'static, str>, Value<'static>> = HashMap::new();
 
@@ -126,9 +125,6 @@ impl<'de> Deserialize<'de> for Value<'static> {
                     match key.as_str() {
                         "$version" => {
                             version = Some(map.next_value()?);
-                        }
-                        "$variant" => {
-                            variant = Some(map.next_value()?);
                         }
                         "$handle" => {
                             handle_name = Some(map.next_value()?);
@@ -146,11 +142,7 @@ impl<'de> Deserialize<'de> for Value<'static> {
 
                 if let Some(version) = version {
                     let record = Record { record: fields };
-                    return Ok(Value::Object(Versioned {
-                        record,
-                        version,
-                        variant,
-                    }));
+                    return Ok(Value::Object(Versioned { record, version }));
                 }
 
                 Err(de::Error::custom(
@@ -191,6 +183,23 @@ impl<'a> Record<'a> {
         self.record.get(key)
     }
 
+    /// Number of (user) keys in this record. Reserved keys (`$version`, `$handle`)
+    /// are tracked elsewhere and never appear here.
+    pub fn len(&self) -> usize {
+        self.record.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.record.is_empty()
+    }
+
+    /// Iterate over the user keys in this record. Order is unspecified.
+    pub fn keys(&self) -> Keys<'_, 'a> {
+        Keys {
+            inner: self.record.keys(),
+        }
+    }
+
     pub fn insert<K, V>(&mut self, key: K, value: V) -> crate::save::Result<Option<Value<'a>>>
     where
         K: Into<Cow<'a, str>>,
@@ -207,7 +216,33 @@ impl<'a> Record<'a> {
 
         Ok(self.record.insert(key, value.into()))
     }
+
+    /// Wrap this record as a versioned [`Value`] ready for insertion into another
+    /// record. Use this from enum [`Save`](crate::save::Save) impls to attach the
+    /// outer type's version to an inline variant payload.
+    pub fn into_value(self, version: Version) -> Value<'a> {
+        Value::Object(Versioned::new(self, version))
+    }
 }
+
+/// Iterator over the keys of a [`Record`].
+pub struct Keys<'r, 'a> {
+    inner: std::collections::hash_map::Keys<'r, Cow<'a, str>, Value<'a>>,
+}
+
+impl<'r, 'a> Iterator for Keys<'r, 'a> {
+    type Item = &'r str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|k| k.as_ref())
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for Keys<'_, '_> {}
 
 impl<'a> FromIterator<(Cow<'a, str>, Value<'a>)> for Record<'a> {
     fn from_iter<I: IntoIterator<Item = (Cow<'a, str>, Value<'a>)>>(itr: I) -> Self {
@@ -223,30 +258,15 @@ pub struct Versioned<'a> {
     record: Record<'a>,
     #[serde(rename = "$version")]
     version: Version,
-    #[serde(
-        rename = "$variant",
-        default,
-        skip_serializing_if = "Option::is_none",
-        borrow
-    )]
-    variant: Option<Cow<'a, str>>,
 }
 
 impl<'a> Versioned<'a> {
-    pub(crate) fn new(record: Record<'a>, version: Version, variant: Option<Cow<'a, str>>) -> Self {
-        Self {
-            record,
-            version,
-            variant,
-        }
+    pub(crate) fn new(record: Record<'a>, version: Version) -> Self {
+        Self { record, version }
     }
 
     pub(crate) fn version(&self) -> Version {
         self.version
-    }
-
-    pub(crate) fn variant(&self) -> Option<&str> {
-        self.variant.as_deref()
     }
 
     pub(crate) fn record(&self) -> &Record<'a> {

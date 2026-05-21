@@ -148,7 +148,6 @@ impl<'a> Context<'a> {
                     inner: self.inner,
                     record: versioned.record(),
                     version: versioned.version(),
-                    variant: versioned.variant(),
                 };
                 Some(object)
             }
@@ -201,7 +200,6 @@ pub struct Object<'a> {
     inner: &'a ContextInner,
     record: &'a save::Record<'a>,
     version: Version,
-    variant: Option<&'a str>,
 }
 
 impl<'a> Object<'a> {
@@ -209,9 +207,46 @@ impl<'a> Object<'a> {
         self.version
     }
 
-    /// Return the variant tag for enum-shaped records, or `None` for structs.
-    pub fn variant(&self) -> Option<&'a str> {
-        self.variant
+    /// Iterate over the user keys of this record. Reserved keys (`$version`,
+    /// `$handle`) are tracked separately and never appear here.
+    pub fn keys(&self) -> save::Keys<'_, 'a> {
+        self.record.keys()
+    }
+
+    /// Number of user keys in this record.
+    pub fn len(&self) -> usize {
+        self.record.len()
+    }
+
+    /// Whether this record has no user keys.
+    pub fn is_empty(&self) -> bool {
+        self.record.is_empty()
+    }
+
+    /// Return the sole user key of this record, used by enum loaders to dispatch
+    /// to a variant arm. Errors with a recoverable [`error::Kind::TypeMismatch`]
+    /// if the record has zero or multiple user keys (i.e. the wire shape does
+    /// not look like an enum).
+    pub fn single_key(&self) -> Result<&str> {
+        let mut keys = self.record.keys();
+        let Some(first) = keys.next() else {
+            return Err(error::Kind::TypeMismatch.into());
+        };
+        if keys.next().is_some() {
+            return Err(error::Kind::TypeMismatch.into());
+        }
+        Ok(first)
+    }
+
+    /// Descend into the raw [`Context`] for `key`, without imposing a type.
+    /// Useful for enum variants whose payload is itself an [`Object`], an array,
+    /// or any other [`save::Value`]. Returns [`error::Kind::MissingField`] when
+    /// the key is absent.
+    pub fn child(&self, key: &str) -> Result<Context<'a>> {
+        match self.record.get(key) {
+            Some(value) => Ok(Context::new(self.context(), value)),
+            None => Err(error::Kind::MissingField.into()),
+        }
     }
 
     pub fn field<T>(&self, key: &str) -> Result<T>

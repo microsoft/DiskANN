@@ -576,33 +576,25 @@ impl diskann_record::save::Save for PrefetchCacheLineLevel {
         &self,
         _context: diskann_record::save::Context<'_>,
     ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
-        Ok(diskann_record::save::Record::empty())
-    }
-
-    fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-        Some(
-            match self {
-                Self::CacheLine4 => PREFETCH_CACHE_LINE_4,
-                Self::CacheLine8 => PREFETCH_CACHE_LINE_8,
-                Self::CacheLine16 => PREFETCH_CACHE_LINE_16,
-                Self::All => PREFETCH_CACHE_LINE_ALL,
-            }
-            .into(),
-        )
+        let mut record = diskann_record::save::Record::empty();
+        let key = match self {
+            Self::CacheLine4 => PREFETCH_CACHE_LINE_4,
+            Self::CacheLine8 => PREFETCH_CACHE_LINE_8,
+            Self::CacheLine16 => PREFETCH_CACHE_LINE_16,
+            Self::All => PREFETCH_CACHE_LINE_ALL,
+        };
+        record.insert(key, diskann_record::save::Value::Null)?;
+        Ok(record)
     }
 }
 
 impl diskann_record::load::Load<'_> for PrefetchCacheLineLevel {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
-    const IS_ENUM: bool = true;
 
     fn load(
         object: diskann_record::load::Object<'_>,
     ) -> diskann_record::load::Result<Self> {
-        let variant = object
-            .variant()
-            .ok_or(diskann_record::load::error::Kind::MissingVariant)?;
-        match variant {
+        match object.single_key()? {
             PREFETCH_CACHE_LINE_4 => Ok(Self::CacheLine4),
             PREFETCH_CACHE_LINE_8 => Ok(Self::CacheLine8),
             PREFETCH_CACHE_LINE_16 => Ok(Self::CacheLine16),

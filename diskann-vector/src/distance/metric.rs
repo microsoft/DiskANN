@@ -116,33 +116,25 @@ impl diskann_record::save::Save for Metric {
         &self,
         _context: diskann_record::save::Context<'_>,
     ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
-        Ok(diskann_record::save::Record::empty())
-    }
-
-    fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-        Some(
-            match self {
-                Self::Cosine => METRIC_VARIANT_COSINE,
-                Self::InnerProduct => METRIC_VARIANT_INNER_PRODUCT,
-                Self::L2 => METRIC_VARIANT_L2,
-                Self::CosineNormalized => METRIC_VARIANT_COSINE_NORMALIZED,
-            }
-            .into(),
-        )
+        let mut record = diskann_record::save::Record::empty();
+        let key = match self {
+            Self::Cosine => METRIC_VARIANT_COSINE,
+            Self::InnerProduct => METRIC_VARIANT_INNER_PRODUCT,
+            Self::L2 => METRIC_VARIANT_L2,
+            Self::CosineNormalized => METRIC_VARIANT_COSINE_NORMALIZED,
+        };
+        record.insert(key, diskann_record::save::Value::Null)?;
+        Ok(record)
     }
 }
 
 impl diskann_record::load::Load<'_> for Metric {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
-    const IS_ENUM: bool = true;
 
     fn load(
         object: diskann_record::load::Object<'_>,
     ) -> diskann_record::load::Result<Self> {
-        let variant = object
-            .variant()
-            .ok_or(diskann_record::load::error::Kind::MissingVariant)?;
-        match variant {
+        match object.single_key()? {
             METRIC_VARIANT_COSINE => Ok(Self::Cosine),
             METRIC_VARIANT_INNER_PRODUCT => Ok(Self::InnerProduct),
             METRIC_VARIANT_L2 => Ok(Self::L2),

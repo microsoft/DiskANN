@@ -21,13 +21,12 @@ where
     inner.context().load()
 }
 
+/// Implemented by user types that can be loaded from a versioned record.
+///
+/// Enum types dispatch on the single non-reserved key of the record (see
+/// [`Object::single_key`]) and recurse via [`Object::child`] into the payload.
 pub trait Load<'a>: Sized {
     const VERSION: Version;
-    /// Set to `true` for enum types. The framework checks at load time that the
-    /// wire format's `$variant` tag presence matches this constant and rejects
-    /// mismatches (an enum loader cannot consume an untagged record and a
-    /// struct loader cannot consume a tagged record).
-    const IS_ENUM: bool = false;
     fn load(object: Object<'a>) -> Result<Self>;
     fn load_legacy(object: Object<'a>) -> Result<Self>;
 }
@@ -42,11 +41,6 @@ where
 {
     fn load(context: Context<'a>) -> Result<Self> {
         let object = context.as_object().ok_or(error::Kind::TypeMismatch)?;
-        match (T::IS_ENUM, object.variant().is_some()) {
-            (false, true) => return Err(error::Kind::UnexpectedVariant.into()),
-            (true, false) => return Err(error::Kind::MissingVariant.into()),
-            _ => {}
-        }
         let version = object.version();
         if version == T::VERSION {
             T::load(object)

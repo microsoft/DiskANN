@@ -4,15 +4,13 @@
  */
 
 mod value;
-pub use value::{Handle, Record, Value, Versioned};
+pub use value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
 pub use context::Context;
 
 mod error;
 pub use error::{Error, Result};
-
-use std::borrow::Cow;
 
 use crate::Version;
 
@@ -30,18 +28,13 @@ where
 }
 
 /// Save objects!
+///
+/// Enums are serialized by their [`Save::save`] impl returning a [`Record`] with a
+/// single user key whose name is the variant tag and whose value is the variant's
+/// payload. See the crate-level docs for examples.
 pub trait Save {
     const VERSION: Version;
     fn save(&self, context: Context<'_>) -> Result<Record<'_>>;
-
-    /// Return the variant tag for enum types. Default: `None` (struct).
-    ///
-    /// Enum implementations must return `Some(variant_name)` for every variant.
-    /// The framework writes this into the manifest as `$variant` and enforces on
-    /// load that the tag's presence matches the corresponding [`Load::IS_ENUM`].
-    fn variant(&self) -> Option<Cow<'_, str>> {
-        None
-    }
 }
 
 /// Save anything!
@@ -55,9 +48,7 @@ where
 {
     fn save(&self, context: Context<'_>) -> Result<Value<'_>> {
         let record = self.save(context)?;
-        let variant = <Self as Save>::variant(self);
-        let versioned = Versioned::new(record, T::VERSION, variant);
-        Ok(Value::Object(versioned))
+        Ok(record.into_value(T::VERSION))
     }
 }
 

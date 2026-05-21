@@ -105,12 +105,8 @@ pub enum Kind {
     MissingField,
     TypeMismatch,
     UnknownVersion,
-    /// Wire format has a `$variant` tag but the target type is not an enum.
-    UnexpectedVariant,
-    /// Target type is an enum but the wire format has no `$variant` tag.
-    MissingVariant,
-    /// The wire format's `$variant` tag does not match any known variant of the
-    /// target enum.
+    /// The variant tag read from the wire format does not match any known
+    /// variant of the target enum.
     UnknownVariant,
     /// A numeric value in the manifest does not fit in the requested Rust type
     /// (either out of range or would lose precision).
@@ -127,8 +123,6 @@ impl Kind {
             Self::MissingField => "missing field",
             Self::TypeMismatch => "type mismatch",
             Self::UnknownVersion => "unknown version",
-            Self::UnexpectedVariant => "unexpected variant tag on non-enum record",
-            Self::MissingVariant => "missing variant tag on enum record",
             Self::UnknownVariant => "unknown variant",
             Self::NumberOutOfRange => "number out of range for target type",
             Self::MissingFile => "handle references a file not present in the manifest",
@@ -149,8 +143,6 @@ impl Kind {
             Self::VersionMismatch | Self::MissingField | Self::TypeMismatch => true,
             // Structural / integrity failures — give up.
             Self::UnknownVersion
-            | Self::UnexpectedVariant
-            | Self::MissingVariant
             | Self::UnknownVariant
             | Self::NumberOutOfRange
             | Self::MissingFile => false,

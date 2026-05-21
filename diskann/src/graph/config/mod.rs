@@ -710,31 +710,23 @@ impl diskann_record::save::Save for PruneKind {
         &self,
         _context: diskann_record::save::Context<'_>,
     ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
-        Ok(diskann_record::save::Record::empty())
-    }
-
-    fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-        Some(
-            match self {
-                Self::TriangleInequality => PRUNE_KIND_TRIANGLE_INEQUALITY,
-                Self::Occluding => PRUNE_KIND_OCCLUDING,
-            }
-            .into(),
-        )
+        let mut record = diskann_record::save::Record::empty();
+        let key = match self {
+            Self::TriangleInequality => PRUNE_KIND_TRIANGLE_INEQUALITY,
+            Self::Occluding => PRUNE_KIND_OCCLUDING,
+        };
+        record.insert(key, diskann_record::save::Value::Null)?;
+        Ok(record)
     }
 }
 
 impl diskann_record::load::Load<'_> for PruneKind {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
-    const IS_ENUM: bool = true;
 
     fn load(
         object: diskann_record::load::Object<'_>,
     ) -> diskann_record::load::Result<Self> {
-        let variant = object
-            .variant()
-            .ok_or(diskann_record::load::error::Kind::MissingVariant)?;
-        match variant {
+        match object.single_key()? {
             PRUNE_KIND_TRIANGLE_INEQUALITY => Ok(Self::TriangleInequality),
             PRUNE_KIND_OCCLUDING => Ok(Self::Occluding),
             other => Err(diskann_record::load::Error::message(format!(
@@ -762,39 +754,34 @@ impl diskann_record::save::Save for IntraBatchCandidates {
         &self,
         context: diskann_record::save::Context<'_>,
     ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
-        Ok(match self {
-            Self::None | Self::All => diskann_record::save::Record::empty(),
-            Self::Max(max) => diskann_record::save_fields!(context, [max]),
-        })
-    }
-
-    fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-        Some(
-            match self {
-                Self::None => INTRA_BATCH_NONE,
-                Self::Max(_) => INTRA_BATCH_MAX,
-                Self::All => INTRA_BATCH_ALL,
+        let mut record = diskann_record::save::Record::empty();
+        match self {
+            Self::None => {
+                record.insert(INTRA_BATCH_NONE, diskann_record::save::Value::Null)?;
             }
-            .into(),
-        )
+            Self::All => {
+                record.insert(INTRA_BATCH_ALL, diskann_record::save::Value::Null)?;
+            }
+            Self::Max(max) => {
+                let payload = <_ as diskann_record::save::Saveable>::save(max, context)?;
+                record.insert(INTRA_BATCH_MAX, payload)?;
+            }
+        }
+        Ok(record)
     }
 }
 
 impl diskann_record::load::Load<'_> for IntraBatchCandidates {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
-    const IS_ENUM: bool = true;
 
     fn load(
         object: diskann_record::load::Object<'_>,
     ) -> diskann_record::load::Result<Self> {
-        let variant = object
-            .variant()
-            .ok_or(diskann_record::load::error::Kind::MissingVariant)?;
-        match variant {
+        match object.single_key()? {
             INTRA_BATCH_NONE => Ok(Self::None),
             INTRA_BATCH_ALL => Ok(Self::All),
             INTRA_BATCH_MAX => {
-                diskann_record::load_fields!(object, [max: NonZeroU32]);
+                let max: NonZeroU32 = object.field(INTRA_BATCH_MAX)?;
                 Ok(Self::Max(max))
             }
             other => Err(diskann_record::load::Error::message(format!(

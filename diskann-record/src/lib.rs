@@ -205,30 +205,35 @@ mod tests {
     impl save::Save for Metric {
         const VERSION: Version = Version::new(0, 0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
-            Ok(match self {
-                Self::L2 | Self::Cosine => save::Record::empty(),
-                Self::Weighted { weights } => save_fields!(context, [weights]),
-            })
-        }
-        fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-            Some(match self {
-                Self::L2 => "L2".into(),
-                Self::Cosine => "Cosine".into(),
-                Self::Weighted { .. } => "Weighted".into(),
-            })
+            let mut record = save::Record::empty();
+            match self {
+                Self::L2 => {
+                    record.insert("L2", save::Value::Null)?;
+                }
+                Self::Cosine => {
+                    record.insert("Cosine", save::Value::Null)?;
+                }
+                Self::Weighted { weights } => {
+                    let payload = save_fields!(context, [weights]).into_value(Self::VERSION);
+                    record.insert("Weighted", payload)?;
+                }
+            }
+            Ok(record)
         }
     }
 
     impl load::Load<'_> for Metric {
         const VERSION: Version = Version::new(0, 0, 0);
-        const IS_ENUM: bool = true;
         fn load(object: load::Object<'_>) -> load::Result<Self> {
-            let variant = object.variant().ok_or(load::error::Kind::MissingVariant)?;
-            match variant {
+            match object.single_key()? {
                 "L2" => Ok(Self::L2),
                 "Cosine" => Ok(Self::Cosine),
                 "Weighted" => {
-                    load_fields!(object, [weights: Vec<f32>]);
+                    let inner = object
+                        .child("Weighted")?
+                        .as_object()
+                        .ok_or(load::error::Kind::TypeMismatch)?;
+                    load_fields!(inner, [weights: Vec<f32>]);
                     Ok(Self::Weighted { weights })
                 }
                 _ => Err(load::error::Kind::UnknownVariant.into()),
@@ -321,25 +326,27 @@ mod tests {
     impl save::Save for EnumShape {
         const VERSION: Version = Version::new(0, 0, 0);
         fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
-            Ok(match self {
-                Self::Only { x } => save_fields!(context, [x]),
-            })
-        }
-        fn variant(&self) -> Option<std::borrow::Cow<'_, str>> {
-            Some(match self {
-                Self::Only { .. } => "Only".into(),
-            })
+            let mut record = save::Record::empty();
+            match self {
+                Self::Only { x } => {
+                    let payload = save_fields!(context, [x]).into_value(Self::VERSION);
+                    record.insert("Only", payload)?;
+                }
+            }
+            Ok(record)
         }
     }
 
     impl load::Load<'_> for EnumShape {
         const VERSION: Version = Version::new(0, 0, 0);
-        const IS_ENUM: bool = true;
         fn load(object: load::Object<'_>) -> load::Result<Self> {
-            let variant = object.variant().ok_or(load::error::Kind::MissingVariant)?;
-            match variant {
+            match object.single_key()? {
                 "Only" => {
-                    load_fields!(object, [x: i32]);
+                    let inner = object
+                        .child("Only")?
+                        .as_object()
+                        .ok_or(load::error::Kind::TypeMismatch)?;
+                    load_fields!(inner, [x: i32]);
                     Ok(Self::Only { x })
                 }
                 _ => Err(load::error::Kind::UnknownVariant.into()),
@@ -352,6 +359,9 @@ mod tests {
 
     #[test]
     fn loading_enum_as_struct_is_rejected() -> anyhow::Result<()> {
+        // Enum data has a single key "Only" whose payload is a versioned
+        // sub-object. Loading it as `StructShape` (which expects field `x`)
+        // surfaces `MissingField`.
         let value = EnumShape::Only { x: 7 };
         let temp_dir = tempfile::tempdir()?;
         let dir = temp_dir.path();
@@ -359,17 +369,19 @@ mod tests {
 
         save::save_to_disk(&value, dir, &metadata)?;
         let err = load::load_from_disk::<StructShape>(&metadata, dir)
-            .expect_err("loading a tagged record as a struct should fail");
+            .expect_err("loading enum data into a struct shape should fail");
         let msg = format!("{err}");
         assert!(
-            msg.contains("unexpected variant"),
-            "expected UnexpectedVariant error, got: {msg}"
+            msg.contains("missing field"),
+            "expected MissingField error, got: {msg}"
         );
         Ok(())
     }
 
     #[test]
     fn loading_struct_as_enum_is_rejected() -> anyhow::Result<()> {
+        // Struct data has field `x`, which the enum loader sees as a candidate
+        // variant name. It doesn't match any arm, so we get `UnknownVariant`.
         let value = StructShape { x: 7 };
         let temp_dir = tempfile::tempdir()?;
         let dir = temp_dir.path();
@@ -377,11 +389,11 @@ mod tests {
 
         save::save_to_disk(&value, dir, &metadata)?;
         let err = load::load_from_disk::<EnumShape>(&metadata, dir)
-            .expect_err("loading an untagged record as an enum should fail");
+            .expect_err("loading struct data into an enum shape should fail");
         let msg = format!("{err}");
         assert!(
-            msg.contains("missing variant"),
-            "expected MissingVariant error, got: {msg}"
+            msg.contains("unknown variant"),
+            "expected UnknownVariant error, got: {msg}"
         );
         Ok(())
     }
