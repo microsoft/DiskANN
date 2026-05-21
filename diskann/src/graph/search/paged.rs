@@ -136,26 +136,26 @@ where
 // FIXME: Wire proper post-processing support into paged search.
 fn filter_search_candidates<I>(
     start_points: &[I],
-    l_value: usize,
+    page_size: usize,
     best: &mut NeighborPriorityQueue<I>,
 ) -> (Vec<Neighbor<I>>, usize)
 where
     I: VectorId,
 {
     let mut total = 0usize;
-    let mut candidates = Vec::with_capacity(l_value);
+    let mut candidates = Vec::with_capacity(page_size);
     for n in best.iter() {
         total += 1;
         if !start_points.contains(&n.id) {
             candidates.push(n);
-            if candidates.len() >= l_value {
+            if candidates.len() >= page_size {
                 break;
             }
         }
     }
 
     debug_assert!(
-        l_value.min(best.size().saturating_sub(start_points.len())) <= candidates.len(),
+        page_size.min(best.size().saturating_sub(start_points.len())) <= candidates.len(),
         "Not enough candidates after filtering starting points",
     );
 

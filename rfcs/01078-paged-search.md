@@ -20,7 +20,7 @@ Paged search allows callers to retrieve nearest-neighbor results incrementally (
 The search state (scratch buffers, the priority queue, the query computer) must persist across page boundaries.
 
 Earlier synchronous version of DiskANN did this by persisting the search state manually and passing the search state explicitly to the next-page requests.
-The async rewrite stuck with this pattern where callers were required  to manage a `SearchState` struct whose `ExtraState` type parameter carried a `'static` bound:
+The async rewrite stuck with this pattern where callers were required to manage a `SearchState` struct whose `ExtraState` type parameter carried a `'static` bound:
 ```rust
 // OLD: ExtraState must be 'static
 pub struct SearchState<VectorIdType, ExtraState: 'static = NoExtraState> { ... }
