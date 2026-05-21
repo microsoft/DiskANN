@@ -2256,7 +2256,15 @@ mod tests {
         let ctx = &DefaultContext;
         let num_start_points = 2;
         let dim = 5;
-        let start_points = Matrix::new(Init(|| 0.0f32), num_start_points, dim);
+        let start_points = Matrix::try_from(
+            vec![0.0f32; dim]
+                .into_iter()
+                .chain(vec![0.5f32; dim])
+                .collect::<Box<[_]>>(),
+            num_start_points,
+            dim,
+        )
+        .unwrap();
 
         let provider = BfTreeProvider::new(
             BfTreeProviderParameters {
