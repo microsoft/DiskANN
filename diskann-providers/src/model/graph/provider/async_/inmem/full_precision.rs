@@ -403,7 +403,8 @@ where
 ////////////////
 
 /// Perform a search entirely in the full-precision space.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> SearchStrategy<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -411,19 +412,20 @@ where
     Ctx: ExecutionContext,
 {
     type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
 }
 
-impl<T, Q, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> DefaultPostProcessor<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -508,7 +510,8 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> InsertStrategy<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -530,6 +533,7 @@ where
     Ctx: ExecutionContext,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+            'a,
             FullPrecisionProvider<T, Q, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,

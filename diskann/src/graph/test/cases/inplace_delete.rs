@@ -57,7 +57,7 @@ async fn basic_single() {
 
     for i in 1..6 {
         index
-            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
+            .insert(&strat, &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }
@@ -88,7 +88,7 @@ async fn basic_multi() {
 
     for i in 1..6 {
         index
-            .insert(strat.clone(), &ctx, &i, &[i as f32, i as f32])
+            .insert(&strat, &ctx, &i, &[i as f32, i as f32])
             .await
             .unwrap();
     }

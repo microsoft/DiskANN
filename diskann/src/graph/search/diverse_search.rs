@@ -92,27 +92,27 @@ where
     }
 }
 
-impl<DP, S, T, P> Search<DP, S, T> for Diverse<P>
+impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
-    T: Copy + Send + Sync,
-    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync + 'a,
+    S: SearchStrategy<'a, DP, T>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
