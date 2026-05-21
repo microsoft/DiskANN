@@ -7,8 +7,6 @@ use std::{
     num::NonZeroUsize,
 };
 
-use num_traits::FromPrimitive;
-
 use crate::{ANNError, ANNResult};
 
 /// A constant representing the number one as a `NonZeroUsize`.
@@ -30,30 +28,26 @@ where
 
 pub fn vecid_from_u32<T>(val: u32) -> ANNResult<T>
 where
-    T: FromPrimitive,
+    T: VectorIdTryFrom<u32>,
 {
-    let res = T::from_u32(val).ok_or_else(|| {
+    T::vector_id_try_from(val).map_err(|_| {
         ANNError::log_index_error(format_args!(
             "Failed to convert from u32 to VectorIdType for vector {}",
             val
         ))
-    })?;
-
-    Ok(res)
+    })
 }
 
 pub fn vecid_from_usize<T>(val: usize) -> ANNResult<T>
 where
-    T: FromPrimitive,
+    T: VectorIdTryFrom<usize>,
 {
-    let res = T::from_usize(val).ok_or_else(|| {
+    T::vector_id_try_from(val).map_err(|_| {
         ANNError::log_index_error(format_args!(
             "Failed to convert from usize to VectorIdType for vector {}",
             val
         ))
-    })?;
-
-    Ok(res)
+    })
 }
 
 /// In Rust, `From` conversion for `usize` from various primitive types is not implemented
@@ -160,6 +154,14 @@ impl TypeStr for u128 {
     }
 }
 
+// For testing purposes, we need a type that cannot hold all u32 values.
+#[cfg(test)]
+impl TypeStr for u16 {
+    fn type_str() -> &'static str {
+        "u16"
+    }
+}
+
 /// An error type indicating that conversion from an integer to a `VectorId` failed due
 /// to a narrowing conversion.
 ///
@@ -240,9 +242,6 @@ where
 
 /// Record that an conversion error occurred while trying to convert to a VectorId.
 pub type ErrorToVectorId<FromType, ToType> = IdConversionError<true, FromType, ToType>;
-
-/// Record that conversion error occurred while trying to convert to an Integer.
-pub type ErrorToInt<FromType, ToType> = IdConversionError<false, FromType, ToType>;
 
 /// Try to convert a type into a vector id. IF such a conversion can not be performed
 /// losslessly, return an `ErrorToVectorId` error, recording the involved types and the
@@ -331,29 +330,6 @@ where
 {
     fn try_into_vector_id(self) -> Result<T, ErrorToVectorId<Self, T>> {
         <T as VectorIdTryFrom<U>>::vector_id_try_from(self).map_err(|_| ErrorToVectorId::new(self))
-    }
-}
-
-/// Try to convert a `VectorId` to an integer. If such a conversion cannot be performed
-/// losslessly, return an `ErrorToInt` recording the involved types and the value that
-/// caused the conversion to fail.
-///
-/// In many ways, this trait is the pair for `TryIntoVectorId`, but its corresponding error
-/// message reports the direction of the conversion.
-pub trait TryIntoInteger<To>: Copy + TypeStr + Display
-where
-    To: Sized + TypeStr,
-{
-    fn try_into_integer(self) -> Result<To, ErrorToInt<Self, To>>;
-}
-
-impl<To, From> TryIntoInteger<To> for From
-where
-    From: Copy + TypeStr + Display,
-    To: Sized + TypeStr + TryFrom<From>,
-{
-    fn try_into_integer(self) -> Result<To, ErrorToInt<Self, To>> {
-        <To as TryFrom<Self>>::try_from(self).map_err(|_| ErrorToInt::new(self))
     }
 }
 
@@ -484,7 +460,7 @@ mod test_utils {
     #[test]
     fn id_conversion_to_annerror() {
         // VectorId -> Int
-        let x = ErrorToInt::<u64, u32>::new(500);
+        let x = IdConversionError::<false, u64, u32>::new(500);
         let ann = ANNError::from(x);
         assert_eq!(ann.kind(), ANNErrorKind::IndexError);
 
@@ -604,82 +580,5 @@ mod test_utils {
 
         let x: Result<u64, _> = (u32::MAX).try_into_vector_id();
         assert_eq!(x.unwrap(), <u32 as Into<u64>>::into(u32::MAX));
-    }
-
-    #[test]
-    fn try_into_integer() {
-        let convertible_u64: u64 = 321;
-        let convertible_usize: usize = 1234;
-        // A 128-bit integer that is convertible to u64 but not u32.
-        let convertible_u128: u128 = (u64::MAX).into();
-        assert!(u32::try_from(convertible_u128).is_err());
-        assert!(u64::try_from(convertible_u128).is_ok());
-
-        // to u32 - errors
-        let x: Result<u32, _> = (u64::MAX).try_into_integer();
-        assert!(x.is_err());
-        assert_eq!(
-            x.unwrap_err().to_string(),
-            id_to_int_message::<u64, u32>(u64::MAX)
-        );
-
-        let x: Result<u32, _> = (usize::MAX).try_into_integer();
-        assert!(x.is_err());
-        assert_eq!(
-            x.unwrap_err().to_string(),
-            id_to_int_message::<usize, u32>(usize::MAX)
-        );
-
-        // to u32 - works
-        let x: Result<u32, _> = convertible_u64.try_into_integer();
-        assert_eq!(
-            x.unwrap(),
-            <u64 as TryInto<u32>>::try_into(convertible_u64).unwrap()
-        );
-
-        let x: Result<u32, _> = convertible_usize.try_into_integer();
-        assert_eq!(
-            x.unwrap(),
-            <usize as TryInto<u32>>::try_into(convertible_usize).unwrap()
-        );
-
-        // to u64 - errors
-        let x: Result<u64, _> = (u128::MAX).try_into_integer();
-        assert!(x.is_err());
-        assert_eq!(
-            x.unwrap_err().to_string(),
-            id_to_int_message::<u128, u64>(u128::MAX)
-        );
-
-        // to u64 - success
-        let x: Result<u64, _> = convertible_u128.try_into_integer();
-        assert_eq!(
-            x.unwrap(),
-            <u128 as TryInto<u64>>::try_into(convertible_u128).unwrap()
-        );
-
-        let x: Result<u64, _> = (u32::MAX).try_into_integer();
-        assert_eq!(x.unwrap(), <u32 as Into<u64>>::into(u32::MAX));
-
-        // to usize - errors
-        let x: Result<usize, _> = (u128::MAX).try_into_integer();
-        assert!(x.is_err());
-        assert_eq!(
-            x.unwrap_err().to_string(),
-            id_to_int_message::<u128, usize>(u128::MAX)
-        );
-
-        // to usize - success
-        let x: Result<usize, _> = convertible_u128.try_into_integer();
-        assert_eq!(
-            x.unwrap(),
-            <u128 as TryInto<usize>>::try_into(convertible_u128).unwrap()
-        );
-
-        let x: Result<usize, _> = (u32::MAX).try_into_integer();
-        assert_eq!(
-            x.unwrap(),
-            <u32 as TryInto<usize>>::try_into(u32::MAX).unwrap()
-        );
     }
 }

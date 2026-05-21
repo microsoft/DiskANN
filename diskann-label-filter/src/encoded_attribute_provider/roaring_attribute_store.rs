@@ -70,7 +70,7 @@ where
     where
         IT: VectorId,
     {
-        let vec_id_u64 = (*vec_id).into();
+        let vec_id_u64 = (*vec_id).into_usize() as u64;
         let mut deleted = true;
 
         // Acquire locks in consistent order: index first, then inv_index
@@ -135,7 +135,7 @@ where
     where
         IT: VectorId,
     {
-        let id_u64: u64 = (*vec_id).into();
+        let id_u64: u64 = (*vec_id).into_usize() as u64;
 
         //For now, we assume that it is an error if a point has zero attributes.
         if attributes.is_empty() {

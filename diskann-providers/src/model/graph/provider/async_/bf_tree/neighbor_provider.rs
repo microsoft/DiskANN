@@ -211,8 +211,9 @@ impl<I: VectorId> NeighborProvider<I> {
             let nbr_count = neighbor_list.len();
             let mut neighbor_list: Vec<_> = neighbor_list.into();
             neighbor_list.resize(self.dim, I::default());
-            neighbor_list[self.dim - 1] =
-                I::from_usize(nbr_count).expect("Fails to cast usize as VectorId");
+            neighbor_list[self.dim - 1] = nbr_count
+                .try_into_vector_id()
+                .expect("Fails to cast usize as VectorId");
 
             // Given that we already have a full sized neighbor list ready to be directly saved in bf-tree
             // We avoid one data copy by directly writing to bf-tree instead of invoking set_neighbor()

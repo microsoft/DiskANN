@@ -3012,8 +3012,8 @@ where
         S: PruneStrategy<DP>,
     {
         async move {
-            let start: u64 = range.start.into();
-            let end: u64 = range.end.into();
+            let start: usize = range.start.into_usize();
+            let end: usize = range.end.into_usize();
 
             let mut accessor = strategy
                 .prune_accessor(&self.data_provider, context)
