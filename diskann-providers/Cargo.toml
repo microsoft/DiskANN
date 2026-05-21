@@ -35,7 +35,7 @@ diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 prost = "0.14.1"
-futures-util.workspace = true
+futures-util = { workspace = true, features = ["async-await"] }
 vfs = { workspace = true, optional = true }
 
 [dev-dependencies]
