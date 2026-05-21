@@ -731,6 +731,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-bftree"
+version = "0.52.0"
+dependencies = [
+ "bf-tree",
+ "bytemuck",
+ "diskann",
+ "diskann-providers",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "futures-util",
+ "half",
+ "rand 0.9.4",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+]
+
+[[package]]
 name = "diskann-disk"
 version = "0.52.0"
 dependencies = [
@@ -863,7 +885,6 @@ version = "0.52.0"
 dependencies = [
  "approx",
  "arc-swap",
- "bf-tree",
  "bincode",
  "bytemuck",
  "byteorder",
@@ -889,7 +910,6 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
