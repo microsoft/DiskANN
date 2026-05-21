@@ -920,23 +920,23 @@ where
     where
         OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
     {
-        // We process IDs up to `BATCH_SIZE` elements at a time.
-        const BATCH_SIZE: usize = 32;
-        let mut id_buffer = Vec::with_capacity(BATCH_SIZE);
-
         let provider = self.index.provider();
         let mut accessor = strategy
             .search_accessor(provider, &DefaultContext)
             .into_ann_result()?;
 
+        // Derive the batch size from the scratch data structure. Providing too many vectors
+        // will panic.
+        let batch_size = accessor.scratch.pq_scratch.max_vectors();
+        let mut id_buffer = Vec::with_capacity(batch_size);
+
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
         let mut cmps = 0u32;
 
         let mut iter = (0..provider.num_points as u32).filter(vector_filter);
-
         loop {
             id_buffer.clear();
-            id_buffer.extend(iter.by_ref().take(BATCH_SIZE));
+            id_buffer.extend(iter.by_ref().take(batch_size));
 
             if id_buffer.is_empty() {
                 break;
