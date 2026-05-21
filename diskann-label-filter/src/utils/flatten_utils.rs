@@ -72,7 +72,7 @@ impl Document {
     }
 
     /// Configurable version that uses FlattenConfig
-    /// For example, with config.separator=".": {"details": {"color": "red"}} becomes {".details.color": "red"}
+    /// For example, with config.separator="/": {"details": {"color": "red"}} becomes {"/details/color": "red"}
     pub fn flatten_metadata_with_config(&self, config: &FlattenConfig) -> Attributes {
         flatten_json_pointers_map_with_config(&self.label, config)
     }
