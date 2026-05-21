@@ -920,25 +920,35 @@ where
     where
         OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
     {
+        // We process IDs up to `BATCH_SIZE` elements at a time.
+        const BATCH_SIZE: usize = 32;
+        let mut id_buffer = Vec::with_capacity(BATCH_SIZE);
+
         let provider = self.index.provider();
         let mut accessor = strategy
             .search_accessor(provider, &DefaultContext)
             .into_ann_result()?;
-        let computer = accessor.build_query_computer(query).into_ann_result()?;
 
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
         let mut cmps = 0u32;
 
-        let num_points = provider.num_points as u32;
-        for id in 0..num_points {
-            if vector_filter(&id) {
-                let element = accessor.get_element(id).await.into_ann_result()?;
-                let dist = computer.evaluate_similarity(element);
-                best.insert(Neighbor::new(id, dist));
-                cmps += 1;
+        let mut iter = (0..provider.num_points as u32).filter(vector_filter);
+
+        loop {
+            id_buffer.clear();
+            id_buffer.extend(iter.by_ref().take(BATCH_SIZE));
+
+            if id_buffer.is_empty() {
+                break;
             }
+
+            accessor.pq_distances(&id_buffer, |dist, id| best.insert(Neighbor::new(id, dist)))?;
+            cmps += id_buffer.len() as u32;
         }
 
+        // FIXME: This is a temporary bridge. We don't really need the query computer, but
+        // we do need to satisfy the trait definition until PR 1067 lands.
+        let computer = accessor.build_query_computer(query).into_ann_result()?;
         let result_count = strategy
             .default_post_processor()
             .post_process(&mut accessor, query, &computer, best.iter(), output)
