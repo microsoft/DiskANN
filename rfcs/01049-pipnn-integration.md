@@ -9,7 +9,7 @@
 
 ## Summary
 
-Add **PiPNN** ([Pick-in-Partitions Nearest Neighbors](https://arxiv.org/abs/2602.21247)) as a second algorithm for **DiskANN's disk-index full-build path** — both initial builds and full rebuilds. PiPNN writes a graph byte-compatible with Vamana's disk format and search API, at **up to 6.3× lower build time** on measured workloads. Vamana stays the default; PiPNN is opt-in behind a Cargo feature. In-memory PiPNN build is intentionally out of scope — DiskANN's in-mem path is for streaming per-point construction, which PiPNN's batch algorithm cannot do.
+Add **PiPNN** ([Pick-in-Partitions Nearest Neighbors](https://arxiv.org/abs/2602.21247)) as a second algorithm for **DiskANN's disk-index full-build path** — both initial builds and full rebuilds. PiPNN writes its graph in **Vamana's existing disk format** (same headers, node/edge layout, frozen-point convention), so the disk writer, PQ codes, and search pipeline are unchanged. The graph **contents themselves** differ from what Vamana would build at the same parameters — the two algorithms construct graphs differently — but recall@k matches at equivalent L (see Benchmarks). PiPNN is **up to 6.3× faster to build** on measured workloads. Vamana stays the default; PiPNN is opt-in behind a Cargo feature. In-memory PiPNN build is intentionally out of scope — DiskANN's in-mem path is for streaming per-point construction, which PiPNN's batch algorithm cannot do.
 
 ## Motivation
 
@@ -82,7 +82,7 @@ In-memory PiPNN build is not in any stage — see "Out of scope".
 ### Goals (Stage 1)
 
 1. **Pluggable disk builder** — a selector that routes Vamana (default) vs. PiPNN (opt-in). No behavior change at existing call sites.
-2. **Disk-format compatibility** — byte-identical to Vamana's output; search/PQ/storage layouts unchanged.
+2. **Disk-format compatibility** — PiPNN emits Vamana's on-disk schema (node/edge layout, headers, frozen-point convention, PQ/SQ codes all unchanged), so search loads PiPNN-built indexes with no code change. The graph **contents** differ from Vamana's by design — the two algorithms construct graphs differently — but recall@k is equivalent across tested datasets.
 3. **API backward compatibility** — `DiskIndexBuilder`, `IndexConfiguration`, JSON schema all stay additive.
 4. **Feature parity for the full-build role** — deliver the Vamana disk-build capabilities PiPNN still lacks (quantization, label filters).
 5. **Memory mitigation** — a three-tier build path that brings PiPNN's peak RSS to or under Vamana's at a documented build-time cost.
