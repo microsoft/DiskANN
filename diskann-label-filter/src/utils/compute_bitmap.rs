@@ -224,14 +224,14 @@ pub fn compute_inverted_index_accelerator(
 }
 
 pub fn compute_btree_accelerator(
-    key: String,
-    labels: Vec<HashMap<String, AttributeValue>>,
+    key: &str,
+    labels: &[HashMap<String, AttributeValue>],
     doc_ids: &[usize],
 ) -> Result<BTreeMap<OrderedFloat, Vec<usize>>, anyhow::Error> {
     // Implementation for computing BTree accelerator
     let mut map: BTreeMap<OrderedFloat, Vec<usize>> = BTreeMap::new();
     for (label, doc_id) in labels.iter().zip(doc_ids.iter().copied()) {
-        if let Some(value) = label.get(&key) {
+        if let Some(value) = label.get(key) {
             if let Some(f64_value) = value.as_float() {
                 let f64_value = OrderedFloat::new(f64_value)
                     .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
@@ -279,14 +279,12 @@ pub fn compute_query_accelerator(
 ) -> Result<QueryAccelerator, anyhow::Error> {
     match value {
         AttributeValue::String(_) | AttributeValue::Bool(_) => {
-            let bitmap = compute_inverted_index_accelerator(&key, doc_ids, flattened_base_labels)
-                .unwrap_or_default();
+            let bitmap = compute_inverted_index_accelerator(&key, doc_ids, flattened_base_labels)?;
             Ok(QueryAccelerator::InvertedIndex(bitmap))
         }
         AttributeValue::Integer(_) | AttributeValue::Real(_) => {
             // For integers and reals, we use an BTree
-            let btree = compute_btree_accelerator(key.clone(), flattened_base_labels.to_vec(), doc_ids)
-                .unwrap_or_default();
+            let btree = compute_btree_accelerator(&key, flattened_base_labels, doc_ids)?;
             Ok(QueryAccelerator::BTree(btree))
         }
         AttributeValue::Empty => Err(anyhow::anyhow!("Empty attribute value is not allowed")),
