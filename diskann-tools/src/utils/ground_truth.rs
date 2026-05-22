@@ -4,7 +4,7 @@
  */
 
 use bit_set::BitSet;
-use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels};
+use diskann_label_filter::{compute_query_bitmaps, read_and_parse_queries, read_baselabels};
 
 use std::{io::Write, mem::size_of, str::FromStr};
 
@@ -35,25 +35,18 @@ pub fn read_labels_and_compute_bitmap(
     // Read base labels
     let base_labels = read_baselabels(base_label_filename)?;
 
-    // Parse queries and evaluate against labels
+    // Read and parse queries
     let parsed_queries = read_and_parse_queries(query_label_filename)?;
 
-    // using the global threadpool is fine here
-    #[allow(clippy::disallowed_methods)]
-    let query_bitmaps: Vec<BitSet> = parsed_queries
-        .par_iter()
-        .map(|(_query_id, query_expr)| {
-            let mut bitmap = BitSet::new();
-            for base_label in base_labels.iter() {
-                if eval_query_expr(query_expr, &base_label.label) {
-                    bitmap.insert(base_label.doc_id);
-                }
-            }
-            bitmap
-        })
-        .collect();
+    // Compute the query bitmaps
+    let query_bitmaps = compute_query_bitmaps(base_labels, parsed_queries);
 
-    Ok(query_bitmaps)
+    match query_bitmaps {
+        Ok(bitmaps) => Ok(bitmaps),
+        Err(e) => Err(CMDToolError {
+            details: format!("Error computing query bitmaps: {}", e),
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
