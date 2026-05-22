@@ -36,6 +36,8 @@ pub use search::{KnnSearchError, RangeSearchError, Search};
 
 mod internal;
 
+pub mod strategy;
+
 // Integration tests and test providers.
 #[cfg(any(test, feature = "testing"))]
 pub mod test;

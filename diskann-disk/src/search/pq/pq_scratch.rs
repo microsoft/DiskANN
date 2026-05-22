@@ -78,6 +78,12 @@ impl PQScratch {
         self.query_scratch.copy_from_slice(&query[..dim]);
         Ok(())
     }
+
+    /// Return the largest number of PQ vectors whose distances can be computed using this
+    /// scratch data structure.
+    pub(crate) fn max_vectors(&self) -> usize {
+        self.aligned_dist_scratch.len()
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +117,8 @@ mod tests {
             (pq_scratch.aligned_pq_coord_scratch.as_ptr() as usize) % PowerOfTwo::V128.raw(),
             0
         );
+
+        assert_eq!(pq_scratch.max_vectors(), graph_degree);
 
         // Test set() method
         let query: Vec<f32> = (1..=dim).map(|i| i as f32).collect();

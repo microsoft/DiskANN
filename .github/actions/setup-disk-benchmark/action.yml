@@ -23,8 +23,16 @@ runs:
   steps:
     - name: Install Rust
       shell: bash
-      run: rustup show
+      run: |
+        if ! command -v rustup &>/dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        fi
 
+    - name: Show Rust toolchain
+      shell: bash
+      run: rustup show
+      
     - name: Install system dependencies
       shell: bash
       run: |
