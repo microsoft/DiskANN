@@ -56,7 +56,14 @@ where
                 continue;
             }
 
-            let recall = benchmark_core::recall::knn(groundtruth, None, results, *k, *n, false)?;
+            let recall = benchmark_core::recall::knn(
+                groundtruth,
+                None,
+                results,
+                *k,
+                *n,
+                benchmark_core::recall::GroundTruthMode::Fixed,
+            )?;
             result.push((&recall).into());
         }
     }

@@ -6,8 +6,8 @@
 //! Tests for paged (iterative) search.
 //!
 //! Paged search returns results in pages of k neighbors via a stateful
-//! `SearchState`. Tests cover basic pagination, single-page retrieval,
-//! and small page sizes that stress the iteration machinery.
+//! [`PagedSearch`](crate::graph::search::PagedSearch) handle. Tests cover basic pagination,
+//! single-page retrieval, and small page sizes that stress the iteration machinery.
 
 use std::sync::Arc;
 
@@ -155,8 +155,8 @@ fn basic_paged_search() {
     let page_size = 4;
     let ctx = test_provider::Context::new();
 
-    let mut state = rt
-        .block_on(index.start_paged_search(
+    let mut search = rt
+        .block_on(index.paged_search(
             test_provider::Strategy::new(),
             &ctx,
             query.as_slice(),
@@ -165,24 +165,13 @@ fn basic_paged_search() {
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
-    let mut buffer = vec![Neighbor::<u32>::default(); page_size];
 
     loop {
-        let count = rt
-            .block_on(
-                index.next_search_results::<test_provider::Strategy, &[f32]>(
-                    &ctx,
-                    &mut state,
-                    page_size,
-                    &mut buffer,
-                ),
-            )
-            .unwrap();
-
-        if count == 0 {
+        let page = rt.block_on(search.next_page(page_size)).unwrap();
+        if page.is_empty() {
             break;
         }
-        pages.push(buffer[..count].to_vec());
+        pages.push(page);
     }
 
     let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);
@@ -209,8 +198,8 @@ fn single_page() {
     let page_size = 200; // larger than total points (125)
     let ctx = test_provider::Context::new();
 
-    let mut state = rt
-        .block_on(index.start_paged_search(
+    let mut search = rt
+        .block_on(index.paged_search(
             test_provider::Strategy::new(),
             &ctx,
             query.as_slice(),
@@ -218,21 +207,8 @@ fn single_page() {
         ))
         .unwrap();
 
-    let mut buffer = vec![Neighbor::<u32>::default(); page_size];
-
-    let count = rt
-        .block_on(
-            index.next_search_results::<test_provider::Strategy, &[f32]>(
-                &ctx,
-                &mut state,
-                page_size,
-                &mut buffer,
-            ),
-        )
-        .unwrap();
-
-    let results: Vec<Neighbor<u32>> = buffer[..count].to_vec();
-    let pages = vec![results.clone()];
+    let results = rt.block_on(search.next_page(page_size)).unwrap();
+    let pages = vec![results];
 
     let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);
 
@@ -242,18 +218,13 @@ fn single_page() {
     assert_no_duplicates_across_pages(&pages);
     assert_non_decreasing_distances(&pages);
 
-    // Verify second call returns 0 (nothing left)
-    let count2 = rt
-        .block_on(
-            index.next_search_results::<test_provider::Strategy, &[f32]>(
-                &ctx,
-                &mut state,
-                page_size,
-                &mut buffer,
-            ),
-        )
-        .unwrap();
-    assert_eq!(count2, 0, "second page should be empty");
+    // Verify second call returns empty (nothing left)
+    let page2 = rt.block_on(search.next_page(page_size)).unwrap();
+    assert!(page2.is_empty(), "second page should be empty");
+
+    // Verify repeated calls after exhaustion remain empty (idempotent, no panic).
+    let page3 = rt.block_on(search.next_page(page_size)).unwrap();
+    assert!(page3.is_empty(), "third page should still be empty");
 }
 
 #[test]
@@ -270,8 +241,8 @@ fn small_page_size() {
     let page_size = 1; // one result per page, maximum iterations
     let ctx = test_provider::Context::new();
 
-    let mut state = rt
-        .block_on(index.start_paged_search(
+    let mut search = rt
+        .block_on(index.paged_search(
             test_provider::Strategy::new(),
             &ctx,
             query.as_slice(),
@@ -280,24 +251,13 @@ fn small_page_size() {
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
-    let mut buffer = vec![Neighbor::<u32>::default(); page_size];
 
     loop {
-        let count = rt
-            .block_on(
-                index.next_search_results::<test_provider::Strategy, &[f32]>(
-                    &ctx,
-                    &mut state,
-                    page_size,
-                    &mut buffer,
-                ),
-            )
-            .unwrap();
-
-        if count == 0 {
+        let page = rt.block_on(search.next_page(page_size)).unwrap();
+        if page.is_empty() {
             break;
         }
-        pages.push(buffer[..count].to_vec());
+        pages.push(page);
     }
 
     let baseline = build_baseline(grid_size, &dims, &query, search_l, page_size, &pages);

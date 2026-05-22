@@ -26,7 +26,7 @@ use diskann_benchmark_runner::{
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, Benchmark, CheckDeserialization, Checker, Input, Registry,
+    Benchmark, Checker, Input, Registry,
 };
 
 ////////////////
@@ -118,12 +118,6 @@ pub struct SimdOp {
     runs: Vec<Run>,
 }
 
-impl CheckDeserialization for SimdOp {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 macro_rules! write_field {
     ($f:ident, $field:tt, $($expr:tt)*) => {
         writeln!($f, "{:>18}: {}", $field, $($expr)*)
@@ -149,18 +143,21 @@ impl std::fmt::Display for SimdOp {
 }
 
 impl Input for SimdOp {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-op"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
         const DIM: [NonZeroUsize; 2] = [
             NonZeroUsize::new(128).unwrap(),
             NonZeroUsize::new(150).unwrap(),
@@ -191,12 +188,12 @@ impl Input for SimdOp {
             },
         ];
 
-        Ok(serde_json::to_value(&Self {
+        Self {
             query_type: DataType::Float32,
             data_type: DataType::Float32,
             arch: Arch::X86_64_V3,
             runs,
-        })?)
+        }
     }
 }
 
@@ -213,33 +210,30 @@ struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }
 
-impl CheckDeserialization for SimdTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for SimdTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const EXAMPLE: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite please"),
         };
 
-        Ok(serde_json::to_value(SimdTolerance {
+        SimdTolerance {
             min_time_regression: EXAMPLE,
-        })?)
+        }
     }
 }
 

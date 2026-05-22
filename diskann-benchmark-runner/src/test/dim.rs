@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     benchmark::{FailureScore, MatchScore, PassFail, Regression},
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
+    Benchmark, Checker, Checkpoint, Input, Output,
 };
 
 ///////////
@@ -32,25 +32,22 @@ impl DimInput {
 }
 
 impl Input for DimInput {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "test-input-dim"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(DimInput::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(DimInput::new(Some(128)))?)
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
     }
-}
 
-impl CheckDeserialization for DimInput {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        Ok(())
+    fn example() -> Self::Raw {
+        DimInput::new(Some(128))
     }
 }
 
@@ -65,23 +62,25 @@ pub(super) struct Tolerance {
 }
 
 impl Input for Tolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "test-input-dim-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        _checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        Ok(Any::new(Self::deserialize(serialized)?, Self::tag()))
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
-        let this = Self {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        Self {
             succeed: true,
             error_in_check: false,
-        };
-        Ok(serde_json::to_value(this)?)
+        }
     }
 }
 
