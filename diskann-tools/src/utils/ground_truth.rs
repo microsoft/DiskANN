@@ -3,8 +3,9 @@
  * Licensed under the MIT license.
  */
 
+use crate::utils::compute_bitmap::compute_query_bitmaps;
 use bit_set::BitSet;
-use diskann_label_filter::{compute_query_bitmaps, read_and_parse_queries, read_baselabels};
+use diskann_label_filter::{read_and_parse_queries, read_baselabels};
 
 use std::{io::Write, mem::size_of, str::FromStr};
 

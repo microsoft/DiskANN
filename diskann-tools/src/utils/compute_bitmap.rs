@@ -3,11 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use crate::attribute::AttributeValue;
-use crate::parser::evaluator::eval_query_expr;
-use crate::utils::flatten_utils::{flatten_json_pointers_with_config, FlattenConfig};
-use crate::{parser::format::Document, ASTExpr, CompareOp};
 use bit_set::BitSet;
+use diskann_label_filter::attribute::AttributeValue;
+use diskann_label_filter::parser::{evaluator::eval_query_expr, format::Document};
+use diskann_label_filter::utils::flatten_utils::{
+    flatten_json_pointers_with_config, FlattenConfig,
+};
+use diskann_label_filter::{ASTExpr, CompareOp};
 use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -42,6 +44,7 @@ impl PartialOrd for OrderedFloat {
         Some(self.cmp(other))
     }
 }
+
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> Ordering {
         // By construction, we know the partial comparison will succeed.
@@ -372,9 +375,9 @@ pub fn compute_query_bitmaps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attribute::AttributeValue;
-    use crate::parser::format::Document;
-    use crate::{ASTExpr, CompareOp};
+    use diskann_label_filter::attribute::AttributeValue;
+    use diskann_label_filter::parser::format::Document;
+    use diskann_label_filter::{ASTExpr, CompareOp};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -423,8 +426,6 @@ mod tests {
 
     #[test]
     fn test_compute_query_bitmap_missing_field() {
-        use crate::parser::format::Document;
-        use serde_json::json;
         // Three documents, one missing the 'color' field
         let base_labels = vec![
             Document {
@@ -466,8 +467,6 @@ mod tests {
 
     #[test]
     fn test_compute_query_bitmap_nested_value() {
-        use crate::parser::format::Document;
-        use serde_json::json;
         // Two documents with nested car.color
         let base_labels = vec![
             Document {
@@ -695,8 +694,6 @@ mod tests {
 
     #[test]
     fn test_compute_query_bitmap_bools() {
-        use crate::parser::format::Document;
-        use serde_json::json;
         // Two documents with a boolean field
         let base_labels = vec![
             Document {

@@ -3,7 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use diskann_label_filter::{compute_query_bitmaps, read_and_parse_queries, read_baselabels};
+use diskann_label_filter::{read_and_parse_queries, read_baselabels};
+use diskann_tools::utils::compute_bitmap::compute_query_bitmaps;
 use std::env;
 use std::fs::File;
 use std::io::Write;
