@@ -67,7 +67,10 @@
 
 use diskann_utils::{Reborrow, future::SendFuture};
 
-use crate::{ANNError, provider::Accessor};
+use crate::{
+    ANNError,
+    provider::{HasElementRef, HasId},
+};
 
 /////////////
 // Exports //
@@ -99,7 +102,7 @@ pub use map::Map;
 /// implementation of [`Fill::fill`].
 ///
 /// See Also: [`View`], [`AsWorkingSet`], [`Map`].
-pub trait Fill<WorkingSet>: Accessor {
+pub trait Fill<WorkingSet>: HasElementRef + HasId {
     /// Any critical error that occurs during [`fill`](Self::fill).
     ///
     /// Implementations of `fill` are expected to swallow any non-critical errors.

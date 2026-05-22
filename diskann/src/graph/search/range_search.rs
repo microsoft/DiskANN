@@ -19,7 +19,7 @@ use crate::{
         search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
     utils::IntoUsize,
 };
 
@@ -181,9 +181,8 @@ where
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = index.search_scratch(self.starting_l(), start_ids.len());
@@ -193,7 +192,6 @@ where
                     self.beam_width(),
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
                 )
@@ -222,7 +220,6 @@ where
                     index.max_degree_with_slack(),
                     &self,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                 )
                 .await?;
@@ -252,7 +249,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     scratch.in_range.iter().copied(),
                     &mut filtered,
                 )
@@ -323,16 +319,14 @@ where
 ///
 /// Expands the search frontier to find all points within the specified radius.
 /// Called after the initial graph search has identified starting candidates.
-pub(crate) async fn range_search_internal<I, A, T>(
+pub(crate) async fn range_search_internal<A>(
     max_degree_with_slack: usize,
     search_params: &Range,
     accessor: &mut A,
-    computer: &A::QueryComputer,
-    scratch: &mut SearchScratch<I>,
+    scratch: &mut SearchScratch<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
-    I: crate::utils::VectorId,
-    A: ExpandBeam<T, Id = I> + SearchExt,
+    A: ExpandBeam + SearchExt,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 
@@ -360,7 +354,6 @@ where
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
-                computer,
                 glue::NotInMut::new(&mut scratch.visited),
                 |distance, id| neighbors.push(Neighbor::new(id, distance)),
             )

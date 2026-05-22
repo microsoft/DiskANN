@@ -18,8 +18,7 @@ use diskann::{
         workingset,
     },
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
-        HasId,
+        Accessor, BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -29,7 +28,7 @@ use diskann_quantization::{
     spherical,
 };
 use diskann_utils::future::AsyncFriendly;
-use diskann_vector::distance::Metric;
+use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use super::{GetFullPrecision, PassThrough, Rerank};
@@ -62,6 +61,13 @@ impl From<Bridge<QueryComputerError>> for ANNError {
 impl From<Bridge<diskann_quantization::spherical::CompressionError>> for ANNError {
     #[track_caller]
     fn from(err: Bridge<diskann_quantization::spherical::CompressionError>) -> Self {
+        ANNError::new(ANNErrorKind::SQError, err)
+    }
+}
+
+impl From<Bridge<diskann_quantization::spherical::iface::QueryDistanceError>> for ANNError {
+    #[track_caller]
+    fn from(err: Bridge<diskann_quantization::spherical::iface::QueryDistanceError>) -> Self {
         ANNError::new(ANNErrorKind::SQError, err)
     }
 }
@@ -284,15 +290,85 @@ where
     }
 }
 
+///////////////////
+// PruneAccessor //
+///////////////////
+
+#[derive(Clone, Copy)]
+pub struct PruneAccessor<'a> {
+    store: &'a SphericalStore,
+    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+}
+
+impl HasId for PruneAccessor<'_> {
+    type Id = u32;
+}
+
+impl HasElementRef for PruneAccessor<'_> {
+    type ElementRef<'a> = spherical::iface::Opaque<'a>;
+}
+
+impl<'a> DelegateNeighbor<'a> for PruneAccessor<'_> {
+    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        self.neighbors
+    }
+}
+
+impl BuildDistanceComputer for PruneAccessor<'_> {
+    type DistanceComputerError = AllocatorError;
+    type DistanceComputer =
+        UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
+
+    fn build_distance_computer(
+        &self,
+    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
+        self.store.distance_computer().map(UnwrapErr::new)
+    }
+}
+
+// Pass-through fill — returns `&Self` which directly accesses the underlying provider.
+impl workingset::Fill<PassThrough> for PruneAccessor<'_> {
+    type Error = std::convert::Infallible;
+    type View<'a>
+        = Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(*self)
+    }
+}
+
+// Pass-through view — reads spherical vectors directly from the provider.
+impl workingset::View<u32> for PruneAccessor<'_> {
+    type ElementRef<'a> = spherical::iface::Opaque<'a>;
+    type Element<'a>
+        = spherical::iface::Opaque<'a>
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
+        self.store.get_vector(id.into_usize()).ok()
+    }
+}
+
 //////////////
 // Accessor //
 //////////////
 
 pub struct QuantAccessor<'a, V, D, Ctx> {
     provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
+    computer: spherical::iface::QueryComputer,
     id_buffer: Vec<u32>,
-    layout: spherical::iface::QueryLayout,
-    is_search: bool,
 }
 
 impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>
@@ -303,15 +379,25 @@ where
 {
     pub(crate) fn new(
         provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
+        query: &[f32],
         layout: spherical::iface::QueryLayout,
         is_search: bool,
-    ) -> Self {
-        Self {
+    ) -> ANNResult<Self> {
+        let computer = provider
+            .aux_vectors
+            .query_computer(query, layout, is_search)
+            .bridge_err()?;
+
+        Ok(Self {
             provider,
+            computer,
             id_buffer: Vec::with_capacity(32),
-            layout,
-            is_search,
-        }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn computer(&self) -> &spherical::iface::QueryComputer {
+        &self.computer
     }
 }
 
@@ -346,40 +432,31 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// This accessor returns raw slices. There *is* a chance of racing when the fast
-    /// providers are used. We just have to live with it.
-    type Element<'a>
-        = spherical::iface::Opaque<'a>
-    where
-        Self: 'a;
-
-    /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'a> = spherical::iface::Opaque<'a>;
-
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
 
     /// Return the quantized vector stored at index `i`.
     ///
     /// This function always completes synchronously.
-    fn get_element(
+    fn get_distance(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
+    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
         // SAFETY: We've decided to live with UB that can result from potentially mixing
         // unsynchronized reads and writes on the underlying memory.
-        std::future::ready(
-            self.provider
-                .aux_vectors
-                .get_vector(id.into_usize())
-                .into_ann_result(),
-        )
+        let f = || -> ANNResult<f32> {
+            Ok(self
+                .computer
+                .evaluate_similarity(self.provider.aux_vectors.get_vector(id.into_usize())?)
+                .bridge_err()?)
+        };
+        std::future::ready(f())
     }
 
     /// Perform a bulk operation.
     ///
     /// This implementation uses prefetching.
-    fn on_elements_unordered<Itr, F>(
+    fn distances_unordered<Itr, F>(
         &mut self,
         itr: Itr,
         mut f: F,
@@ -387,39 +464,40 @@ where
     where
         Self: Sync,
         Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'b> FnMut(Self::ElementRef<'b>, Self::Id),
+        F: Send + FnMut(f32, Self::Id),
     {
-        // Reuse the internal buffer to collect the results and give us random access
-        // capabilities.
-        let id_buffer = &mut self.id_buffer;
-        id_buffer.clear();
-        id_buffer.extend(itr);
+        let f = move || -> ANNResult<()> {
+            // Reuse the internal buffer to collect the results and give us random access
+            // capabilities.
+            let id_buffer = &mut self.id_buffer;
+            id_buffer.clear();
+            id_buffer.extend(itr);
 
-        let len = id_buffer.len();
-        let lookahead = self.provider.aux_vectors.prefetch_lookahead();
+            let len = id_buffer.len();
+            let lookahead = self.provider.aux_vectors.prefetch_lookahead();
 
-        // Prefetch the first few vectors.
-        for id in id_buffer.iter().take(lookahead) {
-            self.provider.aux_vectors.prefetch_hint(id.into_usize());
-        }
-
-        for (i, id) in id_buffer.iter().enumerate() {
-            // Prefetch `lookahead` iterations ahead as long as it is safe.
-            if lookahead > 0 && i + lookahead < len {
-                self.provider
-                    .aux_vectors
-                    .prefetch_hint(id_buffer[i + lookahead].into_usize());
+            // Prefetch the first few vectors.
+            for id in id_buffer.iter().take(lookahead) {
+                self.provider.aux_vectors.prefetch_hint(id.into_usize());
             }
 
-            let vector = match self.provider.aux_vectors.get_vector(id.into_usize()) {
-                Ok(v) => v,
-                Err(e) => return std::future::ready(Err(e.into())),
-            };
+            for (i, id) in id_buffer.iter().enumerate() {
+                // Prefetch `lookahead` iterations ahead as long as it is safe.
+                if lookahead > 0 && i + lookahead < len {
+                    self.provider
+                        .aux_vectors
+                        .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                }
 
-            f(vector, *id)
-        }
+                let vector = self.provider.aux_vectors.get_vector(id.into_usize())?;
+                let distance = self.computer.evaluate_similarity(vector).bridge_err()?;
+                f(distance, *id)
+            }
 
-        std::future::ready(Ok(()))
+            Ok(())
+        };
+
+        std::future::ready(f())
     }
 }
 
@@ -435,32 +513,8 @@ where
     }
 }
 
-impl<V, D, Ctx, T> BuildQueryComputer<&[T]> for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx> ExpandBeam for QuantAccessor<'_, V, D, Ctx>
 where
-    T: VectorRepr,
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type QueryComputerError = Bridge<QueryComputerError>;
-    type QueryComputer =
-        UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
-
-    fn build_query_computer(
-        &self,
-        query: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        self.provider
-            .aux_vectors
-            .query_computer(query, self.layout, self.is_search)
-            .bridge_err()
-            .map(UnwrapErr::new)
-    }
-}
-
-impl<V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, V, D, Ctx>
-where
-    T: VectorRepr,
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
@@ -474,26 +528,6 @@ pub enum Infallible {}
 impl From<Infallible> for ANNError {
     fn from(_: Infallible) -> Self {
         unreachable!("Infallible is an unconstructible enum")
-    }
-}
-
-impl<V, D, Ctx> BuildDistanceComputer for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type DistanceComputerError = AllocatorError;
-    type DistanceComputer =
-        UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        self.provider
-            .aux_vectors
-            .distance_computer()
-            .map(UnwrapErr::new)
     }
 }
 
@@ -552,8 +586,6 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type QueryComputer =
-        UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
     type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
 
@@ -561,8 +593,10 @@ where
         &'a self,
         provider: &'a FullPrecisionProvider<T, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider, self.layout, self.is_search))
+        let as_f32 = T::as_f32(query).into_ann_result()?;
+        QuantAccessor::new(provider, &as_f32, self.layout, self.is_search)
     }
 }
 
@@ -587,8 +621,6 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type QueryComputer =
-        UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
     type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
 
@@ -596,8 +628,10 @@ where
         &'a self,
         provider: &'a DefaultProvider<NoStore, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
+        query: &[T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider, self.layout, self.is_search))
+        let as_f32 = T::as_f32(query).into_ann_result()?;
+        QuantAccessor::new(provider, &as_f32, self.layout, self.is_search)
     }
 }
 
@@ -620,7 +654,7 @@ where
 {
     type DistanceComputer<'a> =
         UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
-    type PruneAccessor<'a> = QuantAccessor<'a, V, D, Ctx>;
+    type PruneAccessor<'a> = PruneAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;
 
@@ -633,52 +667,11 @@ where
         provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        let build = Self::build();
-        Ok(QuantAccessor::new(provider, build.layout, build.is_search))
-    }
-}
-
-// Pass-through fill — returns `&Self` which directly accesses the underlying provider.
-impl<V, D, Ctx> workingset::Fill<PassThrough> for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type Error = std::convert::Infallible;
-    type View<'a>
-        = &'a Self
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(self)
-    }
-}
-
-// Pass-through view — reads spherical vectors directly from the provider.
-impl<V, D, Ctx> workingset::View<u32> for &QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = spherical::iface::Opaque<'a>;
-    type Element<'a>
-        = spherical::iface::Opaque<'a>
-    where
-        Self: 'a;
-
-    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
-        self.provider.aux_vectors.get_vector(id.into_usize()).ok()
+        let accessor = PruneAccessor {
+            store: &provider.aux_vectors,
+            neighbors: provider.neighbors(),
+        };
+        Ok(accessor)
     }
 }
 

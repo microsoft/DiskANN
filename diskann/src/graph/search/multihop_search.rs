@@ -5,9 +5,7 @@
 
 //! Label-filtered search using multi-hop expansion.
 
-use diskann_utils::Reborrow;
 use diskann_utils::future::SendFuture;
-use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
@@ -26,7 +24,7 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
     utils::VectorId,
 };
 
@@ -77,9 +75,8 @@ where
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
 
             let start_ids = accessor.starting_points().await?;
 
@@ -89,7 +86,6 @@ where
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
-                &computer,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 self.label_evaluator,
@@ -100,7 +96,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
@@ -171,18 +166,17 @@ impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {
 ///
 /// Performs label-filtered search by expanding through non-matching nodes
 /// to find matching neighbors within two hops.
-pub(crate) async fn multihop_search_internal<I, A, T, SR>(
+pub(crate) async fn multihop_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
-    computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
-    A: ExpandBeam<T, Id = I> + SearchExt,
+    A: ExpandBeam<Id = I> + SearchExt,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
@@ -201,11 +195,10 @@ where
 
         for id in start_ids {
             scratch.visited.insert(id);
-            let element = accessor
-                .get_element(id)
+            let dist = accessor
+                .get_distance(id)
                 .await
                 .escalate("start point retrieval must succeed")?;
-            let dist = computer.evaluate_similarity(element.reborrow());
             scratch.best.insert(Neighbor::new(id, dist));
         }
     }
@@ -234,7 +227,6 @@ where
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
-                computer,
                 glue::NotInMut::new(&mut scratch.visited),
                 |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
             )
@@ -280,7 +272,6 @@ where
         accessor
             .expand_beam(
                 two_hop_expansion_candidate_ids.iter().copied(),
-                computer,
                 NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
                 |distance, id| {
                     two_hop_neighbors.push(Neighbor::new(id, distance));

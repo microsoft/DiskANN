@@ -19,14 +19,14 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        ExecutionContext, HasId,
+        Accessor, BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext,
+        HasElementRef, HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
 
 use diskann_utils::future::AsyncFriendly;
-use diskann_vector::{DistanceFunction, distance::Metric};
+use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
     FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
@@ -102,6 +102,101 @@ where
     }
 }
 
+///////////////////
+// PruneAccessor //
+///////////////////
+
+#[derive(Clone, Copy)]
+pub struct PruneAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    metric: Metric,
+    store: &'a FastMemoryVectorProviderAsync<T>,
+    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+}
+
+impl<T> HasId for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+}
+
+impl<T> HasElementRef for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
+impl<'a, T> DelegateNeighbor<'a> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        self.neighbors
+    }
+}
+
+impl<T> BuildDistanceComputer for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type DistanceComputerError = Panics;
+    type DistanceComputer = T::Distance;
+
+    fn build_distance_computer(
+        &self,
+    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
+        Ok(T::distance(self.metric, Some(self.store.dim())))
+    }
+}
+
+impl<T> workingset::Fill<PassThrough> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Error = Infallible;
+
+    type View<'a>
+        = PruneAccessor<'a, T>
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(*self)
+    }
+}
+
+// Pass-through view.
+impl<T> workingset::View<u32> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = &'a [T];
+    type Element<'a>
+        = &'a [T]
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<&[T]> {
+        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+        // this invariant is not enforced. See `get_vector_sync` for details
+        Some(unsafe { self.store.get_vector_sync(id.into_usize()) })
+    }
+}
+
 //////////////////
 // FullAccessor //
 //////////////////
@@ -119,6 +214,9 @@ where
 {
     /// The host provider.
     provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+
+    /// The distance computer.
+    computer: T::QueryDistance,
 
     /// A buffer for resolving iterators given during bulk operations.
     ///
@@ -163,9 +261,10 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>) -> Self {
+    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
         Self {
             provider,
+            computer: T::query_distance(query, provider.metric),
             id_buffer: Vec::new(),
         }
     }
@@ -192,16 +291,6 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// This accessor returns raw slices. There *is* a chance of racing when the fast
-    /// providers are used. We just have to live with it.
-    type Element<'a>
-        = &'a [T]
-    where
-        Self: 'a;
-
-    /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'a> = &'a [T];
-
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
 
@@ -209,21 +298,21 @@ where
     ///
     /// This function always completes synchronously.
     #[inline(always)]
-    fn get_element(
+    fn get_distance(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
+    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
         // SAFETY: We've decided to live with UB (undefined behavior) that can result from
         // potentially mixing unsynchronized reads and writes on the underlying memory.
-        std::future::ready(Ok(unsafe {
+        std::future::ready(Ok(self.computer.evaluate_similarity(unsafe {
             self.provider.base_vectors.get_vector_sync(id.into_usize())
-        }))
+        })))
     }
 
     /// Perform a bulk operation.
     ///
     /// This implementation uses prefetching.
-    fn on_elements_unordered<Itr, F>(
+    fn distances_unordered<Itr, F>(
         &mut self,
         itr: Itr,
         mut f: F,
@@ -231,83 +320,48 @@ where
     where
         Self: Sync,
         Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'b> FnMut(Self::ElementRef<'b>, Self::Id),
+        F: Send + FnMut(f32, Self::Id),
     {
-        // Reuse the internal buffer to collect the results and give us random access
-        // capabilities.
-        let id_buffer = &mut self.id_buffer;
-        id_buffer.clear();
-        id_buffer.extend(itr);
+        let f = || -> Result<(), Panics> {
+            // Reuse the internal buffer to collect the results and give us random access
+            // capabilities.
+            let id_buffer = &mut self.id_buffer;
+            id_buffer.clear();
+            id_buffer.extend(itr);
 
-        let len = id_buffer.len();
-        let lookahead = self.provider.base_vectors.prefetch_lookahead();
+            let len = id_buffer.len();
+            let lookahead = self.provider.base_vectors.prefetch_lookahead();
 
-        // Prefetch the first few vectors.
-        for id in id_buffer.iter().take(lookahead) {
-            self.provider.base_vectors.prefetch_hint(id.into_usize());
-        }
-
-        for (i, id) in id_buffer.iter().enumerate() {
-            // Prefetch `lookahead` iterations ahead as long as it is safe.
-            if lookahead > 0 && i + lookahead < len {
-                self.provider
-                    .base_vectors
-                    .prefetch_hint(id_buffer[i + lookahead].into_usize());
+            // Prefetch the first few vectors.
+            for id in id_buffer.iter().take(lookahead) {
+                self.provider.base_vectors.prefetch_hint(id.into_usize());
             }
 
-            // Invoke the passed closure on the full-precision vector.
-            //
-            // SAFETY: We're accepting the consequences of potential unsynchronized,
-            // concurrent mutation.
-            f(
-                unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) },
-                *id,
-            )
-        }
+            for (i, id) in id_buffer.iter().enumerate() {
+                // Prefetch `lookahead` iterations ahead as long as it is safe.
+                if lookahead > 0 && i + lookahead < len {
+                    self.provider
+                        .base_vectors
+                        .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                }
 
-        std::future::ready(Ok(()))
+                // Invoke the passed closure on the full-precision vector.
+                //
+                // SAFETY: We're accepting the consequences of potential unsynchronized,
+                // concurrent mutation.
+                let vector = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
+                let distance = self.computer.evaluate_similarity(vector);
+                f(distance, *id)
+            }
+
+            Ok(())
+        };
+
+        std::future::ready(f())
     }
 }
 
-impl<T, Q, D, Ctx> BuildDistanceComputer for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type DistanceComputerError = Panics;
-    type DistanceComputer = T::Distance;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(
-            self.provider.metric,
-            Some(self.provider.base_vectors.dim()),
-        ))
-    }
-}
-
-impl<T, Q, D, Ctx> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type QueryComputerError = Panics;
-    type QueryComputer = T::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(from, self.provider.metric))
-    }
-}
-
-impl<T, Q, D, Ctx> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> ExpandBeam for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -353,7 +407,7 @@ pub struct Rerank;
 impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<&'a [T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: HasId<Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 
@@ -361,7 +415,6 @@ where
         &self,
         accessor: &mut A,
         query: &'a [T],
-        _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -411,7 +464,6 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type QueryComputer = T::QueryDistance;
     type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
 
@@ -419,8 +471,9 @@ where
         &'a self,
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
+        Ok(FullAccessor::new(provider, query))
     }
 }
 
@@ -444,7 +497,7 @@ where
     Ctx: ExecutionContext,
 {
     type DistanceComputer<'a> = T::Distance;
-    type PruneAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type PruneAccessor<'a> = PruneAccessor<'a, T>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;
 
@@ -453,60 +506,16 @@ where
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(FullAccessor::new(provider))
+        let accessor = PruneAccessor {
+            metric: provider.metric,
+            store: &provider.base_vectors,
+            neighbors: provider.neighbors(),
+        };
+        Ok(accessor)
     }
 
     fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         PassThrough
-    }
-}
-
-// All this does is return a `&Self` - which directly accesses the underlying provider.
-impl<T, Q, D, Ctx> workingset::Fill<PassThrough> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Error = Infallible;
-
-    type View<'a>
-        = &'a Self
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(self)
-    }
-}
-
-// Pass-through view.
-impl<T, Q, D, Ctx> workingset::View<u32> for &FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = &'a [T];
-    type Element<'a>
-        = &'a [T]
-    where
-        Self: 'a;
-
-    fn get(&self, id: u32) -> Option<&[T]> {
-        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
-        // this invariant is not enforced. See `get_vector_sync` for details
-        Some(unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) })
     }
 }
 
