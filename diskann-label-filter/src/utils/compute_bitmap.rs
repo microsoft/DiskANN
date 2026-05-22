@@ -207,16 +207,17 @@ pub fn eval_query_using_accelerators(
 }
 
 pub fn compute_inverted_index_accelerator(
-    key: String,
-    labels: Vec<HashMap<String, AttributeValue>>,
+    key: &str,
+    doc_ids: &[usize],
+    labels: &[HashMap<String, AttributeValue>],
 ) -> Result<HashMap<AttributeValue, BitSet>, anyhow::Error> {
     let mut inverted_index: HashMap<AttributeValue, BitSet> = HashMap::new();
-    for (doc_id, label) in labels.iter().enumerate() {
-        if let Some(value) = label.get(&key) {
+    for (doc_id, label) in doc_ids.iter().zip(labels.iter()) {
+        if let Some(value) = label.get(key) {
             inverted_index
                 .entry(value.clone())
                 .or_insert_with(BitSet::new)
-                .insert(doc_id);
+                .insert(*doc_id);
         }
     }
     Ok(inverted_index)
@@ -272,13 +273,13 @@ pub fn compute_global_label_set(
 pub fn compute_query_accelerator(
     key: String,
     value: AttributeValue,
+    doc_ids: &[usize],
     flattened_base_labels: &[HashMap<String, AttributeValue>],
 ) -> Result<QueryAccelerator, anyhow::Error> {
     match value {
         AttributeValue::String(_) | AttributeValue::Bool(_) => {
-            let bitmap =
-                compute_inverted_index_accelerator(key.clone(), flattened_base_labels.to_vec())
-                    .unwrap_or_default();
+            let bitmap = compute_inverted_index_accelerator(&key, doc_ids, flattened_base_labels)
+                .unwrap_or_default();
             Ok(QueryAccelerator::InvertedIndex(bitmap))
         }
         AttributeValue::Integer(_) | AttributeValue::Real(_) => {
@@ -346,6 +347,7 @@ pub fn compute_query_bitmaps(
             .collect();
 
         let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
+        let base_doc_ids: Vec<usize> = base_labels.iter().map(|base_label| base_label.doc_id).collect();
 
         // compute the global set of labels ahead of time so that we can compute
         // each accelerator in parallel
@@ -360,6 +362,7 @@ pub fn compute_query_bitmaps(
                     compute_query_accelerator(
                         key.clone(),
                         value.clone(),
+                        &base_doc_ids,
                         &flattened_base_label_hashmaps,
                     )
                     .map(|accel| (key.clone(), accel))
@@ -807,11 +810,13 @@ mod tests {
         doc2.insert("real".to_string(), AttributeValue::Real(2.71));
         doc2.insert("flag".to_string(), AttributeValue::Bool(false));
         let base = vec![doc1, doc2];
+        let doc_ids = vec![10, 42];
 
         // String
         let accel = compute_query_accelerator(
             "foo".to_string(),
             AttributeValue::String("bar".to_string()),
+            &doc_ids,
             &base,
         )
         .expect("Should succeed for String");
@@ -819,13 +824,27 @@ mod tests {
             QueryAccelerator::InvertedIndex(map) => {
                 assert!(map.contains_key(&AttributeValue::String("bar".to_string())));
                 assert!(map.contains_key(&AttributeValue::String("baz".to_string())));
+                assert_eq!(
+                    map.get(&AttributeValue::String("bar".to_string()))
+                        .expect("bar key should exist")
+                        .iter()
+                        .collect::<Vec<_>>(),
+                    vec![10]
+                );
+                assert_eq!(
+                    map.get(&AttributeValue::String("baz".to_string()))
+                        .expect("baz key should exist")
+                        .iter()
+                        .collect::<Vec<_>>(),
+                    vec![42]
+                );
             }
             _ => panic!("Expected InvertedIndex for String"),
         }
 
         // Bool
         let accel =
-            compute_query_accelerator("flag".to_string(), AttributeValue::Bool(true), &base)
+            compute_query_accelerator("flag".to_string(), AttributeValue::Bool(true), &doc_ids, &base)
                 .expect("Should succeed for Bool");
         match accel {
             QueryAccelerator::InvertedIndex(map) => {
@@ -837,7 +856,7 @@ mod tests {
 
         // Integer
         let accel =
-            compute_query_accelerator("num".to_string(), AttributeValue::Integer(42), &base)
+            compute_query_accelerator("num".to_string(), AttributeValue::Integer(42), &doc_ids, &base)
                 .expect("Should succeed for Integer");
         match accel {
             QueryAccelerator::BTree(map) => {
@@ -849,7 +868,7 @@ mod tests {
 
         // Real
         let accel =
-            compute_query_accelerator("real".to_string(), AttributeValue::Real(3.14), &base)
+            compute_query_accelerator("real".to_string(), AttributeValue::Real(3.14), &doc_ids, &base)
                 .expect("Should succeed for Real");
         match accel {
             QueryAccelerator::BTree(map) => {
@@ -860,7 +879,7 @@ mod tests {
         }
 
         // Empty
-        let err = compute_query_accelerator("none".to_string(), AttributeValue::Empty, &base);
+        let err = compute_query_accelerator("none".to_string(), AttributeValue::Empty, &doc_ids, &base);
         assert!(err.is_err());
     }
 
