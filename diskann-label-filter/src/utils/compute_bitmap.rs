@@ -469,9 +469,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_color)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), false);
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(!bitmaps[0].contains(0));
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
 
         // Query: weight >= 20
         let query_weight = ASTExpr::Compare {
@@ -480,9 +480,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_weight)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(1), false);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), true);
+        assert!(!bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+        assert!(bitmaps[0].contains(0));
     }
 
     #[test]
@@ -508,8 +508,8 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_eq)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
 
         // Query: NOT car.color == "red" (should match blue)
         let query_not = ASTExpr::Not(Box::new(ASTExpr::Compare {
@@ -518,8 +518,8 @@ mod tests {
         }));
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_not)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(0), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(0));
     }
 
     #[test]
@@ -546,9 +546,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_lt)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), false);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
 
         // score > 2.0
         let query_gt = ASTExpr::Compare {
@@ -557,9 +557,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_gt)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
-        assert_eq!(bitmaps[0].contains(1), false);
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
 
         // score <= 2.0
         let query_lte = ASTExpr::Compare {
@@ -568,9 +568,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_lte)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
 
         // score >= 2.0
         let query_gte = ASTExpr::Compare {
@@ -579,9 +579,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_gte)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
 
         // score >= 2.0 AND score <= 3.5 (range: [2.0, 3.5])
         let query_range = ASTExpr::And(vec![
@@ -597,9 +597,9 @@ mod tests {
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_range)])
             .expect("should succeed");
         // Should match doc 1 (2.0) and doc 2 (3.5)
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
     }
 
     #[test]
@@ -626,9 +626,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_lt)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), false);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
 
         // age > 20
         let query_gt = ASTExpr::Compare {
@@ -637,9 +637,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_gt)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
-        assert_eq!(bitmaps[0].contains(1), false);
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
 
         // age <= 20
         let query_lte = ASTExpr::Compare {
@@ -648,9 +648,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_lte)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
 
         // age >= 20
         let query_gte = ASTExpr::Compare {
@@ -659,9 +659,9 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_gte)])
             .expect("should succeed");
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
 
         // age >= 20 AND age <= 30 (range: [20, 30])
         let query_range = ASTExpr::And(vec![
@@ -677,9 +677,9 @@ mod tests {
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_range)])
             .expect("should succeed");
         // Should match doc 1 (20) and doc 2 (30)
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(0), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(0));
     }
 
     #[test]
@@ -706,12 +706,12 @@ mod tests {
         let bitmaps =
             compute_query_bitmaps(base_labels, vec![(0, query_gte)]).expect("should succeed");
 
-        assert_eq!(bitmaps[0].contains(20), true);
-        assert_eq!(bitmaps[0].contains(30), true);
-        assert_eq!(bitmaps[0].contains(10), false);
-        assert_eq!(bitmaps[0].contains(0), false);
-        assert_eq!(bitmaps[0].contains(1), false);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(20));
+        assert!(bitmaps[0].contains(30));
+        assert!(!bitmaps[0].contains(10));
+        assert!(!bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(2));
     }
 
     #[test]
@@ -738,8 +738,8 @@ mod tests {
         let queries = vec![(0, query)];
         let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("should succeed");
         // Only doc 0 should match
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(1), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
     }
 
     #[test]
@@ -796,21 +796,21 @@ mod tests {
 
         let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("should succeed");
         // color == "red" => doc 0, 2
-        assert_eq!(bitmaps[0].contains(0), true);
-        assert_eq!(bitmaps[0].contains(2), true);
-        assert_eq!(bitmaps[0].contains(1), false);
+        assert!(bitmaps[0].contains(0));
+        assert!(bitmaps[0].contains(2));
+        assert!(!bitmaps[0].contains(1));
         // size == 20 => doc 1, 2
-        assert_eq!(bitmaps[1].contains(1), true);
-        assert_eq!(bitmaps[1].contains(2), true);
-        assert_eq!(bitmaps[1].contains(0), false);
+        assert!(bitmaps[1].contains(1));
+        assert!(bitmaps[1].contains(2));
+        assert!(!bitmaps[1].contains(0));
         // color == "red" AND size == 20 => doc 2
-        assert_eq!(bitmaps[2].contains(2), true);
-        assert_eq!(bitmaps[2].contains(0), false);
-        assert_eq!(bitmaps[2].contains(1), false);
+        assert!(bitmaps[2].contains(2));
+        assert!(!bitmaps[2].contains(0));
+        assert!(!bitmaps[2].contains(1));
         // color == "red" OR size == 10 => doc 0, 2
-        assert_eq!(bitmaps[3].contains(0), true);
-        assert_eq!(bitmaps[3].contains(2), true);
-        assert_eq!(bitmaps[3].contains(1), false);
+        assert!(bitmaps[3].contains(0));
+        assert!(bitmaps[3].contains(2));
+        assert!(!bitmaps[3].contains(1));
 
         // Query: NOT color == "red"
         let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
@@ -825,9 +825,9 @@ mod tests {
         );
         // The result should be a bitmap with doc 1 (not red)
         let bitmaps = result.unwrap();
-        assert_eq!(bitmaps[0].contains(1), true);
-        assert_eq!(bitmaps[0].contains(0), false);
-        assert_eq!(bitmaps[0].contains(2), false);
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(2));
     }
 
     #[test]
@@ -836,7 +836,7 @@ mod tests {
         let mut doc1 = HashMap::new();
         doc1.insert("foo".to_string(), AttributeValue::String("bar".to_string()));
         doc1.insert("num".to_string(), AttributeValue::Integer(42));
-        doc1.insert("real".to_string(), AttributeValue::Real(3.14));
+        doc1.insert("real".to_string(), AttributeValue::Real(3.13));
         doc1.insert("flag".to_string(), AttributeValue::Bool(true));
         let mut doc2 = HashMap::new();
         doc2.insert("foo".to_string(), AttributeValue::String("baz".to_string()));
@@ -911,14 +911,14 @@ mod tests {
         // Real
         let accel = compute_query_accelerator(
             "real".to_string(),
-            AttributeValue::Real(3.14),
+            AttributeValue::Real(3.13),
             &doc_ids,
             &base,
         )
         .expect("Should succeed for Real");
         match accel {
             QueryAccelerator::BTree(map) => {
-                assert!(map.contains_key(&super::OrderedFloat(3.14)));
+                assert!(map.contains_key(&super::OrderedFloat(3.13)));
                 assert!(map.contains_key(&super::OrderedFloat(2.71)));
             }
             _ => panic!("Expected BTree for Real"),
@@ -937,14 +937,14 @@ mod tests {
             field: "foo".to_string(),
             op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
         };
-        assert_eq!(check_for_disallowed_operators(&expr), false);
+        assert!(!check_for_disallowed_operators(&expr));
 
         // NOT at root
         let expr = ASTExpr::Not(Box::new(ASTExpr::Compare {
             field: "foo".to_string(),
             op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
         }));
-        assert_eq!(check_for_disallowed_operators(&expr), true);
+        assert!(check_for_disallowed_operators(&expr));
 
         // AND with NOT inside
         let expr = ASTExpr::And(vec![
@@ -957,7 +957,7 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
             })),
         ]);
-        assert_eq!(check_for_disallowed_operators(&expr), true);
+        assert!(check_for_disallowed_operators(&expr));
 
         // OR with only Compare
         let expr = ASTExpr::Or(vec![
@@ -970,7 +970,7 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
             },
         ]);
-        assert_eq!(check_for_disallowed_operators(&expr), false);
+        assert!(!check_for_disallowed_operators(&expr));
 
         // Nested AND/OR with NOT deep inside
         let expr = ASTExpr::And(vec![
@@ -989,6 +989,6 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("f".to_string())),
             },
         ]);
-        assert_eq!(check_for_disallowed_operators(&expr), true);
+        assert!(check_for_disallowed_operators(&expr));
     }
 }

@@ -4,7 +4,6 @@
  */
 
 use diskann_label_filter::{compute_query_bitmaps, read_and_parse_queries, read_baselabels};
-use rayon::prelude::*;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -61,11 +60,10 @@ fn main() {
     println!("Computing bitmap took {:.3?} seconds", elapsed);
 
     let mut specificities: Vec<f64> = bitmaps
-        .par_iter()
+        .iter()
         .map(|bitmap| {
             let count = bitmap.len();
-            let specificity = count as f64 / total_base as f64;
-            specificity
+            count as f64 / total_base as f64
         })
         .collect();
 
@@ -90,7 +88,7 @@ fn main() {
         specificities.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let min = specificities[0];
         let max = specificities[specificities.len() - 1];
-        let median = if specificities.len() % 2 == 0 {
+        let median = if specificities.len().is_multiple_of(2) {
             let mid = specificities.len() / 2;
             (specificities[mid - 1] + specificities[mid]) / 2.0
         } else {
