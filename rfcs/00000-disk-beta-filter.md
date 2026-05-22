@@ -9,13 +9,15 @@
 
 ## Summary
 
-Replace the disk search API's `(vector_filter: Option<Box<dyn Fn>>, is_flat_search: bool)` parameter pair with a single `plan: SearchPlan` enum. The new enum is hierarchical (`SearchPlan { FlatScan, Graph(GraphMode) }`), makes invalid combinations unrepresentable, and introduces a new capability — *beta-biased graph search* — as one of its variants. The change also closes the design's only extension point for future graph algorithms (e.g. `MultihopSearch`) without further growing the public signature of `searcher.search()`.
+Adds support for **beta-biased filtering on the disk search path** by introducing a `SearchPlan` enum that replaces the existing `(vector_filter, is_flat_search)` parameter pair on `searcher.search()`. The new enum is hierarchical (`SearchPlan { FlatScan, Graph(GraphMode) }`), encodes today's four search configurations plus the new beta-biased variant as one named value each, makes invalid combinations unrepresentable, and gives future filter algorithms a single extension point that doesn't require further growing the public `search()` signature.
 
 ## Motivation
 
 ### Background
 
-The disk search API today exposes filtering as a raw closure type alias paired with a separate boolean for flat vs. graph dispatch:
+The in-memory side of DiskANN has a `BetaFilter` strategy ([diskann-providers/src/model/graph/provider/layers/betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) that biases beam traversal toward vectors matching a label predicate, by multiplying their distances by a factor `β ∈ (0, 1]`. It's documented and tested for the in-memory `FullPrecision` strategy.
+
+The disk search path has no equivalent. The disk API today exposes filtering as a raw closure type alias paired with a separate boolean for flat vs. graph dispatch:
 
 ```rust
 // diskann-disk/src/build/configuration/filter_parameter.rs
@@ -25,47 +27,83 @@ pub type VectorFilter<'a, Data> =
 // searcher.search(..., vector_filter: Option<VectorFilter>, is_flat_search: bool)
 ```
 
-The benchmark layer exposes both as independent inputs ([diskann-benchmark/src/inputs/disk.rs:83-85](../diskann-benchmark/src/inputs/disk.rs)). Today this is orthogonal — all four `(vector_filter, is_flat_search)` combinations correspond to valid disk-search configurations:
+A raw closure has no field to attach `β` to, and bolting beta on as a third `Option<f32>` parameter would create meaningless combinations (e.g. `is_flat_search=true` + `beta=Some(_)`) that the type system can't reject.
 
-| `vector_filter` | `is_flat_search` | Meaning |
-|---|---|---|
-| `None` | `false` | Graph search, no filter |
-| `Some(p)` | `false` | Graph search + post-filter |
-| `None` | `true` | Flat scan baseline (brute-force recall floor) |
-| `Some(p)` | `true` | Flat scan + hard filter |
-
-Meanwhile, the in-memory side has gained a `BetaFilter` strategy ([diskann-providers/src/model/graph/provider/layers/betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) that biases beam traversal toward labelled vectors by multiplying their distances by a factor `β ∈ (0, 1]`. The disk path has no equivalent today: a query that wants beta-biased filtering on a disk index has no way to express it.
+Looking forward, `MultihopSearch` already exists in [diskann/src/graph/search/multihop_search.rs](../diskann/src/graph/search/multihop_search.rs) but the disk API has no way to select it. Each new graph algorithm under the current shape would mean another boolean flag and another runtime validation rule.
 
 ### Problem Statement
 
-Three concrete problems with the current shape:
+1. **Beta-biased graph search is unavailable on the disk path.** Queries that would benefit from biasing beam traversal toward labelled vectors must fall back to plain post-filtering on the disk side, with no way to express the beta variant.
 
-1. **A raw closure can't carry `beta`.** Adding beta-biased graph search requires threading another parameter (`beta: Option<f32>`) through `search()` → `search_internal()` → `DiskAccessor`. The closure has no field to attach metadata to.
+2. **The current API shape can't carry beta cleanly.** A raw closure has no place to attach `β`. Threading `beta: Option<f32>` through `search()` → `search_internal()` → `DiskAccessor` as a fourth parameter creates orthogonality problems: beta is only meaningful in graph search, and `(vector_filter, is_flat_search, beta)` as three independent inputs admits 2 of 8 meaningless combinations the type system can't catch.
 
-2. **Beta breaks the existing orthogonality.** Beta is only meaningful in graph search (it biases beam expansion; flat scan has no beam). With three independent inputs `(vector_filter, is_flat_search, beta)`, 2 of the 2³ = 8 combinations are meaningless (`is_flat_search=true` with `beta=Some(_)`; `vector_filter=None` with `beta=Some(_)`). A flat `bool` + `Option<f32>` cannot reject them at compile time — validation has to run at runtime, and every call site has to know which combinations are valid.
-
-3. **No integration point for future graph algorithms.** `MultihopSearch` already exists in [diskann/src/graph/search/multihop_search.rs](../diskann/src/graph/search/multihop_search.rs) but the disk API has no way to select it. Each new algorithm would mean another boolean flag and another runtime validation rule.
+3. **No clean integration point for future filter algorithms.** `MultihopSearch` exists in `diskann` but the disk API has no extension point — adding it (or any future algorithm) would mean another flag and more cross-field validation.
 
 ### Goals
 
-1. Express all five valid configurations — flat-no-filter, flat-with-filter, graph-no-filter, graph-with-post-filter, graph-with-beta — as one named value each, with invalid combinations unrepresentable.
-2. Add beta-biased disk graph search as a first-class capability without further growing `searcher.search()`'s parameter list.
-3. Provide a single extension point for future graph algorithms that doesn't require changing the public `search()` signature.
-4. Preserve the zero-allocation, zero-overhead property for the most common case (graph search, no filter).
-5. Keep the disk filter API insulated from upstream changes to `diskann::graph::index::QueryLabelProvider<u32>`.
+1. Add beta-biased disk graph search as a first-class capability — equivalent in effect to the in-memory `BetaFilter` strategy.
+2. Replace the `(vector_filter, is_flat_search)` parameter pair with a single value where every supported configuration is one named variant or constructor.
+3. Make invalid combinations (beta on flat scan, beta without a predicate) unrepresentable by construction — caught at compile time, not by runtime assertion.
+4. Provide a single extension point so future filter algorithms (`MultihopSearch`, others) can be added without changing the public `search()` signature.
+5. Preserve zero allocation and zero per-iteration overhead on the no-filter graph path (today's most common case).
 
 ## Proposal
 
-### Core types
+### 1. Motivation
 
-Two new types replace the existing `VectorFilter` alias:
+The disk search filter is a raw `Box<dyn Fn(...)>` type alias paired with a separate `is_flat_search: bool` flag:
+
+```rust
+// diskann-disk/src/build/configuration/filter_parameter.rs
+pub type VectorFilter<'a, Data> =
+    Box<dyn Fn(&<Data as GraphDataType>::VectorIdType) -> bool + Send + Sync + 'a>;
+
+// searcher.search(..., vector_filter: Option<VectorFilter>, is_flat_search: bool)
+```
+
+Three problems with this shape:
+
+1. **A raw closure can't carry `beta`.** Adding beta-biased graph search requires threading another parameter through `search()` → `search_internal()` → `DiskAccessor`.
+
+2. **Adding beta breaks the existing orthogonality between `is_flat_search` and `vector_filter`.** Today the two flags are genuinely orthogonal: all four `(is_flat_search, vector_filter)` combinations are meaningful, and the benchmark exposes them as independent inputs ([diskann-benchmark/src/inputs/disk.rs:83-85](../diskann-benchmark/src/inputs/disk.rs)). But beta only exists in graph search — it biases beam expansion, and a flat scan has no beam. Adding beta as a third independent parameter creates meaningless combinations (e.g. `is_flat_search=true` + `beta=Some(_)`) that the type system can't reject.
+
+3. **No integration point for future graph algorithms.** `MultihopSearch` already exists in `diskann/src/graph/search/multihop_search.rs`, but the disk API has no way to select it. Each new algorithm would mean another boolean flag.
+
+This design replaces both flags with a single `plan: SearchPlan` enum. Each of the five supported configurations is one explicit variant or constructor; future graph algorithms slot in as new `GraphMode` variants without changing the public `search()` signature; the compiler enforces exhaustiveness at every dispatch site.
+
+### 2. API Change
+
+#### 2.1 The `Predicate` type alias
+
+The disk path identifies filtered IDs through a closure, not a trait. There is no `IdFilter` trait, no `BitmapProvider` wrapper, and no `QueryLabelProvider<u32>` dependency.
 
 ```rust
 // diskann-disk/src/search/filter_parameter.rs
 // (Moved from build/configuration/ — this is a search-time concept, not build-time.)
 
 pub type Predicate = Box<dyn Fn(u32) -> bool + Send + Sync>;
+```
 
+**Why a closure, not a trait?**
+- **Ergonomic at call sites.** `|id| bm.contains(id)` is shorter and clearer than `Arc::new(BitmapProvider::new(bm))`. Callers using `HashSet<u32>`, sorted `Vec<u32>`, or any custom backing structure write a closure directly.
+- **No upstream coupling.** No dependency on `diskann::graph::index::QueryLabelProvider<u32>` — upstream signature changes don't reach the disk path. If a future graph algorithm (e.g. `MultihopSearch`) requires `&dyn QueryLabelProvider<u32>`, it adapts at the boundary with a thin local wrapper.
+- **No allocation when absent.** `Option<Predicate>` is `None` for the no-filter cases; no closure object is constructed.
+
+**Why `Fn(u32)` and not `Fn(&u32)`?** `u32` is 4 bytes and `Copy`; passing by value is cheaper than an 8-byte reference, eliminates `*` derefs at every call site, and matches the codebase convention of `QueryLabelProvider::is_match(id: V)` ([diskann/src/graph/index.rs:82](../diskann/src/graph/index.rs)).
+
+**Why `Box`, not `Arc`?** Predicates are owned by `SearchPlan` for the duration of one search call. They aren't shared across queries. `Box` is sufficient and avoids atomic refcount traffic on every clone/drop.
+
+#### 2.2 `SearchPlan` and `GraphMode` enums
+
+**Current** (`filter_parameter.rs`):
+```rust
+pub type VectorFilter<'a, Data> =
+    Box<dyn Fn(&<Data as GraphDataType>::VectorIdType) -> bool + Send + Sync + 'a>;
+```
+
+**Proposed**: replace the type alias with two hierarchical enums. `SearchPlan` makes the top-level graph-vs-flat-scan break; `GraphMode` describes the variant on the graph path.
+
+```rust
 /// Top-level search plan: graph traversal vs. linear scan.
 pub enum SearchPlan {
     /// Brute-force linear scan. `Some(p)` applies `p` inline; `None`
@@ -77,7 +115,7 @@ pub enum SearchPlan {
 }
 
 /// Graph-search variant. Invalid combinations (e.g. beta without a predicate)
-/// are unrepresentable by construction.
+/// are unrepresentable.
 pub enum GraphMode {
     /// Plain greedy beam.
     Unfiltered,
@@ -120,17 +158,25 @@ impl SearchPlan {
 }
 ```
 
-The five cases:
+**The five cases:**
 
-| # | Case | Call |
-|---|------|------|
+| # | Case | `SearchPlan` value |
+|---|------|---|
 | 1 | Flat scan, no filter | `SearchPlan::flat()` |
 | 2 | Flat scan + filter | `SearchPlan::flat_filtered(\|id\| bm.contains(id))` |
 | 3 | Graph, no filter | `SearchPlan::graph()` |
 | 4 | Graph + post-filter | `SearchPlan::graph_with(GraphMode::post_filter(\|id\| bm.contains(id)))` |
-| 5 | Graph + beta + post-filter (**new**) | `SearchPlan::graph_with(GraphMode::beta_filter(\|id\| bm.contains(id), 0.5))` |
+| 5 | Graph + beta + post-filter | `SearchPlan::graph_with(GraphMode::beta_filter(\|id\| bm.contains(id), 0.5))` |
 
-### Public `search()` signature change
+**Key design decisions**:
+
+- **Hierarchical, not flat.** `SearchPlan { FlatScan, Graph(GraphMode) }` separates the graph-vs-linear-scan categorical break (different access patterns, different code paths) from the choice of graph algorithm/modifier. A future `Multihop` slots into `GraphMode` as a sibling to `BetaFilter`, not as a top-level variant — they both traverse the graph.
+- **Invalid states unrepresentable.** `BetaFilter` carries the predicate inline; the `FlatScan` path has no `GraphMode` field. Beta-without-predicate and beta-on-flat-scan are rejected at compile time, not by runtime assertion.
+- **Project at the boundary.** `GraphMode` exposes constructors only — no `predicate()` or `beta()` accessors. The strategy projects `(Option<&Predicate>, Option<f32>)` from the plan via one exhaustive match at construction (§4.2). Blocks semantically meaningless calls (asking `beta()` on `Unfiltered`) and routes every new variant through a single site, compiler-enforced.
+
+#### 2.3 `search()` public signature
+
+`is_flat_search: bool` and `vector_filter: Option<VectorFilter>` are **both removed** and replaced with a single `plan: SearchPlan` parameter.
 
 ```rust
 // Before
@@ -139,7 +185,7 @@ pub fn search(
     return_list_size: u32,
     search_list_size: u32,
     beam_width: Option<usize>,
-    vector_filter: Option<VectorFilter<Data>>,
+    vector_filter: Option<VectorFilter<Data>>,  // Box<dyn Fn(...)>
     is_flat_search: bool,
 ) -> ANNResult<SearchResult<Data::AssociatedDataType>>
 
@@ -153,32 +199,142 @@ pub fn search(
 ) -> ANNResult<SearchResult<Data::AssociatedDataType>>
 ```
 
-### Internal plumbing
+Dispatch is a single match on `plan` (see §4.3). `SearchPlan::graph()` is the default "graph, no filter" case — a unit variant inside a unit variant, no allocation.
+
+#### 2.4 Caller migration
+
+The benchmark today exposes `is_flat_search` and `vector_filters_file` as independent flags ([diskann-benchmark/src/backend/disk_index/search.rs:267-281](../diskann-benchmark/src/backend/disk_index/search.rs)). The four combinations map onto `SearchPlan` as follows:
+
+| Today `(vector_filter, is_flat_search)` | New `plan` |
+|---|---|
+| `(None, false)` | `SearchPlan::graph()` |
+| `(None, true)` | `SearchPlan::flat()` |
+| `(Some(p), false)` | `SearchPlan::graph_with(GraphMode::post_filter(p))` |
+| `(Some(p), true)` | `SearchPlan::flat_filtered(p)` |
+| (not expressible) | `SearchPlan::graph_with(GraphMode::beta_filter(p, β))` |
+
+The last row is **new** capability not available today.
+
+**Example: flat scan + hard filter migration**
+
+```rust
+// Before — raw closure + separate boolean
+let filter_list: Arc<RoaringBitmap> = /* bitmap of allowed IDs */;
+let result = searcher.search(
+    query,
+    return_list_size,
+    search_list_size,
+    beam_width,
+    Some(Box::new(move |vid: &u32| filter_list.contains(*vid))),
+    true,   // is_flat_search
+)?;
+
+// After — single plan parameter, no boolean
+let filter_list: Arc<RoaringBitmap> = /* bitmap of allowed IDs */;
+let result = searcher.search(
+    query,
+    return_list_size,
+    search_list_size,
+    beam_width,
+    SearchPlan::flat_filtered(move |id| filter_list.contains(id)),
+)?;
+```
+
+**Example: graph + post-filter migration**
+
+```rust
+let filter_list: Arc<RoaringBitmap> = /* bitmap of allowed IDs */;
+let result = searcher.search(
+    query,
+    return_list_size,
+    search_list_size,
+    beam_width,
+    SearchPlan::graph_with(GraphMode::post_filter(move |id| filter_list.contains(id))),
+)?;
+```
+
+**Example: beta-biased graph search (new capability)**
+
+```rust
+let active_ids: Arc<RoaringBitmap> = /* bitmap of non-deleted IDs */;
+let result = searcher.search(
+    query,
+    return_list_size,
+    search_list_size,
+    beam_width,
+    SearchPlan::graph_with(GraphMode::beta_filter(
+        move |id| active_ids.contains(id),
+        0.5,  // beta: bias beam toward matching vectors
+    )),
+)?;
+```
+
+**Benchmark CLI**: the `--is_flat_search` flag is removed from the disk-index benchmark input schema. The benchmark layer constructs `SearchPlan` from `(is_flat_search, vector_filters_file)` once at the boundary and passes only `SearchPlan` to `searcher.search()`. JSON input schemas that still carry `is_flat_search` should be migrated as a separate task (config-only, no code dependency after the backend update).
+
+### 3. Internal Plumbing
+
+**Changes per type:**
 
 | Type | Change |
 |------|--------|
 | `filter_parameter.rs` | Replace `VectorFilter` + `default_vector_filter()` with `Predicate`, `GraphMode`, `SearchPlan`. Move file from `build/configuration/` to `search/`. |
-| `DiskSearchStrategy` | Old: `vector_filter: &'a dyn Fn`. New: `predicate: Option<&'a Predicate>` + `beta: Option<f32>`, projected from `plan` at construction. |
-| `DiskAccessor` | Carries `predicate: Option<&'a Predicate>` + `beta: Option<f32>`. |
-| `DiskAccessor::pq_distances` | ~4 added lines: apply `beta` when both fields are `Some`. |
-| `RerankAndFilter` | Old: `filter: &'a dyn Fn`. New: `filter: Option<&'a Predicate>`. |
-| `search_internal` | `(vector_filter, is_flat_search)` → `plan: &SearchPlan`; dispatches on top-level variant only. |
-| `search_strategy` | The **only** site that introspects `GraphMode` (one exhaustive match producing `(predicate, beta)`). |
-| `flat_search` path | Drop redundant `vector_filter` arg; read predicate from `plan`. |
-| `expand_beam`, `distances_unordered` | **No change.** |
+| `DiskSearchStrategy` | `vector_filter: &'a dyn Fn` → carries `predicate: Option<&'a Predicate>` + `beta: Option<f32>`, projected from `plan` at construction |
+| `DiskAccessor` | Carries `predicate: Option<&'a Predicate>` + `beta: Option<f32>` (both extracted from `plan` at construction) |
+| `DiskAccessor::pq_distances` | ~4 lines: apply `beta` when both fields are `Some` |
+| `DiskAccessor::new` | Accept `predicate` + `beta` (extracted by `search_accessor()`) |
+| `RerankAndFilter` | `filter: &'a dyn Fn` → `filter: Option<&'a Predicate>` |
+| `search_internal` | `(vector_filter, is_flat_search)` → `plan: &SearchPlan`; dispatches on top-level variant only |
+| `search_strategy` | The **only** site that introspects `GraphMode`; produces `(predicate, beta)` for the strategy fields |
+| `flat_search` path | Drop redundant `vector_filter` arg; read predicate from `plan` |
+| `search()` | Replace `vector_filter` + `is_flat_search` with `plan: SearchPlan` |
+| `expand_beam` | **No change** |
+| `distances_unordered` | **No change** |
 
-The "project at the boundary" decision matters: every match on `GraphMode` happens in `search_strategy`. Downstream code (`DiskAccessor`, `RerankAndFilter`, `flat_search`) sees only the projected `(Option<&Predicate>, Option<f32>)` pair. Adding a new `GraphMode` variant later means touching one match arm, not three or four.
+**No `Arc`, no allocation on the no-filter paths.** `Predicate` is `Box<dyn Fn>`; `DiskAccessor::predicate` is `Option<&'a Predicate>`. For `SearchPlan::graph()` (i.e. `GraphMode::Unfiltered`) and `SearchPlan::flat()`, both `predicate` and `beta` are `None` — no `Box` is constructed.
 
-### `pq_distances` — where beta applies
+### 4. Core Implementation Changes
+
+#### 4.1 `search()` — single dispatch parameter
 
 ```rust
-// Before (disk_provider.rs:581-586)
+pub fn search(&self, ..., plan: SearchPlan) -> ANNResult<SearchResult<...>> {
+    self.search_internal(query, ..., &plan)
+}
+```
+
+#### 4.2 `search_strategy` projection — the single `GraphMode` match site
+
+`search_strategy` is the **only** place that introspects `GraphMode`'s variants. One exhaustive match produces `(predicate, beta)`; the strategy carries them as fields. Every downstream consumer reads `strategy.predicate` and `strategy.beta` — no further variant matching anywhere.
+
+```rust
+fn search_strategy<'a>(
+    &'a self,
+    query: &'a [Data::VectorDataType],
+    plan: &'a SearchPlan,
+) -> DiskSearchStrategy<'a, ...> {
+    let (predicate, beta) = match plan {
+        SearchPlan::FlatScan { filter } => (filter.as_ref(), None),
+        SearchPlan::Graph(GraphMode::Unfiltered) => (None, None),
+        SearchPlan::Graph(GraphMode::PostFilter(p)) => (Some(p), None),
+        SearchPlan::Graph(GraphMode::BetaFilter { predicate, beta }) =>
+            (Some(predicate), Some(*beta)),
+    };
+    DiskSearchStrategy { predicate, beta, query, ... }
+}
+```
+
+#### 4.3 `pq_distances()` — apply `beta` when both fields are `Some`
+
+**Current** ([disk_provider.rs:581-586](../diskann-disk/src/search/provider/disk_provider.rs)):
+```rust
 for (i, id) in ids.iter().enumerate() {
     let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
     f(distance, *id);
 }
+```
 
-// After
+**Proposed**:
+```rust
 for (i, id) in ids.iter().enumerate() {
     let mut distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
     if let (Some(beta), Some(predicate)) = (self.beta, self.predicate) {
@@ -190,67 +346,152 @@ for (i, id) in ids.iter().enumerate() {
 }
 ```
 
-When either field is `None`, the `if let` short-circuits — zero overhead on the common cases.
+When `beta` or `predicate` is `None`, the `if let` short-circuits — zero overhead on cases 3 (`Unfiltered`) and 4 (`PostFilter`).
 
-### Caller migration
+#### 4.4 `search_internal()` — dispatch by top-level variant
 
-| Today `(vector_filter, is_flat_search)` | New `plan` |
-|---|---|
-| `(None, false)` | `SearchPlan::graph()` |
-| `(None, true)` | `SearchPlan::flat()` |
-| `(Some(p), false)` | `SearchPlan::graph_with(GraphMode::post_filter(p))` |
-| `(Some(p), true)` | `SearchPlan::flat_filtered(p)` |
-| (not expressible) | `SearchPlan::graph_with(GraphMode::beta_filter(p, β))` |
+`search_internal` dispatches by the top-level `SearchPlan` variant only — the `GraphMode` match already happened in `search_strategy`.
 
-The benchmark layer constructs `SearchPlan` once at the boundary; the `--is_flat_search` flag is removed from the disk-index input schema. JSON input schemas that still carry `is_flat_search` are migrated as a separate config-only step.
+```rust
+pub(crate) fn search_internal(
+    &self, ..., plan: &SearchPlan,
+) -> ANNResult<SearchResultStats> {
+    let strategy = self.search_strategy(query, plan);
+    let stats = match plan {
+        SearchPlan::FlatScan { filter } => {
+            let accept_all: &(dyn Fn(u32) -> bool + Send + Sync) = &|_| true;
+            let accept: &(dyn Fn(u32) -> bool + Send + Sync) = match filter {
+                Some(p) => &**p,
+                None => accept_all,
+            };
+            self.runtime.block_on(self.index.flat_search(
+                &strategy, &DefaultContext, strategy.query, accept,
+                &Knn::new(k, l, beam_width)?, &mut result_output_buffer,
+            ))?
+        }
+        SearchPlan::Graph(_) => {
+            let knn = Knn::new(k, l, beam_width)?;
+            self.runtime.block_on(self.index.search(
+                knn, &strategy, &DefaultContext, strategy.query, &mut result_output_buffer,
+            ))?
+        }
+    };
+    ...
+}
+```
 
-### Where beta does and doesn't apply
+The `Graph(_)` arm doesn't need to look at the `GraphMode` — `pq_distances` already knows about `beta` via `strategy`, and `RerankAndFilter` already knows about `predicate` via `strategy`.
+
+#### 4.5 `RerankAndFilter` — optional predicate
+
+```rust
+pub struct RerankAndFilter<'a> {
+    filter: Option<&'a Predicate>,
+}
+
+// in DiskSearchStrategy::default_post_processor():
+fn default_post_processor(&self) -> RerankAndFilter<'_> {
+    RerankAndFilter::new(self.predicate)
+}
+
+// in RerankAndFilter::post_process():
+.filter(|id| self.filter.map_or(true, |f| f(*id)))
+```
+
+`map_or(true, ...)` short-circuits with no closure invocation when `filter` is `None`.
+
+### 5. Where Beta Is / Isn't Applied
 
 | Location | Beta applied? | Rationale |
 |----------|--------------|-----------|
-| `pq_distances` | **Yes**, only on `GraphMode::BetaFilter` | Biases beam toward matching vectors during graph traversal |
-| `ensure_loaded` (full-precision cache) | No | Cache must hold true distances for honest reranking |
-| `RerankAndFilter::post_process` | No | Uses true distances; predicate is hard-filter only |
+| `pq_distances()` | **Yes**, only on `GraphMode::BetaFilter` | Biases beam toward matching vectors during graph traversal |
+| `ensure_loaded()` (full-precision cache) | No | Cache must hold true distances for honest reranking |
+| `RerankAndFilter::post_process()` | No | Uses true distances; predicate is hard-filter only |
 | `flat_search` path | No | Type system forbids it — `FlatScan` has no `GraphMode` field |
 
-### Extensibility — adding a new graph algorithm
+### 6. Data Flow
+
+```
+search(plan: SearchPlan)
+  ▼
+search_internal(plan: &SearchPlan)
+  │
+  ├─► step 1: strategy = search_strategy(query, plan)
+  │              // exhaustive match on GraphMode projects (predicate, beta) once;
+  │              // strategy carries the projection — nothing downstream reads GraphMode
+  │
+  └─► step 2: dispatch on top-level variant
+        │
+        ├─[FlatScan { filter }]─► index.flat_search(..., accept-or-accept-all, ...)
+        │     (no GraphMode on this path; type system forbids beta)
+        │
+        └─[Graph(_)]─► index.search(Knn, &strategy, ctx, query, output)
+              // index.search drives the traversal and calls back into the
+              // strategy on demand:
+              │
+              ├─► strategy.search_accessor(...) → DiskAccessor
+              │     reads strategy.predicate, strategy.beta
+              │     │
+              │     └─► accessor.pq_distances() — invoked per beam expansion
+              │           if let (Some(beta), Some(p)) = (self.beta, self.predicate) {
+              │               if p(*id) { distance *= beta }
+              │           }
+              │
+              └─► strategy.default_post_processor() → RerankAndFilter
+                    // invoked once on the final candidate set
+                    filter = strategy.predicate
+```
+
+### 7. Files Modified
+
+| File | Scope of change |
+|------|-----------------|
+| `diskann-disk/src/search/filter_parameter.rs` (moved from `build/configuration/`) | New types: `Predicate`, `GraphMode`, `SearchPlan` replace `VectorFilter` and `default_vector_filter()` |
+| `diskann-disk/src/search/provider/disk_provider.rs` | `DiskSearchStrategy`, `DiskAccessor`, `pq_distances`, `RerankAndFilter`, `search_internal`, `search_strategy`, `flat_search`, `search()`, internal test call sites |
+| `diskann-benchmark/src/backend/disk_index/search.rs` | Build `SearchPlan` at the boundary; drop `is_flat_search` parameter |
+| `tools/search_disk_index.rs` (or equivalent) | Same closure-to-`SearchPlan` replacement |
+| Benchmark input JSON schemas | Remove `is_flat_search`; encode the plan in inputs instead (config-only, no code dependency after the backend update) |
+
+### 8. Backward Compatibility
+
+- **Existing no-filter callers**: replace `vector_filter: None, is_flat_search: false` with `SearchPlan::graph()` — identical behavior, no allocation.
+- **Existing flat-scan-no-filter callers** (benchmark recall baseline): replace `vector_filter: None, is_flat_search: true` with `SearchPlan::flat()`.
+- **Existing filtered callers (graph + post-filter)**: replace `Some(Box::new(|vid| bm.contains(vid))), is_flat_search: false` with `SearchPlan::graph_with(GraphMode::post_filter(move |id| bm.contains(id)))`.
+- **Existing flat-scan-with-filter callers**: replace `Some(Box::new(|vid| bm.contains(vid))), is_flat_search: true` with `SearchPlan::flat_filtered(move |id| bm.contains(id))`.
+- **`search_internal` is `pub(crate)`** — no external API breakage beyond `search()`.
+- **Zero overhead on the no-filter graph path** — `SearchPlan::graph()` constructs no `Box`; `pq_distances`' `if let` does not match; `RerankAndFilter::filter` is `None` and the `.filter` call short-circuits.
+
+### 9. Extensibility — adding a new graph algorithm
 
 Two extension axes, both compiler-enforced:
 
 | Add… | Where it lives | `match` sites to update |
 |------|-----|---|
 | **New top-level search class** (e.g. range search) | New `SearchPlan` variant | `search_internal` dispatch |
-| **New graph algorithm or beam modifier** | New `GraphMode` variant | `search_strategy` projection match (Rust exhaustiveness check forces the update) |
+| **New graph algorithm or beam modifier** | New `GraphMode` variant | `search_strategy` projection match; `Graph(_)` arm in `search_internal` if invocation differs |
 
-Worked example — adding `Multihop` (which already exists in `diskann::graph::search::multihop_search` and takes `&dyn QueryLabelProvider<u32>`):
+### 10. Validation
 
-```rust
-// In GraphMode:
-Multihop { predicate: Predicate },
-```
+- `beta` in `GraphMode::BetaFilter { beta }` must be in $(0, 1]$ — `GraphMode::beta_filter()` is the only constructor and panics otherwise. $\beta > 1$ would penalize matches (opposite of intent); $\beta \leq 0$ is nonsensical.
+- `DiskAccessor` remains `Send` — `Predicate`'s `Send + Sync` bound propagates.
+- No allocation on the `SearchPlan::graph()` and `SearchPlan::flat()` paths — both produce variants carrying `None` predicates.
+- The type system forbids beta on the `FlatScan` path (no `GraphMode` field) and beta without a predicate (`BetaFilter` carries it inline).
 
-Three localized edits:
+### 11. Testing
 
-1. Add the `GraphMode::Multihop { predicate }` arm to the projection match in `search_strategy`: `(Some(predicate), None)`. `RerankAndFilter` post-filters automatically; no beta.
-2. Add a `ClosureAsLabelProvider` wrapper local to the disk crate, since `MultihopSearch::new` expects `&dyn QueryLabelProvider<u32>`:
+- **Existing tests pass unchanged in spirit**: old `(None, false)` → `SearchPlan::graph()`; `(None, true)` → `SearchPlan::flat()`; `(Some(p), false)` → `SearchPlan::graph_with(GraphMode::post_filter(p))`; `(Some(p), true)` → `SearchPlan::flat_filtered(p)`.
+- **Case 5 regression (beta-biased graph)**: synthetic graph where the medoid's BFS frontier provably misses a target cluster unless beta biases it. Verify `BetaFilter` returns IDs that `PostFilter` (same predicate, no beta) misses. Stat-based "matching IDs appear" assertions are flaky — the fixture must make beam ordering deterministic.
+- **Recall sweep**: case 4 vs. case 5 across several $\beta$ values on a filter-selective workload. Establishes the recall-vs-effort baseline.
+- **Validation**: `GraphMode::beta_filter(p, β)` panics for $\beta \notin (0, 1]$.
+- **No-filter zero-cost**: counter assertion that case 3 (`SearchPlan::graph()`) invokes no closure in `pq_distances` or `RerankAndFilter`.
 
-   ```rust
-   struct ClosureAsLabelProvider<'a>(&'a Predicate);
+### 12. Non-Goals
 
-   impl std::fmt::Debug for ClosureAsLabelProvider<'_> {
-       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-           f.debug_struct("ClosureAsLabelProvider").finish_non_exhaustive()
-       }
-   }
-
-   impl QueryLabelProvider<u32> for ClosureAsLabelProvider<'_> {
-       fn is_match(&self, id: u32) -> bool { (self.0)(id) }
-   }
-   ```
-
-3. Add a `match` arm in `search_internal` (or refine the `Graph(_)` arm) that calls `MultihopSearch::new(Knn, &adapter)` instead of plain `Knn`.
-
-The compiler refuses to build until every `match` on `GraphMode` handles `Multihop`.
+- **`BetaFilter<DiskSearchStrategy>` composability.** Beta application stays in `DiskAccessor::pq_distances` rather than moving to the `QueryComputer` path. The disk path implements the beta algorithm independently from the in-memory `BetaFilter` strategy.
+- **Adopting `QueryLabelProvider<u32>` at the user-facing API.** Closures are the primary representation; future graph algorithms that internally require `&dyn QueryLabelProvider<u32>` adapt at the boundary with a thin wrapper.
+- **Beta on `flat_search`.** Brute-force enumeration doesn't benefit from traversal biasing; the type system forbids it (`FlatScan` has no `GraphMode` field).
+- **`VectorIdType` genericity.** `Predicate` pins `u32`. The disk path already constrains `Data::VectorIdType = u32` ([disk_provider.rs:548-557](../diskann-disk/src/search/provider/disk_provider.rs)); a future `u64` ID type would touch this API surface — accepted cost.
+- **Additional `GraphMode` variants in this change.** The enum is built for extension (§9), but each new variant should land with its own consumer integration, tests, and (for traversal modifiers) recall data.
 
 ## Trade-offs
 
@@ -286,26 +527,12 @@ The compiler refuses to build until every `match` on `GraphMode` handles `Multih
 
 ## Benchmark Results
 
-Not yet collected. The primary risk is whether beta-biased graph search delivers a measurable recall improvement over post-filter on filter-selective workloads, and at what `β` the cost crossover sits. Planned experiments:
-
-1. **Recall vs. effort sweep** — case 4 (`PostFilter`) vs. case 5 (`BetaFilter`) across `β ∈ {0.3, 0.5, 0.7, 0.9}` on workloads with selectivity ∈ {1%, 10%, 50%}. Establishes when beta is worth its traversal cost.
-2. **No-filter zero-cost regression** — counter assertion that case 3 (`SearchPlan::graph()`) invokes no closure in `pq_distances` or `RerankAndFilter`.
-3. **`is_flat_search=true, vector_filter=None` baseline parity** — confirm `SearchPlan::flat()` matches today's `(None, true)` performance and recall exactly.
-
-Results will be added to this RFC before merge.
+N/A
 
 ## Future Work
 
-- [ ] **`BetaFilter<DiskSearchStrategy>` composability.** Move beta application from `DiskAccessor::pq_distances` into the `QueryComputer` path, then add an `IdFilter → QueryLabelProvider<u32>` adapter so the disk strategy can be wrapped by the in-memory `BetaFilter` strategy. Out of scope here.
-- [ ] **`Multihop` integration on the disk path.** Add as a new `GraphMode` variant per the worked example in §Extensibility.
-- [ ] **`u64` `VectorIdType` support.** `Predicate` pins `u32` today, matching the disk path's existing `Data::VectorIdType = u32` constraint at [disk_provider.rs:548-557](../diskann-disk/src/search/provider/disk_provider.rs). A future `u64` ID type would require generalizing `Predicate` and the projection.
-- [ ] **Migration of benchmark JSON input schemas.** Remove `is_flat_search` from the disk-index schema and from the example/perf-test JSON files. Config-only, no code dependency after the backend update.
+- [ ] **Align disk and in-memory beta-filter behavior.** After this change, `GraphMode::BetaFilter` on the disk path applies *both* beta-biased traversal *and* a hard post-filter (matching IDs survive, non-matching IDs are dropped in `RerankAndFilter`). The in-memory `BetaFilter` strategy ([diskann-providers/.../betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) only applies the beta bias — it does not post-filter, so non-matching IDs can still appear in results. A user asking for "beta filter" gets different result sets depending on which side they're on. Future work: pick one semantics (most likely "bias + post-filter," matching the disk side) and align the in-memory strategy, or document the divergence explicitly in both APIs.
 
 ## References
 
-1. [docs/disk-beta-filter-with-query-label-provider.md](../docs/disk-beta-filter-with-query-label-provider.md) — full design doc this RFC summarizes.
-2. [docs/disk-beta-filter.md](../docs/disk-beta-filter.md) — earlier closure-based beta filter design (superseded by this RFC).
-3. [diskann-providers/src/model/graph/provider/layers/betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs) — in-memory `BetaFilter` strategy; the disk path implements the algorithm independently.
-4. [diskann/src/graph/search/multihop_search.rs](../diskann/src/graph/search/multihop_search.rs) — `MultihopSearch`; the worked extensibility example.
-5. [diskann-disk/src/search/provider/disk_provider.rs](../diskann-disk/src/search/provider/disk_provider.rs) — current `pq_distances`, `RerankAndFilter`, `DiskSearchStrategy`, `DiskAccessor`.
-6. [diskann-benchmark/src/backend/disk_index/search.rs](../diskann-benchmark/src/backend/disk_index/search.rs) — current benchmark call site (lines 267-281).
+N/A
