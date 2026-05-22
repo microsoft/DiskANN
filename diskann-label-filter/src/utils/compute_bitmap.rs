@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
-pub struct NotNonNan;
+struct NotNonNan;
 
 impl std::fmt::Display for NotNonNan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -24,7 +24,7 @@ impl std::fmt::Display for NotNonNan {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct OrderedFloat(f64);
+struct OrderedFloat(f64);
 
 impl OrderedFloat {
     pub fn new(v: f64) -> Result<Self, NotNonNan> {
@@ -49,12 +49,13 @@ impl Ord for OrderedFloat {
         self.0.partial_cmp(&other.0).unwrap_or(Ordering::Equal)
     }
 }
-pub enum QueryAccelerator {
+
+enum QueryAccelerator {
     InvertedIndex(HashMap<AttributeValue, BitSet>),
     BTree(BTreeMap<OrderedFloat, Vec<usize>>),
 }
 
-pub fn check_for_disallowed_operators(query_expr: &ASTExpr) -> bool {
+fn check_for_disallowed_operators(query_expr: &ASTExpr) -> bool {
     match query_expr {
         ASTExpr::Not(_) => true,
         ASTExpr::And(subs) => subs.iter().any(check_for_disallowed_operators),
@@ -63,7 +64,13 @@ pub fn check_for_disallowed_operators(query_expr: &ASTExpr) -> bool {
     }
 }
 
-pub fn eval_query_using_accelerators(
+fn insert_into_bitset(ids: Vec<usize>) -> BitSet {
+    let mut bitset = BitSet::new();
+    bitset.extend(ids);
+    bitset
+}
+
+fn eval_query_using_accelerators(
     query_expr: &ASTExpr,
     query_accelerators: &HashMap<String, QueryAccelerator>,
 ) -> Result<BitSet, anyhow::Error> {
@@ -147,53 +154,25 @@ pub fn eval_query_using_accelerators(
                                 }
                                 Ok(bitset)
                             }
-                            CompareOp::Lt(value) => {
-                                let fval = *value;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                            CompareOp::Lt(num) => {
+                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                                 let iter = btree.range((Unbounded, Excluded(fval)));
-                                let mut all_ids = Vec::new();
-                                for (_, ids) in iter {
-                                    all_ids.extend(ids.iter().cloned());
-                                }
-                                let mut bitset = BitSet::new();
-                                bitset.extend(all_ids);
-                                Ok(bitset)
+                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
                             }
-                            CompareOp::Lte(value) => {
-                                let fval = *value;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                            CompareOp::Lte(num) => {
+                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                                 let iter = btree.range((Unbounded, Included(fval)));
-                                let mut all_ids = Vec::new();
-                                for (_, ids) in iter {
-                                    all_ids.extend(ids.iter().cloned());
-                                }
-                                let mut bitset = BitSet::new();
-                                bitset.extend(all_ids);
-                                Ok(bitset)
+                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
                             }
-                            CompareOp::Gt(value) => {
-                                let fval = *value;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                            CompareOp::Gt(num) => {
+                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                                 let iter = btree.range((Excluded(fval), Unbounded));
-                                let mut all_ids = Vec::new();
-                                for (_, ids) in iter {
-                                    all_ids.extend(ids.iter().cloned());
-                                }
-                                let mut bitset = BitSet::new();
-                                bitset.extend(all_ids);
-                                Ok(bitset)
+                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
                             }
-                            CompareOp::Gte(value) => {
-                                let fval = *value;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                            CompareOp::Gte(num) => {
+                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                                 let iter = btree.range((Included(fval), Unbounded));
-                                let mut all_ids = Vec::new();
-                                for (_, ids) in iter {
-                                    all_ids.extend(ids.iter().cloned());
-                                }
-                                let mut bitset = BitSet::new();
-                                bitset.extend(all_ids);
-                                Ok(bitset)
+                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
                             }
                         }
                     }
@@ -206,7 +185,7 @@ pub fn eval_query_using_accelerators(
     }
 }
 
-pub fn compute_inverted_index_accelerator(
+fn compute_inverted_index_accelerator(
     key: &str,
     doc_ids: &[usize],
     labels: &[HashMap<String, AttributeValue>],
@@ -223,7 +202,7 @@ pub fn compute_inverted_index_accelerator(
     Ok(inverted_index)
 }
 
-pub fn compute_btree_accelerator(
+fn compute_btree_accelerator(
     key: &str,
     labels: &[HashMap<String, AttributeValue>],
     doc_ids: &[usize],
@@ -254,7 +233,7 @@ pub fn compute_btree_accelerator(
 
 // Compute a global label set across all documents with a representative element
 // Make sure that each global label only maps to the same type of AttributeValue, and throw an error otherwise
-pub fn compute_global_label_set(
+fn compute_global_label_set(
     flattened_base_labels: &Vec<HashMap<std::string::String, AttributeValue>>,
 ) -> Result<HashMap<String, AttributeValue>, anyhow::Error> {
     let mut global_label_set = HashMap::new();
@@ -271,7 +250,7 @@ pub fn compute_global_label_set(
     Ok(global_label_set)
 }
 
-pub fn compute_query_accelerator(
+fn compute_query_accelerator(
     key: String,
     value: AttributeValue,
     doc_ids: &[usize],

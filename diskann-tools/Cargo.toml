@@ -34,6 +34,7 @@ bit-set.workspace = true
 anyhow.workspace = true
 itertools.workspace = true
 diskann-label-filter.workspace = true
+roaring.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

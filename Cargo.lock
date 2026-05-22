@@ -937,6 +937,7 @@ dependencies = [
  "rand 0.9.4",
  "rand_distr",
  "rayon",
+ "roaring",
  "rstest",
  "serde",
  "tracing",
