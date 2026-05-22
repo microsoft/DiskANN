@@ -36,6 +36,10 @@ fn main() {
     };
 
     let total_base = base_labels.len() as u64;
+    if total_base == 0 {
+        eprintln!("Base labels are empty: cannot compute specificities.");
+        process::exit(1);
+    }
 
     let query_labels = match read_and_parse_queries(query_label_file) {
         Ok(queries) => queries,
