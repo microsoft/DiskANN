@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::{
     ANNError, ANNResult, default_post_processor,
+    error::ranked::ErrorExt,
     error::{Infallible, RankedError, StandardError, ToRanked, TransientError, message},
     graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
@@ -471,6 +472,17 @@ impl Provider {
             .iter()
             .map(|ref_multi| *ref_multi.key())
             .filter(|id| !self.is_start_point(*id))
+    }
+
+    /// Run the provided closure on the associated term.
+    fn get<F, R>(&self, id: u32, f: F) -> Result<R, AccessedInvalidId>
+    where
+        F: FnOnce(&[f32]) -> R,
+    {
+        match self.terms.get(&id) {
+            Some(term) => Ok(f(&term.data)),
+            None => Err(AccessedInvalidId(id)),
+        }
     }
 }
 
@@ -999,12 +1011,31 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
 //////////////
 
 #[derive(Debug)]
+struct Flaky<'a>(Option<Cow<'a, HashSet<u32>>>);
+
+impl<'a> Flaky<'a> {
+    fn new(ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
+        Self(ids)
+    }
+
+    fn check(&self, id: u32) -> Result<(), TransientAccessError> {
+        if let Some(ids) = self.0.as_ref()
+            && ids.contains(&id)
+        {
+            Err(TransientAccessError::new(id))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Accessor<'a> {
     provider: &'a Provider,
     buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
     /// IDs that will produce transient errors when accessed.
-    transient_ids: Option<Cow<'a, HashSet<u32>>>,
+    transient_ids: Flaky<'a>,
 }
 
 impl<'a> Accessor<'a> {
@@ -1031,7 +1062,21 @@ impl<'a> Accessor<'a> {
             provider,
             buffer,
             get_vector: provider.get_vector.local(),
-            transient_ids,
+            transient_ids: Flaky::new(transient_ids),
+        }
+    }
+
+    fn copy(&mut self, id: u32) -> Result<Box<[f32]>, AccessError> {
+        let f = |data: &[f32]| -> Result<Box<[f32]>, TransientAccessError> {
+            self.transient_ids.check(id)?;
+            self.get_vector.increment();
+            Ok(data.into())
+        };
+
+        match self.provider.get(id, f) {
+            Ok(Ok(buf)) => Ok(buf),
+            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
+            Err(invalid) => Err(AccessError::InvalidId(invalid)),
         }
     }
 }
@@ -1049,19 +1094,17 @@ impl provider::Accessor for Accessor<'_> {
     type GetError = AccessError;
 
     async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessError> {
-        match self.provider.terms.get(&id) {
-            Some(term) => {
-                if let Some(transient) = &self.transient_ids
-                    && transient.contains(&id)
-                {
-                    return Err(AccessError::Transient(TransientAccessError::new(id)));
-                }
+        let f = |data: &[f32]| -> Result<(), TransientAccessError> {
+            self.transient_ids.check(id)?;
+            self.get_vector.increment();
+            self.buffer.copy_from_slice(data);
+            Ok(())
+        };
 
-                self.get_vector.increment();
-                self.buffer.copy_from_slice(&term.data);
-                Ok(&*self.buffer)
-            }
-            None => Err(AccessError::InvalidId(AccessedInvalidId(id))),
+        match self.provider.get(id, f) {
+            Ok(Ok(())) => Ok(&self.buffer),
+            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
+            Err(invalid) => Err(AccessError::InvalidId(invalid)),
         }
     }
 }
@@ -1110,6 +1153,32 @@ impl glue::SearchExt for Accessor<'_> {
 }
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
+
+type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+type View<'a> = workingset::map::View<'a, u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+
+impl workingset::Fill<WorkingSet> for Accessor<'_> {
+    type Error = ANNError;
+    type View<'a>
+        = View<'a>
+    where
+        Self: 'a,
+        WorkingSet: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        set: &'a mut WorkingSet,
+        itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        set.fill(itr, |i| {
+            self.copy(i).allow_transient("transient failures allowed")
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Strategy {

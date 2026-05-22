@@ -20,14 +20,14 @@ use serde::{Deserialize, Serialize};
 use bf_tree::{BfTree, Config};
 use diskann::{
     default_post_processor,
-    error::{Infallible, RankedError},
+    error::{ErrorExt, Infallible, RankedError},
     graph::{
         glue::{
             self, Batch, CopyIds, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy,
             InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
         strategy::{FullPrecision, Quantized},
-        workingset::{map, Map},
+        workingset::{self, map},
         AdjacencyList, SearchOutputBuffer,
     },
     neighbor::Neighbor,
@@ -39,7 +39,10 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
-use diskann_utils::{future::AsyncFriendly, views::MatrixView};
+use diskann_utils::{
+    future::{AsyncFriendly, SendFuture},
+    views::MatrixView,
+};
 use diskann_vector::{distance::Metric, DistanceFunction};
 
 use super::{
@@ -942,6 +945,62 @@ where
 {
 }
 
+type WorkingSet<T> = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
+type WorkingSetView<'a, T> = map::View<'a, u32, Box<[T]>, map::Ref<[T]>>;
+
+impl<T, Q> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type Error = ANNError;
+    type View<'a>
+        = WorkingSetView<'a, T>
+    where
+        Self: 'a;
+
+    fn fill<'a, Itr>(
+        &'a mut self,
+        working_set: &'a mut WorkingSet<T>,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        // We only get a notification of failure after trying to extract data, meaning we
+        // first need an allocation.
+        //
+        // We use an `Option` for this pre-allocated buffer so if there is an access error,
+        // we can reuse the allocation for the next attempt.
+        let mut buf: Option<Box<[T]>> = None;
+
+        let view = working_set.fill(itr, |i: u32| -> ANNResult<_> {
+            // Reuse a previous allocation if available. Otherwise, make a new one.
+            let mut b = match buf.take() {
+                Some(b) => b,
+                None => std::iter::repeat_n(T::default(), self.provider.dim()).collect(),
+            };
+
+            match self
+                .provider
+                .full_vectors
+                .get_vector_into(i.into_usize(), &mut b)
+                .allow_transient("transient errors allowed during fill")?
+            {
+                Some(()) => Ok(Some(b)),
+                None => {
+                    // Save the allocation for a potential future iteration.
+                    buf = Some(b);
+                    Ok(None)
+                }
+            }
+        });
+
+        std::future::ready(view)
+    }
+}
+
 ///////////////////
 // QuantAccessor //
 ///////////////////
@@ -1117,18 +1176,68 @@ where
 /// [`workingset::View`] trait requires `get` to return something that implements
 /// `Reborrow<'short, Target = Opaque<'short>>`, so we need an owned type that bridges
 /// bf_tree's copy-out model with the working set's reborrow expectation.
-pub struct OwnedOpaque(Vec<u8>);
+pub struct Owned(Box<[u8]>);
 
-impl<'short> diskann_utils::Reborrow<'short> for OwnedOpaque {
+impl<'short> diskann_utils::Reborrow<'short> for Owned {
     type Target = Opaque<'short>;
     fn reborrow(&'short self) -> Self::Target {
         Opaque::new(&self.0)
     }
 }
 
-impl<'a> From<Opaque<'a>> for OwnedOpaque {
-    fn from(value: Opaque<'a>) -> Self {
-        OwnedOpaque(value.to_vec())
+type QuantWorkingSet = map::Map<u32, Owned>;
+type QuantWorkingSetView<'a> = map::View<'a, u32, Owned>;
+
+impl<T> workingset::Fill<QuantWorkingSet> for QuantAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Error = ANNError;
+    type View<'a>
+        = QuantWorkingSetView<'a>
+    where
+        Self: 'a;
+
+    fn fill<'a, Itr>(
+        &'a mut self,
+        working_set: &'a mut QuantWorkingSet,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        // We only get a notification of failure after trying to extract data, meaning we
+        // first need an allocation.
+        //
+        // We use an `Option` for this pre-allocated buffer so if there is an access error,
+        // we can reuse the allocation for the next attempt.
+        let mut buf: Option<Box<[u8]>> = None;
+        let bytes = self.provider.quant_vectors.quantizer.bytes();
+
+        let view = working_set.fill(itr, |i: u32| -> ANNResult<_> {
+            // Reuse a previous allocation if available. Otherwise, make a new one.
+            let mut b = match buf.take() {
+                Some(b) => b,
+                None => std::iter::repeat_n(0, bytes).collect(),
+            };
+
+            match self
+                .provider
+                .quant_vectors
+                .get_vector_into(i.into_usize(), &mut b)
+                .allow_transient("transient errors allowed during fill")?
+            {
+                Some(()) => Ok(Some(Owned(b))),
+                None => {
+                    // Save the allocation for a potential future iteration.
+                    buf = Some(b);
+                    Ok(None)
+                }
+            }
+        });
+
+        std::future::ready(view)
     }
 }
 
@@ -1324,8 +1433,8 @@ where
         PruneStrategy = Self,
     >,
 {
-    type Seed = map::Builder<u32, map::Reborrowed<OwnedOpaque>>;
-    type WorkingSet = Map<u32, OwnedOpaque>;
+    type Seed = map::Builder<u32, map::Reborrowed<Owned>>;
+    type WorkingSet = QuantWorkingSet;
     type FinishError = diskann::error::Infallible;
     type InsertStrategy = Self;
 
@@ -1393,7 +1502,7 @@ impl<T> PruneStrategy<BfTreeProvider<T, QuantVectorProvider>> for Quantized
 where
     T: VectorRepr,
 {
-    type WorkingSet = Map<u32, OwnedOpaque>;
+    type WorkingSet = QuantWorkingSet;
     type DistanceComputer<'a> =
         UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
     type PruneAccessor<'a> = QuantAccessor<'a, T>;

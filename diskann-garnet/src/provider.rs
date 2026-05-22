@@ -23,7 +23,6 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
-use diskann_utils::Reborrow;
 use diskann_utils::object_pool::{AsPooled, ObjectPool, PooledRef, Undef};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
@@ -588,21 +587,8 @@ impl<T: VectorRepr> BuildQueryComputer<&[T]> for FullAccessor<'_, T> {
     }
 }
 
-/// An escape hatch for the blanket implementation of [`workingset::Fill`].
-///
-/// Without an `&[T]: Into<Escape<T>>`, the blanket implementation for `workingset::Map`
-/// is not applicable, allowing customization of `Fill`.
-pub struct Escape<T>(Box<[T]>);
-
-impl<'a, T> Reborrow<'a> for Escape<T> {
-    type Target = &'a [T];
-    fn reborrow(&'a self) -> Self::Target {
-        &self.0
-    }
-}
-
-type WorkingSet<T> = workingset::Map<u32, Escape<T>>;
-type WorkingSetView<'a, T> = workingset::map::View<'a, u32, Escape<T>>;
+type WorkingSet<T> = workingset::Map<u32, Box<[T]>>;
+type WorkingSetView<'a, T> = workingset::map::View<'a, u32, Box<[T]>>;
 
 impl<T: VectorRepr> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T> {
     type Error = GarnetProviderError;
@@ -633,7 +619,7 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T> {
                     } else {
                         return Err(GarnetError::Read.into());
                     };
-                    e.insert(Escape((&**guard).into()));
+                    e.insert((&**guard).into());
                 }
             } else if !set.contains_key(&id) {
                 self.filtered_ids.push(4);
@@ -646,7 +632,7 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T> {
                 self.context.term(Term::Vector),
                 &self.filtered_ids,
                 |id, v| {
-                    set.insert(self.filtered_ids[id as usize * 2 + 1], Escape(v.into()));
+                    set.insert(self.filtered_ids[id as usize * 2 + 1], v.into());
                 },
             );
         }
