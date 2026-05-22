@@ -58,7 +58,7 @@ fn main() {
         }
     };
     let elapsed = start.elapsed();
-    println!("read_labels_and_compute_bitmap_naive took {:.3?}", elapsed);
+    println!("Computing bitmap took {:.3?} seconds", elapsed);
 
     let mut specificities: Vec<f64> = bitmaps
         .par_iter()
