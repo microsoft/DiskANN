@@ -27,8 +27,8 @@ use diskann::{
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
     provider::{
-        Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
-        NeighborAccessor, NoopGuard,
+        Accessor, DataProvider, DefaultContext, DelegateNeighbor, HasId, NeighborAccessor,
+        NoopGuard,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -221,7 +221,6 @@ where
     // This needs to be Arc instead of Rc because DiskSearchStrategy has "Send" trait bound, though this is not expected to be shared across threads.
     io_tracker: IOTracker,
     vector_filter: &'a (dyn Fn(&u32) -> bool + Send + Sync), // Fn param is u32 as we validate "VectorIdType = u32" everywhere in this provider in trait bounds.
-    query: &'a [Data::VectorDataType],
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: &'a ProviderFactory,
@@ -296,7 +295,6 @@ where
         &self,
         accessor: &mut DiskAccessor<'_, Data, VP>,
         query: &[Data::VectorDataType],
-        _computer: &DiskQueryComputer,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -346,7 +344,6 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    type QueryComputer = DiskQueryComputer;
     type SearchAccessor = DiskAccessor<'this, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
 
@@ -354,11 +351,12 @@ where
         &'this self,
         provider: &'this DiskProvider<Data>,
         _context: &DefaultContext,
+        query: &'this [Data::VectorDataType],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         DiskAccessor::new(
             provider,
             &self.io_tracker,
-            self.query,
+            query,
             self.vertex_provider_factory,
             self.scratch_pool,
         )
@@ -407,43 +405,7 @@ impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
     }
 }
 
-impl<Data, VP> BuildQueryComputer<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    type QueryComputerError = ANNError;
-    type QueryComputer = DiskQueryComputer;
-
-    fn build_query_computer(
-        &self,
-        _from: &[Data::VectorDataType],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(DiskQueryComputer {
-            num_pq_chunks: self.provider.pq_data.get_num_chunks(),
-            query_centroid_l2_distance: self
-                .scratch
-                .pq_scratch
-                .aligned_pqtable_dist_scratch
-                .to_vec(),
-        })
-    }
-
-    async fn distances_unordered<Itr, F>(
-        &mut self,
-        vec_id_itr: Itr,
-        _computer: &Self::QueryComputer,
-        f: F,
-    ) -> Result<(), Self::GetError>
-    where
-        F: Send + FnMut(f32, Self::Id),
-        Itr: Iterator<Item = Self::Id>,
-    {
-        self.pq_distances(&vec_id_itr.collect::<Box<[_]>>(), f)
-    }
-}
-
-impl<Data, VP> ExpandBeam<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> ExpandBeam for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -451,7 +413,6 @@ where
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
-        _computer: &Self::QueryComputer,
         mut pred: P,
         mut f: F,
     ) -> impl std::future::Future<Output = Result<(), Self::GetError>> + Send
@@ -694,24 +655,20 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    /// This accessor returns raw slices. There *is* a chance of racing when the fast
-    /// providers are used. We just have to live with it.
-    type Element<'a>
-        = &'a [u8]
-    where
-        Self: 'a;
-
-    /// `ElementRef` can have arbitrary lifetimes.
-    type ElementRef<'a> = &'a [u8];
-
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;
 
-    fn get_element(
+    /// Note: this a temporary, poor implementation.
+    fn get_distance(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        std::future::ready(self.provider.pq_data.get_compressed_vector(id as usize))
+    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
+        let mut f = || -> ANNResult<f32> {
+            let mut out = 0.0;
+            self.pq_distances(&[id], |distance, _| out = distance)?;
+            Ok(out)
+        };
+        std::future::ready(f())
     }
 }
 
@@ -894,13 +851,11 @@ where
     /// Helper method to create a DiskSearchStrategy with common parameters
     fn search_strategy<'a>(
         &'a self,
-        query: &'a [Data::VectorDataType],
         vector_filter: &'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
             io_tracker: IOTracker::default(),
             vector_filter,
-            query,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
         }
@@ -924,7 +879,7 @@ where
     {
         let provider = self.index.provider();
         let mut accessor = strategy
-            .search_accessor(provider, &DefaultContext)
+            .search_accessor(provider, &DefaultContext, query)
             .into_ann_result()?;
 
         // Derive the batch size from the scratch data structure. Providing too many vectors
@@ -959,12 +914,9 @@ where
             cmps += id_buffer.len() as u32;
         }
 
-        // FIXME: This is a temporary bridge. We don't really need the query computer, but
-        // we do need to satisfy the trait definition until PR 1067 lands.
-        let computer = accessor.build_query_computer(query).into_ann_result()?;
         let result_count = strategy
             .default_post_processor()
-            .post_process(&mut accessor, query, &computer, best.iter(), output)
+            .post_process(&mut accessor, query, best.iter(), output)
             .await
             .into_ann_result()?;
 
@@ -1048,7 +1000,7 @@ where
             &mut associated_data[..k_value],
         );
 
-        let strategy = self.search_strategy(query, vector_filter);
+        let strategy = self.search_strategy(vector_filter);
         let timer = Instant::now();
         let k = k_value;
         let l = search_list_size as usize;
@@ -1066,7 +1018,7 @@ where
                 knn_search,
                 &strategy,
                 &DefaultContext,
-                strategy.query,
+                query,
                 &mut result_output_buffer,
             ))?
         };
@@ -1652,7 +1604,7 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let strategy = search_engine.search_strategy(&|_| true);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let recorded_search =
@@ -1774,7 +1726,7 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let strategy = search_engine.search_strategy(&|_| true);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -1821,7 +1773,7 @@ mod disk_provider_tests {
             &mut distances2,
             &mut associated_data2,
         );
-        let strategy2 = search_engine.search_strategy(&query_vector, &|_| true);
+        let strategy2 = search_engine.search_strategy(&|_| true);
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
@@ -2105,7 +2057,7 @@ mod disk_provider_tests {
             &mut associated_data,
         );
 
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let strategy = search_engine.search_strategy(&|_| true);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();

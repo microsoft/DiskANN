@@ -19,7 +19,7 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
 };
 
 /// Parameters for diversity-aware search.
@@ -117,10 +117,9 @@ where
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut diverse_scratch = self.create_scratch(index);
@@ -130,7 +129,6 @@ where
                     Some(self.inner.beam_width().get()),
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut diverse_scratch,
                     &mut NoopSearchRecord::new(),
                 )
@@ -143,7 +141,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     diverse_scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )

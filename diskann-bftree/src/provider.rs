@@ -32,9 +32,9 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
-        DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
-        NoopGuard, SetElement,
+        Accessor, BuildDistanceComputer, DataProvider, DefaultContext, DelegateNeighbor, Delete,
+        ElementStatus, HasElementRef, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard,
+        SetElement,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
@@ -43,7 +43,7 @@ use diskann_utils::{
     future::{AsyncFriendly, SendFuture},
     views::MatrixView,
 };
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 
 use super::{
     neighbors::NeighborProvider, quant::QuantVectorProvider, vectors::VectorProvider, AccessError,
@@ -785,6 +785,8 @@ where
 {
     /// The host provider.
     provider: &'a BfTreeProvider<T, Q>,
+    /// The fused query-distance computer.
+    computer: T::QueryDistance,
     /// A buffer to store retrieved elements.
     element: Box<[T]>,
 }
@@ -812,9 +814,10 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    pub(crate) fn new(provider: &'a BfTreeProvider<T, Q>) -> Self {
+    pub(crate) fn new(provider: &'a BfTreeProvider<T, Q>, query: &[T]) -> Self {
         Self {
             provider,
+            computer: T::query_distance(query, provider.metric),
             element: (0..provider.full_vectors.dim())
                 .map(|_| T::default())
                 .collect(),
@@ -834,38 +837,36 @@ where
     }
 }
 
+impl<T, Q> HasElementRef for FullAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
 impl<T, Q> Accessor for FullAccessor<'_, T, Q>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    /// This accessor returns a reference to a local copy of the vector.
-    type Element<'a>
-        = &'a [T]
-    where
-        Self: 'a;
-
-    /// The reference version of `Element` is the same as `Element`.
-    type ElementRef<'a> = &'a [T];
-
     // Hard-deleted entries may be encountered via stale graph edges.
     //
     type GetError = AccessError;
 
-    /// Return the full-precision vector stored at index `i`.
+    /// Return the distance between the query and the vector stored at index `i`.
     ///
-    /// This function always completes synchronously
-    ///
+    /// This function always completes synchronously.
     #[inline(always)]
-    fn get_element(
+    fn get_distance(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
+    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
         let v = self
             .provider
             .full_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| &*self.element);
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element));
 
         std::future::ready(v)
     }
@@ -873,7 +874,7 @@ where
     /// Perform a bulk operation, silently skipping entries that cannot be read
     /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
     ///
-    fn on_elements_unordered<Itr, F>(
+    fn distances_unordered<Itr, F>(
         &mut self,
         itr: Itr,
         mut f: F,
@@ -881,7 +882,7 @@ where
     where
         Self: Sync,
         Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(Self::ElementRef<'_>, Self::Id),
+        F: Send + FnMut(f32, Self::Id),
     {
         for i in itr {
             match self
@@ -890,7 +891,7 @@ where
                 .get_vector_into(i.into_usize(), &mut self.element)
             {
                 Ok(()) => {
-                    f(&self.element, i);
+                    f(self.computer.evaluate_similarity(&self.element), i);
                 }
                 Err(RankedError::Transient(_)) => {
                     // Deleted or missing vector — expected during graph traversal, skip.
@@ -904,101 +905,11 @@ where
     }
 }
 
-impl<T, Q> BuildDistanceComputer for FullAccessor<'_, T, Q>
+impl<T, Q> ExpandBeam for FullAccessor<'_, T, Q>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type DistanceComputerError = Infallible;
-    type DistanceComputer = T::Distance;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(
-            self.provider.metric,
-            Some(self.provider.full_vectors.dim()),
-        ))
-    }
-}
-
-impl<T, Q> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type QueryComputerError = Infallible;
-    type QueryComputer = T::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(from, self.provider.metric))
-    }
-}
-
-impl<T, Q> ExpandBeam<&[T]> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-}
-
-type WorkingSet<T> = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
-type WorkingSetView<'a, T> = map::View<'a, u32, Box<[T]>, map::Ref<[T]>>;
-
-impl<T, Q> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type Error = ANNError;
-    type View<'a>
-        = WorkingSetView<'a, T>
-    where
-        Self: 'a;
-
-    fn fill<'a, Itr>(
-        &'a mut self,
-        working_set: &'a mut WorkingSet<T>,
-        itr: Itr,
-    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        // We only get a notification of failure after trying to extract data, meaning we
-        // first need an allocation.
-        //
-        // We use an `Option` for this pre-allocated buffer so if there is an access error,
-        // we can reuse the allocation for the next attempt.
-        let mut buf: Option<Box<[T]>> = None;
-
-        let view = working_set.fill(itr, |i: u32| -> ANNResult<_> {
-            // Reuse a previous allocation if available. Otherwise, make a new one.
-            let mut b = match buf.take() {
-                Some(b) => b,
-                None => std::iter::repeat_n(T::default(), self.provider.dim()).collect(),
-            };
-
-            match self
-                .provider
-                .full_vectors
-                .get_vector_into(i.into_usize(), &mut b)
-                .allow_transient("transient errors allowed during fill")?
-            {
-                Some(()) => Ok(Some(b)),
-                None => {
-                    // Save the allocation for a potential future iteration.
-                    buf = Some(b);
-                    Ok(None)
-                }
-            }
-        });
-
-        std::future::ready(view)
-    }
 }
 
 ///////////////////
@@ -1010,13 +921,15 @@ where
 /// This type implements the following traits:
 ///
 /// * [`Accessor`] for the `BfTreeProvider`.
-/// * [`BuildQueryComputer`].
 ///
 pub struct QuantAccessor<'a, T>
 where
     T: VectorRepr,
 {
     provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+    /// The fused query-distance computer.
+    computer: super::quant::QuantQueryComputer,
+    /// A buffer to store retrieved elements.
     element: Box<[u8]>,
 }
 
@@ -1040,13 +953,18 @@ impl<'a, T> QuantAccessor<'a, T>
 where
     T: VectorRepr,
 {
-    pub(crate) fn new(provider: &'a BfTreeProvider<T, QuantVectorProvider>) -> Self {
-        Self {
+    pub(crate) fn new(
+        provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+        query: &[T],
+    ) -> ANNResult<Self> {
+        let computer = provider.quant_vectors.query_computer(query)?;
+        Ok(Self {
             provider,
+            computer,
             element: (0..provider.quant_vectors.quantizer.bytes())
                 .map(|_| u8::default())
                 .collect(),
-        }
+        })
     }
 }
 
@@ -1060,36 +978,33 @@ where
     }
 }
 
+impl<T> HasElementRef for QuantAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = Opaque<'a>;
+}
+
 impl<T> Accessor for QuantAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    /// This accessor returns a reference to a local copy of the element.
-    type Element<'a>
-        = Opaque<'a>
-    where
-        Self: 'a;
-
-    /// The reference version of `Element` is simply `Element`.
-    type ElementRef<'a> = Opaque<'a>;
-
     // ANNError on access failures in bf-tree
     //
     type GetError = AccessError;
 
-    /// Return the quantized vector stored at index `i`.
+    /// Return the distance between the query and the quantized vector stored at index `i`.
     ///
     /// This function always completes synchronously.
-    ///
-    fn get_element(
+    fn get_distance(
         &mut self,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
+    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
         let v = self
             .provider
             .quant_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| Opaque::new(&self.element));
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element));
 
         std::future::ready(v)
     }
@@ -1097,7 +1012,7 @@ where
     /// Perform a bulk operation, silently skipping entries that cannot be read
     /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
     ///
-    fn on_elements_unordered<Itr, F>(
+    fn distances_unordered<Itr, F>(
         &mut self,
         itr: Itr,
         mut f: F,
@@ -1105,7 +1020,7 @@ where
     where
         Self: Sync,
         Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(Self::ElementRef<'_>, Self::Id),
+        F: Send + FnMut(f32, Self::Id),
     {
         for i in itr {
             match self
@@ -1114,7 +1029,7 @@ where
                 .get_vector_into(i.into_usize(), &mut self.element)
             {
                 Ok(()) => {
-                    f(Opaque::new(&self.element), i);
+                    f(self.computer.evaluate_similarity(&self.element), i);
                 }
                 Err(RankedError::Transient(_)) => {
                     // Deleted or missing vector — expected during graph traversal, skip.
@@ -1128,44 +1043,176 @@ where
     }
 }
 
-impl<T> BuildQueryComputer<&[T]> for QuantAccessor<'_, T>
+impl<T> ExpandBeam for QuantAccessor<'_, T> where T: VectorRepr {}
+
+///////////////////////
+// FullPruneAccessor //
+///////////////////////
+
+/// A pruning accessor for full-precision vectors in the `BfTreeProvider`.
+///
+/// Unlike [`FullAccessor`], this type does not require a query — it implements
+/// [`HasElementRef`], [`BuildDistanceComputer`], and [`Fill`](workingset::Fill) for use
+/// during graph pruning.
+pub struct FullPruneAccessor<'a, T, Q>
 where
     T: VectorRepr,
+    Q: AsyncFriendly,
 {
-    type QueryComputerError = ANNError;
-    type QueryComputer = UnwrapErr<
-        spherical_iface::QueryComputer<GlobalAllocator>,
-        spherical_iface::QueryDistanceError,
-    >;
+    provider: &'a BfTreeProvider<T, Q>,
+}
 
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        self.provider
-            .quant_vectors
-            .query_computer(from)
-            .map(|qc| UnwrapErr::new(qc.into_inner()))
+impl<'a, T, Q> FullPruneAccessor<'a, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    fn new(provider: &'a BfTreeProvider<T, Q>) -> Self {
+        Self { provider }
     }
 }
 
-impl<T> ExpandBeam<&[T]> for QuantAccessor<'_, T> where T: VectorRepr {}
-
-impl<T> BuildDistanceComputer for QuantAccessor<'_, T>
+impl<T, Q> HasId for FullPruneAccessor<'_, T, Q>
 where
     T: VectorRepr,
+    Q: AsyncFriendly,
 {
-    type DistanceComputerError = ANNError;
-    type DistanceComputer =
-        UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
+    type Id = u32;
+}
+
+impl<T, Q> HasElementRef for FullPruneAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
+impl<'a, T, Q> DelegateNeighbor<'a> for FullPruneAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type Delegate = &'a NeighborProvider<u32>;
+
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        self.provider.neighbors()
+    }
+}
+
+impl<T, Q> BuildDistanceComputer for FullPruneAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type DistanceComputerError = Infallible;
+    type DistanceComputer = T::Distance;
 
     fn build_distance_computer(
         &self,
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        self.provider
-            .quant_vectors
-            .distance_computer()
-            .map(UnwrapErr::new)
+        Ok(T::distance(
+            self.provider.metric,
+            Some(self.provider.full_vectors.dim()),
+        ))
+    }
+}
+
+type WorkingSet<T> = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
+type WorkingSetView<'a, T> = map::View<'a, u32, Box<[T]>, map::Ref<[T]>>;
+
+impl<T, Q> workingset::Fill<WorkingSet<T>> for FullPruneAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type Error = ANNError;
+    type View<'a>
+        = WorkingSetView<'a, T>
+    where
+        Self: 'a;
+
+    fn fill<'a, Itr>(
+        &'a mut self,
+        working_set: &'a mut WorkingSet<T>,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        let mut buf: Option<Box<[T]>> = None;
+
+        let view = working_set.fill(itr, |i: u32| -> ANNResult<_> {
+            let mut b = match buf.take() {
+                Some(b) => b,
+                None => std::iter::repeat_n(T::default(), self.provider.dim()).collect(),
+            };
+
+            match self
+                .provider
+                .full_vectors
+                .get_vector_into(i.into_usize(), &mut b)
+                .allow_transient("transient errors allowed during fill")?
+            {
+                Some(()) => Ok(Some(b)),
+                None => {
+                    buf = Some(b);
+                    Ok(None)
+                }
+            }
+        });
+
+        std::future::ready(view)
+    }
+}
+
+////////////////////////
+// QuantPruneAccessor //
+////////////////////////
+
+/// A pruning accessor for quantized vectors in the `BfTreeProvider`.
+///
+/// Unlike [`QuantAccessor`], this type does not require a query — it implements
+/// [`HasElementRef`], [`BuildDistanceComputer`], and [`Fill`](workingset::Fill) for use
+/// during graph pruning.
+pub struct QuantPruneAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+}
+
+impl<'a, T> QuantPruneAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    fn new(provider: &'a BfTreeProvider<T, QuantVectorProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+impl<T> HasId for QuantPruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+}
+
+impl<T> HasElementRef for QuantPruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = Opaque<'a>;
+}
+
+impl<'a, T> DelegateNeighbor<'a> for QuantPruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Delegate = &'a NeighborProvider<u32>;
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        self.provider.neighbors()
     }
 }
 
@@ -1188,7 +1235,25 @@ impl<'short> diskann_utils::Reborrow<'short> for Owned {
 type QuantWorkingSet = map::Map<u32, Owned>;
 type QuantWorkingSetView<'a> = map::View<'a, u32, Owned>;
 
-impl<T> workingset::Fill<QuantWorkingSet> for QuantAccessor<'_, T>
+impl<T> BuildDistanceComputer for QuantPruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type DistanceComputerError = ANNError;
+    type DistanceComputer =
+        UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
+
+    fn build_distance_computer(
+        &self,
+    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
+        self.provider
+            .quant_vectors
+            .distance_computer()
+            .map(UnwrapErr::new)
+    }
+}
+
+impl<T> workingset::Fill<QuantWorkingSet> for QuantPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
@@ -1207,16 +1272,10 @@ where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
     {
-        // We only get a notification of failure after trying to extract data, meaning we
-        // first need an allocation.
-        //
-        // We use an `Option` for this pre-allocated buffer so if there is an access error,
-        // we can reuse the allocation for the next attempt.
         let mut buf: Option<Box<[u8]>> = None;
         let bytes = self.provider.quant_vectors.quantizer.bytes();
 
         let view = working_set.fill(itr, |i: u32| -> ANNResult<_> {
-            // Reuse a previous allocation if available. Otherwise, make a new one.
             let mut b = match buf.take() {
                 Some(b) => b,
                 None => std::iter::repeat_n(0, bytes).collect(),
@@ -1230,7 +1289,6 @@ where
             {
                 Some(()) => Ok(Some(Owned(b))),
                 None => {
-                    // Save the allocation for a potential future iteration.
                     buf = Some(b);
                     Ok(None)
                 }
@@ -1253,7 +1311,6 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type QueryComputer = T::QueryDistance;
     type SearchAccessor = FullAccessor<'a, T, Q>;
     type SearchAccessorError = Infallible;
 
@@ -1261,8 +1318,9 @@ where
         &'a self,
         provider: &'a BfTreeProvider<T, Q>,
         _context: &'a DefaultContext,
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
+        Ok(FullAccessor::new(provider, query))
     }
 }
 
@@ -1280,9 +1338,9 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
+    type WorkingSet = WorkingSet<T>;
     type DistanceComputer<'a> = T::Distance;
-    type PruneAccessor<'a> = FullAccessor<'a, T, Q>;
+    type PruneAccessor<'a> = FullPruneAccessor<'a, T, Q>;
     type PruneAccessorError = diskann::error::Infallible;
 
     fn prune_accessor<'a>(
@@ -1290,7 +1348,7 @@ where
         provider: &'a BfTreeProvider<T, Q>,
         _context: &'a DefaultContext,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(FullAccessor::new(provider))
+        Ok(FullPruneAccessor::new(provider))
     }
 
     fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
@@ -1316,7 +1374,7 @@ where
     B: for<'a> Batch<Element<'a> = &'a [T]> + Debug,
 {
     type Seed = map::Builder<u32, map::Ref<[T]>>;
-    type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
+    type WorkingSet = WorkingSet<T>;
     type FinishError = diskann::error::Infallible;
     type InsertStrategy = Self;
 
@@ -1389,10 +1447,6 @@ impl<'a, T> SearchStrategy<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> 
 where
     T: VectorRepr,
 {
-    type QueryComputer = UnwrapErr<
-        spherical_iface::QueryComputer<GlobalAllocator>,
-        spherical_iface::QueryDistanceError,
-    >;
     type SearchAccessor = QuantAccessor<'a, T>;
     type SearchAccessorError = ANNError;
 
@@ -1400,8 +1454,9 @@ where
         &'a self,
         provider: &'a BfTreeProvider<T, QuantVectorProvider>,
         _context: &'a DefaultContext,
+        query: &'a [T],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider))
+        QuantAccessor::new(provider, query)
     }
 }
 
@@ -1505,7 +1560,7 @@ where
     type WorkingSet = QuantWorkingSet;
     type DistanceComputer<'a> =
         UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
-    type PruneAccessor<'a> = QuantAccessor<'a, T>;
+    type PruneAccessor<'a> = QuantPruneAccessor<'a, T>;
     type PruneAccessorError = diskann::error::Infallible;
 
     fn prune_accessor<'a>(
@@ -1513,7 +1568,7 @@ where
         provider: &'a BfTreeProvider<T, QuantVectorProvider>,
         _context: &'a DefaultContext,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(QuantAccessor::new(provider))
+        Ok(QuantPruneAccessor::new(provider))
     }
 
     fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
@@ -1535,10 +1590,6 @@ where
         &self,
         accessor: &mut QuantAccessor<'a, T>,
         query: &[T],
-        _computer: &UnwrapErr<
-            spherical_iface::QueryComputer<GlobalAllocator>,
-            spherical_iface::QueryDistanceError,
-        >,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send

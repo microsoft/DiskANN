@@ -14,7 +14,7 @@ use std::{
 
 use dashmap::{DashMap, mapref::entry::Entry};
 use diskann_utils::views::Matrix;
-use diskann_vector::distance::Metric;
+use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
 use crate::{
@@ -1006,9 +1006,9 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
     }
 }
 
-//////////////
-// Accessor //
-//////////////
+//-------//
+// Flaky //
+//-------//
 
 #[derive(Debug)]
 struct Flaky<'a>(Option<Cow<'a, HashSet<u32>>>);
@@ -1029,44 +1029,27 @@ impl<'a> Flaky<'a> {
     }
 }
 
+///////////////////
+// PruneAccessor //
+///////////////////
+
 #[derive(Debug)]
-pub struct Accessor<'a> {
+pub struct PruneAccessor<'a> {
     provider: &'a Provider,
-    buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
-    /// IDs that will produce transient errors when accessed.
     transient_ids: Flaky<'a>,
 }
 
-impl<'a> Accessor<'a> {
-    /// Return the underlying [`Provider`] reference.
-    pub fn provider(&self) -> &'a Provider {
-        self.provider
-    }
-
-    /// Creates an accessor with no flaky behavior (backward-compatible).
-    pub fn new(provider: &'a Provider) -> Self {
-        Self::new_inner(provider, None)
-    }
-
-    /// Creates an accessor where `get_element` returns a transient error for
-    /// any ID in `transient_ids`. The ID must still exist in the provider —
-    /// accessing a truly missing ID remains a critical `InvalidId` error.
-    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
-        Self::new_inner(provider, Some(transient_ids))
-    }
-
-    fn new_inner(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
-        let buffer = (0..provider.dim()).map(|_| 0.0).collect();
+impl<'a> PruneAccessor<'a> {
+    fn new(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
         Self {
             provider,
-            buffer,
             get_vector: provider.get_vector.local(),
             transient_ids: Flaky::new(transient_ids),
         }
     }
 
-    fn copy(&mut self, id: u32) -> Result<Box<[f32]>, AccessError> {
+    fn get(&mut self, id: u32) -> Result<Box<[f32]>, AccessError> {
         let f = |data: &[f32]| -> Result<Box<[f32]>, TransientAccessError> {
             self.transient_ids.check(id)?;
             self.get_vector.increment();
@@ -1081,54 +1064,22 @@ impl<'a> Accessor<'a> {
     }
 }
 
-impl provider::HasId for Accessor<'_> {
+impl provider::HasId for PruneAccessor<'_> {
     type Id = u32;
 }
 
-impl provider::Accessor for Accessor<'_> {
-    type Element<'a>
-        = &'a [f32]
-    where
-        Self: 'a;
+impl provider::HasElementRef for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
-    type GetError = AccessError;
-
-    async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessError> {
-        let f = |data: &[f32]| -> Result<(), TransientAccessError> {
-            self.transient_ids.check(id)?;
-            self.get_vector.increment();
-            self.buffer.copy_from_slice(data);
-            Ok(())
-        };
-
-        match self.provider.get(id, f) {
-            Ok(Ok(())) => Ok(&self.buffer),
-            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
-            Err(invalid) => Err(AccessError::InvalidId(invalid)),
-        }
-    }
 }
 
-impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
+impl<'a> provider::DelegateNeighbor<'a> for PruneAccessor<'_> {
     type Delegate = NeighborAccessor<'a>;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         NeighborAccessor::new(self.provider)
     }
 }
 
-impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
-    type QueryComputerError = Infallible;
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[f32],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(f32::query_distance(from, self.provider.config.metric))
-    }
-}
-
-impl provider::BuildDistanceComputer for Accessor<'_> {
+impl provider::BuildDistanceComputer for PruneAccessor<'_> {
     type DistanceComputerError = Infallible;
     type DistanceComputer = <f32 as VectorRepr>::Distance;
 
@@ -1143,21 +1094,13 @@ impl provider::BuildDistanceComputer for Accessor<'_> {
 }
 
 //------//
-// Glue //
+// glue //
 //------//
-
-impl glue::SearchExt for Accessor<'_> {
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
-        futures_util::future::ok(self.provider.config.start_points.keys().copied().collect())
-    }
-}
-
-impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
 type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 type View<'a> = workingset::map::View<'a, u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 
-impl workingset::Fill<WorkingSet> for Accessor<'_> {
+impl workingset::Fill<WorkingSet> for PruneAccessor<'_> {
     type Error = ANNError;
     type View<'a>
         = View<'a>
@@ -1175,10 +1118,125 @@ impl workingset::Fill<WorkingSet> for Accessor<'_> {
         Self: 'a,
     {
         set.fill(itr, |i| {
-            self.copy(i).allow_transient("transient failures allowed")
+            self.get(i).allow_transient("transient failures allowed")
         })
     }
 }
+
+//////////////
+// Accessor //
+//////////////
+
+#[derive(Debug)]
+pub struct Accessor<'a> {
+    provider: &'a Provider,
+    get_vector: LocalCounter<'a>,
+    distance: <f32 as VectorRepr>::QueryDistance,
+    /// IDs that will produce transient errors when accessed.
+    transient_ids: Flaky<'a>,
+}
+
+impl<'a> Accessor<'a> {
+    /// Return the underlying [`Provider`] reference.
+    pub fn provider(&self) -> &'a Provider {
+        self.provider
+    }
+
+    /// Creates an accessor with no flaky behavior (backward-compatible).
+    pub fn new(provider: &'a Provider, query: &[f32]) -> Result<Self, DimMismatch> {
+        Self::new_inner(provider, query, None)
+    }
+
+    /// Creates an accessor where `get_element` returns a transient error for
+    /// any ID in `transient_ids`. The ID must still exist in the provider —
+    /// accessing a truly missing ID remains a critical `InvalidId` error.
+    pub fn flaky(
+        provider: &'a Provider,
+        query: &[f32],
+        transient_ids: Cow<'a, HashSet<u32>>,
+    ) -> Result<Self, DimMismatch> {
+        Self::new_inner(provider, query, Some(transient_ids))
+    }
+
+    fn new_inner(
+        provider: &'a Provider,
+        query: &[f32],
+        transient_ids: Option<Cow<'a, HashSet<u32>>>,
+    ) -> Result<Self, DimMismatch> {
+        if query.len() != provider.dim() {
+            Err(DimMismatch {
+                got: query.len(),
+                expected: provider.dim(),
+            })
+        } else {
+            Ok(Self {
+                provider,
+                distance: f32::query_distance(query, provider.distance_metric()),
+                get_vector: provider.get_vector.local(),
+                transient_ids: Flaky::new(transient_ids),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Error)]
+#[error("query has dim {} but the provider expected {}", self.got, self.expected)]
+pub struct DimMismatch {
+    got: usize,
+    expected: usize,
+}
+
+impl From<DimMismatch> for ANNError {
+    #[track_caller]
+    fn from(mismatch: DimMismatch) -> Self {
+        ANNError::opaque(mismatch)
+    }
+}
+
+impl provider::HasId for Accessor<'_> {
+    type Id = u32;
+}
+
+impl provider::Accessor for Accessor<'_> {
+    type GetError = AccessError;
+
+    async fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        let f = |data: &[f32]| -> Result<f32, TransientAccessError> {
+            self.transient_ids.check(id)?;
+            self.get_vector.increment();
+            Ok(self.distance.evaluate_similarity(data))
+        };
+
+        match self.provider.get(id, f) {
+            Ok(Ok(dist)) => Ok(dist),
+            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
+            Err(invalid) => Err(AccessError::InvalidId(invalid)),
+        }
+    }
+}
+
+impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
+    type Delegate = NeighborAccessor<'a>;
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        NeighborAccessor::new(self.provider)
+    }
+}
+
+//------//
+// glue //
+//------//
+
+impl glue::SearchExt for Accessor<'_> {
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
+        futures_util::future::ok(self.provider.config.start_points.keys().copied().collect())
+    }
+}
+
+impl glue::ExpandBeam for Accessor<'_> {}
+
+//////////////
+// Strategy //
+//////////////
 
 #[derive(Debug, Clone)]
 pub struct Strategy {
@@ -1221,16 +1279,16 @@ impl Default for Strategy {
 }
 
 impl<'a> glue::SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
-    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type SearchAccessorError = Infallible;
+    type SearchAccessorError = DimMismatch;
     type SearchAccessor = Accessor<'a>;
 
     fn search_accessor(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
-    ) -> Result<Accessor<'a>, Infallible> {
-        Ok(Accessor::new(provider))
+        query: &'a [f32],
+    ) -> Result<Accessor<'a>, DimMismatch> {
+        Accessor::new(provider, query)
     }
 }
 
@@ -1241,7 +1299,7 @@ impl<'a> glue::DefaultPostProcessor<'a, Provider, &'a [f32]> for Strategy {
 impl glue::PruneStrategy<Provider> for Strategy {
     type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type DistanceComputer<'a> = <f32 as VectorRepr>::Distance;
-    type PruneAccessor<'a> = Accessor<'a>;
+    type PruneAccessor<'a> = PruneAccessor<'a>;
     type PruneAccessorError = Infallible;
 
     fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
@@ -1260,8 +1318,8 @@ impl glue::PruneStrategy<Provider> for Strategy {
         _context: &'a Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         match &self.transient_ids {
-            Some(ids) => Ok(Accessor::flaky(provider, Cow::Borrowed(ids))),
-            None => Ok(Accessor::new(provider)),
+            Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)))),
+            None => Ok(PruneAccessor::new(provider, None)),
         }
     }
 }
@@ -1277,8 +1335,9 @@ impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
+        vector: &'a [f32],
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        Ok(Accessor::new(provider))
+        Accessor::new(provider, vector)
     }
 }
 
@@ -1334,7 +1393,6 @@ impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for Filt
         next: &Next,
         accessor: &mut Accessor<'a>,
         query: &'b [f32],
-        computer: &<f32 as VectorRepr>::QueryDistance,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
@@ -1347,7 +1405,6 @@ impl<'a, 'b, O> glue::SearchPostProcessStep<Accessor<'a>, &'b [f32], O> for Filt
         next.post_process(
             accessor,
             query,
-            computer,
             candidates.filter(|n| !provider.is_deleted(n.id).unwrap_or(true)),
             output,
         )
@@ -1633,7 +1690,7 @@ mod tests {
     fn create_test_provider() -> Provider {
         // Edge case: complex valid graph
         let config = Config::new(
-            Metric::Cosine,
+            Metric::L2,
             4,
             [
                 StartPoint::new(0, vec![1.0, 0.0]),
@@ -1662,7 +1719,7 @@ mod tests {
 
         assert_eq!(provider.dim(), 2);
         assert_eq!(provider.max_degree(), 4);
-        assert_eq!(provider.distance_metric(), Metric::Cosine);
+        assert_eq!(provider.distance_metric(), Metric::L2);
 
         provider
     }
@@ -1707,10 +1764,11 @@ mod tests {
         let rt = current_thread_runtime();
 
         let context = Context::new();
-        let mut accessor = super::Accessor::new(&provider);
+        let query = vec![0.0; provider.dim()];
+        let mut accessor = super::Accessor::new(&provider, &query).unwrap();
         let id = 5;
 
-        assert!(rt.block_on(accessor.get_element(5)).is_err());
+        assert!(rt.block_on(accessor.get_distance(5)).is_err());
 
         // Setting with the wrong dimension is an error.
         {
@@ -1720,7 +1778,7 @@ mod tests {
                 .unwrap_err();
             let msg = err.to_string();
             assert_message_contains!(msg, "wrong dim");
-            assert!(rt.block_on(accessor.get_element(id)).is_err());
+            assert!(rt.block_on(accessor.get_distance(id)).is_err());
         }
 
         // Setting with the correct dimension is successful.
@@ -1731,8 +1789,8 @@ mod tests {
                 .unwrap();
             rt.block_on(guard.complete());
 
-            let element = rt.block_on(accessor.get_element(id)).unwrap();
-            assert_eq!(v, element);
+            let distance = rt.block_on(accessor.get_distance(id)).unwrap();
+            assert_eq!(distance, provider.dim() as f32);
         }
 
         // Setting again is an error.

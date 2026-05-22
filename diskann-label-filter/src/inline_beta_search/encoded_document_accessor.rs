@@ -3,27 +3,28 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::{Arc, RwLock};
+use std::{
+    borrow::Cow,
+    sync::{Arc, RwLock},
+};
 
 use diskann::{
-    error::{ErrorExt, IntoANNResult},
+    error::ErrorExt,
     graph::glue::{ExpandBeam, SearchExt},
-    provider::{Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, HasId},
-    ANNError, ANNErrorKind,
+    provider::{Accessor, AsNeighbor, DelegateNeighbor, HasId},
+    ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_utils::Reborrow;
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;
 use crate::{
-    document::EncodedDocument,
     encoded_attribute_provider::{
         attribute_encoder::AttributeEncoder, encoded_attribute_accessor::EncodedAttributeAccessor,
         encoded_filter_expr::EncodedFilterExpr,
     },
     inline_beta_search::inline_beta_filter::InlineBetaComputer,
-    query::FilteredQuery,
     set::roaring_set_provider::RoaringTreemapSetProvider,
+    ASTExpr,
 };
 
 type AttrAccessor<IA> = EncodedAttributeAccessor<RoaringTreemapSetProvider<<IA as HasId>::Id>>;
@@ -34,30 +35,50 @@ where
 {
     inner_accessor: IA,
     attribute_accessor: AttrAccessor<IA>,
-    attribute_map: Arc<RwLock<AttributeEncoder>>,
-    beta_value: f32,
+    computer: InlineBetaComputer,
 }
 
 impl<IA> EncodedDocumentAccessor<IA>
 where
-    IA: Accessor,
+    IA: HasId,
 {
     pub(crate) fn new(
         inner_accessor: IA,
         attribute_accessor: AttrAccessor<IA>,
         attribute_map: Arc<RwLock<AttributeEncoder>>,
+        filter_expr: &ASTExpr,
         beta_value: f32,
-    ) -> Self {
-        Self {
-            attribute_accessor,
+    ) -> ANNResult<Self> {
+        let id_query = EncodedFilterExpr::new(filter_expr, attribute_map)?;
+        let computer = InlineBetaComputer::new(beta_value, id_query);
+        Ok(Self {
             inner_accessor,
-            attribute_map,
-            beta_value,
-        }
+            attribute_accessor,
+            computer,
+        })
     }
 
     pub fn inner_accessor(&mut self) -> &mut IA {
         &mut self.inner_accessor
+    }
+
+    pub(crate) fn attributes_for<F, R>(&mut self, id: IA::Id, f: F) -> ANNResult<R>
+    where
+        F: FnOnce(&mut InlineBetaComputer, Cow<'_, RoaringTreemap>) -> R,
+    {
+        match self
+            .attribute_accessor
+            .visit_labels_of_point(id, |_, opt_set| match opt_set {
+                Some(set) => Ok(f(&mut self.computer, set)),
+                None => Err(ANNError::message(
+                    ANNErrorKind::IndexError,
+                    "No labels were found for vector",
+                )),
+            }) {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -72,37 +93,17 @@ impl<IA> Accessor for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
 {
-    type Element<'a>
-        = EncodedDocument<IA::Element<'a>, RoaringTreemap>
-    where
-        Self: 'a;
-    type ElementRef<'a> = EncodedDocument<IA::ElementRef<'a>, &'a RoaringTreemap>;
     type GetError = ANNError;
 
-    async fn get_element(&mut self, id: Self::Id) -> Result<Self::Element<'_>, Self::GetError> {
-        let future = self.inner_accessor.get_element(id);
-        let elem = future.await.escalate("Did not find the vector element")?;
+    async fn get_distance(&mut self, id: Self::Id) -> Result<f32, Self::GetError> {
+        let future = self.inner_accessor.get_distance(id);
+        let distance = future.await.escalate("Did not find the vector element")?;
+        let filtered = self.attributes_for(id, |computer, set| computer.apply(distance, &set))?;
 
-        let attrs = self
-            .attribute_accessor
-            .visit_labels_of_point(id, |_, opt_set| {
-                match opt_set {
-                    //TODO: Currently, there is no way but to copy. So we copy the set from the Cow into a
-                    //hydrated object.
-                    //IMP NOTE: Removing the copy will also change the signature of "Element" and may cause other
-                    //downstream issues, so should be done with care!
-                    Some(set) => Ok(set.into_owned()),
-                    None => Err(ANNError::message(
-                        ANNErrorKind::IndexError,
-                        "No labels were found for vector",
-                    )),
-                }
-            })?;
-
-        Ok(EncodedDocument::new(elem, attrs?))
+        Ok(filtered)
     }
 
-    async fn on_elements_unordered<Itr, F>(
+    async fn distances_unordered<Itr, F>(
         &mut self,
         itr: Itr,
         mut f: F,
@@ -110,12 +111,12 @@ where
     where
         Self: Sync,
         Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'a> FnMut(Self::ElementRef<'a>, Self::Id),
+        F: Send + FnMut(f32, Self::Id),
     {
         for i in itr {
-            let vec = self
+            let distance = self
                 .inner_accessor
-                .get_element(i)
+                .get_distance(i)
                 .await
                 .escalate("Failed to get vector from inner accessor")?;
             let _ = self
@@ -130,8 +131,8 @@ where
                             ));
                         }
                     };
-                    let elem = EncodedDocument::new(vec.reborrow(), &*set);
-                    f(elem, i);
+                    let distance = self.computer.apply(distance, &set);
+                    f(distance, i);
                     Ok(())
                 });
         }
@@ -162,36 +163,10 @@ where
     }
 }
 
-impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
-where
-    IA: BuildQueryComputer<&'q Q>,
-{
-    type QueryComputerError = ANNError;
-    type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
-
-    fn build_query_computer(
-        &self,
-        from: &'q FilteredQuery<Q>,
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        let inner_computer = self
-            .inner_accessor
-            .build_query_computer(from.query())
-            .into_ann_result()?;
-        let id_query = EncodedFilterExpr::new(from.filter_expr(), self.attribute_map.clone())?;
-
-        Ok(InlineBetaComputer::new(
-            inner_computer,
-            self.beta_value,
-            id_query,
-        ))
-    }
-}
-
-impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
+impl<IA> ExpandBeam for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
-    EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
-    Q: Clone,
+    EncodedDocumentAccessor<IA>: AsNeighbor,
 {
 }
 
