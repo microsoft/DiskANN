@@ -219,7 +219,15 @@ fn compute_btree_accelerator(
                     .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                 map.entry(f64_value).or_default().push(doc_id);
             } else if let Some(i64_value) = value.as_integer() {
-                let i64_value = OrderedFloat::new(i64_value as f64)
+                // convert from i64 to f64
+                let f = i64_value as f64;
+                if f as i64 != i64_value {
+                    return Err(anyhow::anyhow!(
+                        "i64 value cannot be exactly represented as f64: {}",
+                        i64_value
+                    ));
+                }
+                let i64_value = OrderedFloat::new(f)
                     .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                 map.entry(i64_value).or_default().push(doc_id);
             } else {
