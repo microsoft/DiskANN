@@ -240,7 +240,12 @@ where
     // Results are discarded. This ensures measured QPS reflects steady-state, not cold start.
     {
         // Warmup at the largest L to ensure all sectors are cached for every search_list value.
-        let warmup_l = search_params.search_list.iter().copied().max().unwrap_or(10);
+        let warmup_l = search_params
+            .search_list
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(10);
         queries.par_row_iter().for_each_in_pool(&pool, |q| {
             let _ = searcher.search(
                 q,

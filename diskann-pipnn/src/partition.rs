@@ -92,7 +92,11 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         assert!(
             iteration <= 50,
             "partition diverged at iteration {} (npoints={}, c_max={}, c_min={}, fanout={:?})",
-            iteration, npoints, config.c_max, config.c_min, config.fanout
+            iteration,
+            npoints,
+            config.c_max,
+            config.c_min,
+            config.fanout
         );
 
         let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
@@ -444,8 +448,7 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                         let denom = _mm512_mul_ps(pi_v, ln);
                                         let denom_mask =
                                             _mm512_cmp_ps_mask::<_CMP_GT_OQ>(denom, zero);
-                                        let cos =
-                                            _mm512_mask_div_ps(zero, denom_mask, dots, denom);
+                                        let cos = _mm512_mask_div_ps(zero, denom_mask, dots, denom);
                                         let d = _mm512_sub_ps(one, cos);
                                         let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d, thresh);
                                         if mask != 0 {
@@ -491,13 +494,12 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                         let denom = _mm256_mul_ps(pi_v, ln);
                                         let div = _mm256_div_ps(dots, denom);
                                         // No masked div on AVX2 — zero out lanes where denom == 0.
-                                        let zero_mask =
-                                            _mm256_cmp_ps::<_CMP_GT_OQ>(denom, zero);
+                                        let zero_mask = _mm256_cmp_ps::<_CMP_GT_OQ>(denom, zero);
                                         let cos = _mm256_and_ps(div, zero_mask);
                                         let d = _mm256_sub_ps(one, cos);
-                                        let mask = _mm256_movemask_ps(
-                                            _mm256_cmp_ps::<_CMP_LT_OQ>(d, thresh),
-                                        );
+                                        let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(
+                                            d, thresh,
+                                        ));
                                         if mask != 0 {
                                             let mut d_arr = [0.0f32; 8];
                                             _mm256_storeu_ps(d_arr.as_mut_ptr(), d);
@@ -694,7 +696,12 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                                 let lane = m.trailing_zeros() as usize;
                                                 m &= m - 1;
                                                 let j = (base + lane) as u32;
-                                                topk_insert(&mut top, threshold_idx, j, d_arr[lane]);
+                                                topk_insert(
+                                                    &mut top,
+                                                    threshold_idx,
+                                                    j,
+                                                    d_arr[lane],
+                                                );
                                             }
                                         }
                                     }
@@ -728,7 +735,12 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                                                 let lane = m.trailing_zeros() as usize;
                                                 m &= m - 1;
                                                 let j = (base + lane) as u32;
-                                                topk_insert(&mut top, threshold_idx, j, d_arr[lane]);
+                                                topk_insert(
+                                                    &mut top,
+                                                    threshold_idx,
+                                                    j,
+                                                    d_arr[lane],
+                                                );
                                             }
                                         }
                                     }

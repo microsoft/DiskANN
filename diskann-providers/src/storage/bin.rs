@@ -326,12 +326,7 @@ where
 /// After the header, each adjacency list in stored densely, consisting of a `u32` encoding
 /// the length `L` of the adjacency list followed by `L` u32-values containing the
 /// out-neighbors of this node. These adjacency lists are stored in-order.
-pub fn save_graph<S, P>(
-    graph: &S,
-    provider: &P,
-    start_point: u32,
-    path: &str,
-) -> ANNResult<usize>
+pub fn save_graph<S, P>(graph: &S, provider: &P, start_point: u32, path: &str) -> ANNResult<usize>
 where
     S: GetAdjacencyList<Element = u32>,
     P: StorageWriteProvider,
@@ -345,11 +340,7 @@ where
 /// builders that produce a final on-disk index directly.
 ///
 /// The on-disk format is identical to [`save_graph`].
-pub fn save_graph_to_writer<S, W>(
-    graph: &S,
-    start_point: u32,
-    writer: W,
-) -> ANNResult<usize>
+pub fn save_graph_to_writer<S, W>(graph: &S, start_point: u32, writer: W) -> ANNResult<usize>
 where
     S: GetAdjacencyList<Element = u32>,
     W: Write + Seek,

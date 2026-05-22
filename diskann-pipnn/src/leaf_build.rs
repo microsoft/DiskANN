@@ -124,7 +124,6 @@ pub struct Edge {
     pub distance: f32,
 }
 
-
 /// Build a leaf partition: compute all-pairs distances and extract bi-directed k-NN edges.
 ///
 /// Returns edges as (global_src, global_dst, distance).

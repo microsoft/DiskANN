@@ -624,10 +624,12 @@ mod tests {
         let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
         let s1 = sketches_from_data(&data, 32, 4, 12, 42);
         let s2 = sketches_from_data(&data, 32, 4, 12, 99);
-        let any_diff = (0..32).any(|p| (p + 1..32).any(|c|
-            s1.relative_hash(p, c) != s2.relative_hash(p, c)
-        ));
-        assert!(any_diff, "different seeds should give at least one different pair hash");
+        let any_diff =
+            (0..32).any(|p| (p + 1..32).any(|c| s1.relative_hash(p, c) != s2.relative_hash(p, c)));
+        assert!(
+            any_diff,
+            "different seeds should give at least one different pair hash"
+        );
     }
 
     #[test]
@@ -638,7 +640,10 @@ mod tests {
         let sketches = sketches_from_data(&data, 3, 2, 4, 42);
         let h01 = sketches.relative_hash(0, 1);
         let h10 = sketches.relative_hash(1, 0);
-        assert_ne!(h01, h10, "relative_hash must be asymmetric for distinct points");
+        assert_ne!(
+            h01, h10,
+            "relative_hash must be asymmetric for distinct points"
+        );
     }
 
     #[test]
