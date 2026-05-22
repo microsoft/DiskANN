@@ -226,10 +226,11 @@ pub fn compute_inverted_index_accelerator(
 pub fn compute_btree_accelerator(
     key: String,
     labels: Vec<HashMap<String, AttributeValue>>,
+    doc_ids: &[usize],
 ) -> Result<BTreeMap<OrderedFloat, Vec<usize>>, anyhow::Error> {
     // Implementation for computing BTree accelerator
     let mut map: BTreeMap<OrderedFloat, Vec<usize>> = BTreeMap::new();
-    for (doc_id, label) in labels.iter().enumerate() {
+    for (label, doc_id) in labels.iter().zip(doc_ids.iter().copied()) {
         if let Some(value) = label.get(&key) {
             if let Some(f64_value) = value.as_float() {
                 let f64_value = OrderedFloat::new(f64_value)
@@ -284,7 +285,7 @@ pub fn compute_query_accelerator(
         }
         AttributeValue::Integer(_) | AttributeValue::Real(_) => {
             // For integers and reals, we use an BTree
-            let btree = compute_btree_accelerator(key.clone(), flattened_base_labels.to_vec())
+            let btree = compute_btree_accelerator(key.clone(), flattened_base_labels.to_vec(), doc_ids)
                 .unwrap_or_default();
             Ok(QueryAccelerator::BTree(btree))
         }
@@ -681,6 +682,37 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_query_bitmap_ints_uses_document_ids_in_accelerator() {
+        let base_labels = vec![
+            Document {
+                doc_id: 10,
+                label: json!({"age": 10}),
+            },
+            Document {
+                doc_id: 20,
+                label: json!({"age": 20}),
+            },
+            Document {
+                doc_id: 30,
+                label: json!({"age": 30}),
+            },
+        ];
+
+        let query_gte = ASTExpr::Compare {
+            field: "age".to_string(),
+            op: CompareOp::Gte(20.0),
+        };
+        let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query_gte)]).expect("should succeed");
+
+        assert_eq!(bitmaps[0].contains(20), true);
+        assert_eq!(bitmaps[0].contains(30), true);
+        assert_eq!(bitmaps[0].contains(10), false);
+        assert_eq!(bitmaps[0].contains(0), false);
+        assert_eq!(bitmaps[0].contains(1), false);
+        assert_eq!(bitmaps[0].contains(2), false);
+    }
+
+    #[test]
     fn test_compute_query_bitmap_bools() {
         use crate::parser::format::Document;
         use serde_json::json;
@@ -844,8 +876,13 @@ mod tests {
 
         // Bool
         let accel =
-            compute_query_accelerator("flag".to_string(), AttributeValue::Bool(true), &doc_ids, &base)
-                .expect("Should succeed for Bool");
+            compute_query_accelerator(
+                "flag".to_string(),
+                AttributeValue::Bool(true),
+                &doc_ids,
+                &base,
+            )
+            .expect("Should succeed for Bool");
         match accel {
             QueryAccelerator::InvertedIndex(map) => {
                 assert!(map.contains_key(&AttributeValue::Bool(true)));
@@ -856,8 +893,13 @@ mod tests {
 
         // Integer
         let accel =
-            compute_query_accelerator("num".to_string(), AttributeValue::Integer(42), &doc_ids, &base)
-                .expect("Should succeed for Integer");
+            compute_query_accelerator(
+                "num".to_string(),
+                AttributeValue::Integer(42),
+                &doc_ids,
+                &base,
+            )
+            .expect("Should succeed for Integer");
         match accel {
             QueryAccelerator::BTree(map) => {
                 assert!(map.contains_key(&super::OrderedFloat(42.0)));
@@ -868,8 +910,13 @@ mod tests {
 
         // Real
         let accel =
-            compute_query_accelerator("real".to_string(), AttributeValue::Real(3.14), &doc_ids, &base)
-                .expect("Should succeed for Real");
+            compute_query_accelerator(
+                "real".to_string(),
+                AttributeValue::Real(3.14),
+                &doc_ids,
+                &base,
+            )
+            .expect("Should succeed for Real");
         match accel {
             QueryAccelerator::BTree(map) => {
                 assert!(map.contains_key(&super::OrderedFloat(3.14)));
@@ -879,7 +926,12 @@ mod tests {
         }
 
         // Empty
-        let err = compute_query_accelerator("none".to_string(), AttributeValue::Empty, &doc_ids, &base);
+        let err = compute_query_accelerator(
+            "none".to_string(),
+            AttributeValue::Empty,
+            &doc_ids,
+            &base,
+        );
         assert!(err.is_err());
     }
 
