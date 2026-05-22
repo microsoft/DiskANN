@@ -346,7 +346,10 @@ pub fn compute_query_bitmaps(
             .collect();
 
         let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
-        let base_doc_ids: Vec<usize> = base_labels.iter().map(|base_label| base_label.doc_id).collect();
+        let base_doc_ids: Vec<usize> = base_labels
+            .iter()
+            .map(|base_label| base_label.doc_id)
+            .collect();
 
         // compute the global set of labels ahead of time so that we can compute
         // each accelerator in parallel
@@ -700,7 +703,8 @@ mod tests {
             field: "age".to_string(),
             op: CompareOp::Gte(20.0),
         };
-        let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query_gte)]).expect("should succeed");
+        let bitmaps =
+            compute_query_bitmaps(base_labels, vec![(0, query_gte)]).expect("should succeed");
 
         assert_eq!(bitmaps[0].contains(20), true);
         assert_eq!(bitmaps[0].contains(30), true);
@@ -873,14 +877,13 @@ mod tests {
         }
 
         // Bool
-        let accel =
-            compute_query_accelerator(
-                "flag".to_string(),
-                AttributeValue::Bool(true),
-                &doc_ids,
-                &base,
-            )
-            .expect("Should succeed for Bool");
+        let accel = compute_query_accelerator(
+            "flag".to_string(),
+            AttributeValue::Bool(true),
+            &doc_ids,
+            &base,
+        )
+        .expect("Should succeed for Bool");
         match accel {
             QueryAccelerator::InvertedIndex(map) => {
                 assert!(map.contains_key(&AttributeValue::Bool(true)));
@@ -890,14 +893,13 @@ mod tests {
         }
 
         // Integer
-        let accel =
-            compute_query_accelerator(
-                "num".to_string(),
-                AttributeValue::Integer(42),
-                &doc_ids,
-                &base,
-            )
-            .expect("Should succeed for Integer");
+        let accel = compute_query_accelerator(
+            "num".to_string(),
+            AttributeValue::Integer(42),
+            &doc_ids,
+            &base,
+        )
+        .expect("Should succeed for Integer");
         match accel {
             QueryAccelerator::BTree(map) => {
                 assert!(map.contains_key(&super::OrderedFloat(42.0)));
@@ -907,14 +909,13 @@ mod tests {
         }
 
         // Real
-        let accel =
-            compute_query_accelerator(
-                "real".to_string(),
-                AttributeValue::Real(3.14),
-                &doc_ids,
-                &base,
-            )
-            .expect("Should succeed for Real");
+        let accel = compute_query_accelerator(
+            "real".to_string(),
+            AttributeValue::Real(3.14),
+            &doc_ids,
+            &base,
+        )
+        .expect("Should succeed for Real");
         match accel {
             QueryAccelerator::BTree(map) => {
                 assert!(map.contains_key(&super::OrderedFloat(3.14)));
@@ -924,12 +925,8 @@ mod tests {
         }
 
         // Empty
-        let err = compute_query_accelerator(
-            "none".to_string(),
-            AttributeValue::Empty,
-            &doc_ids,
-            &base,
-        );
+        let err =
+            compute_query_accelerator("none".to_string(), AttributeValue::Empty, &doc_ids, &base);
         assert!(err.is_err());
     }
 
