@@ -35,6 +35,8 @@ use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
+#[cfg(feature = "pipnn")]
+use crate::build::configuration::build_algorithm::BuildAlgorithm;
 use crate::{
     build::{
         builder::{
@@ -53,7 +55,6 @@ use crate::{
             },
             continuation::{process_while_resource_is_available_async, ChunkingConfig},
         },
-        configuration::build_algorithm::BuildAlgorithm,
     },
     storage::{
         quant::{GeneratorContext, PQGeneration, PQGenerationContext, QuantDataGenerator},
@@ -212,13 +213,16 @@ where
         // PiPNN is fully synchronous (rayon-only, no async). Run it outside tokio
         // to avoid the async future capturing all build state.
         #[cfg(feature = "pipnn")]
-        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
-            return self.build_sync_pipnn();
+        if matches!(
+            self.disk_build_param.build_algorithm(),
+            BuildAlgorithm::PiPNN(_)
+        ) {
+            return self.build_pipnn();
         }
 
         let runtime = create_runtime(self.index_configuration.num_threads)?;
         runtime.block_on(async {
-            match self.build_internal().await {
+            match self.build_vamana().await {
                 Err(err) if err.kind() == ANNErrorKind::BuildInterrupted => {
                     info!(
                         "Index build was interrupted by continuation_checker, progress saved for resumption"
@@ -230,7 +234,7 @@ where
         })
     }
 
-    async fn build_internal(&mut self) -> ANNResult<()> {
+    async fn build_vamana(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
 
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
@@ -243,42 +247,20 @@ where
             self.index_configuration.num_threads
         );
 
-        let t_pq = std::time::Instant::now();
-        self.generate_compressed_data(&pool).await?;
+        self.generate_compressed_data(&pool)?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
-        let pq_secs = t_pq.elapsed().as_secs_f64();
 
-        let t_index = std::time::Instant::now();
-        self.build_inmem_index(&pool).await?;
+        self.build_vamana_inmem(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
-        let index_secs = t_index.elapsed().as_secs_f64();
-
-        // Return freed memory (f32 data, graph, PiPNN internals) to the OS
-        // before disk layout starts. Without this, ~1.7 GB of freed-but-retained
-        // memory inflates peak RSS during the disk layout phase.
-        #[cfg(target_os = "linux")]
-        unsafe {
-            extern "C" {
-                fn malloc_trim(pad: usize) -> i32;
-            }
-            malloc_trim(0);
-        }
 
         // Use physical file to pass the memory index to the disk writer
-        let t_layout = std::time::Instant::now();
         self.create_disk_layout()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
-        let layout_secs = t_layout.elapsed().as_secs_f64();
-
-        println!("Disk Index Build Phases");
-        println!("  PQ compression: {:.3}s", pq_secs);
-        println!("  Graph build:    {:.3}s", index_secs);
-        println!("  Disk layout:    {:.3}s", layout_secs);
 
         Ok(())
     }
 
-    async fn generate_compressed_data(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+    fn generate_compressed_data(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
         let num_points = self.index_configuration.max_points;
         let num_chunks = self.disk_build_param.search_pq_chunks();
 
@@ -342,25 +324,7 @@ where
         Ok(())
     }
 
-    async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
-        // PiPNN is handled by build_sync_pipnn() — should not reach here.
-        #[cfg(feature = "pipnn")]
-        if let &BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
-            return Err(ANNError::log_index_error(
-                "PiPNN should use build_sync_pipnn(), not the async path",
-            ));
-        }
-
-        #[cfg(not(feature = "pipnn"))]
-        if !matches!(
-            self.disk_build_param.build_algorithm(),
-            &BuildAlgorithm::Vamana
-        ) {
-            return Err(ANNError::log_index_error(
-                "PiPNN build algorithm requires the 'pipnn' feature to be enabled",
-            ));
-        }
-
+    async fn build_vamana_inmem(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -377,7 +341,7 @@ where
     /// Fully synchronous PiPNN build: PQ compression + PiPNN graph + disk layout.
     /// Runs without tokio runtime, avoiding the ~1.6 GB async future overhead.
     #[cfg(feature = "pipnn")]
-    fn build_sync_pipnn(&mut self) -> ANNResult<()> {
+    fn build_pipnn(&mut self) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
 
@@ -389,73 +353,41 @@ where
         );
 
         // PQ compression (sync — generate_compressed_data has no .await calls).
-        let t_pq = std::time::Instant::now();
-        {
-            let runtime = create_runtime(self.index_configuration.num_threads)?;
-            runtime.block_on(self.generate_compressed_data(&pool))?;
-        }
-        // Runtime dropped — reclaim RSS from PQ phase before PiPNN starts.
-        #[cfg(target_os = "linux")]
-        unsafe {
-            extern "C" {
-                fn malloc_trim(pad: usize) -> i32;
-            }
-            malloc_trim(0);
-        }
+        self.generate_compressed_data(&pool)?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
-        let pq_secs = t_pq.elapsed().as_secs_f64();
 
         // PiPNN graph build (pure rayon, no tokio).
-        let t_index = std::time::Instant::now();
-        self.build_pipnn_index_sync()?;
+        self.build_pipnn_graph()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
-        let index_secs = t_index.elapsed().as_secs_f64();
 
-        #[cfg(target_os = "linux")]
-        unsafe {
-            extern "C" {
-                fn malloc_trim(pad: usize) -> i32;
-            }
-            malloc_trim(0);
-        }
-
-        let t_layout = std::time::Instant::now();
         self.create_disk_layout()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
-        let layout_secs = t_layout.elapsed().as_secs_f64();
-
-        println!("Disk Index Build Phases");
-        println!("  PQ compression: {:.3}s", pq_secs);
-        println!("  Graph build:    {:.3}s", index_secs);
-        println!("  Disk layout:    {:.3}s", layout_secs);
 
         Ok(())
     }
 
-    /// PiPNN graph construction — sync version of build_pipnn_index.
+    /// PiPNN graph construction. Materializes the graph from the disk index
+    /// build parameters and writes it to the mem-index file.
     #[cfg(feature = "pipnn")]
-    fn build_pipnn_index_sync(&mut self) -> ANNResult<()> {
-        use diskann_pipnn::builder;
+    fn build_pipnn_graph(&mut self) -> ANNResult<()> {
+        use diskann_pipnn::{builder, PiPNNBuildContext};
 
-        let config = self
-            .disk_build_param
-            .build_algorithm()
-            .to_pipnn_config(
-                self.index_configuration.config.pruned_degree().get(),
-                self.index_configuration.dist_metric,
-                self.index_configuration.num_threads,
-            )
-            .ok_or_else(|| {
-                ANNError::log_index_error(
-                    "build_pipnn_index called but build algorithm is not PiPNN",
-                )
-            })?;
+        let BuildAlgorithm::PiPNN(pipnn_config) = self.disk_build_param.build_algorithm() else {
+            return Err(ANNError::log_index_error(
+                "build_pipnn_graph called but build algorithm is not PiPNN",
+            ));
+        };
 
-        config
-            .validate()
-            .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
+        let max_degree = self.index_configuration.config.pruned_degree();
+        let ctx = PiPNNBuildContext::new(
+            pipnn_config.clone(),
+            max_degree,
+            self.index_configuration.dist_metric,
+            self.index_configuration.num_threads,
+        )
+        .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
 
-        info!("Building PiPNN index: max_degree={}", config.max_degree);
+        info!("Building PiPNN index: max_degree={}", max_degree);
 
         let data_path = self.index_writer.get_dataset_file();
 
@@ -463,7 +395,7 @@ where
         // avoid upfront f32 conversion (saves ~793 MB peak RSS for f16 data).
         let (npoints, ndims, data) =
             load_data_typed::<Data::VectorDataType, _>(&data_path, self.storage_provider)?;
-        let graph = builder::build_typed(&data, npoints, ndims, &config)
+        let graph = builder::build_typed(&data, npoints, ndims, &ctx)
             .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?;
 
         let save_path = self.index_writer.get_mem_index_file();
@@ -476,11 +408,8 @@ where
             graph.avg_degree(),
             graph.max_degree(),
             graph.num_isolated(),
-            graph.build_stats.total_secs
+            graph.build_stats.total_secs,
         );
-        // Print timing breakdown to stdout (tracing goes to OpenTelemetry spans,
-        // not stdout, so use print! for user-visible output like Vamana does).
-        print!("{}", graph.build_stats);
 
         // Mark checkpoint stages as complete so the checkpoint system is consistent.
         self.checkpoint_record_manager.execute_stage(

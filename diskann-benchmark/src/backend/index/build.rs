@@ -5,6 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc, time::Instant};
 
+use anyhow::Context;
 use diskann::{
     error::DiskANNError::StartPointComputeError,
     graph::{DiskANNIndex, StartPointStrategy},
@@ -138,7 +139,18 @@ where
         .pipnn
         .as_ref()
         .expect("pipnn_insert called without PiPNN config");
-    let config = crate::inputs::async_::inmem_pipnn_config(pipnn_cfg, input);
+    let diskann_disk::build::configuration::BuildAlgorithm::PiPNN(algo_config) = pipnn_cfg else {
+        anyhow::bail!("pipnn_insert called but build algorithm is not PiPNN");
+    };
+    let max_degree = std::num::NonZeroUsize::new(input.max_degree)
+        .context("max_degree must be non-zero for PiPNN build")?;
+    let ctx = diskann_pipnn::PiPNNBuildContext::new(
+        algo_config.clone(),
+        max_degree,
+        input.distance.into(),
+        input.num_threads,
+    )
+    .map_err(|e| anyhow::anyhow!("invalid PiPNN config: {e}"))?;
 
     let npoints = data.nrows();
     let ndims = data.ncols();
@@ -168,8 +180,8 @@ where
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(input.num_threads)
         .build()?;
-    let graph = pool
-        .install(|| diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &config))?;
+    let graph =
+        pool.install(|| diskann_pipnn::builder::build_typed::<T>(flat_data, npoints, ndims, &ctx))?;
 
     writeln!(output, "{}", graph.build_stats)?;
     writeln!(

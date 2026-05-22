@@ -172,13 +172,19 @@ fn bench_full_build(c: &mut Criterion) {
             c_max: 512,
             c_min: 128,
             k: 3,
-            max_degree: 32,
             replicas: 1,
             l_max: 64,
             p_samp: 0.05,
             fanout: vec![8],
             ..Default::default()
         };
+        let ctx = diskann_pipnn::PiPNNBuildContext::new(
+            config,
+            std::num::NonZeroUsize::new(32).unwrap(),
+            diskann_vector::distance::Metric::L2,
+            0,
+        )
+        .unwrap();
 
         group.throughput(Throughput::Elements(npoints as u64));
         group.bench_with_input(
@@ -186,7 +192,8 @@ fn bench_full_build(c: &mut Criterion) {
             &(),
             |b, _| {
                 b.iter(|| {
-                    diskann_pipnn::builder::build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+                    diskann_pipnn::builder::build_typed::<f32>(&data, npoints, ndims, &ctx)
+                        .unwrap();
                 });
             },
         );

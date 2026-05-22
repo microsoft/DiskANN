@@ -490,17 +490,6 @@ pub(crate) struct IndexBuild {
 /// (`max_degree`, `metric`, `num_threads`) come from the parent `IndexBuild`.
 pub(crate) type PiPNNInmemConfig = diskann_disk::build::configuration::BuildAlgorithm;
 
-/// Convert an inmem PiPNN config into a [`diskann_pipnn::PiPNNConfig`] by
-/// combining it with shared knobs from the parent `IndexBuild`. Panics if
-/// the algorithm isn't `PiPNN` — callers should check the variant first.
-pub(crate) fn inmem_pipnn_config(
-    algo: &PiPNNInmemConfig,
-    parent: &IndexBuild,
-) -> diskann_pipnn::PiPNNConfig {
-    algo.to_pipnn_config(parent.max_degree, parent.distance.into(), parent.num_threads)
-        .expect("PiPNNInmemConfig must be the PiPNN variant")
-}
-
 impl IndexBuild {
     pub(crate) const fn tag() -> &'static str {
         "async-index-builder"
@@ -587,21 +576,15 @@ impl IndexBuild {
             None => write_field!(f, "Save Path", "None")?,
             Some(p) => write_field!(f, "Save Path", p)?,
         }
-        if let Some(diskann_disk::build::configuration::BuildAlgorithm::PiPNN {
-            c_max,
-            c_min,
-            leaf_k,
-            l_max,
-            replicas,
-            ..
-        }) = self.pipnn.as_ref()
+        if let Some(diskann_disk::build::configuration::BuildAlgorithm::PiPNN(cfg)) =
+            self.pipnn.as_ref()
         {
             write_field!(f, "build algorithm", "PiPNN")?;
-            write_field!(f, "pipnn.c_max", c_max)?;
-            write_field!(f, "pipnn.c_min", c_min)?;
-            write_field!(f, "pipnn.leaf_k", leaf_k)?;
-            write_field!(f, "pipnn.l_max", l_max)?;
-            write_field!(f, "pipnn.replicas", replicas)?;
+            write_field!(f, "pipnn.c_max", cfg.c_max)?;
+            write_field!(f, "pipnn.c_min", cfg.c_min)?;
+            write_field!(f, "pipnn.leaf_k", cfg.k)?;
+            write_field!(f, "pipnn.l_max", cfg.l_max)?;
+            write_field!(f, "pipnn.replicas", cfg.replicas)?;
         } else {
             write_field!(f, "build algorithm", "Vamana")?;
         }

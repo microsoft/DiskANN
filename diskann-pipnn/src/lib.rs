@@ -17,6 +17,8 @@ pub mod leaf_build;
 pub mod partition;
 pub(crate) mod rayon_util;
 
+use std::num::NonZeroUsize;
+
 use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -48,37 +50,9 @@ pub enum PiPNNError {
 /// Result type for PiPNN operations.
 pub type PiPNNResult<T> = Result<T, PiPNNError>;
 
-/// Custom serde module for `Metric`, which does not derive Serialize/Deserialize.
-/// Serializes as a string representation (e.g. "l2", "cosine").
-mod metric_serde {
-    use diskann_vector::distance::Metric;
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(metric: &Metric, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(metric.as_str())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Metric, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse::<Metric>().map_err(serde::de::Error::custom)
-    }
-}
-
 /// Configuration for the PiPNN index builder.
-fn default_leader_cap() -> usize {
-    1000
-}
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PiPNNConfig {
     /// Number of LSH hyperplanes for HashPrune.
     pub num_hash_planes: usize,
@@ -91,30 +65,22 @@ pub struct PiPNNConfig {
     /// Fanout at each partitioning level (overlap factor).
     pub fanout: Vec<usize>,
     /// k for k-NN in leaf building.
+    #[serde(alias = "leaf_k")]
     pub k: usize,
-    /// Maximum graph degree (R).
-    pub max_degree: usize,
     /// Number of independent partitioning passes (replicas).
     pub replicas: usize,
     /// Maximum reservoir size per node in HashPrune.
     pub l_max: usize,
-    /// Distance metric.
-    #[serde(with = "metric_serde")]
-    pub metric: Metric,
     /// Whether to apply a final diversity-prune pass (occlusion-based, similar to RobustPrune).
     pub final_prune: bool,
     /// Alpha (occlusion factor) for final diversity prune. Same as DiskANN's `alpha` parameter.
     /// Higher values yield sparser graphs. Default: 1.2 (matches DiskANN default).
+    #[serde(alias = "final_prune_alpha")]
     pub alpha: f32,
-    /// Number of threads to use. 0 means use all available cores.
-    #[serde(default)]
-    pub num_threads: usize,
     /// Maximum leaders per partition level. Default: 1000 (paper recommendation).
-    #[serde(default = "default_leader_cap")]
     pub leader_cap: usize,
     /// Whether to saturate after final prune (fill remaining degree slots with
     /// closest non-selected candidates). Default: true.
-    #[serde(default = "default_true")]
     pub saturate_after_prune: bool,
 }
 
@@ -132,9 +98,6 @@ impl PiPNNConfig {
                 "c_min ({}) must be <= c_max ({})",
                 self.c_min, self.c_max
             )));
-        }
-        if self.max_degree == 0 {
-            return Err(PiPNNError::Config("max_degree must be > 0".into()));
         }
         if self.k == 0 {
             return Err(PiPNNError::Config("k must be > 0".into()));
@@ -188,15 +151,55 @@ impl Default for PiPNNConfig {
             p_samp: 0.005,
             fanout: vec![10, 3],
             k: 3,
-            max_degree: 64,
             replicas: 1,
             l_max: 128,
-            metric: Metric::L2,
             final_prune: false,
             alpha: 1.2,
-            num_threads: 0,
             leader_cap: 1000,
             saturate_after_prune: true,
         }
+    }
+}
+
+/// Validated input to [`builder::build_typed`].
+#[derive(Debug, Clone)]
+pub struct PiPNNBuildContext {
+    config: PiPNNConfig,
+    max_degree: NonZeroUsize,
+    metric: Metric,
+    num_threads: usize,
+}
+
+impl PiPNNBuildContext {
+    /// `num_threads = 0` means use all available cores.
+    pub fn new(
+        config: PiPNNConfig,
+        max_degree: NonZeroUsize,
+        metric: Metric,
+        num_threads: usize,
+    ) -> PiPNNResult<Self> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            max_degree,
+            metric,
+            num_threads,
+        })
+    }
+
+    pub fn config(&self) -> &PiPNNConfig {
+        &self.config
+    }
+
+    pub fn max_degree(&self) -> NonZeroUsize {
+        self.max_degree
+    }
+
+    pub fn metric(&self) -> Metric {
+        self.metric
+    }
+
+    pub fn num_threads(&self) -> usize {
+        self.num_threads
     }
 }

@@ -85,4 +85,4 @@ harness = false
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(feature, values("pipnn"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

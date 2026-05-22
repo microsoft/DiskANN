@@ -23,7 +23,7 @@ use crate::hash_prune::HashPrune;
 use crate::leaf_build;
 use crate::partition::PartitionConfig;
 use crate::rayon_util::ParIterInstalled;
-use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
+use crate::{PiPNNBuildContext, PiPNNError, PiPNNResult};
 
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
 
@@ -300,64 +300,17 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
     best_idx
 }
 
-/// Builder-pattern handle for constructing a PiPNN index.
-///
-/// Mirrors the shape of `diskann_disk::build::builder::DiskIndexBuilder` so
-/// callers that work across Vamana and PiPNN can write similar code. For
-/// quick one-shot use the free function [`build_typed`] is equivalent.
-///
-/// ```ignore
-/// let graph = PiPNNBuilder::new(config).build_typed(&data, npoints, ndims)?;
-/// ```
-#[derive(Debug, Clone)]
-pub struct PiPNNBuilder {
-    config: PiPNNConfig,
-}
-
-impl PiPNNBuilder {
-    /// Create a builder from the given config. The config is validated on `build_typed`.
-    pub fn new(config: PiPNNConfig) -> Self {
-        Self { config }
-    }
-
-    /// Mutable access to the config — useful for tweaking a tuned-default
-    /// baseline before building.
-    pub fn config_mut(&mut self) -> &mut PiPNNConfig {
-        &mut self.config
-    }
-
-    /// Borrow the config.
-    pub fn config(&self) -> &PiPNNConfig {
-        &self.config
-    }
-
-    /// Build the index from typed vector data, keeping `T` in native form.
-    pub fn build_typed<T: VectorRepr + Send + Sync>(
-        self,
-        data: &[T],
-        npoints: usize,
-        ndims: usize,
-    ) -> PiPNNResult<PiPNNGraph> {
-        build_typed(data, npoints, ndims, &self.config)
-    }
-}
-
 /// Build a PiPNN index from typed vector data.
 ///
 /// Keeps data in its native type T and converts to f32 on-the-fly at each access point,
 /// avoiding a full f32 copy of the dataset.
 /// `data` is a flat slice of `T` in row-major order: npoints x ndims.
-///
-/// See [`PiPNNBuilder`] for a stateful builder API that matches the
-/// `DiskIndexBuilder` pattern used elsewhere in DiskANN.
 pub fn build_typed<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
     ndims: usize,
-    config: &PiPNNConfig,
+    ctx: &PiPNNBuildContext,
 ) -> PiPNNResult<PiPNNGraph> {
-    config.validate()?;
-
     let expected_len = npoints * ndims;
     if data.len() != expected_len {
         return Err(PiPNNError::DataLengthMismatch {
@@ -372,46 +325,48 @@ pub fn build_typed<T: VectorRepr + Send + Sync>(
         return Err(PiPNNError::Config("npoints and ndims must be > 0".into()));
     }
 
+    let config = ctx.config();
     tracing::info!(
         npoints = npoints,
         ndims = ndims,
         k = config.k,
-        max_degree = config.max_degree,
+        max_degree = ctx.max_degree().get(),
         c_max = config.c_max,
         replicas = config.replicas,
         "PiPNN build started (typed)"
     );
 
-    build_internal(data, npoints, ndims, config)
+    build_internal(data, npoints, ndims, ctx)
 }
 
-
-
-/// Internal build logic shared between `build()` and `build_typed()`.
+/// Internal build logic shared between entry points.
 fn build_internal<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
     ndims: usize,
-    config: &PiPNNConfig,
+    ctx: &PiPNNBuildContext,
 ) -> PiPNNResult<PiPNNGraph> {
     // Respect num_threads: install a scoped rayon pool so all par_iter() calls
     // within this build use the configured thread count instead of all cores.
-    if config.num_threads > 0 {
+    if ctx.num_threads() > 0 {
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(config.num_threads)
+            .num_threads(ctx.num_threads())
             .build()
             .map_err(|e| PiPNNError::Config(format!("Failed to create thread pool: {}", e)))?;
-        return pool.install(|| build_internal_impl(data, npoints, ndims, config));
+        return pool.install(|| build_internal_impl(data, npoints, ndims, ctx));
     }
-    build_internal_impl(data, npoints, ndims, config)
+    build_internal_impl(data, npoints, ndims, ctx)
 }
 
 fn build_internal_impl<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
     ndims: usize,
-    config: &PiPNNConfig,
+    ctx: &PiPNNBuildContext,
 ) -> PiPNNResult<PiPNNGraph> {
+    let config = ctx.config();
+    let metric = ctx.metric();
+    let max_degree = ctx.max_degree().get();
     let t_total = Instant::now();
 
     log_simd_tier();
@@ -427,7 +382,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         ndims,
         config.num_hash_planes,
         config.l_max,
-        config.max_degree,
+        max_degree,
         42,
     );
     let sketch_secs = t0.elapsed().as_secs_f64();
@@ -448,7 +403,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             c_min: config.c_min,
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
-            metric: config.metric,
+            metric,
             leader_cap: config.leader_cap,
         };
 
@@ -501,7 +456,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                         ndims,
                         &leaf.indices,
                         config.k,
-                        config.metric,
+                        metric,
                         &mut bufs,
                     );
                     total_edges.fetch_add(edge_count, Ordering::Relaxed);
@@ -543,15 +498,12 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let t4 = Instant::now();
         tracing::info!(
             "Applying final prune (selecting {} from {} candidates)",
-            config.max_degree,
+            max_degree,
             config.l_max
         );
         // Log candidate stats before pruning.
         let total_candidates: usize = candidates.iter().map(|c| c.len()).sum();
-        let nodes_over_degree = candidates
-            .iter()
-            .filter(|c| c.len() > config.max_degree)
-            .count();
+        let nodes_over_degree = candidates.iter().filter(|c| c.len() > max_degree).count();
         let max_cand = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
         let avg_cand = if candidates.is_empty() {
             0.0
@@ -563,7 +515,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             avg_candidates = avg_cand,
             max_candidates = max_cand,
             nodes_over_max_degree = nodes_over_degree,
-            max_degree = config.max_degree,
+            max_degree = max_degree,
             "Final prune input"
         );
 
@@ -571,8 +523,8 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             data,
             ndims,
             &candidates,
-            config.max_degree,
-            config.metric,
+            max_degree,
+            metric,
             config.alpha,
             config.saturate_after_prune,
         );
@@ -624,7 +576,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         npoints,
         ndims,
         medoid,
-        metric: config.metric,
+        metric,
         build_stats,
     };
 
@@ -742,6 +694,10 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
+    use crate::PiPNNConfig;
+
     use super::*;
 
     fn generate_random_data(npoints: usize, ndims: usize, seed: u64) -> Vec<f32> {
@@ -750,6 +706,10 @@ mod tests {
         (0..npoints * ndims)
             .map(|_| rng.random_range(-1.0f32..1.0f32))
             .collect()
+    }
+
+    fn nonzero(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test value must be > 0")
     }
 
     #[test]
@@ -762,13 +722,13 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
@@ -778,9 +738,10 @@ mod tests {
     #[test]
     fn test_build_data_length_mismatch() {
         let data = vec![0.0f32; 10];
-        let config = PiPNNConfig::default();
+        let ctx =
+            PiPNNBuildContext::new(PiPNNConfig::default(), nonzero(64), Metric::L2, 0).unwrap();
 
-        let result = build_typed::<f32>(&data, 5, 3, &config);
+        let result = build_typed::<f32>(&data, 5, 3, &ctx);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, PiPNNError::DataLengthMismatch { .. }));
@@ -796,13 +757,13 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 4,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         let query = &data[0..ndims];
         let results = graph.search(&data, query, 10, 50);
@@ -824,13 +785,13 @@ mod tests {
             c_max: 128,
             c_min: 32,
             k: 4,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         let k = 10;
         let search_l = 100;
@@ -929,13 +890,6 @@ mod tests {
 
     #[test]
     fn test_config_validate_failures() {
-        // max_degree = 0
-        let bad = PiPNNConfig {
-            max_degree: 0,
-            ..Default::default()
-        };
-        assert!(bad.validate().is_err());
-
         // k = 0
         let bad = PiPNNConfig {
             k: 0,
@@ -999,19 +953,17 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
-            metric: diskann_vector::distance::Metric::Cosine,
             ..Default::default()
         };
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::Cosine, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(matches!(graph.metric, Metric::Cosine));
         assert_eq!(graph.npoints, npoints);
         assert!(graph.avg_degree() > 0.0);
     }
-
 
     #[test]
     fn test_build_typed_f32() {
@@ -1023,14 +975,14 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
 
-        let graph_direct = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
-        let graph_typed = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph_direct = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
+        let graph_typed = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         // Both should produce the same npoints and medoid.
         assert_eq!(graph_direct.npoints, graph_typed.npoints);
@@ -1047,13 +999,13 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         let dir = std::env::temp_dir().join("pipnn_test_save_graph");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1090,13 +1042,13 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(
             graph.medoid < npoints,
             "medoid {} is out of range [0, {})",
@@ -1116,13 +1068,13 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 4,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             ..Default::default()
         };
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
 
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         // With these settings no node should be completely isolated.
         assert_eq!(
@@ -1136,16 +1088,18 @@ mod tests {
     #[test]
     fn test_build_zero_npoints() {
         let data: Vec<f32> = vec![];
-        let config = PiPNNConfig::default();
-        let result = build_typed::<f32>(&data, 0, 8, &config);
+        let ctx =
+            PiPNNBuildContext::new(PiPNNConfig::default(), nonzero(64), Metric::L2, 0).unwrap();
+        let result = build_typed::<f32>(&data, 0, 8, &ctx);
         assert!(result.is_err(), "npoints=0 should error");
     }
 
     #[test]
     fn test_build_zero_ndims() {
         let data: Vec<f32> = vec![];
-        let config = PiPNNConfig::default();
-        let result = build_typed::<f32>(&data, 10, 0, &config);
+        let ctx =
+            PiPNNBuildContext::new(PiPNNConfig::default(), nonzero(64), Metric::L2, 0).unwrap();
+        let result = build_typed::<f32>(&data, 10, 0, &ctx);
         assert!(result.is_err(), "ndims=0 should error");
     }
 
@@ -1156,12 +1110,12 @@ mod tests {
             c_max: 32,
             c_min: 1,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, 1, 4, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, 1, 4, &ctx).unwrap();
         assert_eq!(graph.npoints, 1, "should have 1 point");
         assert_eq!(
             graph.adjacency[0].len(),
@@ -1177,12 +1131,12 @@ mod tests {
             c_max: 32,
             c_min: 1,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, 2, 2, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, 2, 2, &ctx).unwrap();
         assert_eq!(graph.npoints, 2, "should have 2 points");
         // With 2 points, they should connect to each other.
         let total_edges: usize = graph.adjacency.iter().map(|a| a.len()).sum();
@@ -1202,12 +1156,12 @@ mod tests {
             c_max: 32,
             c_min: 4,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert_eq!(
             graph.npoints, npoints,
             "should build successfully with duplicate points"
@@ -1223,12 +1177,12 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 1,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert_eq!(graph.npoints, npoints, "k=1 should produce valid graph");
         assert!(
             graph.avg_degree() > 0.0,
@@ -1246,12 +1200,12 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 100, // larger than c_max
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert_eq!(
             graph.npoints, npoints,
             "k > c_max should still produce valid graph"
@@ -1285,12 +1239,12 @@ mod tests {
             c_max: 32,
             c_min: 4,
             k: 3,
-            max_degree: 16,
             replicas: 1,
             l_max: 32,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         let query = &data[0..ndims];
         // Request more neighbors than points exist.
         let results = graph.search(&data, query, 100, 200);
@@ -1310,12 +1264,12 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 4,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         // Query with the medoid point itself.
         let medoid = graph.medoid;
         let query = &data[medoid * ndims..(medoid + 1) * ndims];
@@ -1346,12 +1300,12 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 4,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         let k = 10;
         let query = &data[0..ndims];
@@ -1381,13 +1335,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_build_typed_data_length_mismatch() {
         let data = vec![1.0f32; 30]; // 30 elements
-        let config = PiPNNConfig::default();
+        let ctx =
+            PiPNNBuildContext::new(PiPNNConfig::default(), nonzero(64), Metric::L2, 0).unwrap();
         // npoints=5, ndims=8 expects 40 elements but data has 30.
-        let result = build_typed::<f32>(&data, 5, 8, &config);
+        let result = build_typed::<f32>(&data, 5, 8, &ctx);
         assert!(
             result.is_err(),
             "data length mismatch should produce an error"
@@ -1441,12 +1395,12 @@ mod tests {
             c_max: 128,
             c_min: 32,
             k: 4,
-            max_degree: 32,
             replicas: 1,
             l_max: 64,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(32), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         let dir = std::env::temp_dir().join("pipnn_test_save_large");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1585,11 +1539,11 @@ mod tests {
         let data = generate_random_data(npoints, ndims, 42);
 
         // Build without final prune, then build with, and compare max degree.
+        let max_degree = 16;
         let config_no_prune = PiPNNConfig {
             c_max: 64,
             c_min: 16,
             k: 6,
-            max_degree: 16,
             replicas: 2,
             l_max: 64,
             final_prune: false,
@@ -1600,15 +1554,19 @@ mod tests {
             ..config_no_prune.clone()
         };
 
-        let graph_no = build_typed::<f32>(&data, npoints, ndims, &config_no_prune).unwrap();
-        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &config_with_prune).unwrap();
+        let ctx_no =
+            PiPNNBuildContext::new(config_no_prune, nonzero(max_degree), Metric::L2, 0).unwrap();
+        let ctx_yes =
+            PiPNNBuildContext::new(config_with_prune, nonzero(max_degree), Metric::L2, 0).unwrap();
+        let graph_no = build_typed::<f32>(&data, npoints, ndims, &ctx_no).unwrap();
+        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &ctx_yes).unwrap();
 
         // Final prune should not increase max degree beyond max_degree.
         assert!(
-            graph_yes.max_degree() <= config_with_prune.max_degree,
-            "final_prune max_degree {} > config max_degree {}",
+            graph_yes.max_degree() <= max_degree,
+            "final_prune max_degree {} > expected max_degree {}",
             graph_yes.max_degree(),
-            config_with_prune.max_degree
+            max_degree
         );
 
         // Both should be valid graphs.
@@ -1670,7 +1628,6 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 6,
-            max_degree: 16,
             replicas: 2,
             l_max: 64,
             final_prune: true,
@@ -1682,8 +1639,13 @@ mod tests {
             ..config_aggressive.clone()
         };
 
-        let graph_aggressive = build_typed::<f32>(&data, npoints, ndims, &config_aggressive).unwrap();
-        let graph_relaxed = build_typed::<f32>(&data, npoints, ndims, &config_relaxed).unwrap();
+        let ctx_aggressive =
+            PiPNNBuildContext::new(config_aggressive, nonzero(16), Metric::L2, 0).unwrap();
+        let ctx_relaxed =
+            PiPNNBuildContext::new(config_relaxed, nonzero(16), Metric::L2, 0).unwrap();
+        let graph_aggressive =
+            build_typed::<f32>(&data, npoints, ndims, &ctx_aggressive).unwrap();
+        let graph_relaxed = build_typed::<f32>(&data, npoints, ndims, &ctx_relaxed).unwrap();
 
         // Relaxed alpha should yield denser graph (more edges survive pruning).
         assert!(
@@ -1705,7 +1667,6 @@ mod tests {
             c_max: 128,
             c_min: 32,
             k: 3,
-            max_degree: 32,
             replicas: 2,
             l_max: 64,
             final_prune: false,
@@ -1717,8 +1678,11 @@ mod tests {
             ..config_no_prune.clone()
         };
 
-        let graph_no = build_typed::<f32>(&data, npoints, ndims, &config_no_prune).unwrap();
-        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &config_prune).unwrap();
+        let ctx_no =
+            PiPNNBuildContext::new(config_no_prune, nonzero(32), Metric::L2, 0).unwrap();
+        let ctx_yes = PiPNNBuildContext::new(config_prune, nonzero(32), Metric::L2, 0).unwrap();
+        let graph_no = build_typed::<f32>(&data, npoints, ndims, &ctx_no).unwrap();
+        let graph_yes = build_typed::<f32>(&data, npoints, ndims, &ctx_yes).unwrap();
 
         // Both should have non-trivial degree.
         assert!(graph_no.avg_degree() > 1.0);
@@ -1765,12 +1729,11 @@ mod tests {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             replicas: 2,
-            metric: Metric::CosineNormalized,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::CosineNormalized, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::CosineNormalized);
 
@@ -1783,15 +1746,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validate_inner_product_accepted() {
-        let config = PiPNNConfig {
-            metric: Metric::InnerProduct,
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
     fn test_build_inner_product_end_to_end() {
         let npoints = 200;
         let ndims = 8;
@@ -1801,12 +1755,11 @@ mod tests {
             c_max: 64,
             c_min: 16,
             k: 3,
-            max_degree: 16,
             replicas: 2,
-            metric: Metric::InnerProduct,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(16), Metric::InnerProduct, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
         assert!(graph.avg_degree() > 0.0);
         assert_eq!(graph.metric, Metric::InnerProduct);
 
@@ -1838,21 +1791,22 @@ mod tests {
         let npoints = 100;
         let ndims = 4;
         let data = generate_random_data(npoints, ndims, 42);
+        let max_degree = 16;
         let config = PiPNNConfig {
             c_max: 32,
             c_min: 8,
             k: 3,
-            max_degree: 16,
             ..Default::default()
         };
-        let graph = build_typed::<f32>(&data, npoints, ndims, &config).unwrap();
+        let ctx = PiPNNBuildContext::new(config, nonzero(max_degree), Metric::L2, 0).unwrap();
+        let graph = build_typed::<f32>(&data, npoints, ndims, &ctx).unwrap();
 
         assert_eq!(graph.npoints, npoints);
         assert_eq!(graph.ndims, ndims);
         assert!(graph.medoid < npoints);
-        assert!(graph.max_degree() <= config.max_degree);
+        assert!(graph.max_degree() <= max_degree);
         assert!(graph.avg_degree() > 0.0);
-        assert!(graph.avg_degree() <= config.max_degree as f64);
+        assert!(graph.avg_degree() <= max_degree as f64);
         // num_isolated should be 0 for a well-connected graph.
         assert_eq!(
             graph.num_isolated(),
@@ -1866,9 +1820,6 @@ mod tests {
         let config = PiPNNConfig::default();
         let json = serde_json::to_string(&config).expect("serialize");
         let deserialized: PiPNNConfig = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(config.c_max, deserialized.c_max);
-        assert_eq!(config.k, deserialized.k);
-        assert_eq!(config.max_degree, deserialized.max_degree);
-        assert!((config.alpha - deserialized.alpha).abs() < 1e-6);
+        assert_eq!(config, deserialized);
     }
 }
