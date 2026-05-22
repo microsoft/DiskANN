@@ -7,7 +7,6 @@ use diskann_utils::future::SendFuture;
 
 use crate::{
     ANNError, ANNResult,
-    error::IntoANNResult,
     graph::{
         DiskANNIndex,
         glue::{SearchExt, SearchStrategy},
@@ -32,13 +31,11 @@ where
     T: 'a,
 {
     pub(in crate::graph) index: &'a DiskANNIndex<DP>,
-    pub(in crate::graph) context: &'a DP::Context,
     pub(in crate::graph) scratch: SearchScratch<DP::InternalId>,
     pub(in crate::graph) computed_result: Vec<Neighbor<DP::InternalId>>,
     pub(in crate::graph) next_result_index: usize,
     pub(in crate::graph) search_param_l: usize,
-    pub(in crate::graph) strategy: &'a S,
-    pub(in crate::graph) computer: S::QueryComputer,
+    pub(in crate::graph) accessor: S::SearchAccessor,
     // Note: The `fn` is so we derive `Send` and `Sync` more easily: `fn` is always Send/Sync.
     pub(in crate::graph) _query: std::marker::PhantomData<fn(T)>,
 }
@@ -95,18 +92,12 @@ where
 
             // Resume graph search to fill the next batch.
             let start_points = {
-                let mut accessor = self
-                    .strategy
-                    .search_accessor(&self.index.data_provider, self.context)
-                    .into_ann_result()?;
-
-                let start_ids = accessor.starting_points().await?;
+                let start_ids = self.accessor.starting_points().await?;
                 self.index
                     .search_internal(
                         None, // beam_width
                         &start_ids,
-                        &mut accessor,
-                        &self.computer,
+                        &mut self.accessor,
                         &mut self.scratch,
                         &mut NoopSearchRecord::new(),
                     )

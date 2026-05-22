@@ -80,7 +80,7 @@ use std::{future::Future, sync::Arc};
 
 use diskann_utils::Reborrow;
 use diskann_utils::future::AssertSend;
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+use diskann_vector::DistanceFunction;
 
 use crate::{
     ANNError, ANNResult,
@@ -88,8 +88,8 @@ use crate::{
     graph::{AdjacencyList, SearchOutputBuffer, workingset},
     neighbor::Neighbor,
     provider::{
-        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
-        DataProvider, HasId, NeighborAccessor,
+        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef,
+        HasId, NeighborAccessor,
     },
 };
 
@@ -241,7 +241,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 ///
 /// The provided implementation works on each element of `ids` sequentially, pre-filters
 /// the resulting candidate list using `pred.eval()` before invoking
-/// [`BuildQueryComputer::distances_unordered`].
+/// [`Accessor::distances_unordered`].
 ///
 /// The callback `on_neighbors` is decorated to the uses `pred.eval_mut()`.
 ///
@@ -251,11 +251,10 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 /// ## Error Handling
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
+pub trait ExpandBeam: Accessor + AsNeighbor + Sized {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
-        computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send
@@ -270,7 +269,7 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
                 self.get_neighbors(id, &mut neighbors).send().await?;
                 neighbors.retain(|i| pred.eval(i));
 
-                self.distances_unordered(neighbors.iter().copied(), computer, |distance, id| {
+                self.distances_unordered(neighbors.iter().copied(), |distance, id| {
                     if pred.eval_mut(&id) {
                         on_neighbors(distance, id);
                     }
@@ -294,31 +293,20 @@ where
     Provider: DataProvider,
     T: 'a,
 {
-    /// The computer used by the associated accessor.
-    ///
-    /// We could grab this type from the `SearchAccessor` associated type, but it's
-    /// useful enough that we move it up here.
-    type QueryComputer: for<'b> PreprocessedDistanceFunction<
-            <Self::SearchAccessor as Accessor>::ElementRef<'b>,
-            f32,
-        > + Send
-        + Sync
-        + 'static;
-
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
 
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor: ExpandBeam<T, QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
-        + SearchExt;
+    type SearchAccessor: ExpandBeam<Id = Provider::InternalId> + SearchExt;
 
     /// Construct and return the search accessor.
     fn search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
+        query: T,
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
 }
 
@@ -389,7 +377,7 @@ macro_rules! default_post_processor {
 /// directly into the output buffer.
 pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     type Error: StandardError;
 
@@ -399,7 +387,6 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -415,14 +402,13 @@ pub struct CopyIds;
 
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
-    A: BuildQueryComputer<T>,
+    A: Accessor,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
         _query: T,
-        _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -440,7 +426,7 @@ where
 /// using a [`Pipeline`].
 pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     /// A potentially modified version of the error yielded by the next state in the
     /// processing pipeline.
@@ -449,7 +435,7 @@ where
         NextError: StandardError;
 
     /// The accessor that will be passed to the next processing stage.
-    type NextAccessor: BuildQueryComputer<T, Id = A::Id>;
+    type NextAccessor: HasId<Id = A::Id>;
 
     /// Perform any modification the `input`, `output`, `accessor`, or `computer` objects
     /// and invoke the [`SearchPostProcess`] routine `next` on stage.
@@ -458,7 +444,6 @@ where
         next: &Next,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
@@ -474,7 +459,7 @@ pub struct FilterStartPoints;
 
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
-    A: BuildQueryComputer<T> + SearchExt,
+    A: Accessor + SearchExt,
     T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
@@ -492,7 +477,6 @@ where
         next: &Next,
         accessor: &mut A,
         query: T,
-        computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> ANNResult<usize>
@@ -502,18 +486,12 @@ where
         Next: SearchPostProcess<A, T, O> + Sync,
     {
         let filter = accessor.is_not_start_point().await?;
-        next.post_process(
-            accessor,
-            query,
-            computer,
-            candidates.filter(|n| filter(n.id)),
-            output,
-        )
-        .await
-        .map_err(|err| {
-            let err = err.into();
-            err.context("after filtering start points")
-        })
+        next.post_process(accessor, query, candidates.filter(|n| filter(n.id)), output)
+            .await
+            .map_err(|err| {
+                let err = err.into();
+                err.context("after filtering start points")
+            })
     }
 }
 
@@ -543,7 +521,7 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
-    A: BuildQueryComputer<T>,
+    A: Accessor,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -553,7 +531,6 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -562,7 +539,7 @@ where
         B: SearchOutputBuffer<O> + Send + ?Sized,
     {
         self.head
-            .post_process_step(&self.tail, accessor, query, computer, candidates, output)
+            .post_process_step(&self.tail, accessor, query, candidates, output)
     }
 }
 
@@ -593,8 +570,9 @@ where
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
+        vector: T,
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-        self.search_accessor(provider, context)
+        self.search_accessor(provider, context, vector)
     }
 }
 
@@ -618,8 +596,8 @@ where
     /// We could grab this type from the `PruneAccessor` associated type, but it's
     /// useful enough that we move it up here.
     type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
-            <Self::PruneAccessor<'a> as Accessor>::ElementRef<'b>,
-            <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
+            <Self::PruneAccessor<'a> as HasElementRef>::ElementRef<'b>,
+            <Self::PruneAccessor<'c> as HasElementRef>::ElementRef<'d>,
             f32,
         > + Send
         + Sync;
@@ -632,10 +610,13 @@ where
     ///
     /// Implementations are encouraged to have [`Accessor::get_element`] return the
     /// highest-precision applicable value for a given element type.
-    type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
+    type PruneAccessor<'a>: HasId<Id = Provider::InternalId>
+        + HasElementRef
         + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
         + AsNeighborMut
-        + workingset::Fill<Self::WorkingSet>;
+        + workingset::Fill<Self::WorkingSet>
+        + Send
+        + Sync;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
@@ -791,8 +772,7 @@ where
     /// of associated types.
     ///
     /// Lifting the accessor all the way to the trait level makes the caching provider possible.
-    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
-        + SearchExt;
+    type DeleteSearchAccessor<'a>: ExpandBeam<Id = Provider::InternalId> + SearchExt;
 
     /// The processor used during the delete-search phase.
     type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
@@ -836,7 +816,6 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use diskann_vector::PreprocessedDistanceFunction;
     use futures_util::future;
 
     use super::*;
@@ -916,18 +895,11 @@ mod tests {
     }
 
     impl Accessor for Retriever<'_> {
-        type Element<'a>
-            = f32
-        where
-            Self: 'a;
-        type ElementRef<'a> = f32;
-
         type GetError = ANNError;
-        fn get_element(
+        fn get_distance(
             &mut self,
             id: Self::Id,
-        ) -> impl std::future::Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send
-        {
+        ) -> impl std::future::Future<Output = Result<f32, Self::GetError>> + Send {
             let result = match self.provider.items.get(id as usize) {
                 Some(v) => {
                     self.count.count.fetch_add(1, Ordering::Relaxed);
@@ -950,29 +922,13 @@ mod tests {
         }
     }
 
-    struct QueryComputer;
-    impl PreprocessedDistanceFunction<f32, f32> for QueryComputer {
-        fn evaluate_similarity(&self, _changing: f32) -> f32 {
-            panic!("this method should not be called")
-        }
-    }
-
-    impl BuildQueryComputer<f32> for Retriever<'_> {
-        type QueryComputerError = ANNError;
-        type QueryComputer = QueryComputer;
-        fn build_query_computer(&self, _from: f32) -> Result<QueryComputer, ANNError> {
-            Ok(QueryComputer)
-        }
-    }
-
-    impl ExpandBeam<f32> for Retriever<'_> {}
+    impl ExpandBeam for Retriever<'_> {}
 
     // This strategy explicitly does not define `post_process` so we can test the provided
     // implementation.
     struct Strategy;
 
     impl<'a> SearchStrategy<'a, SimpleProvider, f32> for Strategy {
-        type QueryComputer = QueryComputer;
         type SearchAccessorError = ANNError;
         type SearchAccessor = Retriever<'a>;
 
@@ -980,6 +936,7 @@ mod tests {
             &'a self,
             provider: &'a SimpleProvider,
             context: &'a CountGetVector,
+            _query: f32,
         ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
             Ok(Retriever::new(provider, context))
         }
@@ -1002,10 +959,11 @@ mod tests {
         assert_eq!(provider.to_internal_id(&ctx, &10).unwrap(), 10);
         assert_eq!(provider.to_external_id(&ctx, 10).unwrap(), 10);
 
-        let mut accessor = strategy.search_accessor(&provider, &ctx).unwrap();
+        let query = 11.5;
+        let mut accessor = strategy.search_accessor(&provider, &ctx, query).unwrap();
         assert_eq!(accessor.starting_points().await.unwrap().as_slice(), &[0]);
         for i in 0..num_points {
-            assert_eq!(accessor.get_element(i as u32).await.unwrap(), i as f32);
+            assert_eq!(accessor.get_distance(i as u32).await.unwrap(), i as f32);
         }
 
         // Check dummy get_neighbors implmeentation for code coverage
@@ -1021,9 +979,6 @@ mod tests {
         assert_eq!(ctx.count(), num_points);
         ctx.clear();
 
-        let query = 11.5;
-        let computer = accessor.build_query_computer(query).unwrap();
-
         for input_len in 0..10 {
             let input: Vec<_> = (0..input_len)
                 .map(|i| Neighbor::<u32>::new(i as u32, i as f32))
@@ -1036,7 +991,6 @@ mod tests {
                     .post_process(
                         &mut accessor,
                         query,
-                        &computer,
                         input.iter().copied(),
                         &mut neighbor::BackInserter::new(output.as_mut_slice()),
                     )

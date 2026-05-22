@@ -173,8 +173,8 @@ pub(crate) mod tests {
         },
         neighbor::Neighbor,
         provider::{
-            AsNeighbor, AsNeighborMut, BuildQueryComputer, DataProvider, DefaultContext, Delete,
-            ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
+            AsNeighbor, AsNeighborMut, DataProvider, DefaultContext, Delete, ExecutionContext,
+            Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
         utils::{IntoUsize, ONE},
     };
@@ -1935,10 +1935,11 @@ pub(crate) mod tests {
 
         // Ensure that the query computer used for insertion uses the `SameAsData` layout.
         let strategy = inmem::spherical::Quantized::build();
-        let accessor = strategy.search_accessor(index.provider(), ctx).unwrap();
-        let computer = accessor.build_query_computer(data.row(0)).unwrap();
+        let accessor = strategy
+            .search_accessor(index.provider(), ctx, data.row(0))
+            .unwrap();
         assert_eq!(
-            computer.layout(),
+            accessor.computer().layout(),
             diskann_quantization::spherical::iface::QueryLayout::SameAsData
         );
     }
@@ -2040,14 +2041,14 @@ pub(crate) mod tests {
 
         // Ensure that the query computer used for insertion uses the `SameAsData` layout.
         let strategy = inmem::spherical::Quantized::build();
-        let accessor = <inmem::spherical::Quantized as SearchStrategy<
-            DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
-            &[f32],
-        >>::search_accessor(&strategy, index.provider(), ctx)
-        .unwrap();
-        let computer = accessor.build_query_computer(data.row(0)).unwrap();
+        let accessor =
+            <inmem::spherical::Quantized as InsertStrategy<
+                DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
+                &[f32],
+            >>::insert_search_accessor(&strategy, index.provider(), ctx, data.row(0))
+            .unwrap();
         assert_eq!(
-            computer.layout(),
+            accessor.computer().layout(),
             diskann_quantization::spherical::iface::QueryLayout::SameAsData
         );
     }
@@ -2819,7 +2820,7 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), true)
             .await
             .unwrap();
-        let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
+        let mut accessor_sat = index_sat.provider().neighbors();
         let res_sat = index_sat
             .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
             .await
@@ -2828,7 +2829,7 @@ pub(crate) mod tests {
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
+        let mut accessor_unsat = index_unsat.provider().neighbors();
         let res_unsat = index_unsat
             .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
@@ -2844,7 +2845,7 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(3).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
+        let mut accessor_sat = index_sat.provider().neighbors();
         let res_sat = index_sat
             .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
             .await
@@ -2853,7 +2854,7 @@ pub(crate) mod tests {
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
+        let mut accessor_unsat = index_unsat.provider().neighbors();
         let res_unsat = index_sat
             .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await

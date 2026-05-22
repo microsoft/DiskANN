@@ -16,7 +16,7 @@ use diskann_utils::{
     Reborrow,
     future::{AssertSend, SendFuture, boxit},
 };
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
@@ -44,9 +44,8 @@ use crate::{
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
-        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
-        DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
-        NeighborAccessorMut, SetElement,
+        AsNeighbor, AsNeighborMut, BuildDistanceComputer, DataProvider, Delete, ElementStatus,
+        ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
@@ -276,10 +275,8 @@ where
 
             // NOTE: Use the API `insert_search_accessor` to allow `Accessor` customization.
             let mut accessor = strategy
-                .insert_search_accessor(&self.data_provider, context)
+                .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(vector).into_ann_result()?;
 
             // NOTE: We don't filter the start points out of `visited_nodes`, as those are
             // needed to generate out edges from the start points.
@@ -310,7 +307,6 @@ where
                     None, // beam_width
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut search_record,
                 )
@@ -410,17 +406,14 @@ where
         Set: Send + Sync,
     {
         async move {
-            // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
             let internal_id = ids[position];
+            let vector = batch.get(position);
 
             // NOTE: Use the `insert_search_accessor` API to allow insert-specific customization.
             let mut accessor = strategy
-                .insert_search_accessor(&self.data_provider, context)
+                .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
 
-            let computer = accessor
-                .build_query_computer(batch.get(position))
-                .into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
@@ -440,7 +433,6 @@ where
                     None, // beam_width
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut search_record,
                 )
@@ -1242,11 +1234,7 @@ where
 
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = search_accessor
-                .build_query_computer(v.reborrow())
+                .search_accessor(&self.data_provider, context, v.reborrow())
                 .into_ann_result()?;
 
             let start_ids = search_accessor.starting_points().await?;
@@ -1257,7 +1245,6 @@ where
                 None, // beam_width
                 &start_ids,
                 &mut search_accessor,
-                &computer,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
             )
@@ -1272,7 +1259,6 @@ where
                 .post_process(
                     &mut search_accessor,
                     v.reborrow(),
-                    &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
@@ -1666,9 +1652,9 @@ where
                 .await
                 .escalate("`inplace_delete` requires a successful delete")?;
 
-            let search_strategy = strategy.search_strategy();
-            let accessor = &mut search_strategy
-                .search_accessor(&self.data_provider, context)
+            let prune_strategy = strategy.prune_strategy();
+            let mut accessor = prune_strategy
+                .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
             let InplaceDeleteWorkList {
@@ -1683,21 +1669,16 @@ where
                         .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
-                    self.get_candidates_using_twohop_and_onehop(context, accessor, vector_id)
+                    self.get_candidates_using_twohop_and_onehop(context, &mut accessor, vector_id)
                         .await?
                 }
                 InplaceDeleteMethod::OneHop => {
-                    self.get_candidates_using_onehop(context, accessor, vector_id)
+                    self.get_candidates_using_onehop(context, &mut accessor, vector_id)
                         .await?
                 }
             };
 
-            let prune_strategy = strategy.prune_strategy();
             let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
-            let mut accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
             let mut edges_to_add = HashMap::<DP::InternalId, Vec<DP::InternalId>>::new();
 
             // fetch the filtered adjacency list of `p`.
@@ -1978,18 +1959,16 @@ where
         }
     }
 
-    // A is the accessor type, T is the query type used for BuildQueryComputer
-    pub(crate) fn search_internal<A, T, SR, Q>(
+    pub(crate) fn search_internal<A, SR, Q>(
         &self,
         beam_width: Option<usize>,
         start_ids: &[DP::InternalId],
         accessor: &mut A,
-        computer: &A::QueryComputer,
         scratch: &mut SearchScratch<DP::InternalId, Q>,
         search_record: &mut SR,
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
-        A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
+        A: ExpandBeam<Id = DP::InternalId> + SearchExt,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {
@@ -2001,11 +1980,10 @@ where
             if scratch.visited.is_empty() {
                 for id in start_ids {
                     scratch.visited.insert(*id);
-                    let element = accessor
-                        .get_element(*id)
+                    let dist = accessor
+                        .get_distance(*id)
                         .await
                         .escalate("start point retrieval must succeed")?;
-                    let dist = computer.evaluate_similarity(element.reborrow());
                     scratch.best.insert(Neighbor::new(*id, dist));
                     scratch.cmps += 1;
                 }
@@ -2028,7 +2006,6 @@ where
                 accessor
                     .expand_beam(
                         scratch.beam_nodes.iter().copied(),
-                        computer,
                         glue::NotInMut::new(&mut scratch.visited),
                         |distance, id| neighbors.push(Neighbor::new(id, distance)),
                     )
@@ -2162,12 +2139,10 @@ where
         T: Copy + Send + 'a,
     {
         async move {
-            let (computer, scratch) = {
+            let (accessor, scratch) = {
                 let mut accessor = strategy
-                    .search_accessor(&self.data_provider, context)
+                    .search_accessor(&self.data_provider, context, query)
                     .into_ann_result()?;
-
-                let computer = accessor.build_query_computer(query).into_ann_result()?;
 
                 let start_ids = accessor.starting_points().await?;
                 let num_start_points = start_ids.len();
@@ -2188,7 +2163,6 @@ where
                 accessor
                     .expand_beam(
                         init_ids.iter().copied(),
-                        &computer,
                         glue::NotInMut::new(&mut scratch.visited),
                         |distance, id| neighbors.push(Neighbor::new(id, distance)),
                     )
@@ -2199,18 +2173,16 @@ where
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
 
-                (computer, scratch)
+                (accessor, scratch)
             };
 
             ANNResult::Ok(PagedSearch {
                 index: self,
-                context,
                 scratch,
                 computed_result: vec![Neighbor::default(); l_value],
                 next_result_index: l_value,
                 search_param_l: l_value,
-                strategy,
-                computer,
+                accessor,
                 _query: std::marker::PhantomData,
             })
         }
@@ -2422,7 +2394,7 @@ where
         options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
         Set: Send + Sync,
     {
         async move {
@@ -2480,7 +2452,7 @@ where
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
         Set: Send + Sync,
     {
         async move {
@@ -2571,7 +2543,7 @@ where
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
         Set: Send + Sync,
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {

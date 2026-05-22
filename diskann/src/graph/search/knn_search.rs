@@ -20,7 +20,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
 };
 
 /// Error type for [`Knn`] parameter validation.
@@ -191,10 +191,9 @@ where
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
@@ -204,14 +203,13 @@ where
                     Some(self.beam_width.get()),
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
                 )
                 .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
+                .post_process(&mut accessor, query, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -267,10 +265,9 @@ where
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
@@ -280,14 +277,13 @@ where
                     Some(self.inner.beam_width.get()),
                     &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     self.recorder,
                 )
                 .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
+                .post_process(&mut accessor, query, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
