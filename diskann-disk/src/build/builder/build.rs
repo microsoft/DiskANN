@@ -36,7 +36,10 @@ use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 #[cfg(feature = "pipnn")]
-use crate::build::configuration::build_algorithm::BuildAlgorithm;
+use {
+    crate::build::configuration::build_algorithm::BuildAlgorithm,
+    diskann_pipnn::PiPNNBuildContext,
+};
 use crate::{
     build::{
         builder::{
@@ -210,14 +213,16 @@ where
     }
 
     pub fn build(&mut self) -> ANNResult<()> {
-        // PiPNN is fully synchronous (rayon-only, no async). Run it outside tokio
-        // to avoid the async future capturing all build state.
         #[cfg(feature = "pipnn")]
-        if matches!(
-            self.disk_build_param.build_algorithm(),
-            BuildAlgorithm::PiPNN(_)
-        ) {
-            return self.build_pipnn();
+        if let BuildAlgorithm::PiPNN(pipnn_config) = self.disk_build_param.build_algorithm() {
+            let ctx = PiPNNBuildContext::new(
+                pipnn_config.clone(),
+                self.index_configuration.config.pruned_degree(),
+                self.index_configuration.dist_metric,
+                self.index_configuration.num_threads,
+            )
+            .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
+            return self.build_pipnn(ctx);
         }
 
         let runtime = create_runtime(self.index_configuration.num_threads)?;
@@ -338,26 +343,22 @@ where
         }
     }
 
-    /// Fully synchronous PiPNN build: PQ compression + PiPNN graph + disk layout.
-    /// Runs without tokio runtime, avoiding the ~1.6 GB async future overhead.
     #[cfg(feature = "pipnn")]
-    fn build_pipnn(&mut self) -> ANNResult<()> {
+    fn build_pipnn(&mut self, ctx: PiPNNBuildContext) -> ANNResult<()> {
         let mut logger = PerfLogger::new_disk_index_build_logger();
         let pool = create_thread_pool(self.index_configuration.num_threads)?;
 
         info!(
-            "Starting PiPNN build (sync): R={} L={} T={}",
+            "Starting PiPNN build: R={} L={} T={}",
             self.index_configuration.config.pruned_degree(),
             self.index_configuration.config.l_build(),
             self.index_configuration.num_threads
         );
 
-        // PQ compression (sync — generate_compressed_data has no .await calls).
         self.generate_compressed_data(&pool)?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
 
-        // PiPNN graph build (pure rayon, no tokio).
-        self.build_pipnn_graph()?;
+        self.build_pipnn_graph(ctx)?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
         self.create_disk_layout()?;
@@ -366,33 +367,17 @@ where
         Ok(())
     }
 
-    /// PiPNN graph construction. Materializes the graph from the disk index
-    /// build parameters and writes it to the mem-index file.
     #[cfg(feature = "pipnn")]
-    fn build_pipnn_graph(&mut self) -> ANNResult<()> {
-        use diskann_pipnn::{builder, PiPNNBuildContext};
+    fn build_pipnn_graph(&mut self, ctx: PiPNNBuildContext) -> ANNResult<()> {
+        use diskann_pipnn::builder;
 
-        let BuildAlgorithm::PiPNN(pipnn_config) = self.disk_build_param.build_algorithm() else {
-            return Err(ANNError::log_index_error(
-                "build_pipnn_graph called but build algorithm is not PiPNN",
-            ));
-        };
-
-        let max_degree = self.index_configuration.config.pruned_degree();
-        let ctx = PiPNNBuildContext::new(
-            pipnn_config.clone(),
-            max_degree,
-            self.index_configuration.dist_metric,
-            self.index_configuration.num_threads,
-        )
-        .map_err(|e| ANNError::log_index_error(format!("PiPNN config error: {}", e)))?;
-
-        info!("Building PiPNN index: max_degree={}", max_degree);
+        info!(
+            "Building PiPNN index: max_degree={}",
+            self.index_configuration.config.pruned_degree()
+        );
 
         let data_path = self.index_writer.get_dataset_file();
 
-        // Build the PiPNN graph. Load data in native type and use build_typed to
-        // avoid upfront f32 conversion (saves ~793 MB peak RSS for f16 data).
         let (npoints, ndims, data) =
             load_data_typed::<Data::VectorDataType, _>(&data_path, self.storage_provider)?;
         let graph = builder::build_typed(&data, npoints, ndims, &ctx)

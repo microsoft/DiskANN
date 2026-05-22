@@ -108,8 +108,7 @@ mod tests {
         /// to the canonical `k` / `alpha` fields via serde aliases.
         #[test]
         fn serde_pipnn_legacy_aliases() {
-            let json =
-                r#"{"algorithm":"PiPNN","leaf_k":7,"final_prune_alpha":1.5}"#;
+            let json = r#"{"algorithm":"PiPNN","leaf_k":7,"final_prune_alpha":1.5}"#;
             let back: BuildAlgorithm = serde_json::from_str(json).unwrap();
             let BuildAlgorithm::PiPNN(cfg) = back else {
                 panic!("expected PiPNN variant");

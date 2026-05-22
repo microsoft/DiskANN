@@ -232,4 +232,23 @@ mod dataset_test {
         let chunks = NumPQChunks::new_with(64, 128).unwrap();
         assert_eq!(chunks.get(), 64);
     }
+
+    #[cfg(feature = "pipnn")]
+    #[test]
+    fn new_with_algorithm_round_trips_config() {
+        let mb = MemoryBudget::try_from_gb(1.0).unwrap();
+        let pq = NumPQChunks::new_with(1, 128).unwrap();
+        let cfg = diskann_pipnn::PiPNNConfig::default();
+        let params = DiskIndexBuildParameters::new_with_algorithm(
+            mb,
+            QuantizationType::default(),
+            pq,
+            BuildAlgorithm::PiPNN(cfg.clone()),
+        );
+
+        assert!(matches!(
+            params.build_algorithm(),
+            BuildAlgorithm::PiPNN(got) if got == &cfg
+        ));
+    }
 }
