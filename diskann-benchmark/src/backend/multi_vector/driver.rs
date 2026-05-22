@@ -3,12 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Shared benchmark infrastructure for multi-vector kernels.
-//!
-//! Houses the timing harness ([`run_loops`]), data fixtures ([`Data`]), result
-//! types ([`RunResult`], [`Comparison`], [`CheckResult`]), and the trait-object
-//! [`Distance<T>`] boundary the driver dispatches through. None of the
-//! contents are kernel-aware.
+//! Timing harness, data fixtures, and result types for multi-vector benchmarks.
 
 use diskann_benchmark_runner::{
     utils::{
@@ -33,10 +28,7 @@ use crate::utils::DisplayWrapper;
 // Tolerance        //
 //////////////////////
 
-/// Tolerance thresholds for multi-vector benchmark regression detection.
-///
-/// Each field specifies the maximum allowed relative increase in the corresponding metric.
-/// For example, a value of `0.05` means a 5% increase is tolerated.
+/// Maximum allowed relative regression in min latency.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(super) struct MultiVectorTolerance {
     pub(super) min_time_regression: NonNegativeFinite,
@@ -101,17 +93,10 @@ where
 // Distance trait   //
 //////////////////////
 
-/// Object-safe distance executor. The library factory's `Erase` visitor
-/// already produces a `Box<dyn MaxSimKernel<T>>`, but the driver wants its
-/// own narrow trait so the kernel + its assertions are tucked inside one
-/// vtable boundary. Simpler than threading `Box<dyn MaxSimKernel<T>>`
-/// generically through the timing harness.
 pub(super) trait Distance<T: Copy> {
     fn max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]);
 }
 
-/// Distance executor wrapping a boxed `MaxSimKernel<T>` from the library
-/// factory. One vtable hop in the hot loop.
 pub(super) struct BoxedKernel<T: Copy>(pub(super) Box<dyn MaxSimKernel<T>>);
 
 impl<T: Copy> Distance<T> for BoxedKernel<T> {
@@ -154,9 +139,6 @@ fn run_loops(run: &Run, body: &mut dyn FnMut()) -> RunResult {
     }
 }
 
-/// Shared loop nest. The trait-object dispatch happens once per outer iteration
-/// of `run_loops`; the work inside each `max_sim` call is O(Q·D·dim), so the
-/// vtable hop is in the noise.
 pub(super) fn run_with_distance<T: Copy>(
     run: &Run,
     doc: MatRef<'_, Standard<T>>,
@@ -175,11 +157,8 @@ pub(super) fn run_with_distance<T: Copy>(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct RunResult {
-    /// The configuration for this run.
     pub(super) run: Run,
-    /// Per-measurement latencies (over `loops_per_measurement` calls).
     pub(super) latencies: Vec<MicroSeconds>,
-    /// Latency percentiles.
     pub(super) percentiles: percentiles::Percentiles<MicroSeconds>,
 }
 
@@ -246,7 +225,6 @@ impl std::fmt::Display for DisplayWrapper<'_, [RunResult]> {
 // Regression Check //
 //////////////////////
 
-/// Per-run comparison result showing before/after percentile differences.
 #[derive(Debug, Serialize)]
 pub(super) struct Comparison {
     pub(super) run: Run,
@@ -255,7 +233,6 @@ pub(super) struct Comparison {
     pub(super) after_min: f64,
 }
 
-/// Aggregated result of the regression check across all runs.
 #[derive(Debug, Serialize)]
 pub(super) struct CheckResult {
     pub(super) checks: Vec<Comparison>,

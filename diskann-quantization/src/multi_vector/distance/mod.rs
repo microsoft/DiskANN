@@ -1,21 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Distance computation for multi-vector representations.
+//! Multi-vector distance computation.
 //!
-//! Provides asymmetric distance primitives for multi-vector search:
+//! Use [`build_max_sim`] to construct a kernel for a given ISA and query
+//! matrix. The kernel implements [`MaxSimKernel<T>`] and computes per-query
+//! max-similarity scores against document matrices.
 //!
-//! - [`MaxSim`]: per-query-vector maximum similarities.
-//! - [`Chamfer`]: sum of MaxSim scores (asymmetric Chamfer distance).
-//! - [`MaxSimKernel`]: object-safe interface implemented by every concrete
-//!   kernel constructed through [`build_max_sim`].
-//! - [`Erase`]: BYOTE visitor — caller decides how to type-erase the kernel.
-//! - [`MaxSimElement`]: sealed trait gating which element types the factory
-//!   accepts.
-//!
-//! The fallback path uses a double-loop kernel over
-//! [`InnerProduct`](diskann_vector::distance::InnerProduct). The factory
-//! returns cache-tiled SIMD kernels selected by [`MaxSimIsa`].
+//! [`Chamfer`] and [`MaxSim`] provide the non-factory (reference) path.
 //!
 //! # Example
 //!
@@ -26,29 +18,23 @@
 //! };
 //! use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 //!
-//! // Query: 2 vectors of dim 3 (wrapped as QueryMatRef)
 //! let query_data = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
 //! let query: QueryMatRef<_> = MatRef::new(
 //!     Standard::new(2, 3).unwrap(),
 //!     &query_data,
 //! ).unwrap().into();
 //!
-//! // Doc: 2 vectors of dim 3
 //! let doc_data = [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0];
 //! let doc = MatRef::new(
 //!     Standard::new(2, 3).unwrap(),
 //!     &doc_data,
 //! ).unwrap();
 //!
-//! // Chamfer distance (sum of max similarities)
 //! let chamfer_dist = Chamfer::evaluate(query, doc);
 //!
-//! // MaxSim (per-query-vector scores)
 //! let mut scores = vec![0.0f32; 2];
 //! let mut max_sim = MaxSim::new(&mut scores).unwrap();
 //! max_sim.evaluate(query, doc);
-//! // scores[0] = -1.0 (query[0] matches doc[0]: negated max inner product)
-//! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
 //! ```
 
 mod factory;

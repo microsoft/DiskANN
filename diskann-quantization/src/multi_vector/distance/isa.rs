@@ -1,17 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Instruction Set Architecture (ISA) selector for the multi-vector MaxSim
-//! factory.
+//! ISA selector for the multi-vector MaxSim factory.
 
-/// Instruction Set Architecture (ISA) selector for which multi-vector MaxSim
-/// kernel to build.
+/// Which ISA to use when building a MaxSim kernel.
 ///
-/// `#[non_exhaustive]` so adding a variant (e.g. for a new in-tree kernel) is
-/// not a breaking change. Deliberately **not** `Serialize`/`Deserialize` —
-/// callers wanting JSON support maintain their own shadow enum and convert
-/// via `From` / `TryFrom`, so the library is not pinned to a particular
-/// serialization format.
+/// Not `Serialize`/`Deserialize` by design — callers maintain their own
+/// shadow enum for their serialization format.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
@@ -44,9 +39,7 @@ impl std::fmt::Display for MaxSimIsa {
     }
 }
 
-/// Returned by [`build_max_sim`](super::build_max_sim) when the requested
-/// ISA cannot be produced on the current host (e.g. x86_64 V4 requested on
-/// a non-AVX512 CPU, or Neon requested on x86_64).
+/// The requested ISA is not available on this host.
 #[derive(Debug, Clone, Copy)]
 pub struct NotSupported {
     pub isa: MaxSimIsa,

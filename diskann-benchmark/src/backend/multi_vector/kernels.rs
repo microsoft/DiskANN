@@ -3,14 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! `Benchmark` impls for the multi-vector MaxSim factory.
-//!
-//! A single generic [`Kernel<T>`] carrier supplies the `Benchmark` and
-//! `Regression` impls for every element type accepted by the library's
-//! [`MaxSimElement`] sealed trait. Each `try_match` checks `element_type`
-//! only; the JSON `isa` field is passed to the library factory at run time,
-//! and arch unavailability surfaces as a job-level error via
-//! [`NotSupported`](diskann_quantization::multi_vector::NotSupported).
+//! `Benchmark` + `Regression` impls for multi-vector MaxSim.
 
 use std::io::Write;
 use std::marker::PhantomData;

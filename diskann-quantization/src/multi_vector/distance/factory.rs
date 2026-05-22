@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Factory + concrete `MaxSimKernel<T>` implementations for the multi-vector
-//! distance API. See [`build_max_sim`] for the BYOTE entry point and
-//! [`MaxSimElement`] for the sealed trait that gates accepted element types.
+//! Factory for constructing [`MaxSimKernel<T>`](super::kernel::MaxSimKernel)
+//! implementations. See [`build_max_sim`] for the entry point.
 
 use diskann_utils::Reborrow;
 use diskann_vector::distance::InnerProduct;
@@ -24,13 +23,9 @@ use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Standard};
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Prepared<A, Q> — concrete kernel for the arch-dispatched paths.
+//  Prepared<A, Q> — concrete kernel for the SIMD-dispatched paths.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Concrete kernel: owns an arch token and a block-transposed prepared query.
-/// One generic `MaxSimKernel<T>` impl covers every arch (Scalar/V3/V4/Neon)
-/// for every supported element type (f32, f16) via the `Kernel<A>` / `Target3`
-/// dispatch in the `kernels` module.
 #[derive(Debug)]
 struct Prepared<A, Q> {
     arch: A,
@@ -97,11 +92,9 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  ReferenceKernel<T> — non-SIMD fallback that wraps MaxSim::evaluate.
+//  ReferenceKernel<T> — non-SIMD fallback.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `MaxSimIsa::Reference` path. Owns the query as a `Mat<Standard<T>>` and
-/// delegates to [`MaxSim`] per `compute_max_sim` call.
 struct ReferenceKernel<T: Copy> {
     query: Mat<Standard<T>>,
 }
@@ -150,16 +143,12 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  BuildAndErase<E> — Target1 impls used by `dispatch1_no_features` (Auto).
+//  BuildAndErase<E> — Target1 carrier for dispatch1_no_features (Auto).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Internal `Target1` carrier used by the `MaxSimIsa::Auto` arm of
-/// [`MaxSimElement::build`]. `dispatch1_no_features` picks the highest
-/// available arch on the host CPU and calls the matching `Target1::run`
-/// below.
+/// Maps each architecture to its optimal GROUP and hands the resulting
+/// `Prepared` kernel to the caller's `Erase` visitor.
 struct BuildAndErase<E>(E);
-
-// ───── f32 Target1 impls ─────
 
 impl<E: Erase<f32>> diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<f32>>>
     for BuildAndErase<E>
@@ -203,8 +192,6 @@ impl<E: Erase<f32>> diskann_wide::arch::Target1<Neon, E::Output, MatRef<'_, Stan
         self.0.erase(Prepared { arch, prepared })
     }
 }
-
-// ───── f16 Target1 impls ─────
 
 impl<E: Erase<half::f16>>
     diskann_wide::arch::Target1<Scalar, E::Output, MatRef<'_, Standard<half::f16>>>
@@ -261,16 +248,11 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Scalar element types accepted by the multi-vector MaxSim factory.
-///
-/// Sealed: external crates cannot add impls. The library ships impls for
-/// `f32` and `half::f16`. Quantized representations (PQ, SQ, packed sub-byte)
-/// do not fit this trait — they carry per-vector codebook/scale state and
-/// will get dedicated factory functions when they are added.
+/// Element types accepted by [`build_max_sim`]. Sealed — the library ships
+/// impls for `f32` and `half::f16`.
 pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
-    /// Build the concrete kernel for this element type and hand it to
-    /// `erase.erase(...)`. Returns [`NotSupported`] when the requested ISA
-    /// cannot run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64).
+    /// Build a kernel for this element type. Returns [`NotSupported`] if the
+    /// requested ISA is unavailable on this host.
     fn build<E: Erase<Self>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<Self>>,
@@ -387,12 +369,8 @@ impl MaxSimElement for half::f16 {
 //  Factory entry point.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Build a multi-vector MaxSim kernel for any [`MaxSimElement`] type.
-///
-/// Thin wrapper over [`MaxSimElement::build`] — exists so generic callers can
-/// write `build_max_sim::<T, _>(isa, query, erase)` without naming the trait
-/// at the call site. Returns [`NotSupported`] when the requested ISA cannot
-/// run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64).
+/// Build a MaxSim kernel for the given ISA and query matrix, passing the
+/// concrete kernel through `erase` for caller-controlled type erasure.
 pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
     isa: MaxSimIsa,
     query: MatRef<'_, Standard<T>>,
@@ -406,9 +384,6 @@ mod tests {
     use super::*;
     use crate::multi_vector::{BoxErase, Chamfer, MaxSim, QueryMatRef};
 
-    /// Local helper trait — picks a sane test value of `T` from an `f32`
-    /// so both `f32` and `half::f16` parameterizations share the same data
-    /// generator.
     trait FromF32 {
         fn from_f32(v: f32) -> Self;
     }
@@ -435,12 +410,8 @@ mod tests {
             .collect()
     }
 
-    /// Shapes for the `chamfer_matches_fallback` / `max_sim_matches_fallback`
-    /// agreement checks: `(num_queries, num_docs, dim)`.
-    ///
-    /// Targets the factory wiring (query setup, score writeback) above the
-    /// kernel layer; exhaustive panel/remainder coverage is pinned in
-    /// `kernels::tiled_reduce::tests`.
+    /// (num_queries, num_docs, dim) — exercises factory wiring, not kernel
+    /// internals (those are pinned in `kernels::tiled_reduce::tests`).
     const TEST_CASES: &[(usize, usize, usize)] = &[
         (1, 1, 4),   // Degenerate
         (5, 3, 5),   // Prime k; nq > 1 and nd > 1 exercise per-row writeback

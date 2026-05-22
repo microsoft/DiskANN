@@ -1,0 +1,152 @@
+{
+  "search_directories": [
+    "/home/mark/data/bigann"
+  ],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "async-index-build",
+      "content": {
+        "search_phase": {
+          "groundtruth": "sift-1m.gt.bin",
+          "num_threads": [
+            16
+          ],
+          "queries": "sift-1m.queries.u8.bin",
+          "reps": 5,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "search_n": 10
+            }
+          ],
+          "search-type": "topk"
+        },
+        "source": {
+          "alpha": 1.2000000476837158,
+          "backedge_ratio": 1.0,
+          "data": "sift-1m.u8.bin",
+          "data_type": "uint8",
+          "distance": "squared_l2",
+          "index-source": "Build",
+          "insert_retry": null,
+          "l_build": 50,
+          "max_degree": 32,
+          "multi_insert": null,
+          "num_threads": 16,
+          "save_path": null,
+          "start_point_strategy": "medoid"
+        }
+      }
+    },
+    {
+      "type": "async-index-build",
+      "content": {
+        "search_phase": {
+          "groundtruth": "sift-1m.gt.bin",
+          "num_threads": [
+            16
+          ],
+          "queries": "sift-1m.queries.f32.bin",
+          "reps": 5,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "search_n": 10
+            }
+          ],
+          "search-type": "topk"
+        },
+        "source": {
+          "alpha": 1.2000000476837158,
+          "backedge_ratio": 1.0,
+          "data": "sift-1m.f32.bin",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "index-source": "Build",
+          "insert_retry": null,
+          "l_build": 50,
+          "max_degree": 32,
+          "multi_insert": null,
+          "num_threads": 16,
+          "save_path": null,
+          "start_point_strategy": "medoid"
+        }
+      }
+    },
+    {
+      "type": "async-index-build",
+      "content": {
+        "search_phase": {
+          "groundtruth": "sift-1m.gt.bin",
+          "num_threads": [
+            16
+          ],
+          "queries": "sift-1m.queries.f32.bin",
+          "reps": 5,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100
+              ],
+              "search_n": 10
+            }
+          ],
+          "search-type": "topk"
+        },
+        "source": {
+          "alpha": 1.2000000476837158,
+          "backedge_ratio": 1.0,
+          "data": "sift-1m.f32.bin",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "index-source": "Build",
+          "insert_retry": null,
+          "l_build": 50,
+          "max_degree": 32,
+          "multi_insert": null,
+          "num_threads": 16,
+          "save_path": null,
+          "pipnn": {
+             "algorithm": "PiPNN"
+          },
+          "start_point_strategy": "medoid"
+        }
+      }
+    }
+  ]
+}

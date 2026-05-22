@@ -3,58 +3,13 @@
  * Licensed under the MIT license.
  */
 
-//! Multi-vector MaxSim distance benchmarks with regression detection.
+//! Multi-vector MaxSim distance benchmarks.
 //!
-//! Registers one `Benchmark` entry per supported element type; the JSON
-//! `isa` field selects the kernel at run time via the library's
-//! [`build_max_sim`] factory. The set of accepted element types is gated by
-//! the sealed [`MaxSimElement`] trait.
+//! # Adding a new kernel
 //!
-//! # Adding a new in-tree experimental kernel
-//!
-//! 1. **Library: variant + dispatch arm.** In
-//!    `diskann-quantization::multi_vector::distance`:
-//!    - Add a new variant to [`MaxSimIsa`] (in `isa.rs`).
-//!    - Implement [`MaxSimKernel<T>`] for your kernel struct (in
-//!      `factory.rs`, next to `Prepared` and `ReferenceKernel`).
-//!    - Add a matching arm to the [`MaxSimElement::build`] impl for each
-//!      element type your kernel supports — the arm constructs your kernel
-//!      and hands it to `erase.erase(...)`.
-//!
-//! 2. **Benchmark: matching shadow variant.** In
-//!    [`crate::inputs::multi_vector`]:
-//!    - Add the same variant to [`BenchIsa`].
-//!    - Add the matching arm to `From<BenchIsa> for MaxSimIsa`.
-//!
-//! 3. **Run.** Set `"isa": "your-variant"` in the JSON job; the existing
-//!    `Kernel<T>` benchmark entries (registered once per element type)
-//!    handle the rest. No new `Benchmark` registration required.
-//!
-//! # Why two enums?
-//!
-//! [`MaxSimIsa`] (library) and [`BenchIsa`] are kept separate so the library
-//! doesn't pin its public API on a serde version or a particular JSON
-//! shape. The benchmark owns its kebab-case JSON layout; the library is
-//! serde-agnostic. Mirroring variant-for-variant is intentional — small
-//! price for keeping the library boundary clean.
-//!
-//! # Background
-//!
-//! The factory follows the BYOTE ("Bring your own type erasure") pattern
-//! described in [RFC #1068]. If you want your kernel packaged as something
-//! other than `Box<dyn MaxSimKernel<T>>` (e.g. composed with chamfer
-//! summing, or wrapped in a custom thin trait), implement your own
-//! [`Erase<T>`] and pass it to the factory in place of [`BoxErase`].
-//!
-//! [`build_max_sim`]: diskann_quantization::multi_vector::build_max_sim
-//! [`MaxSimIsa`]: diskann_quantization::multi_vector::MaxSimIsa
-//! [`MaxSimElement`]: diskann_quantization::multi_vector::MaxSimElement
-//! [`MaxSimElement::build`]: diskann_quantization::multi_vector::MaxSimElement::build
-//! [`MaxSimKernel<T>`]: diskann_quantization::multi_vector::MaxSimKernel
-//! [`Erase<T>`]: diskann_quantization::multi_vector::Erase
-//! [`BoxErase`]: diskann_quantization::multi_vector::BoxErase
-//! [`BenchIsa`]: crate::inputs::multi_vector::BenchIsa
-//! [RFC #1068]: https://github.com/microsoft/DiskANN/pull/1068
+//! 1. Add a variant to `MaxSimIsa` and wire it in `MaxSimElement::build`.
+//! 2. Mirror the variant in `BenchIsa` and `From<BenchIsa> for MaxSimIsa`.
+//! 3. Set `"isa": "your-variant"` in the JSON job — no new registration needed.
 
 use diskann_benchmark_runner::Registry;
 

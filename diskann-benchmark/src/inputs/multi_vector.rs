@@ -13,14 +13,7 @@ use serde::{Deserialize, Serialize};
 // Enum types //
 ////////////////
 
-/// JSON-facing shadow of [`MaxSimIsa`] from `diskann-quantization`. The
-/// library's enum is deliberately not `Serialize`/`Deserialize` so it isn't
-/// pinned to a particular JSON shape; this enum owns the kebab-case
-/// serialization and converts to the library type at dispatch time.
-///
-/// **Stays in sync with `MaxSimIsa` manually.** When the library adds a
-/// variant, mirror it here + add a matching arm to `From<BenchIsa> for
-/// MaxSimIsa`.
+/// Serde-friendly mirror of `MaxSimIsa`. Kept in sync manually.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
