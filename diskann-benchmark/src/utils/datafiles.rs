@@ -116,15 +116,9 @@ pub(crate) fn load_groundtruth(path: BinFile<'_>, k: Option<usize>) -> anyhow::R
     file.read_exact(groundtruth_slice)?;
 
     if let Some(expected_k) = k {
-<<<<<<< HEAD
-        if groundtruth.ncols() != expected_k {
-            return Err(anyhow::anyhow!(
-                "Each row of groundtruth must have length {} (got {})",
-=======
         if groundtruth.ncols() < expected_k {
             return Err(anyhow::anyhow!(
                 "Each row of groundtruth must have at least {} neighbors (got {})",
->>>>>>> 4f70a82133bf43e6bece7572e611cb4dedf2c475
                 expected_k,
                 groundtruth.ncols()
             ));

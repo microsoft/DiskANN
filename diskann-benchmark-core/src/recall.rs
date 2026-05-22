@@ -205,10 +205,6 @@ where
         let result = results.row(i);
 
         let gt_row = groundtruth.row(i);
-<<<<<<< HEAD
-        // groundtruth does not have to be fixed-size, so we compute recall_k for this row based on its gt length
-        let this_recall_k = gt_row.len().min(recall_k);
-=======
         // `groundtruth` does not have to be fixed-size,
         // so we compute `recall_k` for this row based on its gt length
         let this_recall_k = gt_row.len().min(recall_k);
@@ -216,7 +212,6 @@ where
         if this_recall_k == 0 {
             continue;
         }
->>>>>>> 4f70a82133bf43e6bece7572e611cb4dedf2c475
 
         // Populate the groundtruth using the top-k
         this_groundtruth.clear();
@@ -224,20 +219,6 @@ where
 
         // If we have distances, then continue to append distances as long as the distance
         // value is constant
-<<<<<<< HEAD
-        if let Some(distances) = groundtruth_distances
-            && this_recall_k > 0
-        {
-            let distances_row = distances.row(i);
-            if distances_row.len() > this_recall_k - 1 && gt_row.len() > this_recall_k - 1 {
-                let last_distance = distances_row[this_recall_k - 1];
-                for (d, g) in distances_row.iter().zip(gt_row.iter()).skip(this_recall_k) {
-                    if *d == last_distance {
-                        this_groundtruth.insert(g.clone());
-                    } else {
-                        break;
-                    }
-=======
         if let Some(distances) = groundtruth_distances {
             let distances_row = distances.row(i);
 
@@ -249,7 +230,6 @@ where
                     this_groundtruth.insert(g.clone());
                 } else {
                     break;
->>>>>>> 4f70a82133bf43e6bece7572e611cb4dedf2c475
                 }
             }
         }
@@ -264,32 +244,18 @@ where
             .count()
             .min(this_recall_k);
 
-<<<<<<< HEAD
-        // recall is the number of correct results in the top n, divided by k (not n), or 0 if there are no groundtruth results for this query
-        let recall = if this_recall_k > 0 {
-            (r as f64) / (this_recall_k as f64)
-        } else {
-            0.0
-        };
-=======
         let recall = (r as f64) / (this_recall_k as f64);
->>>>>>> 4f70a82133bf43e6bece7572e611cb4dedf2c475
 
         recall_values.push(recall);
     }
 
     // Compute the average recall
     let total: f64 = recall_values.iter().sum();
-<<<<<<< HEAD
-    let div = recall_values.len();
-    let average = (total) / (div as f64);
-=======
     let average = if recall_values.is_empty() {
         0.0
     } else {
         total / (recall_values.len() as f64)
     };
->>>>>>> 4f70a82133bf43e6bece7572e611cb4dedf2c475
 
     Ok(RecallMetrics {
         recall_k,
