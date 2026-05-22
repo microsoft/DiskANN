@@ -810,7 +810,6 @@ version = "0.52.0"
 dependencies = [
  "anyhow",
  "bf-tree",
- "bit-set",
  "criterion",
  "diskann",
  "diskann-utils",
@@ -819,7 +818,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "num-traits",
  "rand 0.9.4",
- "rayon",
  "roaring",
  "scc",
  "serde",
