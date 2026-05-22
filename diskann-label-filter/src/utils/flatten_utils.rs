@@ -191,7 +191,7 @@ pub fn flatten_json_pointers(value: &Value) -> AttributesVec {
 /// Configurable version that uses FlattenConfig
 ///
 /// Example:
-/// With config.separator=".": {"a": {"b": [1, 2]}} -> [ ("/a/b/0", 1), ("/a/b/1", 2) ]
+/// With config.separator=".": {"a": {"b": [1, 2]}} -> [ (".a.b.0", 1), (".a.b.1", 2) ]
 pub fn flatten_json_pointers_with_config(value: &Value, config: &FlattenConfig) -> AttributesVec {
     let mut out = Vec::new();
     flatten_json_pointer_inner(value, &config.root_prefix, &mut out, &config.separator);
