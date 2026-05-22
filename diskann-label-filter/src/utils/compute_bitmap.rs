@@ -138,15 +138,13 @@ pub fn eval_query_using_accelerators(
                             }
                             CompareOp::Ne(value) => {
                                 let fval = value.as_f64().ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Ne"))?;
-                                let mut all_ids = Vec::new();
+                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                                let mut bitset = BitSet::new();
                                 for (val, ids) in btree.iter() {
-                                    let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                                     if val != &fval {
-                                        all_ids.extend(ids.iter().cloned());
+                                        bitset.extend(ids.iter().cloned());
                                     }
                                 }
-                                let mut bitset = BitSet::new();
-                                bitset.extend(all_ids);
                                 Ok(bitset)
                             }
                             CompareOp::Lt(value) => {
