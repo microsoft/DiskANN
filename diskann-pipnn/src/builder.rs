@@ -17,6 +17,7 @@
 use std::time::Instant;
 
 use diskann::utils::VectorRepr;
+use diskann_providers::utils::MAX_MEDOID_SAMPLE_SIZE;
 use rayon::prelude::*;
 
 use crate::hash_prune::HashPrune;
@@ -263,25 +264,28 @@ impl PiPNNGraph {
     }
 }
 
-/// Find the medoid: the point closest to the centroid.
+/// Find the medoid (point closest to the centroid) using squared L2.
 ///
-/// Uses squared L2 distance to find the nearest point to the centroid,
-/// matching DiskANN's `find_medoid_with_sampling` behavior. The centroid
-/// is a geometric center, so L2 is the natural metric regardless of the
-/// build distance metric.
-fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
+/// Centroid is averaged over a stride-sample capped at
+/// [`MAX_MEDOID_SAMPLE_SIZE`]; argmin scans the full dataset, like
+/// [`diskann_providers::utils::find_medoid_with_sampling`].
+fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNNResult<usize> {
     let dist_fn = make_dist_fn(Metric::L2, ndims);
+    let convert_err =
+        |e: T::Error| PiPNNError::Config(format!("find_medoid: vector conversion failed: {}", e));
 
-    // Compute centroid.
+    let stride = npoints.div_ceil(MAX_MEDOID_SAMPLE_SIZE).max(1);
     let mut centroid = vec![0.0f32; ndims];
     let mut point_buf = vec![0.0f32; ndims];
-    for i in 0..npoints {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).expect("f32 conversion");
+    let mut sample_count = 0usize;
+    for i in (0..npoints).step_by(stride) {
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).map_err(convert_err)?;
         for d in 0..ndims {
             centroid[d] += point_buf[d];
         }
+        sample_count += 1;
     }
-    let inv_n = 1.0 / npoints as f32;
+    let inv_n = 1.0 / sample_count as f32;
     for c in &mut centroid {
         *c *= inv_n;
     }
@@ -289,7 +293,7 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
     let mut best_idx = 0;
     let mut best_dist = f32::MAX;
     for i in 0..npoints {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).expect("f32 conversion");
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).map_err(convert_err)?;
         let dist = dist_fn.call(&point_buf, &centroid);
         if dist < best_dist {
             best_dist = dist;
@@ -297,7 +301,7 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize
         }
     }
 
-    best_idx
+    Ok(best_idx)
 }
 
 /// Build a PiPNN index from typed vector data.
@@ -372,7 +376,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     log_simd_tier();
 
     // Compute medoid once upfront.
-    let medoid = find_medoid(data, npoints, ndims);
+    let medoid = find_medoid(data, npoints, ndims)?;
 
     // Initialize HashPrune for edge merging.
     let t0 = Instant::now();
@@ -398,14 +402,14 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let seed = 1000 + replica as u64 * 7919;
 
         let t1 = Instant::now();
-        let partition_config = PartitionConfig {
-            c_max: config.c_max,
-            c_min: config.c_min,
-            p_samp: config.p_samp,
-            fanout: config.fanout.clone(),
+        let partition_config = PartitionConfig::new(
+            config.c_max,
+            config.c_min,
+            config.p_samp,
+            config.fanout.clone(),
             metric,
-            leader_cap: config.leader_cap,
-        };
+            config.leader_cap,
+        )?;
 
         let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
@@ -1643,8 +1647,7 @@ mod tests {
             PiPNNBuildContext::new(config_aggressive, nonzero(16), Metric::L2, 0).unwrap();
         let ctx_relaxed =
             PiPNNBuildContext::new(config_relaxed, nonzero(16), Metric::L2, 0).unwrap();
-        let graph_aggressive =
-            build_typed::<f32>(&data, npoints, ndims, &ctx_aggressive).unwrap();
+        let graph_aggressive = build_typed::<f32>(&data, npoints, ndims, &ctx_aggressive).unwrap();
         let graph_relaxed = build_typed::<f32>(&data, npoints, ndims, &ctx_relaxed).unwrap();
 
         // Relaxed alpha should yield denser graph (more edges survive pruning).
@@ -1678,8 +1681,7 @@ mod tests {
             ..config_no_prune.clone()
         };
 
-        let ctx_no =
-            PiPNNBuildContext::new(config_no_prune, nonzero(32), Metric::L2, 0).unwrap();
+        let ctx_no = PiPNNBuildContext::new(config_no_prune, nonzero(32), Metric::L2, 0).unwrap();
         let ctx_yes = PiPNNBuildContext::new(config_prune, nonzero(32), Metric::L2, 0).unwrap();
         let graph_no = build_typed::<f32>(&data, npoints, ndims, &ctx_no).unwrap();
         let graph_yes = build_typed::<f32>(&data, npoints, ndims, &ctx_yes).unwrap();

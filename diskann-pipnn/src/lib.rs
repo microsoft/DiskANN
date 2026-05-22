@@ -87,18 +87,14 @@ pub struct PiPNNConfig {
 impl PiPNNConfig {
     /// Validate the configuration, returning an error if any parameter is invalid.
     pub fn validate(&self) -> PiPNNResult<()> {
-        if self.c_max == 0 {
-            return Err(PiPNNError::Config("c_max must be > 0".into()));
-        }
-        if self.c_min == 0 {
-            return Err(PiPNNError::Config("c_min must be > 0".into()));
-        }
-        if self.c_min > self.c_max {
-            return Err(PiPNNError::Config(format!(
-                "c_min ({}) must be <= c_max ({})",
-                self.c_min, self.c_max
-            )));
-        }
+        // Partition-layer rules: delegate to the owning module.
+        partition::PartitionConfig::validate_params(
+            self.c_max,
+            self.c_min,
+            self.p_samp,
+            &self.fanout,
+            self.leader_cap,
+        )?;
         if self.k == 0 {
             return Err(PiPNNError::Config("k must be > 0".into()));
         }
@@ -107,21 +103,6 @@ impl PiPNNConfig {
         }
         if self.l_max == 0 {
             return Err(PiPNNError::Config("l_max must be > 0".into()));
-        }
-        if !self.p_samp.is_finite() {
-            return Err(PiPNNError::Config("p_samp must be finite".into()));
-        }
-        if self.p_samp <= 0.0 || self.p_samp > 1.0 {
-            return Err(PiPNNError::Config(format!(
-                "p_samp ({}) must be in (0.0, 1.0]",
-                self.p_samp
-            )));
-        }
-        if self.fanout.is_empty() {
-            return Err(PiPNNError::Config("fanout must not be empty".into()));
-        }
-        if self.fanout.contains(&0) {
-            return Err(PiPNNError::Config("all fanout values must be > 0".into()));
         }
         if self.num_hash_planes == 0 || self.num_hash_planes > 16 {
             return Err(PiPNNError::Config(format!(

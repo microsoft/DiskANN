@@ -35,11 +35,6 @@ use diskann_utils::views::MatrixView;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
-#[cfg(feature = "pipnn")]
-use {
-    crate::build::configuration::build_algorithm::BuildAlgorithm,
-    diskann_pipnn::PiPNNBuildContext,
-};
 use crate::{
     build::{
         builder::{
@@ -67,6 +62,10 @@ use crate::{
         BuildMergedVamanaIndexCheckpoint, DiskIndexBuildCheckpoint, PerfLogger,
     },
     DiskIndexBuildParameters, QuantizationType,
+};
+#[cfg(feature = "pipnn")]
+use {
+    crate::build::configuration::build_algorithm::BuildAlgorithm, diskann_pipnn::PiPNNBuildContext,
 };
 
 /// Disk index builder that composes with DiskIndexBuilderCore.

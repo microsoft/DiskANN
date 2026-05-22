@@ -135,14 +135,15 @@ fn bench_partition(c: &mut Criterion) {
 
     for &(npoints, ndims) in &[(10_000, 128), (50_000, 128), (10_000, 384)] {
         let data = random_data(npoints, ndims, 42);
-        let config = PartitionConfig {
-            c_max: 1024,
-            c_min: 256,
-            p_samp: 0.05,
-            fanout: vec![8],
-            metric: Metric::L2,
-            leader_cap: 1000,
-        };
+        let config = PartitionConfig::new(
+            1024,       // c_max
+            256,        // c_min
+            0.05,       // p_samp
+            vec![8],    // fanout
+            Metric::L2, // metric
+            1000,       // leader_cap
+        )
+        .expect("valid partition config");
 
         group.throughput(Throughput::Elements(npoints as u64));
         group.bench_with_input(

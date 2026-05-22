@@ -9,10 +9,16 @@
 //! work-queue approach. All oversized clusters at each level are processed in parallel.
 
 use crate::rayon_util::ParIterInstalled;
+use crate::{PiPNNError, PiPNNResult};
 use diskann::utils::VectorRepr;
 use rand::prelude::IndexedRandom;
 use rand::SeedableRng;
 use rayon::prelude::*;
+
+/// Maximum supported `fanout` value: hard upper bound on the size of the
+/// stack-allocated top-k tracker [`assign_to_leaders`] uses on its hot path.
+/// Enforced by [`crate::PiPNNConfig::validate`].
+pub const MAX_FANOUT: usize = 16;
 
 /// A leaf partition containing indices into the original dataset.
 ///
@@ -24,16 +30,95 @@ pub struct Leaf {
 }
 
 /// Configuration for RBC partitioning.
+///
+/// Fields are private; construct via [`PartitionConfig::new`], which enforces
+/// the partition-layer invariants on `fanout` and `leader_cap`.
 #[derive(Debug, Clone)]
 pub struct PartitionConfig {
-    pub c_max: usize,
-    pub c_min: usize,
-    pub p_samp: f64,
-    pub fanout: Vec<usize>,
-    /// Distance metric for partition assignment.
-    pub metric: diskann_vector::distance::Metric,
-    /// Maximum leaders per partition level.
-    pub leader_cap: usize,
+    c_max: usize,
+    c_min: usize,
+    p_samp: f64,
+    fanout: Vec<usize>,
+    metric: diskann_vector::distance::Metric,
+    leader_cap: usize,
+}
+
+impl PartitionConfig {
+    /// Construct a validated [`PartitionConfig`]. Returns an error if any
+    /// partition-layer invariant is violated (see [`Self::validate_params`]).
+    pub fn new(
+        c_max: usize,
+        c_min: usize,
+        p_samp: f64,
+        fanout: Vec<usize>,
+        metric: diskann_vector::distance::Metric,
+        leader_cap: usize,
+    ) -> PiPNNResult<Self> {
+        Self::validate_params(c_max, c_min, p_samp, &fanout, leader_cap)?;
+        Ok(Self {
+            c_max,
+            c_min,
+            p_samp,
+            fanout,
+            metric,
+            leader_cap,
+        })
+    }
+
+    /// Validate raw partition parameters without constructing.
+    ///
+    /// Owns the full set of partition-layer rules so that upstream config
+    /// validators (e.g. [`crate::PiPNNConfig::validate`]) can fail-fast on bad
+    /// inputs by calling this directly, while [`Self::new`] enforces the same
+    /// rules at construction time.
+    pub(crate) fn validate_params(
+        c_max: usize,
+        c_min: usize,
+        p_samp: f64,
+        fanout: &[usize],
+        leader_cap: usize,
+    ) -> PiPNNResult<()> {
+        if c_max == 0 {
+            return Err(PiPNNError::Config("c_max must be > 0".into()));
+        }
+        if c_min == 0 {
+            return Err(PiPNNError::Config("c_min must be > 0".into()));
+        }
+        if c_min > c_max {
+            return Err(PiPNNError::Config(format!(
+                "c_min ({}) must be <= c_max ({})",
+                c_min, c_max
+            )));
+        }
+        if !p_samp.is_finite() {
+            return Err(PiPNNError::Config("p_samp must be finite".into()));
+        }
+        if p_samp <= 0.0 || p_samp > 1.0 {
+            return Err(PiPNNError::Config(format!(
+                "p_samp ({}) must be in (0.0, 1.0]",
+                p_samp
+            )));
+        }
+        if fanout.is_empty() {
+            return Err(PiPNNError::Config("fanout must not be empty".into()));
+        }
+        if fanout.contains(&0) {
+            return Err(PiPNNError::Config("all fanout values must be > 0".into()));
+        }
+        if let Some(&over) = fanout.iter().find(|&&f| f > MAX_FANOUT) {
+            return Err(PiPNNError::Config(format!(
+                "fanout value {} exceeds MAX_FANOUT ({})",
+                over, MAX_FANOUT
+            )));
+        }
+        if leader_cap < 2 {
+            return Err(PiPNNError::Config(format!(
+                "leader_cap ({}) must be >= 2",
+                leader_cap
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Compute the number of leaders to sample, capped by leader_cap.
@@ -276,9 +361,9 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             } = *bufs;
 
             // Fused distance + top-k: compute distance AND track top-k in single pass.
-            // Keeps hot top-k array in registers.
-            debug_assert!(num_assign <= 16, "top-k tracker limited to 16");
-            let mut top: [(u32, f32); 16] = [(u32::MAX, f32::MAX); 16];
+            // Keeps hot top-k array in registers. Capped at MAX_FANOUT by
+            // PiPNNConfig::validate, so num_assign <= MAX_FANOUT.
+            let mut top: [(u32, f32); MAX_FANOUT] = [(u32::MAX, f32::MAX); MAX_FANOUT];
 
             // Outer loop over mini-batches inside the stripe. Each mini-batch:
             //  1. Gather mb rows of p_data (f16→f32 via as_f32_into)
@@ -937,5 +1022,49 @@ mod tests {
         let leaves = partition(&data, ndims, npoints, &config, 0);
         assert_eq!(leaves.len(), 1);
         assert_eq!(leaves[0].indices.len(), npoints);
+    }
+
+    // Baseline partition rules (c_max > 0, c_min <= c_max, p_samp range,
+    // fanout non-empty / non-zero) are covered via PiPNNConfig::validate
+    // delegate path in `builder::tests::test_config_validate`. Only the
+    // partition-specific rules introduced alongside `validate_params` are
+    // tested here.
+
+    #[test]
+    fn validate_params_rejects_fanout_above_max() {
+        let err = PartitionConfig::validate_params(1024, 256, 0.05, &[MAX_FANOUT + 1], 1000)
+            .expect_err("fanout > MAX_FANOUT must reject");
+        assert!(format!("{err}").contains("MAX_FANOUT"));
+        // Boundary: exactly MAX_FANOUT is accepted.
+        PartitionConfig::validate_params(1024, 256, 0.05, &[MAX_FANOUT], 1000)
+            .expect("fanout == MAX_FANOUT must accept");
+    }
+
+    #[test]
+    fn validate_params_rejects_leader_cap_below_two() {
+        for bad in [0usize, 1] {
+            let err = PartitionConfig::validate_params(1024, 256, 0.05, &[10, 3], bad)
+                .expect_err(&format!("leader_cap={bad} must reject"));
+            assert!(format!("{err}").contains("leader_cap"));
+        }
+        // Boundary: exactly 2 is accepted (matches sample_num_leaders clamp floor).
+        PartitionConfig::validate_params(1024, 256, 0.05, &[10, 3], 2)
+            .expect("leader_cap == 2 must accept");
+    }
+
+    #[test]
+    fn new_propagates_validate_params_error() {
+        // Contract test for the public constructor: external callers (e.g.
+        // benches) hit `new` rather than going through PiPNNConfig::validate.
+        let err = PartitionConfig::new(
+            1024,
+            256,
+            0.05,
+            vec![MAX_FANOUT + 1],
+            diskann_vector::distance::Metric::L2,
+            1000,
+        )
+        .expect_err("PartitionConfig::new must propagate validate_params errors");
+        assert!(format!("{err}").contains("MAX_FANOUT"));
     }
 }
