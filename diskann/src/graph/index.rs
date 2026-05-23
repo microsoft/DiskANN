@@ -25,8 +25,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
-        self, Batch, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
-        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
+        self, Batch, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, PruneStrategy,
+        SearchAccessor, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -280,14 +280,14 @@ where
 
             // NOTE: We don't filter the start points out of `visited_nodes`, as those are
             // needed to generate out edges from the start points.
-            let start_ids = accessor.starting_points().await?;
+            let num_start_ids = accessor.num_starting_points().await?;
 
             let prune_strategy = strategy.prune_strategy();
             let mut prune_accessor = prune_strategy
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
-            let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
+            let mut scratch = self.search_scratch(self.l_build(), num_start_ids);
             let mut search_l = scratch.best.search_l();
 
             // If the experimental config is present, use it to obtain the maximum number
@@ -305,7 +305,6 @@ where
 
                 self.search_internal(
                     None, // beam_width
-                    &start_ids,
                     &mut accessor,
                     &mut scratch,
                     &mut search_record,
@@ -414,9 +413,9 @@ where
                 .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
+            let num_start_ids = accessor.num_starting_points().await?;
 
-            let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
+            let mut scratch = self.search_scratch(self.l_build(), num_start_ids);
             let mut search_l = scratch.best.search_l();
 
             // If the experimental config is present, use it to obtain the maximum number
@@ -431,7 +430,6 @@ where
 
                 self.search_internal(
                     None, // beam_width
-                    &start_ids,
                     &mut accessor,
                     &mut scratch,
                     &mut search_record,
@@ -1237,13 +1235,11 @@ where
                 .search_accessor(&self.data_provider, context, v.reborrow())
                 .into_ann_result()?;
 
-            let start_ids = search_accessor.starting_points().await?;
-
-            let mut scratch = self.search_scratch(l_value, start_ids.len());
+            let num_start_ids = search_accessor.num_starting_points().await?;
+            let mut scratch = self.search_scratch(l_value, num_start_ids);
 
             self.search_internal(
                 None, // beam_width
-                &start_ids,
                 &mut search_accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
@@ -1272,8 +1268,13 @@ where
                 .collect();
 
             // Collect IDs whose adjacency lists need to be updated.
+            let prune_strategy = strategy.prune_strategy();
+            let mut prune_accessor = prune_strategy
+                .prune_accessor(self.provider(), context)
+                .into_ann_result()?;
+
             let ids_to_modify = self
-                .return_refs_to_deleted_vertex(&mut search_accessor, id, &undeleted_ids)
+                .return_refs_to_deleted_vertex(&mut prune_accessor, id, &undeleted_ids)
                 .await?;
 
             undeleted_ids.truncate(k_value);
@@ -1962,13 +1963,12 @@ where
     pub(crate) fn search_internal<A, SR, Q>(
         &self,
         beam_width: Option<usize>,
-        start_ids: &[DP::InternalId],
         accessor: &mut A,
         scratch: &mut SearchScratch<DP::InternalId, Q>,
         search_record: &mut SR,
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
-        A: ExpandBeam<Id = DP::InternalId> + SearchExt,
+        A: SearchAccessor<Id = DP::InternalId>,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {
@@ -1978,15 +1978,13 @@ where
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
             if scratch.visited.is_empty() {
-                for id in start_ids {
-                    scratch.visited.insert(*id);
-                    let dist = accessor
-                        .get_distance(*id)
-                        .await
-                        .escalate("start point retrieval must succeed")?;
-                    scratch.best.insert(Neighbor::new(*id, dist));
-                    scratch.cmps += 1;
-                }
+                accessor
+                    .start_point_distances(|id, distance| {
+                        scratch.visited.insert(id);
+                        scratch.best.insert(Neighbor::new(id, distance));
+                        scratch.cmps += 1;
+                    })
+                    .await?;
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
@@ -2007,7 +2005,7 @@ where
                     .expand_beam(
                         scratch.beam_nodes.iter().copied(),
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |id, distance| neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
 
@@ -2111,7 +2109,7 @@ where
         context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
         S: SearchStrategy<'a, DP, T>,
         T: Copy + Send + 'a,
@@ -2133,7 +2131,7 @@ where
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
-    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
         S: SearchStrategy<'a, DP, T>,
         T: Copy + Send + 'a,
@@ -2164,7 +2162,7 @@ where
                     .expand_beam(
                         init_ids.iter().copied(),
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |id, distance| neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
 
@@ -2183,7 +2181,6 @@ where
                 next_result_index: l_value,
                 search_param_l: l_value,
                 accessor,
-                _query: std::marker::PhantomData,
             })
         }
     }

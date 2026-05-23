@@ -385,54 +385,9 @@ pub trait HasElementRef {
     type ElementRef<'a>;
 }
 
-//////////////
-// Accessor //
-//////////////
-
-/// A lens through which [`DataProvider`]s contextually viewed.
-///
-/// Accessors are **not** required to be `'static` and almost always contain a scoped
-/// reference to their parent provider.
-///
-pub trait Accessor: HasId + Send + Sync {
-    /// The error (if any) returned by [`Self::get_element`].
-    type GetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
-
-    /// Return the distance between the query and the value associated with the key `id`.
-    ///
-    /// It is expected that index algorithms will only invoke `get_element` on valid IDs,
-    /// that can be derived from [`SetElement::set_element`] or by some other means.
-    ///
-    /// Implementations are suggested to return an error if this invariant is broken, but
-    /// may also panic if that is an acceptable error mode.
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl std::future::Future<Output = Result<f32, Self::GetError>> + Send;
-
-    /// A bulk interface for invoking [`Self::get_distance`] on each item in an iterator and
-    /// invoking the closure with the reborrowed element.
-    ///
-    /// Algorithms are encouraged to use this interface if appropriate as accessor
-    /// implementations may specialize the implementation for better performance.
-    fn distances_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl std::future::Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
-    {
-        async move {
-            for i in itr {
-                f(self.get_distance(i).await?, i);
-            }
-            Ok(())
-        }
-    }
-}
+/////////////////////////////
+// Build Distance Computer //
+/////////////////////////////
 
 /// A specialized [`Accessor`] that provides random-access distance computations.
 pub trait BuildDistanceComputer: HasElementRef {
@@ -688,11 +643,10 @@ mod sealed {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
         future::Future,
         pin::Pin,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicUsize, Ordering},
         },
         task,
@@ -701,7 +655,6 @@ mod tests {
     use pin_project::{pin_project, pinned_drop};
 
     use super::*;
-    use crate::always_escalate;
 
     ////////////////////
     // DefaultContext //
@@ -900,208 +853,5 @@ mod tests {
         let deleted = ElementStatus::Deleted;
         assert!(!deleted.is_valid());
         assert!(deleted.is_deleted());
-    }
-
-    /// A simple data provider that contains values consisting of floats and strings.
-    ///
-    /// The start point for this provider is as `u32::MAX`.
-    struct SimpleProvider {
-        data: Mutex<HashMap<u32, (f32, String)>>,
-    }
-
-    impl SimpleProvider {
-        fn new(v: f32, st: String) -> Self {
-            let mut data = HashMap::new();
-            data.insert(u32::MAX, (v, st));
-            Self {
-                data: Mutex::new(data),
-            }
-        }
-    }
-
-    impl DataProvider for SimpleProvider {
-        type Context = DefaultContext;
-        // Use the identity mapping for IDs.
-        type InternalId = u32;
-        type ExternalId = u32;
-        type Error = ANNError;
-        type Guard = NoopGuard<u32>;
-
-        fn to_internal_id(&self, _context: &DefaultContext, gid: &u32) -> Result<u32, ANNError> {
-            Ok(*gid)
-        }
-
-        fn to_external_id(&self, _context: &DefaultContext, id: u32) -> Result<u32, ANNError> {
-            Ok(id)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Missing;
-
-    impl std::fmt::Display for Missing {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "key is missing")
-        }
-    }
-
-    impl std::error::Error for Missing {}
-    impl From<Missing> for ANNError {
-        #[cold]
-        fn from(missing: Missing) -> ANNError {
-            ANNError::log_async_error(missing)
-        }
-    }
-
-    always_escalate!(Missing);
-
-    // An accessor for the `f32` portion of the data stored in the SimpleProvider.
-    struct FloatAccessor<'a>(&'a SimpleProvider);
-    impl HasId for FloatAccessor<'_> {
-        type Id = u32;
-    }
-    impl Accessor for FloatAccessor<'_> {
-        type GetError = Missing;
-
-        fn get_distance(
-            &mut self,
-            id: u32,
-        ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-            let guard = self.0.data.lock().unwrap();
-            let v = match guard.get(&id) {
-                None => Err(Missing),
-                Some(v) => Ok(v.0),
-            };
-            std::future::ready(v)
-        }
-
-        // Implement `on_elements_unordered` by only acquiring the lock once.
-        //
-        // Real implementations will need to take care to avoid deadlocks.
-        async fn distances_unordered<Itr, F>(
-            &mut self,
-            itr: Itr,
-            mut f: F,
-        ) -> Result<(), Self::GetError>
-        where
-            Self: Sync,
-            Itr: Iterator<Item = u32>,
-            F: Send + FnMut(f32, u32),
-        {
-            let guard = self.0.data.lock().unwrap();
-            for i in itr {
-                match guard.get(&i) {
-                    None => return Err(Missing),
-                    Some(v) => f(v.0, i),
-                }
-            }
-            Ok(())
-        }
-    }
-
-    // An accessor for the `String` portion of the data stored in the SimpleProvider.
-    //
-    // We keep a local buffer `buf` into which the contents of the string are copied.
-    // This allows us to elide allocating on `get_element` calls.
-    struct StringAccessor<'a> {
-        provider: &'a SimpleProvider,
-    }
-
-    impl<'a> StringAccessor<'a> {
-        fn new(provider: &'a SimpleProvider) -> Self {
-            Self { provider }
-        }
-    }
-
-    impl HasId for StringAccessor<'_> {
-        type Id = u32;
-    }
-    impl Accessor for StringAccessor<'_> {
-        type GetError = Missing;
-
-        fn get_distance(
-            &mut self,
-            id: u32,
-        ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-            let guard = self.provider.data.lock().unwrap();
-            let v = match guard.get(&id) {
-                None => Err(Missing),
-                Some(v) => Ok(v.1.len() as f32),
-            };
-            std::future::ready(v)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_default_implementations() {
-        let provider = SimpleProvider::new(-1.0, "hello".to_string());
-        {
-            let mut data = provider.data.lock().unwrap();
-            data.insert(0, (0.0, "world".to_string()));
-            data.insert(1, (1.0, "foo".to_string()));
-            data.insert(2, (2.0, "bar".to_string()));
-        }
-
-        // Float accessor
-        {
-            let mut accessor = FloatAccessor(&provider);
-            assert_eq!(accessor.get_distance(0).await.unwrap(), 0.0);
-            assert_eq!(accessor.get_distance(1).await.unwrap(), 1.0);
-            assert_eq!(accessor.get_distance(u32::MAX).await.unwrap(), -1.0);
-
-            let mut v = Vec::new();
-            accessor
-                .distances_unordered([2, 1, 0].into_iter(), |element, id| v.push((element, id)))
-                .await
-                .unwrap();
-
-            assert_eq!(&v, &[(2.0, 2), (1.0, 1), (0.0, 0)]);
-
-            // Test error propagation.
-            // Trying to access element 3 will result in an error, which should be propagated
-            // up.
-            let err = accessor
-                .distances_unordered([2, 1, 0, 3].into_iter(), |element, id| {
-                    v.push((element, id))
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(err, Missing);
-        }
-
-        // String accessor
-        {
-            let f = |x: &str| x.len() as f32;
-
-            let mut accessor = StringAccessor::new(&provider);
-            assert_eq!(accessor.get_distance(0).await.unwrap(), f("world"));
-            assert_eq!(accessor.get_distance(1).await.unwrap(), f("foo"));
-            assert_eq!(accessor.get_distance(u32::MAX).await.unwrap(), f("hello"));
-
-            // This method tests the provided implementation of `on_elements_unordered`.
-            let expected = [(f("bar"), 2), (f("foo"), 1), (f("world"), 0)];
-
-            let mut expected_iter = expected.into_iter();
-            accessor
-                .distances_unordered([2, 1, 0].into_iter(), |element, id| {
-                    assert_eq!((element, id), expected_iter.next().unwrap());
-                })
-                .await
-                .unwrap();
-            assert!(expected_iter.next().is_none());
-
-            // Test error propagation.
-            // Trying to access element 3 will result in an error, which should be propagated
-            // up.
-            let mut expected_iter = expected.into_iter();
-            let err = accessor
-                .distances_unordered([2, 1, 0, 3].into_iter(), |element, id| {
-                    assert_eq!((element, id), expected_iter.next().unwrap());
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(err, Missing);
-            assert!(expected_iter.next().is_none());
-        }
     }
 }

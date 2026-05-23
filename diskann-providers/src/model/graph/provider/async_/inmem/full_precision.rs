@@ -10,17 +10,17 @@ use diskann::{
     ANNError, ANNResult,
     error::Infallible,
     graph::{
-        SearchOutputBuffer,
+        AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            SearchStrategy,
         },
         workingset,
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext,
-        HasElementRef, HasId,
+        BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext, HasElementRef,
+        HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
@@ -222,7 +222,23 @@ where
     ///
     /// The accessor reuses this allocation to amortize allocation cost over multiple bulk
     /// operations.
-    id_buffer: Vec<u32>,
+    id_buffer: AdjacencyList<u32>,
+}
+
+impl<'a, T, Q, D, Ctx> FullAccessor<'a, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
+        Self {
+            provider,
+            computer: T::query_distance(query, provider.metric),
+            id_buffer: AdjacencyList::new(),
+        }
+    }
 }
 
 impl<T, Q, D, Ctx> GetFullPrecision for FullAccessor<'_, T, Q, D, Ctx>
@@ -242,7 +258,7 @@ where
     type Id = u32;
 }
 
-impl<T, Q, D, Ctx> SearchExt for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> glue::SearchAccessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -252,122 +268,83 @@ where
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
     }
-}
 
-impl<'a, T, Q, D, Ctx> FullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
-        Self {
-            provider,
-            computer: T::query_distance(query, provider.metric),
-            id_buffer: Vec::new(),
-        }
+    fn num_starting_points(&self) -> impl Future<Output = ANNResult<usize>> {
+        std::future::ready(Ok(self.provider.num_start_points()))
     }
-}
 
-impl<'a, T, Q, D, Ctx> DelegateNeighbor<'a> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T, Q, D, Ctx> Accessor for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    /// Choose to panic on an out-of-bounds access rather than propagate an error.
-    type GetError = Panics;
-
-    /// Return the full-precision vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    #[inline(always)]
-    fn get_distance(
+    fn start_point_distances<F>(
         &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        // SAFETY: We've decided to live with UB (undefined behavior) that can result from
-        // potentially mixing unsynchronized reads and writes on the underlying memory.
-        std::future::ready(Ok(self.computer.evaluate_similarity(unsafe {
-            self.provider.base_vectors.get_vector_sync(id.into_usize())
-        })))
-    }
-
-    /// Perform a bulk operation.
-    ///
-    /// This implementation uses prefetching.
-    fn distances_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
         mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        let f = || -> Result<(), Panics> {
-            // Reuse the internal buffer to collect the results and give us random access
-            // capabilities.
-            let id_buffer = &mut self.id_buffer;
-            id_buffer.clear();
-            id_buffer.extend(itr);
-
-            let len = id_buffer.len();
-            let lookahead = self.provider.base_vectors.prefetch_lookahead();
-
-            // Prefetch the first few vectors.
-            for id in id_buffer.iter().take(lookahead) {
-                self.provider.base_vectors.prefetch_hint(id.into_usize());
-            }
-
-            for (i, id) in id_buffer.iter().enumerate() {
-                // Prefetch `lookahead` iterations ahead as long as it is safe.
-                if lookahead > 0 && i + lookahead < len {
-                    self.provider
-                        .base_vectors
-                        .prefetch_hint(id_buffer[i + lookahead].into_usize());
-                }
-
-                // Invoke the passed closure on the full-precision vector.
-                //
+        let mut f = move || -> ANNResult<()> {
+            for i in self.provider.starting_points()? {
                 // SAFETY: We're accepting the consequences of potential unsynchronized,
                 // concurrent mutation.
-                let vector = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
-                let distance = self.computer.evaluate_similarity(vector);
-                f(distance, *id)
-            }
+                let distance = self.computer.evaluate_similarity(unsafe {
+                    self.provider.base_vectors.get_vector_sync(i.into_usize())
+                });
 
+                f(i, distance);
+            }
             Ok(())
         };
 
         std::future::ready(f())
     }
-}
 
-impl<T, Q, D, Ctx> ExpandBeam for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let f = move || -> ANNResult<()> {
+            let id_buffer = &mut self.id_buffer;
+            for n in ids {
+                self.provider
+                    .neighbor_provider
+                    .get_neighbors_sync(n.into_usize(), id_buffer)?;
+
+                id_buffer.retain(|i| pred.eval_mut(i));
+                let len = id_buffer.len();
+                let lookahead = self.provider.base_vectors.prefetch_lookahead();
+
+                // Prefetch the first few vectors.
+                for id in id_buffer.iter().take(lookahead) {
+                    self.provider.base_vectors.prefetch_hint(id.into_usize());
+                }
+
+                for (i, id) in id_buffer.iter().enumerate() {
+                    // Prefetch `lookahead` iterations ahead as long as it is safe.
+                    if lookahead > 0 && i + lookahead < len {
+                        self.provider
+                            .base_vectors
+                            .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                    }
+
+                    // Invoke the passed closure on the full-precision vector.
+                    //
+                    // SAFETY: We're accepting the consequences of potential unsynchronized,
+                    // concurrent mutation.
+                    let v = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
+                    let distance = self.computer.evaluate_similarity(v);
+                    on_neighbors(*id, distance);
+                }
+            }
+            Ok(())
+        };
+
+        std::future::ready(f())
+    }
 }
 
 //-------------------//

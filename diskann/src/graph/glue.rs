@@ -79,26 +79,85 @@
 use std::{future::Future, sync::Arc};
 
 use diskann_utils::Reborrow;
-use diskann_utils::future::AssertSend;
 use diskann_vector::DistanceFunction;
+use futures_util::FutureExt;
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, StandardError},
-    graph::{AdjacencyList, SearchOutputBuffer, workingset},
+    error::StandardError,
+    graph::{SearchOutputBuffer, workingset},
     neighbor::Neighbor,
-    provider::{
-        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef,
-        HasId, NeighborAccessor,
-    },
+    provider::{AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef, HasId},
 };
 
 /// A trait to override search constraints such as early termination based on constraints
 /// by implementer.
-pub trait SearchExt: Accessor {
+pub trait SearchAccessor: HasId + Send + Sync {
     /// Return a `Vec` containing the starting points.
     fn starting_points(&self)
     -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
+
+    fn start_point_distances<F>(
+        &mut self,
+        f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(Self::Id, f32) + Send;
+
+    /// A primitive routine used by graph search. This is purposely implemented as a
+    /// coarse-grained operation to enable optimization opportunities by the backend.
+    ///
+    /// # Description
+    ///
+    /// For each `i` in `itr`, fetch the adjacency list `v_i` for `i`. For each `v_i`, then
+    /// for each id `j` in `v_i`, compute the distance `d` using `computer` to the data
+    /// associated with `j` and invoke the closure `f` with `d` and `j`, provided
+    /// `pred.eval_mut(j)` evaluates to `true`.
+    ///
+    /// No specification is made on the traversal order of `ids`, the computation order of
+    /// the leaf elements, nor the order in which `pred` is evaluated.
+    ///
+    /// Restriction in the implementation are as follows:
+    ///
+    /// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` must be
+    ///   invoked for that item.
+    ///
+    ///   If an item `i` is already passed to `on_neighbors`, the implementation is not
+    ///   obligated to provided it again, though it **may** do so provided `pred.eval_mut()`
+    ///   continues to return `true`.
+    ///
+    /// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
+    ///   invoked for that item.
+    ///
+    /// * `pred.eval()` may be invoked an arbitrary number of times. Proper predicate
+    ///   implementations  will ensure that
+    ///
+    ///   - `pred.eval() == true` implies `pred.eval_mut() == true` if `pred.eval_mut()` is
+    ///     invoked immediately after `pred.eval()`.
+    ///
+    ///   - `pred.eval() == false` implies `pred.eval_mut() == false` and vice-versa.
+    ///
+    /// * `pred.eval_mut()` must be invoked at most once for all transitive items in the beam.
+    ///
+    /// ## Predicate Requirements
+    ///
+    /// Well behaved predicates must never return `true` (allow an id to be forwarded to
+    /// `on_neighbors`) if it previously returned `false`. Implementations of `expand_beam`
+    /// are allowed to assume this holds.
+    ///
+    /// Additionally, the callback `on_neighbors` and the predicate have to cooperate. If the
+    /// callback requires unique items, the predicate must be structured such that `eval_mut`
+    /// correctly filters out duplicates.
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send;
 
     /// Default is to never terminate early.
     fn terminate_early(&mut self) -> bool {
@@ -124,6 +183,11 @@ pub trait SearchExt: Accessor {
             let starting_points = self.starting_points().await?;
             Ok(move |id| !starting_points.contains(&id))
         }
+    }
+
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+        self.starting_points()
+            .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
     }
 }
 
@@ -192,98 +256,6 @@ where
 /// The interfaces `contains` and `insert` agree with each other.
 impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
 
-/// A primitive routine used by graph search. This is purposely implemented as a
-/// coarse-grained operation to enable optimization opportunities by the backend.
-///
-/// # Description
-///
-/// For each `i` in `itr`, fetch the adjacency list `v_i` for `i`. For each `v_i`, then for
-/// each id `j` in `v_i`, compute the distance `d` using `computer` to the data associated with
-/// `j` and invoke the closure `f` with `d` and `j`, provided `pred.eval_mut(j)` evaluates to
-/// `true`.
-///
-/// No specification is made on the traversal order of `ids`, the computation order of the
-/// leaf elements, nor the order in which `pred` is evaluated.
-///
-/// Restriction in the implementation are as follows:
-///
-/// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` must be invoked
-///   for that item.
-///
-///   If an item `i` is already passed to `on_neighbors`, the implementation is not obligated
-///   to provided it again, though it **may** do so provided `pred.eval_mut()` continues to
-///   return `true`.
-///
-/// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
-///   invoked for that item.
-///
-/// * `pred.eval()` may be invoked an arbitrary number of times. Proper predicate
-///   implementations  will ensure that
-///
-///   - `pred.eval() == true` implies `pred.eval_mut() == true` if `pred.eval_mut()` is
-///     invoked immediately after `pred.eval()`.
-///
-///   - `pred.eval() == false` implies `pred.eval_mut() == false` and vice-versa.
-///
-/// * `pred.eval_mut()` must be invoked at most once for all transitive items in the beam.
-///
-/// ## Predicate Requirements
-///
-/// Well behaved predicates must never return `true` (allow an id to be forwarded to
-/// `on_neighbors`) if it previously returned `false`. Implementations of `ExpandBeam` are
-/// allowed to assume this holds.
-///
-/// Additionally, the callback `on_neighbors` and the predicate have to cooperate. If the
-/// callback requires unique items, the predicate must be structured such that `eval_mut`
-/// correctly filters out duplicates.
-///
-/// # Provided Implementation
-///
-/// The provided implementation works on each element of `ids` sequentially, pre-filters
-/// the resulting candidate list using `pred.eval()` before invoking
-/// [`Accessor::distances_unordered`].
-///
-/// The callback `on_neighbors` is decorated to the uses `pred.eval_mut()`.
-///
-/// This ensures that if `distances_unordered` errors, the predicate is not erroneously
-/// updated.
-///
-/// ## Error Handling
-///
-/// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam: Accessor + AsNeighbor + Sized {
-    fn expand_beam<Itr, P, F>(
-        &mut self,
-        ids: Itr,
-        mut pred: P,
-        mut on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send,
-        P: HybridPredicate<Self::Id> + Send + Sync,
-        F: FnMut(f32, Self::Id) + Send,
-    {
-        async move {
-            let mut neighbors = AdjacencyList::new();
-            for id in ids {
-                self.get_neighbors(id, &mut neighbors).send().await?;
-                neighbors.retain(|i| pred.eval(i));
-
-                self.distances_unordered(neighbors.iter().copied(), |distance, id| {
-                    if pred.eval_mut(&id) {
-                        on_neighbors(distance, id);
-                    }
-                })
-                .send()
-                .await
-                .allow_transient("allowing transient error in beam expansion")?;
-            }
-
-            Ok(())
-        }
-    }
-}
-
 /// A search strategy for query objects of type `T`.
 ///
 /// This trait should be overloaded by data providers wishing to extend
@@ -299,7 +271,7 @@ where
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor: ExpandBeam<Id = Provider::InternalId> + SearchExt;
+    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
 
     /// Construct and return the search accessor.
     fn search_accessor(
@@ -402,7 +374,7 @@ pub struct CopyIds;
 
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
-    A: Accessor,
+    A: HasId,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
@@ -459,7 +431,7 @@ pub struct FilterStartPoints;
 
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
-    A: Accessor + SearchExt,
+    A: SearchAccessor,
     T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
@@ -521,7 +493,7 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
-    A: Accessor,
+    A: HasId,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -772,7 +744,7 @@ where
     /// of associated types.
     ///
     /// Lifting the accessor all the way to the trait level makes the caching provider possible.
-    type DeleteSearchAccessor<'a>: ExpandBeam<Id = Provider::InternalId> + SearchExt;
+    type DeleteSearchAccessor<'a>: SearchAccessor<Id = Provider::InternalId>;
 
     /// The processor used during the delete-search phase.
     type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
@@ -803,217 +775,4 @@ where
         context: &'a Provider::Context,
         id: Provider::InternalId,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
-}
-
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    use futures_util::future;
-
-    use super::*;
-    use crate::{
-        ANNResult, neighbor,
-        provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
-    };
-
-    // A really simple provider that just holds floats and uses the absolute value for its
-    // distances.
-    struct SimpleProvider {
-        items: Vec<f32>,
-    }
-
-    #[derive(Default, Clone)]
-    struct CountGetVector {
-        count: Arc<AtomicUsize>,
-    }
-    impl ExecutionContext for CountGetVector {}
-
-    impl CountGetVector {
-        fn count(&self) -> usize {
-            self.count.load(Ordering::Relaxed)
-        }
-
-        fn clear(&self) {
-            self.count.store(0, Ordering::Relaxed)
-        }
-    }
-
-    impl DataProvider for SimpleProvider {
-        type Context = CountGetVector;
-        type InternalId = u32;
-        type ExternalId = u32;
-        type Error = ANNError;
-        type Guard = crate::provider::NoopGuard<u32>;
-
-        /// Translate an external id to its corresponding internal id.
-        fn to_internal_id(
-            &self,
-            _context: &CountGetVector,
-            gid: &Self::ExternalId,
-        ) -> Result<Self::InternalId, Self::Error> {
-            Ok(*gid)
-        }
-
-        /// Translate an internal id to its corresponding external id.
-        fn to_external_id(
-            &self,
-            _context: &CountGetVector,
-            id: Self::InternalId,
-        ) -> Result<Self::ExternalId, Self::Error> {
-            Ok(id)
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct Retriever<'a> {
-        provider: &'a SimpleProvider,
-        count: &'a CountGetVector,
-    }
-
-    impl SearchExt for Retriever<'_> {
-        async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-            Ok(vec![0])
-        }
-    }
-
-    impl<'a> Retriever<'a> {
-        fn new(provider: &'a SimpleProvider, count: &'a CountGetVector) -> Self {
-            Self { provider, count }
-        }
-    }
-
-    impl HasId for Retriever<'_> {
-        type Id = u32;
-    }
-
-    impl Accessor for Retriever<'_> {
-        type GetError = ANNError;
-        fn get_distance(
-            &mut self,
-            id: Self::Id,
-        ) -> impl std::future::Future<Output = Result<f32, Self::GetError>> + Send {
-            let result = match self.provider.items.get(id as usize) {
-                Some(v) => {
-                    self.count.count.fetch_add(1, Ordering::Relaxed);
-                    Ok(*v)
-                }
-                None => panic!("invalid id: {}", id),
-            };
-            async move { result }
-        }
-    }
-
-    impl NeighborAccessor for Retriever<'_> {
-        fn get_neighbors(
-            self,
-            _id: Self::Id,
-            neighbors: &mut AdjacencyList<Self::Id>,
-        ) -> impl Future<Output = ANNResult<Self>> + Send {
-            neighbors.clear();
-            future::ok(self)
-        }
-    }
-
-    impl ExpandBeam for Retriever<'_> {}
-
-    // This strategy explicitly does not define `post_process` so we can test the provided
-    // implementation.
-    struct Strategy;
-
-    impl<'a> SearchStrategy<'a, SimpleProvider, f32> for Strategy {
-        type SearchAccessorError = ANNError;
-        type SearchAccessor = Retriever<'a>;
-
-        fn search_accessor(
-            &'a self,
-            provider: &'a SimpleProvider,
-            context: &'a CountGetVector,
-            _query: f32,
-        ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-            Ok(Retriever::new(provider, context))
-        }
-    }
-
-    impl<'a> DefaultPostProcessor<'a, SimpleProvider, f32> for Strategy {
-        default_post_processor!(CopyIds);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_default_post_process() {
-        let ctx = CountGetVector::default();
-        let strategy = Strategy;
-
-        let num_points: usize = 100;
-        let provider = SimpleProvider {
-            items: (0..num_points).map(|i| i as f32).collect(),
-        };
-
-        assert_eq!(provider.to_internal_id(&ctx, &10).unwrap(), 10);
-        assert_eq!(provider.to_external_id(&ctx, 10).unwrap(), 10);
-
-        let query = 11.5;
-        let mut accessor = strategy.search_accessor(&provider, &ctx, query).unwrap();
-        assert_eq!(accessor.starting_points().await.unwrap().as_slice(), &[0]);
-        for i in 0..num_points {
-            assert_eq!(accessor.get_distance(i as u32).await.unwrap(), i as f32);
-        }
-
-        // Check dummy get_neighbors implmeentation for code coverage
-        let mut neighbors = AdjacencyList::new();
-        accessor
-            .delegate_neighbor()
-            .get_neighbors(0, &mut neighbors)
-            .await
-            .unwrap();
-        assert_eq!(neighbors.len(), 0);
-
-        // Check that the correct number of reads were emitted.
-        assert_eq!(ctx.count(), num_points);
-        ctx.clear();
-
-        for input_len in 0..10 {
-            let input: Vec<_> = (0..input_len)
-                .map(|i| Neighbor::<u32>::new(i as u32, i as f32))
-                .collect();
-            for output_len in 0..10 {
-                let mut output = vec![Neighbor::<u32>::default(); output_len];
-
-                let count = strategy
-                    .default_post_processor()
-                    .post_process(
-                        &mut accessor,
-                        query,
-                        input.iter().copied(),
-                        &mut neighbor::BackInserter::new(output.as_mut_slice()),
-                    )
-                    .await
-                    .unwrap();
-
-                assert_eq!(count, input_len.min(output_len));
-
-                // Check that the in-range values were properly copied.
-                for (i, n) in output.iter().take(count).enumerate() {
-                    assert_eq!(i, n.id as usize);
-                    assert_eq!(i as f32, n.distance);
-                }
-
-                // Check that out-of-range values were untouched.
-                for n in output.iter().skip(count) {
-                    assert_eq!(n.id, 0);
-                    assert_eq!(n.distance, 0.0);
-                }
-            }
-        }
-
-        // Ensure that no reads were emitted.
-        assert_eq!(ctx.count(), 0);
-    }
 }

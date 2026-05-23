@@ -10,20 +10,20 @@ use diskann::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchPostProcess, SearchPostProcessStep, SearchStrategy,
+            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            SearchAccessor, SearchPostProcess, SearchPostProcessStep, SearchStrategy,
         },
         workingset::{self, map::Entry},
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, DataProvider, DelegateNeighbor, Delete, ElementStatus,
+        BuildDistanceComputer, DataProvider, DelegateNeighbor, Delete, ElementStatus,
         HasElementRef, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::VectorRepr,
 };
 use diskann_quantization::alloc::{AllocatorError, Poly};
-use diskann_utils::{Reborrow, views::Matrix};
+use diskann_utils::views::Matrix;
 use diskann_utils::{
     object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
     views::MatrixView,
@@ -78,44 +78,6 @@ impl AsPooled<Undef> for AdjList {
 
     fn modify(&mut self, _args: Undef) {
         // AdjList is already automatically resizable, no need to do anything here.
-    }
-}
-
-/// A type erased vector, properly aligned so that it can hold any size element
-/// (up to 8 bytes long).
-pub(crate) struct DynVector<T: VectorRepr> {
-    inner: Poly<[u8], AlignToEight>,
-    ty: PhantomData<T>,
-}
-
-impl<T: VectorRepr> DynVector<T> {
-    fn new(inner: Poly<[u8], AlignToEight>) -> Self {
-        Self {
-            inner,
-            ty: PhantomData,
-        }
-    }
-}
-
-impl<T: VectorRepr> Deref for DynVector<T> {
-    type Target = Poly<[u8], AlignToEight>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T: VectorRepr> DerefMut for DynVector<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl<'a, T: VectorRepr> Reborrow<'a> for DynVector<T> {
-    type Target = &'a [u8];
-
-    fn reborrow(&'a self) -> Self::Target {
-        &self.inner
     }
 }
 
@@ -895,6 +857,8 @@ pub(crate) struct DynamicAccessor<'a, T: VectorRepr> {
 }
 
 impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
+    const START_ID: u32 = 0;
+
     pub(crate) fn new(
         provider: &'a GarnetProvider<T>,
         context: &'a Context,
@@ -933,9 +897,21 @@ impl<'a, T: VectorRepr> DynamicAccessor<'a, T> {
         })
     }
 
-    fn get_neighbors_internal(&mut self, id: u32, dest: Option<&mut AdjacencyList<u32>>) -> bool {
-        let dest = dest.unwrap_or(&mut self.id_buffer);
-        self.provider.get_neighbors(self.context, id, dest)
+    /// Return the distance to the start point (the point with `ID == 0`).
+    fn start_point_distance(&mut self) -> Result<f32, GarnetProviderError> {
+        if self.quantized
+            && let Some(_quantizer) = self.provider.quantizer()
+        {
+            match self.provider.start_point_quant_cache.get(&Self::START_ID) {
+                Some(guard) => Ok(self.computer.evaluate_similarity(&*guard)),
+                None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
+            }
+        } else {
+            match self.provider.start_point_cache.get(&Self::START_ID) {
+                Some(guard) => Ok(self.computer.evaluate_similarity(&*guard)),
+                None => Err(GarnetProviderError::Garnet(GarnetError::Read)),
+            }
+        }
     }
 }
 
@@ -943,24 +919,10 @@ impl<T: VectorRepr> HasId for DynamicAccessor<'_, T> {
     type Id = u32;
 }
 
-impl<'a, T> DelegateNeighbor<'a> for DynamicAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = DelegateNeighborAccessor<'a, T>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        DelegateNeighborAccessor {
-            provider: self.provider,
-            context: self.context,
-            scratch: &mut self.id_buffer,
-        }
-    }
-}
-
-impl<T: VectorRepr> SearchExt for DynamicAccessor<'_, T> {
+impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<Self::Id>>> + Send {
         let points = if self.provider.start_points_exist() {
-            vec![0]
+            vec![Self::START_ID]
         } else {
             vec![]
         };
@@ -971,11 +933,24 @@ impl<T: VectorRepr> SearchExt for DynamicAccessor<'_, T> {
         &self,
     ) -> impl Future<Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>> + Send
     {
-        future::ready(Ok(move |id| id != 0))
+        future::ready(Ok(move |id| id != Self::START_ID))
     }
-}
 
-impl<T: VectorRepr> ExpandBeam for DynamicAccessor<'_, T> {
+    fn start_point_distances<F>(&mut self, mut f: F) -> impl Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let result = match self.start_point_distance() {
+            Ok(dist) => {
+                f(Self::START_ID, dist);
+                Ok(())
+            }
+            Err(err) => Err(ANNError::from(err)),
+        };
+
+        std::future::ready(result)
+    }
+
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -985,45 +960,24 @@ impl<T: VectorRepr> ExpandBeam for DynamicAccessor<'_, T> {
     where
         Itr: Iterator<Item = Self::Id> + Send,
         P: glue::HybridPredicate<Self::Id> + Send + Sync,
-        F: FnMut(f32, Self::Id) + Send,
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for nl_id in ids {
-            self.get_neighbors_internal(nl_id, None);
+        // Pilfer the `id_buffer` for the duration of this call to ensure a disjoint
+        // borrow. We put it back at the end to save the allocation.
+        let mut id_buffer = std::mem::take(&mut **self.id_buffer);
 
+        for nl_id in ids {
+            self.provider
+                .get_neighbors(self.context, nl_id, &mut id_buffer);
             self.filtered_ids.clear();
-            for id in self
-                .id_buffer
-                .iter()
-                .copied()
-                .filter(|id| pred.eval_mut(id))
-            {
-                if id == 0 {
-                    let dist = if self.quantized
-                        && let Some(_quantizer) = self.provider.quantizer()
-                    {
-                        let guard = if let Some(r) = self.provider.start_point_quant_cache.get(&id)
-                        {
-                            r
-                        } else {
-                            return future::ready(Err(GarnetProviderError::Garnet(
-                                GarnetError::Read,
-                            )
-                            .into()));
-                        };
-                        self.computer.evaluate_similarity(&*guard)
-                    } else {
-                        let guard = if let Some(r) = self.provider.start_point_cache.get(&id) {
-                            r
-                        } else {
-                            return future::ready(Err(GarnetProviderError::Garnet(
-                                GarnetError::Read,
-                            )
-                            .into()));
-                        };
-                        self.computer.evaluate_similarity(&*guard)
+            for id in id_buffer.iter().copied().filter(|id| pred.eval_mut(id)) {
+                if id == Self::START_ID {
+                    let dist = match self.start_point_distance() {
+                        Ok(dist) => dist,
+                        Err(err) => return future::ready(Err(ANNError::from(err))),
                     };
 
-                    on_neighbors(dist, id);
+                    on_neighbors(id, dist);
                 } else {
                     self.filtered_ids.push(4);
                     self.filtered_ids.push(id);
@@ -1041,67 +995,13 @@ impl<T: VectorRepr> ExpandBeam for DynamicAccessor<'_, T> {
                     .callbacks
                     .read_multi_lpiid(&ctx, &self.filtered_ids, |i, v| {
                         let dist = self.computer.evaluate_similarity(v);
-                        on_neighbors(dist, self.filtered_ids[i as usize * 2 + 1]);
+                        on_neighbors(self.filtered_ids[i as usize * 2 + 1], dist);
                     });
             }
         }
 
+        **self.id_buffer = id_buffer;
         future::ready(Ok(()))
-    }
-}
-
-impl<T: VectorRepr> Accessor for DynamicAccessor<'_, T> {
-    type GetError = GarnetProviderError;
-
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        if id == 0 {
-            if self.quantized {
-                let guard = if let Some(r) = self.provider.start_point_quant_cache.get(&id) {
-                    r
-                } else {
-                    return future::ready(Err(GarnetError::Read.into()));
-                };
-                let distance = self.computer.evaluate_similarity(&*guard);
-                return future::ready(Ok(distance));
-            } else {
-                let guard = if let Some(r) = self.provider.start_point_cache.get(&id) {
-                    r
-                } else {
-                    return future::ready(Err(GarnetError::Read.into()));
-                };
-                let distance = self.computer.evaluate_similarity(&*guard);
-                return future::ready(Ok(distance));
-            }
-        }
-
-        let v_len = if self.quantized
-            && let Some(quantizer) = self.provider.quantizer()
-        {
-            quantizer.bytes()
-        } else {
-            self.provider.dim * mem::size_of::<T>()
-        };
-
-        let mut v = match Poly::broadcast(0u8, v_len, AlignToEight) {
-            Ok(v) => DynVector::<T>::new(v),
-            Err(e) => return future::ready(Err(GarnetProviderError::AllocFailed(e))),
-        };
-
-        let ctx = if self.quantized {
-            self.context.term(Term::Quantized)
-        } else {
-            self.context.term(Term::Vector)
-        };
-
-        if !self.provider.callbacks.read_single_iid(&ctx, id, &mut v) {
-            return future::ready(Err(GarnetError::Read.into()));
-        }
-
-        let distance = self.computer.evaluate_similarity(&*v);
-        future::ready(Ok(distance))
     }
 }
 
