@@ -1248,7 +1248,7 @@ impl glue::SearchAccessor for Accessor<'_> {
         P: glue::HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Self::Id, f32) + Send,
     {
-        // Temporarily piler `neighbors` so we can call `self.get_distance` while
+        // Temporarily pilfer `neighbors` so we can call `self.get_distance` while
         // iterating over `neighbors` and not run into a borrowing conflict.
         //
         // We put it back when we're done.
@@ -1410,8 +1410,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     }
 }
 
-/// A [`glue::SearchPostProcessStep`] for [`Accessor`] that removes deleted IDs from the
-/// candidate stream.
+/// A [`glue::SearchPostProcessStep`] that removes deleted IDs from the candidate stream.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FilterDeleted;
 
