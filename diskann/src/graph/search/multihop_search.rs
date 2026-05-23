@@ -11,11 +11,11 @@ use hashbrown::HashSet;
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
-    error::{ErrorExt, IntoANNResult},
+    error::IntoANNResult,
     graph::{
         glue::{
-            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            self, HybridPredicate, Predicate, PredicateMut, SearchAccessor, SearchPostProcess,
+            SearchStrategy,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -176,7 +176,7 @@ pub(crate) async fn multihop_search_internal<I, A, SR>(
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
-    A: ExpandBeam<Id = I> + SearchExt,
+    A: SearchAccessor<Id = I>,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
@@ -191,16 +191,12 @@ where
     // Initialize search state if not already initialized.
     // This allows paged search to call multihop_search_internal multiple times
     if scratch.visited.is_empty() {
-        let start_ids = accessor.starting_points().await?;
-
-        for id in start_ids {
-            scratch.visited.insert(id);
-            let dist = accessor
-                .get_distance(id)
-                .await
-                .escalate("start point retrieval must succeed")?;
-            scratch.best.insert(Neighbor::new(id, dist));
-        }
+        accessor
+            .start_point_distances(|id, distance| {
+                scratch.visited.insert(id);
+                scratch.best.insert(Neighbor::new(id, distance));
+            })
+            .await?;
     }
 
     // Pre-allocate with good capacity to avoid repeated allocations
@@ -228,7 +224,7 @@ where
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| one_hop_neighbors.push(Neighbor::new(id, distance)),
             )
             .await?;
 
@@ -273,7 +269,7 @@ where
             .expand_beam(
                 two_hop_expansion_candidate_ids.iter().copied(),
                 NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
-                |distance, id| {
+                |id, distance| {
                     two_hop_neighbors.push(Neighbor::new(id, distance));
                 },
             )

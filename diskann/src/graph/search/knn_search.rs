@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
@@ -194,14 +194,12 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.l_value.get(), num_start_ids);
 
             let stats = index
                 .search_internal(
                     Some(self.beam_width.get()),
-                    &start_ids,
                     &mut accessor,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
@@ -268,14 +266,12 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.inner.l_value.get(), num_start_ids);
 
             let stats = index
                 .search_internal(
                     Some(self.inner.beam_width.get()),
-                    &start_ids,
                     &mut accessor,
                     &mut scratch,
                     self.recorder,

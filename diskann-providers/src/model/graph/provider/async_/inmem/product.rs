@@ -10,15 +10,14 @@ use diskann::{
     ANNError, ANNResult,
     error::IntoANNResult,
     graph::{
+        AdjacencyList,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            SearchStrategy,
         },
         workingset,
     },
-    provider::{
-        Accessor, BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId,
-    },
+    provider::{BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::future::AsyncFriendly;
@@ -302,31 +301,6 @@ pub struct QuantAccessor<'a, V, D, Ctx> {
     computer: pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
 }
 
-impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx>
-where
-    T: VectorRepr,
-{
-    type Repr = T;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
-        &self.provider.base_vectors
-    }
-}
-
-impl<V, D, Ctx> HasId for QuantAccessor<'_, V, D, Ctx> {
-    type Id = u32;
-}
-
-impl<V, D, Ctx> SearchExt for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
-        std::future::ready(self.provider.starting_points())
-    }
-}
-
 impl<'a, V, D, Ctx> QuantAccessor<'a, V, D, Ctx>
 where
     V: AsyncFriendly,
@@ -342,71 +316,89 @@ where
     }
 }
 
-impl<'a, V, D, Ctx> DelegateNeighbor<'a> for QuantAccessor<'_, V, D, Ctx>
+impl<T, D, Ctx> GetFullPrecision for QuantAccessor<'_, FullPrecisionStore<T>, D, Ctx>
 where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
+    T: VectorRepr,
 {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
+    type Repr = T;
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
+        &self.provider.base_vectors
     }
 }
 
-impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx> HasId for QuantAccessor<'_, V, D, Ctx> {
+    type Id = u32;
+}
+
+impl<V, D, Ctx> glue::SearchAccessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// Choose to panic on an out-of-bounds access rather than propagate an error.
-    type GetError = Panics;
-
-    /// Return the quantized vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        // SAFETY: We've decided to live with UB that can result from potentially mixing
-        // unsynchronized reads and writes on the underlying memory.
-        let vector = unsafe { self.provider.aux_vectors.get_vector_sync(id.into_usize()) };
-        let distance = self.computer.evaluate_similarity(vector);
-        std::future::ready(Ok(distance))
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
+        std::future::ready(self.provider.starting_points())
     }
 
-    /// Perform a bulk operation.
-    fn distances_unordered<Itr, F>(
+    fn num_starting_points(&self) -> impl Future<Output = ANNResult<usize>> {
+        std::future::ready(Ok(self.provider.num_start_points()))
+    }
+
+    fn start_point_distances<F>(
         &mut self,
-        itr: Itr,
         mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for i in itr {
-            // SAFETY: We're accepting the consequences of potential unsynchronized,
-            // concurrent mutation.
-            let distance = {
-                let v = unsafe { self.provider.aux_vectors.get_vector_sync(i.into_usize()) };
-                self.computer.evaluate_similarity(v)
-            };
-            f(distance, i)
-        }
-        std::future::ready(Ok(()))
-    }
-}
+        let mut f = move || -> ANNResult<()> {
+            for i in self.provider.starting_points()? {
+                // SAFETY: We're accepting the consequences of potential unsynchronized,
+                // concurrent mutation.
+                let distance = self.computer.evaluate_similarity(unsafe {
+                    self.provider.aux_vectors.get_vector_sync(i.into_usize())
+                });
 
-impl<V, D, Ctx> ExpandBeam for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
+                f(i, distance);
+            }
+            Ok(())
+        };
+
+        std::future::ready(f())
+    }
+
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let f = move || -> ANNResult<()> {
+            let mut neighbors = AdjacencyList::new();
+            for n in ids {
+                self.provider
+                    .neighbor_provider
+                    .get_neighbors_sync(n.into_usize(), &mut neighbors)?;
+                for i in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                    // SAFETY: We're accepting the consequences of potential unsynchronized,
+                    // concurrent mutation.
+                    let distance = self.computer.evaluate_similarity(unsafe {
+                        self.provider.aux_vectors.get_vector_sync(i.into_usize())
+                    });
+
+                    on_neighbors(*i, distance);
+                }
+            }
+            Ok(())
+        };
+
+        std::future::ready(f())
+    }
 }
 
 //-------------------//

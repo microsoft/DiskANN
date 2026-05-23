@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
@@ -120,14 +120,11 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
-
             let mut diverse_scratch = self.create_scratch(index);
 
             let stats = index
                 .search_internal(
                     Some(self.inner.beam_width().get()),
-                    &start_ids,
                     &mut accessor,
                     &mut diverse_scratch,
                     &mut NoopSearchRecord::new(),

@@ -461,17 +461,22 @@ impl Provider {
         }
     }
 
-    /// Capture all ids including deleted and startpoints
+    /// Return an iterator over all IDs, including soft deleted points and fixed start points.
     pub fn all_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.terms.iter().map(|ref_multi| *ref_multi.key())
     }
 
-    /// Capture all ids including deleted
+    /// Return an iterator over all non-start-point IDs, including soft deleted points.
     pub fn non_start_points_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.terms
             .iter()
             .map(|ref_multi| *ref_multi.key())
             .filter(|id| !self.is_start_point(*id))
+    }
+
+    /// Return an iterator over the start point IDs.
+    pub fn start_point_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.config.start_points.keys().copied()
     }
 
     /// Run the provided closure on the associated term.
@@ -1132,6 +1137,7 @@ pub struct Accessor<'a> {
     provider: &'a Provider,
     get_vector: LocalCounter<'a>,
     distance: <f32 as VectorRepr>::QueryDistance,
+    neighbors: AdjacencyList<u32>,
     /// IDs that will produce transient errors when accessed.
     transient_ids: Flaky<'a>,
 }
@@ -1171,10 +1177,25 @@ impl<'a> Accessor<'a> {
         } else {
             Ok(Self {
                 provider,
-                distance: f32::query_distance(query, provider.distance_metric()),
                 get_vector: provider.get_vector.local(),
+                distance: f32::query_distance(query, provider.distance_metric()),
+                neighbors: AdjacencyList::new(),
                 transient_ids: Flaky::new(transient_ids),
             })
+        }
+    }
+
+    fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        let f = |data: &[f32]| -> Result<f32, TransientAccessError> {
+            self.transient_ids.check(id)?;
+            self.get_vector.increment();
+            Ok(self.distance.evaluate_similarity(data))
+        };
+
+        match self.provider.get(id, f) {
+            Ok(Ok(dist)) => Ok(dist),
+            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
+            Err(invalid) => Err(AccessError::InvalidId(invalid)),
         }
     }
 }
@@ -1197,42 +1218,56 @@ impl provider::HasId for Accessor<'_> {
     type Id = u32;
 }
 
-impl provider::Accessor for Accessor<'_> {
-    type GetError = AccessError;
-
-    async fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
-        let f = |data: &[f32]| -> Result<f32, TransientAccessError> {
-            self.transient_ids.check(id)?;
-            self.get_vector.increment();
-            Ok(self.distance.evaluate_similarity(data))
-        };
-
-        match self.provider.get(id, f) {
-            Ok(Ok(dist)) => Ok(dist),
-            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
-            Err(invalid) => Err(AccessError::InvalidId(invalid)),
-        }
-    }
-}
-
-impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
-    type Delegate = NeighborAccessor<'a>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        NeighborAccessor::new(self.provider)
-    }
-}
-
 //------//
 // glue //
 //------//
 
-impl glue::SearchExt for Accessor<'_> {
+impl glue::SearchAccessor for Accessor<'_> {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> + Send {
-        futures_util::future::ok(self.provider.config.start_points.keys().copied().collect())
+        futures_util::future::ok(self.provider.start_point_ids().collect())
+    }
+
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
+    where
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        for i in self.provider().start_point_ids() {
+            f(i, self.get_distance(i).escalate("start points must exist")?)
+        }
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        // Temporarily piler `neighbors` so we can call `self.get_distance` while
+        // iterating over `neighbors` and not run into a borrowing conflict.
+        //
+        // We put it back when we're done.
+        let mut neighbors = std::mem::take(&mut self.neighbors);
+        for id in ids {
+            self.provider().get_neighbors(id, &mut neighbors)?;
+            for &n in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                if let Some(distance) = self
+                    .get_distance(n)
+                    .allow_transient("transient failures allowed")?
+                {
+                    on_neighbors(n, distance)
+                }
+            }
+        }
+        self.neighbors = neighbors;
+        Ok(())
     }
 }
-
-impl glue::ExpandBeam for Accessor<'_> {}
 
 //////////////
 // Strategy //
@@ -1758,7 +1793,7 @@ mod tests {
 
     #[test]
     fn test_set_element() {
-        use provider::{Accessor, Guard, SetElement};
+        use provider::{Guard, SetElement};
 
         let provider = create_test_provider();
         let rt = current_thread_runtime();
@@ -1768,7 +1803,7 @@ mod tests {
         let mut accessor = super::Accessor::new(&provider, &query).unwrap();
         let id = 5;
 
-        assert!(rt.block_on(accessor.get_distance(5)).is_err());
+        assert!(accessor.get_distance(5).is_err());
 
         // Setting with the wrong dimension is an error.
         {
@@ -1778,7 +1813,7 @@ mod tests {
                 .unwrap_err();
             let msg = err.to_string();
             assert_message_contains!(msg, "wrong dim");
-            assert!(rt.block_on(accessor.get_distance(id)).is_err());
+            assert!(accessor.get_distance(id).is_err());
         }
 
         // Setting with the correct dimension is successful.
@@ -1789,7 +1824,7 @@ mod tests {
                 .unwrap();
             rt.block_on(guard.complete());
 
-            let distance = rt.block_on(accessor.get_distance(id)).unwrap();
+            let distance = accessor.get_distance(id).unwrap();
             assert_eq!(distance, provider.dim() as f32);
         }
 

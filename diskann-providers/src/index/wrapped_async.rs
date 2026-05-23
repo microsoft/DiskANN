@@ -11,7 +11,7 @@ use diskann::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
             Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-            MultiInsertStrategy, PruneStrategy, SearchStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchAccessor, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors},
         search_output_buffer,
@@ -351,7 +351,7 @@ where
         context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
         S: SearchStrategy<'a, DP, T> + 'static,
         T: Copy + Send + 'a,
@@ -373,7 +373,7 @@ where
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
         S: SearchStrategy<'a, DP, T> + 'static,
         T: Copy + Send + 'a,
@@ -436,20 +436,19 @@ where
 ///
 /// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
 /// blocks the current thread to drive the underlying async search forward.
-pub struct PagedSearch<'a, DP, S, T>
+pub struct PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
-    T: 'a,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     handle: tokio::runtime::Handle,
-    inner: graph::search::PagedSearch<'a, DP, S, T>,
+    inner: graph::search::PagedSearch<'a, DP, A>,
 }
 
-impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+impl<'a, DP, A> PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
