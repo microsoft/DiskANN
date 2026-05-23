@@ -9,7 +9,7 @@ use crate::{
     ANNError, ANNResult,
     graph::{
         DiskANNIndex,
-        glue::{SearchExt, SearchStrategy},
+        glue::SearchAccessor,
         search::{record::NoopSearchRecord, scratch::SearchScratch},
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -24,27 +24,23 @@ use crate::{
 ///
 /// See also: [`DiskANNIndex::paged_search`], [`DiskANNIndex::paged_search_with_init_ids`].
 #[derive(Debug)]
-pub struct PagedSearch<'a, DP, S, T>
+pub struct PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
-    T: 'a,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     pub(in crate::graph) index: &'a DiskANNIndex<DP>,
     pub(in crate::graph) scratch: SearchScratch<DP::InternalId>,
     pub(in crate::graph) computed_result: Vec<Neighbor<DP::InternalId>>,
     pub(in crate::graph) next_result_index: usize,
     pub(in crate::graph) search_param_l: usize,
-    pub(in crate::graph) accessor: S::SearchAccessor,
-    // Note: The `fn` is so we derive `Send` and `Sync` more easily: `fn` is always Send/Sync.
-    pub(in crate::graph) _query: std::marker::PhantomData<fn(T)>,
+    pub(in crate::graph) accessor: A,
 }
 
-impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+impl<'a, DP, A> PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
-    T: 'a,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
@@ -91,21 +87,16 @@ where
             }
 
             // Resume graph search to fill the next batch.
-            let start_points = {
-                let start_ids = self.accessor.starting_points().await?;
-                self.index
-                    .search_internal(
-                        None, // beam_width
-                        &start_ids,
-                        &mut self.accessor,
-                        &mut self.scratch,
-                        &mut NoopSearchRecord::new(),
-                    )
-                    .await?;
+            self.index
+                .search_internal(
+                    None, // beam_width
+                    &mut self.accessor,
+                    &mut self.scratch,
+                    &mut NoopSearchRecord::new(),
+                )
+                .await?;
 
-                start_ids
-            };
-
+            let start_points = self.accessor.starting_points().await?;
             let (mut candidates, total_considered) =
                 filter_search_candidates(&start_points, k, &mut self.scratch.best);
             self.scratch.best.drain_best(total_considered);

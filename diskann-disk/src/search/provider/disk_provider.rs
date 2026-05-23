@@ -5,7 +5,6 @@
 
 use std::{
     collections::HashMap,
-    future::Future,
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
@@ -19,30 +18,24 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         self,
-        glue::{
-            self, DefaultPostProcessor, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy,
-        },
+        glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
         search::Knn,
-        search_output_buffer, AdjacencyList, DiskANNIndex,
+        search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
-    provider::{
-        Accessor, DataProvider, DefaultContext, DelegateNeighbor, HasId, NeighborAccessor,
-        NoopGuard,
-    },
+    provider::{DataProvider, DefaultContext, HasId, NoopGuard},
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{compute_pq_distance, compute_pq_distance_for_pq_coordinates},
+    model::compute_pq_distance,
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
-use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
-use futures_util::future;
+use diskann_vector::{distance::Metric, DistanceFunction};
 use tokio::runtime::Runtime;
 use tracing::debug;
 
@@ -384,70 +377,6 @@ where
     }
 }
 
-/// The query computer for the disk provider. This is used to compute the distance between the query vector and the PQ coordinates.
-pub struct DiskQueryComputer {
-    num_pq_chunks: usize,
-    query_centroid_l2_distance: Vec<f32>,
-}
-
-impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
-    fn evaluate_similarity(&self, changing: &[u8]) -> f32 {
-        let mut dist = 0.0f32;
-        #[allow(clippy::expect_used)]
-        compute_pq_distance_for_pq_coordinates(
-            changing,
-            self.num_pq_chunks,
-            &self.query_centroid_l2_distance,
-            std::slice::from_mut(&mut dist),
-        )
-        .expect("PQ distance compute for PQ coordinates is expected to succeed");
-        dist
-    }
-}
-
-impl<Data, VP> ExpandBeam for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    fn expand_beam<Itr, P, F>(
-        &mut self,
-        ids: Itr,
-        mut pred: P,
-        mut f: F,
-    ) -> impl std::future::Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send,
-        P: glue::HybridPredicate<Self::Id> + Send + Sync,
-        F: FnMut(f32, Self::Id) + Send,
-    {
-        let result = (|| {
-            let io_limit = self.provider.search_io_limit - self.io_tracker.io_count();
-            let load_ids: Box<[_]> = ids.take(io_limit).collect();
-
-            self.ensure_loaded(&load_ids)?;
-            let mut ids = Vec::new();
-            for i in load_ids {
-                ids.clear();
-                ids.extend(
-                    self.scratch
-                        .vertex_provider
-                        .get_adjacency_list(&i)?
-                        .iter()
-                        .copied()
-                        .filter(|id| pred.eval_mut(id)),
-                );
-
-                self.pq_distances(&ids, &mut f)?;
-            }
-
-            Ok(())
-        })();
-
-        std::future::ready(result)
-    }
-}
-
 // Scratch space for disk search operations that need allocations.
 // These allocations are amortized across searches using the scratch pool.
 struct DiskSearchScratch<Data, VP>
@@ -549,7 +478,15 @@ where
     }
 }
 
-impl<Data, VP> SearchExt for DiskAccessor<'_, Data, VP>
+impl<Data, VP> HasId for DiskAccessor<'_, Data, VP>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Id = u32;
+}
+
+impl<Data, VP> glue::SearchAccessor for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -557,6 +494,51 @@ where
     async fn starting_points(&self) -> ANNResult<Vec<u32>> {
         let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
         Ok(vec![start_vertex_id])
+    }
+
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
+    where
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let start_vertex_id = self.provider.graph_header.metadata().medoid as u32;
+        self.pq_distances(&[start_vertex_id], |dist, id| f(id, dist))
+    }
+
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let result = (|| {
+            let io_limit = self.provider.search_io_limit - self.io_tracker.io_count();
+            let load_ids: Box<[_]> = ids.take(io_limit).collect();
+
+            self.ensure_loaded(&load_ids)?;
+            let mut ids = Vec::new();
+            for i in load_ids {
+                ids.clear();
+                ids.extend(
+                    self.scratch
+                        .vertex_provider
+                        .get_adjacency_list(&i)?
+                        .iter()
+                        .copied()
+                        .filter(|id| pred.eval_mut(id)),
+                );
+
+                self.pq_distances(&ids, &mut |dist, id| f(id, dist))?;
+            }
+
+            Ok(())
+        })();
+
+        std::future::ready(result)
     }
 
     fn terminate_early(&mut self) -> bool {
@@ -639,91 +621,6 @@ where
                 .insert(*id, (distance, associated_data));
         }
         Ok(())
-    }
-}
-
-impl<Data, VP> HasId for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    type Id = u32;
-}
-
-impl<Data, VP> Accessor for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    /// Choose to panic on an out-of-bounds access rather than propagate an error.
-    type GetError = ANNError;
-
-    /// Note: this a temporary, poor implementation.
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        let mut f = || -> ANNResult<f32> {
-            let mut out = 0.0;
-            self.pq_distances(&[id], |distance, _| out = distance)?;
-            Ok(out)
-        };
-        std::future::ready(f())
-    }
-}
-
-impl<'a, 'b, Data, VP> DelegateNeighbor<'a> for DiskAccessor<'b, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    type Delegate = AsNeighborAccessor<'a, 'b, Data, VP>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        AsNeighborAccessor(self)
-    }
-}
-
-/// A light-weight wrapper around `&mut DiskAccessor` used to tailor the semantics of
-/// [`NeighborAccessor`].
-///
-/// This implementation ensures that the vector data for adjacency lists is also retrieved
-/// and cached to enhance reranking.
-pub struct AsNeighborAccessor<'a, 'b, Data, VP>(&'a mut DiskAccessor<'b, Data, VP>)
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>;
-
-impl<Data, VP> HasId for AsNeighborAccessor<'_, '_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    type Id = u32;
-}
-
-impl<Data, VP> NeighborAccessor for AsNeighborAccessor<'_, '_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    fn get_neighbors(
-        self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        if self.0.io_tracker.io_count() > self.0.provider.search_io_limit {
-            return future::ok(self); // Returning empty results in `neighbors` out param if IO limit is reached.
-        }
-
-        if let Err(e) = ensure_vertex_loaded(&mut self.0.scratch.vertex_provider, &[id]) {
-            return future::err(e);
-        }
-        let list = match self.0.scratch.vertex_provider.get_adjacency_list(&id) {
-            Ok(list) => list,
-            Err(e) => return future::err(e),
-        };
-        neighbors.overwrite_trusted(list);
-        future::ok(self)
     }
 }
 

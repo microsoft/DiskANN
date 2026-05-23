@@ -23,8 +23,8 @@ use diskann::{
     error::{ErrorExt, Infallible, RankedError},
     graph::{
         glue::{
-            self, Batch, CopyIds, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy,
-            InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
+            self, Batch, CopyIds, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
         strategy::{FullPrecision, Quantized},
         workingset::{self, map},
@@ -32,7 +32,7 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, DataProvider, DefaultContext, DelegateNeighbor, Delete,
+        BuildDistanceComputer, DataProvider, DefaultContext, DelegateNeighbor, Delete,
         ElementStatus, HasElementRef, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard,
         SetElement,
     },
@@ -791,24 +791,6 @@ where
     element: Box<[T]>,
 }
 
-impl<T, Q> HasId for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type Id = u32;
-}
-
-impl<T, Q> SearchExt for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
-        std::future::ready(self.provider.starting_points())
-    }
-}
-
 impl<'a, T, Q> FullAccessor<'a, T, Q>
 where
     T: VectorRepr,
@@ -823,93 +805,71 @@ where
                 .collect(),
         }
     }
-}
 
-impl<'a, T, Q> DelegateNeighbor<'a> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type Delegate = &'a NeighborProvider<u32>;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T, Q> HasElementRef for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type ElementRef<'a> = &'a [T];
-}
-
-impl<T, Q> Accessor for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    // Hard-deleted entries may be encountered via stale graph edges.
-    //
-    type GetError = AccessError;
-
-    /// Return the distance between the query and the vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    #[inline(always)]
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        let v = self
-            .provider
+    fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        self.provider
             .full_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| self.computer.evaluate_similarity(&self.element));
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+    }
+}
 
-        std::future::ready(v)
+impl<T, Q> HasId for FullAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type Id = u32;
+}
+
+impl<T, Q> glue::SearchAccessor for FullAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
+        std::future::ready(self.provider.starting_points())
     }
 
-    /// Perform a bulk operation, silently skipping entries that cannot be read
-    /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    fn distances_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for i in itr {
-            match self
-                .provider
-                .full_vectors
-                .get_vector_into(i.into_usize(), &mut self.element)
-            {
-                Ok(()) => {
-                    f(self.computer.evaluate_similarity(&self.element), i);
-                }
-                Err(RankedError::Transient(_)) => {
-                    // Deleted or missing vector — expected during graph traversal, skip.
-                }
-                Err(e @ RankedError::Error(_)) => {
-                    return std::future::ready(Err(e));
+        for i in self.provider.starting_points()? {
+            f(
+                i,
+                self.get_distance(i)
+                    .escalate("starting point retrieval must succeed")?,
+            )
+        }
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut neighbors = AdjacencyList::new();
+        for n in ids {
+            self.provider.neighbors().get_neighbors(n, &mut neighbors)?;
+            for &id in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                if let Some(distance) = self
+                    .get_distance(id)
+                    .allow_transient("skipping deleted vectors")?
+                {
+                    on_neighbors(id, distance)
                 }
             }
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
-}
-
-impl<T, Q> ExpandBeam for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
 }
 
 ///////////////////
@@ -933,22 +893,6 @@ where
     element: Box<[u8]>,
 }
 
-impl<T> HasId for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Id = u32;
-}
-
-impl<T> SearchExt for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
-        std::future::ready(self.provider.starting_points())
-    }
-}
-
 impl<'a, T> QuantAccessor<'a, T>
 where
     T: VectorRepr,
@@ -966,84 +910,70 @@ where
                 .collect(),
         })
     }
-}
 
-impl<'a, T> DelegateNeighbor<'a> for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = &'a NeighborProvider<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T> HasElementRef for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type ElementRef<'a> = Opaque<'a>;
-}
-
-impl<T> Accessor for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    // ANNError on access failures in bf-tree
-    //
-    type GetError = AccessError;
-
-    /// Return the distance between the query and the quantized vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        let v = self
-            .provider
+    fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        self.provider
             .quant_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| self.computer.evaluate_similarity(&self.element));
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+    }
+}
 
-        std::future::ready(v)
+impl<T> HasId for QuantAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+}
+
+impl<T> glue::SearchAccessor for QuantAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
+        std::future::ready(self.provider.starting_points())
     }
 
-    /// Perform a bulk operation, silently skipping entries that cannot be read
-    /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    fn distances_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for i in itr {
-            match self
-                .provider
-                .quant_vectors
-                .get_vector_into(i.into_usize(), &mut self.element)
-            {
-                Ok(()) => {
-                    f(self.computer.evaluate_similarity(&self.element), i);
-                }
-                Err(RankedError::Transient(_)) => {
-                    // Deleted or missing vector — expected during graph traversal, skip.
-                }
-                Err(e @ RankedError::Error(_)) => {
-                    return std::future::ready(Err(e));
+        for i in self.provider.starting_points()? {
+            f(
+                i,
+                self.get_distance(i)
+                    .escalate("starting point retrieval must succeed")?,
+            )
+        }
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut neighbors = AdjacencyList::new();
+        for n in ids {
+            self.provider.neighbors().get_neighbors(n, &mut neighbors)?;
+            for &id in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                if let Some(distance) = self
+                    .get_distance(id)
+                    .allow_transient("skipping deleted vectors")?
+                {
+                    on_neighbors(id, distance)
                 }
             }
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
-
-impl<T> ExpandBeam for QuantAccessor<'_, T> where T: VectorRepr {}
 
 ///////////////////////
 // FullPruneAccessor //

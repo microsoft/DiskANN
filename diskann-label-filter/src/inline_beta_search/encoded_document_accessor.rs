@@ -8,12 +8,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use diskann::{
-    error::ErrorExt,
-    graph::glue::{ExpandBeam, SearchExt},
-    provider::{Accessor, AsNeighbor, DelegateNeighbor, HasId},
-    ANNError, ANNErrorKind, ANNResult,
-};
+use diskann::{graph::glue, provider::HasId, ANNError, ANNErrorKind, ANNResult};
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;
@@ -89,65 +84,57 @@ where
     type Id = <IA as HasId>::Id;
 }
 
-impl<IA> Accessor for EncodedDocumentAccessor<IA>
+impl<IA> glue::SearchAccessor for EncodedDocumentAccessor<IA>
 where
-    IA: Accessor,
-{
-    type GetError = ANNError;
-
-    async fn get_distance(&mut self, id: Self::Id) -> Result<f32, Self::GetError> {
-        let future = self.inner_accessor.get_distance(id);
-        let distance = future.await.escalate("Did not find the vector element")?;
-        let filtered = self.attributes_for(id, |computer, set| computer.apply(distance, &set))?;
-
-        Ok(filtered)
-    }
-
-    async fn distances_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> Result<(), Self::GetError>
-    where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
-    {
-        for i in itr {
-            let distance = self
-                .inner_accessor
-                .get_distance(i)
-                .await
-                .escalate("Failed to get vector from inner accessor")?;
-            let _ = self
-                .attribute_accessor
-                .visit_labels_of_point(i, |_, opt_set| {
-                    let set = match opt_set {
-                        Some(set) => set,
-                        None => {
-                            return Err(ANNError::message(
-                                ANNErrorKind::IndexError,
-                                format!("No attributes found for point.{}", i),
-                            ));
-                        }
-                    };
-                    let distance = self.computer.apply(distance, &set);
-                    f(distance, i);
-                    Ok(())
-                });
-        }
-        Ok(())
-    }
-}
-
-impl<IA> SearchExt for EncodedDocumentAccessor<IA>
-where
-    IA: SearchExt,
+    IA: glue::SearchAccessor,
 {
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = diskann::ANNResult<Vec<Self::Id>>> + Send {
         self.inner_accessor.starting_points()
+    }
+
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
+    where
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut pairs = Vec::new();
+        self.inner_accessor
+            .start_point_distances(|id, distance| pairs.push((id, distance)))
+            .await?;
+
+        for (id, distance) in pairs {
+            let filtered =
+                self.attributes_for(id, |computer, set| computer.apply(distance, &set))?;
+            f(id, filtered)
+        }
+
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut pairs = Vec::new();
+        self.inner_accessor
+            .expand_beam(ids, pred, |id, distance| pairs.push((id, distance)))
+            .await?;
+
+        for (id, distance) in pairs {
+            let filtered =
+                self.attributes_for(id, |computer, set| computer.apply(distance, &set))?;
+            on_neighbors(id, filtered)
+        }
+
+        Ok(())
     }
 
     fn terminate_early(&mut self) -> bool {
@@ -160,23 +147,5 @@ where
         Output = diskann::ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
     > + Send {
         self.inner_accessor.is_not_start_point()
-    }
-}
-
-impl<IA> ExpandBeam for EncodedDocumentAccessor<IA>
-where
-    IA: Accessor,
-    EncodedDocumentAccessor<IA>: AsNeighbor,
-{
-}
-
-impl<'a, IA> DelegateNeighbor<'a> for EncodedDocumentAccessor<IA>
-where
-    IA: DelegateNeighbor<'a>,
-{
-    type Delegate = IA::Delegate;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.inner_accessor.delegate_neighbor()
     }
 }

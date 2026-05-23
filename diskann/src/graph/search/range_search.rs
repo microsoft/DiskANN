@@ -13,7 +13,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt, SearchStrategy},
+        glue::{self, SearchAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::{self, SearchOutputBuffer},
@@ -183,14 +183,12 @@ where
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.starting_l(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.starting_l(), num_start_ids);
 
             let initial_stats = index
                 .search_internal(
                     self.beam_width(),
-                    &start_ids,
                     &mut accessor,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
@@ -326,7 +324,7 @@ pub(crate) async fn range_search_internal<A>(
     scratch: &mut SearchScratch<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
-    A: ExpandBeam + SearchExt,
+    A: SearchAccessor,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 
@@ -355,7 +353,7 @@ where
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| neighbors.push(Neighbor::new(id, distance)),
             )
             .await?;
 

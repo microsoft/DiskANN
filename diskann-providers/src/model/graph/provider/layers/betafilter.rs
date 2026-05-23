@@ -20,14 +20,13 @@ use diskann::{
     error::StandardError,
     graph::{
         SearchOutputBuffer,
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcessStep, SearchStrategy},
+        glue::{self, SearchPostProcessStep, SearchStrategy},
         index::QueryLabelProvider,
     },
     neighbor::Neighbor,
-    provider::{Accessor, AsNeighbor, DataProvider, DelegateNeighbor, HasId},
+    provider::{DataProvider, HasId},
     utils::VectorId,
 };
-use futures_util::FutureExt;
 
 /// A [`SearchStrategy`] type that composes the inner distance computer with beta filtering.
 ///
@@ -172,31 +171,12 @@ impl<I> Filter<I>
 where
     I: VectorId,
 {
-    fn apply(&self, distance: f32, id: I) -> f32 {
+    fn apply(&self, id: I, distance: f32) -> f32 {
         if self.labels.is_match(id) {
             distance * self.beta
         } else {
             distance
         }
-    }
-}
-
-impl<Inner> SearchExt for BetaAccessor<Inner>
-where
-    Inner: SearchExt,
-{
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<Inner::Id>>> + Send {
-        self.inner.starting_points()
-    }
-}
-
-impl<'a, Inner> DelegateNeighbor<'a> for BetaAccessor<Inner>
-where
-    Inner: DelegateNeighbor<'a>,
-{
-    type Delegate = Inner::Delegate;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.inner.delegate_neighbor()
     }
 }
 
@@ -207,220 +187,57 @@ where
     type Id = Inner::Id;
 }
 
-impl<Inner> Accessor for BetaAccessor<Inner>
+impl<Inner> glue::SearchAccessor for BetaAccessor<Inner>
 where
-    Inner: Accessor,
+    Inner: glue::SearchAccessor,
 {
-    /// Use the same error type as `Inner`.
-    type GetError = Inner::GetError;
-
-    /// Invoke `get_element` on the inner accessor and return a tuple consisting of the
-    /// retrieved element and `id`.
-    #[inline(always)]
-    fn get_distance(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<f32, Self::GetError>> + Send {
-        let filter = &self.filter;
-
-        // The first `map` applies to `Future`.
-        // The second `map` applies to the `Result`.
-        self.inner
-            .get_distance(id)
-            .map(move |result| result.map(move |distance| filter.apply(distance, id)))
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<Inner::Id>>> + Send {
+        self.inner.starting_points()
     }
 
-    /// Method `on_elements_unordered` is implemented by invoking
-    /// `inner.on_elements_unordered` with a decorated version of `f`.
-    async fn distances_unordered<Itr, F>(
+    fn start_point_distances<F>(
         &mut self,
-        itr: Itr,
         mut f: F,
-    ) -> Result<(), Self::GetError>
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
         let filter = &self.filter;
-        self.inner
-            .distances_unordered(
-                itr,
-                #[inline]
-                move |distance, id| f(filter.apply(distance, id), id),
-            )
-            .await
+        self.inner.start_point_distances(move |id, distance| {
+            f(id, filter.apply(id, distance));
+        })
+    }
+
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let filter = &self.filter;
+        self.inner.expand_beam(ids, pred, move |id, distance| {
+            on_neighbors(id, filter.apply(id, distance))
+        })
     }
 }
-
-impl<Inner> ExpandBeam for BetaAccessor<Inner> where Inner: ExpandBeam + AsNeighbor {}
-
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use diskann::{
-        ANNError, ANNResult, always_escalate,
-        graph::AdjacencyList,
-        graph::glue::CopyIds,
-        provider::{DefaultContext, NeighborAccessor, NoopGuard},
-    };
-    use futures_util::future;
-    use thiserror::Error;
-
     use super::*;
 
-    /// A very simple data provider.
-    struct SimpleProvider;
-    impl DataProvider for SimpleProvider {
-        type Context = DefaultContext;
-        type InternalId = u32;
-        type ExternalId = u64;
-        type Guard = NoopGuard<u32>;
-
-        type Error = ANNError;
-
-        fn to_internal_id(&self, _context: &DefaultContext, gid: &u64) -> ANNResult<u32> {
-            Ok((*gid).try_into()?)
-        }
-
-        fn to_external_id(&self, _context: &DefaultContext, id: u32) -> ANNResult<u64> {
-            Ok(id.into())
-        }
-    }
-
-    /// An `Accessor` that doubles its input ID as its output element.
-    ///
-    /// This also tracks the number of calls made to `get_element` and
-    /// `on_elements_unordered` to ensure that `BetaFilter` correctly forwards these methods.
-    #[derive(Debug, Clone, Copy)]
-    struct Doubler {
-        get_element: usize,
-        on_elements_unordered: usize,
-        computer: AddingComputer,
-    }
-
-    impl SearchExt for Doubler {
-        async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-            Ok(vec![0])
-        }
-    }
-
-    impl Doubler {
-        fn new(query: u64) -> Self {
-            Self {
-                get_element: 0,
-                on_elements_unordered: 0,
-                computer: AddingComputer(query),
-            }
-        }
-
-        fn reset(&mut self) {
-            self.get_element = 0;
-            self.on_elements_unordered = 0;
-        }
-    }
-
-    /// A simple error type to test error forwarding.
-    #[derive(Debug, Error)]
-    #[error("the value {0} is not allowed")]
-    pub struct NotAllowed(u32);
-
-    impl From<NotAllowed> for ANNError {
-        #[inline(never)]
-        fn from(value: NotAllowed) -> Self {
-            ANNError::log_async_error(value)
-        }
-    }
-
-    impl HasId for Doubler {
-        type Id = u32;
-    }
-
-    impl NeighborAccessor for Doubler {
-        fn get_neighbors(
-            self,
-            _id: Self::Id,
-            neighbors: &mut AdjacencyList<Self::Id>,
-        ) -> impl Future<Output = ANNResult<Self>> + Send {
-            neighbors.clear();
-            future::ok(self)
-        }
-    }
-
-    always_escalate!(NotAllowed);
-
-    impl Accessor for Doubler {
-        type GetError = NotAllowed;
-
-        fn get_distance(
-            &mut self,
-            id: u32,
-        ) -> impl std::future::Future<Output = Result<f32, Self::GetError>> + Send {
-            self.get_element += 1;
-            let is_err = (100..200).contains(&id);
-
-            async move {
-                if is_err {
-                    Err(NotAllowed(id))
-                } else {
-                    let id: u64 = id.into();
-                    Ok(self.computer.eval(2 * id))
-                }
-            }
-        }
-
-        async fn distances_unordered<Itr, F>(
-            &mut self,
-            itr: Itr,
-            mut f: F,
-        ) -> Result<(), Self::GetError>
-        where
-            Self: Sync,
-            Itr: Iterator<Item = Self::Id> + Send,
-            F: Send + FnMut(f32, Self::Id),
-        {
-            self.on_elements_unordered += 1;
-            for i in itr {
-                f(self.get_distance(i).await?, i);
-            }
-            Ok(())
-        }
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    struct AddingComputer(u64);
-
-    impl AddingComputer {
-        fn eval(&self, x: u64) -> f32 {
-            (self.0 + x) as f32
-        }
-    }
-
-    impl ExpandBeam for Doubler {}
-
-    #[derive(Debug)]
-    struct SimpleStrategy;
-
-    impl<'a> SearchStrategy<'a, SimpleProvider, u64> for SimpleStrategy {
-        type SearchAccessor = Doubler;
-        type SearchAccessorError = ANNError;
-
-        fn search_accessor(
-            &'a self,
-            _provider: &'a SimpleProvider,
-            _context: &'a DefaultContext,
-            query: u64,
-        ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
-            Ok(Doubler::new(query))
-        }
-    }
-
-    impl<'a> glue::DefaultPostProcessor<'a, SimpleProvider, u64> for SimpleStrategy {
-        diskann::default_post_processor!(CopyIds);
-    }
+    use diskann::graph::{
+        glue::{HybridPredicate, Predicate, PredicateMut, SearchAccessor},
+        test::{provider as test_provider, synthetic::Grid},
+    };
+    use std::collections::HashSet;
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.
     #[derive(Debug)]
@@ -432,78 +249,102 @@ mod tests {
         }
     }
 
+    struct NotIn<'a>(&'a mut HashSet<u32>);
+
+    impl Predicate<u32> for NotIn<'_> {
+        fn eval(&self, item: &u32) -> bool {
+            !self.0.contains(item)
+        }
+    }
+
+    impl PredicateMut<u32> for NotIn<'_> {
+        fn eval_mut(&mut self, item: &u32) -> bool {
+            self.0.insert(*item)
+        }
+    }
+
+    impl HybridPredicate<u32> for NotIn<'_> {}
+
     #[tokio::test]
     async fn test_beta_filter() {
-        let provider = SimpleProvider;
-        let context = &DefaultContext;
+        // The grid of 4x4 will look like this:
+        //
+        // |             16
+        // | 3  7 11 15
+        // | 2  6 10 14
+        // | 1  5  9 13
+        // | 0  4  8 12
+        // +---------------
+        //
+        let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
+        let context = test_provider::Context::new();
+
         let beta: f32 = 0.25;
 
-        let strategy = BetaFilter::new(SimpleStrategy, Arc::new(ThreeFilter), beta);
+        let strategy = BetaFilter::new(test_provider::Strategy::new(), Arc::new(ThreeFilter), beta);
 
-        let query = 10;
-        let mut accessor: BetaAccessor<_> =
-            strategy.search_accessor(&provider, context, query).unwrap();
-        assert_eq!(accessor.inner.get_element, 0);
-        assert_eq!(accessor.inner.on_elements_unordered, 0);
-
-        let unfiltered = |id: u32| (2 * (id as u64) + query) as f32;
-        let filtered = |id: u32| beta * unfiltered(id);
-
-        // Test non-erroring path.
-        let v = accessor.get_distance(1).await.unwrap();
-        assert_eq!(v, unfiltered(1));
-
-        let v = accessor.get_distance(2).await.unwrap();
-        assert_eq!(v, unfiltered(2));
-
-        // Test erroring path.
-        assert!(accessor.get_distance(100).await.is_err());
-        assert!(accessor.get_distance(101).await.is_err());
-
-        assert_eq!(accessor.inner.get_element, 4);
-        assert_eq!(accessor.inner.on_elements_unordered, 0);
-        accessor.inner.reset();
-
-        // On elements unordered.
-        {
-            let mut v = Vec::new();
-            accessor
-                .distances_unordered([1, 2, 3, 4, 5].into_iter(), |element, id| {
-                    v.push((element, id));
-                })
-                .await
-                .unwrap();
-
-            assert_eq!(accessor.inner.get_element, 5);
-            assert_eq!(accessor.inner.on_elements_unordered, 1);
-            assert_eq!(
-                v,
-                &[
-                    (unfiltered(1), 1),
-                    (unfiltered(2), 2),
-                    (filtered(3), 3),
-                    (unfiltered(4), 4),
-                    (unfiltered(5), 5)
-                ]
-            );
-            accessor.inner.reset();
-        }
-
-        // On-elements-unordered propagates errors.
-        assert!(
-            accessor
-                .distances_unordered([1, 2, 3, 100, 4].into_iter(), |_, _| {})
-                .await
-                .is_err()
+        let start_point_ids: Vec<_> = provider.start_point_ids().collect();
+        assert_eq!(
+            start_point_ids.len(),
+            1,
+            "grid should only have a single start point"
+        );
+        let start_point = start_point_ids[0];
+        assert_eq!(
+            start_point,
+            u32::MAX,
+            "`Provider::grid` is documented to use `u32::MAX` as its start point",
         );
 
-        assert_eq!(accessor.get_distance(10).await.unwrap(), unfiltered(10),);
-        assert_eq!(accessor.get_distance(11).await.unwrap(), unfiltered(11),);
-        assert_eq!(accessor.get_distance(12).await.unwrap(), filtered(12));
+        let mut visited = HashSet::new();
+        let mut buf = Vec::new();
 
-        // Test dummy implementation of `get_neighbors` for code coverage.
-        let mut neighbors = AdjacencyList::new();
-        accessor.get_neighbors(0, &mut neighbors).await.unwrap();
-        assert_eq!(neighbors.len(), 0);
+        let mut accessor = strategy
+            .search_accessor(&provider, &context, &[0.0, 0.0])
+            .unwrap();
+
+        assert_eq!(
+            &*accessor.starting_points().await.unwrap(),
+            &*start_point_ids,
+            "the underlying start points should match",
+        );
+
+        accessor
+            .expand_beam(
+                [0, 5, 10, 15].into_iter(),
+                NotIn(&mut visited),
+                |distance, id| buf.push((distance, id)),
+            )
+            .await
+            .unwrap();
+
+        // The expansion order is unknown, but we know from the structure of the grid what
+        // the result should be.
+        //
+        // Since each entry in the beam is connected
+        buf.sort_by_key(|(id, _)| *id);
+        assert_eq!(
+            &*buf,
+            [
+                (1, 1.0),
+                (4, 1.0),
+                (6, 5.0 * beta),
+                (9, 5.0 * beta),
+                (11, 13.0),
+                (14, 13.0),
+            ]
+        );
+
+        buf.clear();
+        accessor
+            .start_point_distances(|id, distance| buf.push((id, distance)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            &*buf,
+            [(start_point, 32.0 * beta)],
+            "u32::MAX is a multiple of 3"
+        );
     }
 }
