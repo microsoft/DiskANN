@@ -273,7 +273,7 @@ where
 
             let internal_id = guard.id();
 
-            // NOTE: Use the API `insert_search_accessor` to allow `Accessor` customization.
+            // NOTE: Use the API `insert_search_accessor` to allow customization.
             let mut accessor = strategy
                 .insert_search_accessor(&self.data_provider, context, vector)
                 .into_ann_result()?;
