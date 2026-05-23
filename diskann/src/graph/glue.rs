@@ -3,10 +3,27 @@
  * Licensed under the MIT license.
  */
 
+//! # Search
+//!
+//! The [`SearchAccessor`] is the primary trait for integrating graph search algorithms.
+//! Graph search begins at [`starting_points`](SearchAccessor::starting_points) and performs
+//! several rounds of "beam expansion" via [`expand_beam`](SearchAccessor::expand_beam).
+//!
+//! The [`SearchAccessor`] has several duties. It must be able to retrieve adjacency list
+//! information from its underlying [`DataProvider`] can compute distances between a fixed
+//! query and all elements in adjacency lists. See the documentation of
+//! [`expand_beam`](SearchAccessor::expand_beam) for a more detailed description of the
+//! required algorithm.
+//!
+//! Accessors are constructed via [`SearchStrategy::search_accessor`] and
+//! [`InsertStrategy::insert_search_accessor`] where they are provided with the query.
+//!
+//! # Strategies
+//!
 //! Strategies provide the "glue" between [`DataProvider`]s and index operations like search,
 //! insertion, deletion, etc.
 //!
-//! They do this by tying together [`Accessor`]s, computers, and other operations required
+//! They do this by tying together accessors, computers, and other operations required
 //! by the various indexing algorithms.
 //!
 //! The relationship between between strategies and indexing algorithms can feel like having
@@ -18,16 +35,12 @@
 //! * [`SearchStrategy`]: This is used for default graph-based searches. The flow of a search
 //!   is as follows:
 //!
-//!   1. Create the `SearchAccessor` defined by the strategy. This is the object that will
-//!      be used to actually retrieve data from the [`DataProvider`].
+//!   1. Create the [`SearchAccessor`] defined by the strategy. This is the object that will
+//!      be used to retrieve data from the [`DataProvider`].
 //!
-//!   2. Use the `SearchAccessor` to create the `QueryComputer` from the query object.
-//!      This computer will be used for all distances between elements retrieved from the
-//!      search accessor.
+//!   2. Run greedy-search using the accessor.
 //!
-//!   3. Run greedy-search using the accessor-computer combination.
-//!
-//!   4. After search, post-processing is run, which enables operations like filtering
+//!   3. After search, post-processing is run, which enables operations like filtering
 //!      of start or deleted points, reranking etc.
 //!
 //!      See [`SearchPostProcess`].
@@ -50,23 +63,23 @@
 //!   Most of the [`InsertStrategy`] is dedicated to the initial graph search, delegating
 //!   pruning to an associated [`PruneStrategy`].
 //!
-//!   The graph search portion works by constructing the `InsertAccessor` and then an
-//!   `InsertQueryComputer` from that accessor and the value that was just inserted.
+//!   The graph search portion works by constructing the `InsertAccessor` with the value
+//!   that was just inserted.
 //!
 //!   This accessor/computer pair is then used for search, followed by pruning.
 //!
 //! * [`PruneStrategy`]: The pruning strategy is largely straightforward, consisting of
-//!   an [`Accessor`] and a random access [`DistanceFunction`] for performing distance
-//!   calculations on the retrieve elements.
+//!   an accessor and a random access [`DistanceFunction`] for performing distance
+//!   calculations on the retrieved elements.
 //!
-//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with expensive
-//!   vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
+//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with
+//!   expensive vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
 //!
 //!   This is done by using a working set to store the elements retrieved by the
 //!   `PruneAccessor`. To give implementers the ability to perform a hybrid prune
 //!   (consisting of a mix of full-precision and quantized vectors), **without** the index
-//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to delegate
-//!   the responsibility of populating this cache to the [`DataProvider`].
+//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to
+//!   delegate the responsibility of populating this cache to the [`DataProvider`].
 //!
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
 //!   strategies. One difference for inplace-deletion is that we use an element accessed
@@ -110,20 +123,26 @@ pub trait SearchAccessor: HasId + Send + Sync {
     /// # Description
     ///
     /// For each `i` in `itr`, fetch the adjacency list `v_i` for `i`. For each `v_i`, then
-    /// for each id `j` in `v_i`, compute the distance `d` using `computer` to the data
-    /// associated with `j` and invoke the closure `f` with `d` and `j`, provided
-    /// `pred.eval_mut(j)` evaluates to `true`.
+    /// for each id `j` in `v_i`, compute the distance `d` to the data associated with `j`
+    /// and invoke the closure `f` with `d` and `j`, provided `pred.eval_mut(j)` evaluates
+    /// to `true`.
     ///
     /// No specification is made on the traversal order of `ids`, the computation order of
     /// the leaf elements, nor the order in which `pred` is evaluated.
     ///
+    /// Additionally, there is **no** strict requirement that all `j` discovered during the
+    /// traversal need to be processed, though "dropping" too many candidates silently will
+    /// adversely affect the quality of traversal.
+    ///
+    /// ## Implementation Notes
+    ///
     /// Restriction in the implementation are as follows:
     ///
-    /// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` must be
+    /// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` should be
     ///   invoked for that item.
     ///
     ///   If an item `i` is already passed to `on_neighbors`, the implementation is not
-    ///   obligated to provided it again, though it **may** do so provided `pred.eval_mut()`
+    ///   obligated to provided it again, though it **may** do so if `pred.eval_mut()`
     ///   continues to return `true`.
     ///
     /// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
@@ -137,7 +156,7 @@ pub trait SearchAccessor: HasId + Send + Sync {
     ///
     ///   - `pred.eval() == false` implies `pred.eval_mut() == false` and vice-versa.
     ///
-    /// * `pred.eval_mut()` must be invoked at most once for all transitive items in the beam.
+    /// * `pred.eval_mut()` may be invoked multiple times for the same item `i`.
     ///
     /// ## Predicate Requirements
     ///
@@ -148,6 +167,26 @@ pub trait SearchAccessor: HasId + Send + Sync {
     /// Additionally, the callback `on_neighbors` and the predicate have to cooperate. If the
     /// callback requires unique items, the predicate must be structured such that `eval_mut`
     /// correctly filters out duplicates.
+    ///
+    /// # Pseudo Code
+    ///
+    /// ```ignore
+    /// for i in ids {
+    ///     // Retrieve the adjacency list IDs for node `i`.
+    ///     let neighbors = self.get_neighbors_for(i);
+    ///
+    ///     // Loop over the adjacency list IDs, skipping IDs according to `pred`.
+    ///     //
+    ///     // Using `eval_mut` records that we've not handled this ID and will (potentially)
+    ///     // exclude it from future calls.
+    ///     for neighbor in neighbors.filter(|i| pre.eval_mut(i)) {
+    ///         // Accessors are provided the query upon construction and are responsible
+    ///         // for computing distances.
+    ///         let distance = self.compute_distance_to(neighbor);
+    ///         on_neighbors(neighbor, distance);
+    ///     }
+    /// }
+    /// ```
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -159,14 +198,14 @@ pub trait SearchAccessor: HasId + Send + Sync {
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Self::Id, f32) + Send;
 
+    //////////////////////
+    // Provided methods //
+    //////////////////////
+
     /// Default is to never terminate early.
     fn terminate_early(&mut self) -> bool {
         false
     }
-
-    //////////////////////
-    // Provided methods //
-    //////////////////////
 
     /// Return a `'static` closure that returns `true` if a provided `id` is not a start
     /// point - otherwise returning `false`.
@@ -185,6 +224,7 @@ pub trait SearchAccessor: HasId + Send + Sync {
         }
     }
 
+    /// Return the number of starting points.
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.starting_points()
             .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
@@ -579,9 +619,6 @@ where
     /// The accessor implements [`workingset::Fill`] for the strategy's
     /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
     /// cached for distance computations.
-    ///
-    /// Implementations are encouraged to have [`Accessor::get_element`] return the
-    /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: HasId<Id = Provider::InternalId>
         + HasElementRef
         + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>

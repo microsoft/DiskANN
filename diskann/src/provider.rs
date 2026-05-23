@@ -5,7 +5,8 @@
 
 //! The [`DataProvider`] trait encompasses the following concepts:
 //!
-//! * Storage for arbitrary data that is contextually accessed through the [`Accessor`] trait.
+//! * Storage for arbitrary data that is contextually accessed through accessors constructed
+//!   by [strategies](crate::graph::glue).
 //!
 //! * Mapping between an "external id" (a unique external identifier for an entry in data
 //!   store) and an "internal id", which is a simple typed used as a handle to vector data
@@ -49,47 +50,38 @@
 //!   implementations may allow internal IDs to be reused immediately following the deletion
 //!   of the external ID while others may wait for a "release".
 //!
-//! * [`HasId`]: Traits such as [`Accessor`], [`NeighborAccessor`] and [`DelegateNeighbors`]
-//!   all need to interact with the underlying [`DataProvider`] using an internal ID type.
+//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`DelegateNeighbors`] all need to
+//!   interact with the underlying [`DataProvider`] using an internal ID type.
 //!
 //!   The [`HasId`] trait provides a common base-trait for these related concepts, which
 //!   ensures implementers only need to define and constrain it once.
 //!
-//! * [`Accessor`]: A contextual proxy object for retrieving data from the [`DataProvider`].
-//!   The key idea behind an accessor is that data to be retrieved from a data store
-//!   is contextual. In other words, in some contexts, we may retrieve one kind of data
-//!   (for example, full precision vectors), while in other contexts we may want to
-//!   retrieve another kind (such as quantized vectors).
-//!
-//!   Accessors can be implemented as simple handles to a provider, or can have local
-//!   scratch to assist in bulk operations.
-//!
-//!   Finally, one handy feature of accessors is that they can carry a lifetime, which
-//!   surprisingly can make writing algorithms involving borrows easier than trying to
-//!   manage a lifetime strictly through associated types with lifetimes.
-//!
-//! * [`BuildDistanceComputer`]: A sub-trait of [`Accessor`] that allows for random-access
-//!   distance computations on the retrieved elements.
+//! * [`BuildDistanceComputer`]: A sub-trait of [`HasElementRef`] that allows for
+//!   random-access distance computations on the retrieved elements.
 //!
 //! # Neighbor Delegation
 //!
-//! Index search requires that accessor types implement both the data-centric [`Accessor`]
-//! trait and the graph retrieval [`NeighborAccessor`]/[`NeighborAccessorMut`] traits.
+//! Graph operations require both data access (distances, elements) and graph
+//! access (neighbor retrieval and mutation). These concerns are typically served
+//! by different backing stores and need not vary together.
 //!
-//! While having multiple implementations of [`Accessor`] is common to support different
-//! kinds of searches in the quantized space, neighbor retrieval commonly need not vary.
-//! Instead of requiring all implementations of [`Accessor`] to manually forward the methods
-//! (both required and provided) in the [`NeighborAccesosr`] traits, we use a delegation
-//! technique supplied by the [`DelegateNeighbor`] trait.
+//! For example, search and pruning use different data accessors (optimized for
+//! query distances vs. pairwise element distances), but both share the same
+//! graph topology.
 //!
-//! [`Accessor`] types should implement [`DelegateNeighbor`] to return a [`NeighborAccessor`].
-//! Implementation of [`DelegateNeighbors`] will automatically implement [`AsNeighbor`] and
-//! [`AsNeighborMut`] (the latter is only applicable if the returned type implements
-//! [`NeighborAccessorMut`].
+//! Rather than requiring every data accessor to manually forward
+//! [`NeighborAccessor`] methods, the [`DelegateNeighbor`] trait routes neighbor
+//! access to a single shared implementation.
 //!
-//! Similarly, algorithms requiring graph access should accept `&mut T` where
-//! `T: AsNeighbor` or `T: AsNeighborMut`. This provides access to blanket implementations
-//! of [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
+//! Data accessor types should implement [`DelegateNeighbor`] to return a
+//! [`NeighborAccessor`]. This automatically provides [`AsNeighbor`] and
+//! [`AsNeighborMut`] (the latter when the delegate implements
+//! [`NeighborAccessorMut`]).
+//!
+//! Algorithms requiring graph access should accept `&mut T` where
+//! `T: AsNeighbor` or `T: AsNeighborMut`, which provides blanket
+//! implementations of [`NeighborAccessor`] and [`NeighborAccessorMut`]
+//! for `&mut T`.
 
 use std::ops::Deref;
 
@@ -139,10 +131,8 @@ pub trait ExecutionContext: Send + Sync + Clone + 'static {
 /// through derived and related traits, namely
 ///
 /// * [`SetElement`]: An overloadable version of `set_vector`.
-/// * [`Accessor`]: An overloadable, contextual class for retrieving data elements from
-///   the data provider.
 ///
-/// Indexing algorithms explose overloadable "strategies" that allow data provider to
+/// Indexing algorithms expose overloadable "strategies" that allow data providers to
 /// select the accessor.
 ///
 /// Example strategies include:
@@ -389,7 +379,8 @@ pub trait HasElementRef {
 // Build Distance Computer //
 /////////////////////////////
 
-/// A specialized [`Accessor`] that provides random-access distance computations.
+/// A trait that provides random-access distance computations over elements
+/// identified by [`HasElementRef`].
 pub trait BuildDistanceComputer: HasElementRef {
     /// The error type (if any) associated with distance computer construction.
     ///
@@ -397,7 +388,7 @@ pub trait BuildDistanceComputer: HasElementRef {
     type DistanceComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
     /// The concrete type of the distance computer, which must be applicable to all pairs
-    /// of elements yielded by the [`Accessor`].
+    /// of elements identified by [`HasElementRef::ElementRef`].
     type DistanceComputer: for<'a, 'b> DistanceFunction<Self::ElementRef<'a>, Self::ElementRef<'b>>
         + Send
         + Sync;
@@ -421,10 +412,10 @@ pub trait BuildDistanceComputer: HasElementRef {
 /// different stores. However, there are situations where data and neighbors are
 /// interleaved in the underlying storage medium.
 ///
-/// As such, [`Accessors`] used in congunction with graph operations need to additionally
+/// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
 ///
-/// To avoid repeating implementations for every [`Accessor`] flavor, the trait
+/// To avoid repeating implementations for every accessor flavor, the trait
 /// [`DelegateNeighbor`] should be used instead to route the implementation of
 /// [`NeighborAccessor`] to a single type if applicable.
 ///
@@ -449,7 +440,7 @@ pub trait NeighborAccessor: HasId + Sized + Send + Sync {
 /// A mutable extension of [`NeighborAccessor`] that enables the underlying graph to be
 /// mutated.
 ///
-/// Generally, [`Accessors`] should implement [`DelegateNeighbor`] instead of extending this
+/// Generally, data accessors should implement [`DelegateNeighbor`] instead of extending this
 /// trait if graph and data access are naturally decoupled.
 pub trait NeighborAccessorMut: NeighborAccessor {
     /// Overwrite the neighbor list for the node associated with `id`.
@@ -541,8 +532,8 @@ where
 /// Accessor may delegate the responsibility of being a [`NeighborAccessor`] to an auxiliary
 /// type by implementing this trait.
 ///
-/// If the implementation of a [`NeighborAccessor`]/[`NeighborAccessorMut`] are coupled with
-/// the [`Accessor`] itself (meaning that no delegation can take place), then implementations
+/// If the implementation of a [`NeighborAccessor`]/[`NeighborAccessorMut`] is coupled with
+/// the data accessor itself (meaning that no delegation can take place), then implementations
 /// may do the following. Assume the accessor has type `T`. Then:
 ///
 /// 1. Implement [`NeighborAccessor`]/[`NeighborAccessorMut`] for a thin wrapper around

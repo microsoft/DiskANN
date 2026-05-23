@@ -41,9 +41,9 @@
 //! * Allocate in `Accessor`: Another approach is to allocate scratch space directly in `Self`
 //!   for the elements in `itr`. This works since [`Fill::View`] borrows from `Self`.
 //!
-//! * Passthrough: If random access into the [`Accessor`] is synchronous and fast, then an
-//!   implementation of [`View`] can simply reach through the [`Accessor`], use zero-sized
-//!   types for the `WorkingSet`, and avoid allocation entirely.
+//! * Passthrough: If random access is synchronous and fast, then an implementation of
+//!   [`View`] can simply reach through the [`Accessor`], use zero-sized types for the
+//!   `WorkingSet`, and avoid allocation entirely.
 //!
 //! Within these, there are multiple strategies as well. For example, if data is known to
 //! be standard slices of standard types, then an implementation of `WorkingSet` can pack
@@ -52,8 +52,8 @@
 //! # Reuse in a `WorkingSet`
 //!
 //! Any particular `WorkingSet` can be reused across multiple prunes. It's up to the
-//! [`Accessor`] implementation to decide whether this reuse can serve as a cache for vectors
-//! or not. The default implementation [`Map`] offers both cached and uncached modes.
+//! implementation to decide whether this reuse can serve as a cache for vectors or not.
+//! The default implementation [`Map`] offers both cached and uncached modes.
 //!
 //! Trade offs include:
 //!

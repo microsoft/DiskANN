@@ -20,8 +20,8 @@
 //! ### Single insert, no need to tweak working set fills
 //!
 //! Use [`Map`] with the default projection. For example, if your internal ID type is `u32`
-//! and your [`Accessor`] element type is convertible to a `Box<[T]>`, then use
-//! `Map<u32, Box<[T]>>`, constructed as follows:
+//! and your element type is convertible to a `Box<[T]>`, then use `Map<u32, Box<[T]>>`,
+//! constructed as follows:
 //!
 //! ```
 //! use diskann::graph::workingset::{Map, map::{Builder, Capacity}};
