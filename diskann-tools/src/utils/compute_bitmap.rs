@@ -1,35 +1,35 @@
-    #[test]
-    fn test_compute_query_bitmap_not_with_missing_field() {
-        use serde_json::json;
-        // Three documents: two with "color", one without
-        let base_labels = vec![
-            Document {
-                doc_id: 0,
-                label: json!({"color": "red"}),
-            },
-            Document {
-                doc_id: 1,
-                label: json!({"color": "blue"}),
-            },
-            Document {
-                doc_id: 2,
-                label: json!({"shape": "circle"}), // no color field
-            },
-        ];
+#[test]
+fn test_compute_query_bitmap_not_with_missing_field() {
+    use serde_json::json;
+    // Three documents: two with "color", one without
+    let base_labels = vec![
+        Document {
+            doc_id: 0,
+            label: json!({"color": "red"}),
+        },
+        Document {
+            doc_id: 1,
+            label: json!({"color": "blue"}),
+        },
+        Document {
+            doc_id: 2,
+            label: json!({"shape": "circle"}), // no color field
+        },
+    ];
 
-        // Query: NOT color == "red"
-        let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
-            field: "color".to_string(),
-            op: CompareOp::Eq(json!("red")),
-        }));
-        let queries = vec![(0, not_query)];
-        let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("Should succeed");
-        // Only doc 1 should match (has color and is not red)
-        assert!(bitmaps[0].contains(1));
-        assert!(!bitmaps[0].contains(0));
-        // Doc 2 does not have color, so should not be included in the NOT universe
-        assert!(!bitmaps[0].contains(2));
-    }
+    // Query: NOT color == "red"
+    let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
+        field: "color".to_string(),
+        op: CompareOp::Eq(json!("red")),
+    }));
+    let queries = vec![(0, not_query)];
+    let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("Should succeed");
+    // Only doc 1 should match (has color and is not red)
+    assert!(bitmaps[0].contains(1));
+    assert!(!bitmaps[0].contains(0));
+    // Doc 2 does not have color, so should not be included in the NOT universe
+    assert!(!bitmaps[0].contains(2));
+}
 /*
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
@@ -223,16 +223,6 @@ impl QueryAccelerator for BTreeAccelerator {
     }
 }
 
-fn check_for_nonaccelerated_operators(query_expr: &ASTExpr) -> bool {
-    match query_expr {
-        ASTExpr::Not(_) => true,
-        ASTExpr::And(subs) => subs.iter().any(check_for_nonaccelerated_operators),
-        ASTExpr::Or(subs) => subs.iter().any(check_for_nonaccelerated_operators),
-        ASTExpr::Compare { .. } => false,
-    }
-}
-
-
 // Helper to prepend the separator if not present
 fn prepend_separator(field: &str) -> String {
     let separator = FlattenConfig::dot_notation().separator;
@@ -254,8 +244,11 @@ fn compute_label_set(expr: &ASTExpr) -> Vec<String> {
 }
 
 // Takes in a set of labels and returns the universe of all possible values for those labels
-fn compute_universe(universe_labels: Vec<String>, query_accelerators: &HashMap<String, Box<dyn QueryAccelerator>>) -> BitSet {
-     let mut universe_iter = universe_labels.iter();
+fn compute_universe(
+    universe_labels: Vec<String>,
+    query_accelerators: &HashMap<String, Box<dyn QueryAccelerator>>,
+) -> BitSet {
+    let mut universe_iter = universe_labels.iter();
     // Initialize universe to the first accelerator's universe, then intersect with the rest
     let mut universe = if let Some(first_label) = universe_iter.next() {
         if let Some(accelerator) = query_accelerators.get(first_label) {
@@ -271,7 +264,7 @@ fn compute_universe(universe_labels: Vec<String>, query_accelerators: &HashMap<S
             universe = universe.intersection(&accelerator.universe()).collect();
         }
     }
-    universe     
+    universe
 }
 
 fn insert_into_bitset(ids: Vec<usize>) -> BitSet {
@@ -310,7 +303,10 @@ fn eval_query_using_accelerators(
         ASTExpr::Not(sub) => {
             // compute the universe of all possible values
             let universe_labels_raw = compute_label_set(query_expr);
-            let universe_labels: Vec<String> = universe_labels_raw.iter().map(|f| prepend_separator(f)).collect();
+            let universe_labels: Vec<String> = universe_labels_raw
+                .iter()
+                .map(|f| prepend_separator(f))
+                .collect();
             let universe = compute_universe(universe_labels, query_accelerators);
 
             // Evaluate the sub-expression
@@ -318,7 +314,7 @@ fn eval_query_using_accelerators(
 
             // Return the difference between the sub-expression result and the universe
             Ok(universe.difference(&sub_result).collect())
-        },
+        }
         ASTExpr::Compare { field, op } => {
             let field = prepend_separator(field);
             if let Some(accelerator) = query_accelerators.get(&field) {
@@ -434,26 +430,24 @@ pub fn compute_query_bitmaps(
         })
         .collect();
 
-    let flattened_base_label_hashmaps: Result<
-        Vec<HashMap<String, AttributeValue>>,
-        anyhow::Error,
-    > = flattened_base_labels
-        .iter()
-        .map(|labels| {
-            let mut map = HashMap::new();
-            for (key, value) in labels {
-                // a base label may not have two values for the same key
-                if let Some(_existing_value) = map.get(key) {
-                    return Err(anyhow::anyhow!(
-                        "Duplicate keys in the same document: {}",
-                        key
-                    ));
+    let flattened_base_label_hashmaps: Result<Vec<HashMap<String, AttributeValue>>, anyhow::Error> =
+        flattened_base_labels
+            .iter()
+            .map(|labels| {
+                let mut map = HashMap::new();
+                for (key, value) in labels {
+                    // a base label may not have two values for the same key
+                    if let Some(_existing_value) = map.get(key) {
+                        return Err(anyhow::anyhow!(
+                            "Duplicate keys in the same document: {}",
+                            key
+                        ));
+                    }
+                    map.insert(key.clone(), value.clone());
                 }
-                map.insert(key.clone(), value.clone());
-            }
-            Ok(map)
-        })
-        .collect();
+                Ok(map)
+            })
+            .collect();
 
     let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
     let base_doc_ids: Vec<usize> = base_labels
@@ -489,7 +483,9 @@ pub fn compute_query_bitmaps(
         })
         .collect();
 
-    Ok(query_bitmaps?)
+    let query_bitmaps = query_bitmaps?;
+
+    Ok(query_bitmaps)
 }
 
 #[cfg(test)]
@@ -507,12 +503,18 @@ mod tests {
         let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = HashMap::new();
         let universe_labels = vec!["missing_label".to_string()];
         let result = compute_universe(universe_labels, &query_accelerators);
-        assert!(result.is_empty(), "Universe should be empty if label is missing");
+        assert!(
+            result.is_empty(),
+            "Universe should be empty if label is missing"
+        );
 
         // Sub-test 2: both accelerator types, non-empty intersection
         // InvertedIndexAccelerator for 'foo' with docs 1, 2
         let mut inv_map = HashMap::new();
-        inv_map.insert(AttributeValue::String("a".to_string()), [1, 2].iter().cloned().collect());
+        inv_map.insert(
+            AttributeValue::String("a".to_string()),
+            [1, 2].iter().cloned().collect(),
+        );
         let inv_accel = Box::new(InvertedIndexAccelerator { map: inv_map });
 
         // BTreeAccelerator for 'bar' with docs 2, 3
@@ -528,7 +530,10 @@ mod tests {
         let universe_labels = vec!["foo".to_string(), "bar".to_string()];
         let result = compute_universe(universe_labels, &query_accelerators);
         let expected: BitSet = [2].iter().cloned().collect();
-        assert_eq!(result, expected, "Universe should be the intersection of both accelerator universes");
+        assert_eq!(
+            result, expected,
+            "Universe should be the intersection of both accelerator universes"
+        );
     }
 
     #[test]
@@ -544,9 +549,9 @@ mod tests {
                 op: CompareOp::Eq(json!(2)),
             },
         ]);
-            let mut result_or = compute_label_set(&expr_or);
-            result_or.sort();
-            assert_eq!(result_or, vec!["bar".to_string(), "foo".to_string()]);
+        let mut result_or = compute_label_set(&expr_or);
+        result_or.sort();
+        assert_eq!(result_or, vec!["bar".to_string(), "foo".to_string()]);
 
         // NOT expression: NOT (baz == 3)
         let expr_not = ASTExpr::Not(Box::new(ASTExpr::Compare {
@@ -970,7 +975,8 @@ mod tests {
             op: CompareOp::Eq(serde_json::json!("red")),
         }));
         let queries_with_not = vec![(0, not_query)];
-        let bitmaps = compute_query_bitmaps(base_labels.clone(), queries_with_not).expect("Should succeed");
+        let bitmaps =
+            compute_query_bitmaps(base_labels.clone(), queries_with_not).expect("Should succeed");
         // The result should be a bitmap with doc 1 (not red)
         assert!(bitmaps[0].contains(1));
         assert!(!bitmaps[0].contains(0));
@@ -1079,67 +1085,5 @@ mod tests {
         let err =
             compute_query_accelerator("none".to_string(), AttributeValue::Empty, &doc_ids, &base);
         assert!(err.is_err());
-    }
-
-    #[test]
-    fn test_check_for_nonaccelerated_operators() {
-        // Compare only (no NOT)
-        let expr = ASTExpr::Compare {
-            field: "foo".to_string(),
-            op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
-        };
-        assert!(!check_for_nonaccelerated_operators(&expr));
-
-        // NOT at root
-        let expr = ASTExpr::Not(Box::new(ASTExpr::Compare {
-            field: "foo".to_string(),
-            op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
-        }));
-        assert!(check_for_nonaccelerated_operators(&expr));
-
-        // AND with NOT inside
-        let expr = ASTExpr::And(vec![
-            ASTExpr::Compare {
-                field: "foo".to_string(),
-                op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
-            },
-            ASTExpr::Not(Box::new(ASTExpr::Compare {
-                field: "baz".to_string(),
-                op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
-            })),
-        ]);
-        assert!(check_for_nonaccelerated_operators(&expr));
-
-        // OR with only Compare
-        let expr = ASTExpr::Or(vec![
-            ASTExpr::Compare {
-                field: "foo".to_string(),
-                op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
-            },
-            ASTExpr::Compare {
-                field: "baz".to_string(),
-                op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
-            },
-        ]);
-        assert!(!check_for_nonaccelerated_operators(&expr));
-
-        // Nested AND/OR with NOT deep inside
-        let expr = ASTExpr::And(vec![
-            ASTExpr::Or(vec![
-                ASTExpr::Compare {
-                    field: "a".to_string(),
-                    op: CompareOp::Eq(serde_json::Value::String("b".to_string())),
-                },
-                ASTExpr::Not(Box::new(ASTExpr::Compare {
-                    field: "c".to_string(),
-                    op: CompareOp::Eq(serde_json::Value::String("d".to_string())),
-                })),
-            ]),
-            ASTExpr::Compare {
-                field: "e".to_string(),
-                op: CompareOp::Eq(serde_json::Value::String("f".to_string())),
-            },
-        ]);
-        assert!(check_for_nonaccelerated_operators(&expr));
     }
 }
