@@ -17,6 +17,10 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
+// In order to construct a B-Tree over floats, we need to create a total
+// ordering on the float values by excluding NaN values. This struct is
+// used to throw an error if a NaN value is encountered when constructing
+// the OrderedFloat type.
 struct NotNonNan;
 
 impl std::fmt::Display for NotNonNan {
@@ -58,11 +62,11 @@ enum QueryAccelerator {
     BTree(BTreeMap<OrderedFloat, Vec<usize>>),
 }
 
-fn check_for_disallowed_operators(query_expr: &ASTExpr) -> bool {
+fn check_for_nonaccelerated_operators(query_expr: &ASTExpr) -> bool {
     match query_expr {
         ASTExpr::Not(_) => true,
-        ASTExpr::And(subs) => subs.iter().any(check_for_disallowed_operators),
-        ASTExpr::Or(subs) => subs.iter().any(check_for_disallowed_operators),
+        ASTExpr::And(subs) => subs.iter().any(check_for_nonaccelerated_operators),
+        ASTExpr::Or(subs) => subs.iter().any(check_for_nonaccelerated_operators),
         ASTExpr::Compare { .. } => false,
     }
 }
@@ -288,7 +292,7 @@ pub fn compute_query_bitmaps(
     // read query labels and differentiate between fast and slow path
     let bitmaps = if query_labels
         .iter()
-        .any(|(_, expr)| check_for_disallowed_operators(expr))
+        .any(|(_, expr)| check_for_nonaccelerated_operators(expr))
     {
         // using the global threadpool is fine here
         #[allow(clippy::disallowed_methods)]
@@ -915,20 +919,20 @@ mod tests {
     }
 
     #[test]
-    fn test_check_for_disallowed_operators() {
+    fn test_check_for_nonaccelerated_operators() {
         // Compare only (no NOT)
         let expr = ASTExpr::Compare {
             field: "foo".to_string(),
             op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
         };
-        assert!(!check_for_disallowed_operators(&expr));
+        assert!(!check_for_nonaccelerated_operators(&expr));
 
         // NOT at root
         let expr = ASTExpr::Not(Box::new(ASTExpr::Compare {
             field: "foo".to_string(),
             op: CompareOp::Eq(serde_json::Value::String("bar".to_string())),
         }));
-        assert!(check_for_disallowed_operators(&expr));
+        assert!(check_for_nonaccelerated_operators(&expr));
 
         // AND with NOT inside
         let expr = ASTExpr::And(vec![
@@ -941,7 +945,7 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
             })),
         ]);
-        assert!(check_for_disallowed_operators(&expr));
+        assert!(check_for_nonaccelerated_operators(&expr));
 
         // OR with only Compare
         let expr = ASTExpr::Or(vec![
@@ -954,7 +958,7 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("qux".to_string())),
             },
         ]);
-        assert!(!check_for_disallowed_operators(&expr));
+        assert!(!check_for_nonaccelerated_operators(&expr));
 
         // Nested AND/OR with NOT deep inside
         let expr = ASTExpr::And(vec![
@@ -973,6 +977,6 @@ mod tests {
                 op: CompareOp::Eq(serde_json::Value::String("f".to_string())),
             },
         ]);
-        assert!(check_for_disallowed_operators(&expr));
+        assert!(check_for_nonaccelerated_operators(&expr));
     }
 }

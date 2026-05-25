@@ -3,31 +3,37 @@
  * Licensed under the MIT license.
  */
 
+use clap::Parser;
 use diskann_label_filter::{read_and_parse_queries, read_baselabels};
 use diskann_tools::utils::compute_bitmap::compute_query_bitmaps;
-use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::process;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 3 && args.len() != 4 {
-        eprintln!(
-            "Usage: {} <base_label_file> <query_label_file> [specificity_output_file]",
-            args[0]
-        );
-        process::exit(1);
-    }
-    let base_label_file = &args[1];
-    let query_label_file = &args[2];
-    let output_file = if args.len() == 4 {
-        Some(&args[3])
-    } else {
-        None
-    };
+#[derive(Debug, Parser)]
+#[command(
+    about = "Compute specificities for queries against base labels",
+    author,
+    version
+)]
+struct Args {
+    /// File containing the base labels
+    #[arg(long = "base_label_file", short = 'b')]
+    pub base_label_file: String,
 
-    let base_labels = match read_baselabels(base_label_file) {
+    /// File containing the query labels
+    #[arg(long = "query_label_file", short = 'q')]
+    pub query_label_file: String,
+
+    /// Output file for specificities (optional)
+    #[arg(long = "specificity_output_file", short = 'o')]
+    pub specificity_output_file: Option<String>,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let base_labels = match read_baselabels(&args.base_label_file) {
         Ok(labels) => labels,
         Err(e) => {
             eprintln!("Error reading base labels: {}", e);
@@ -41,7 +47,7 @@ fn main() {
         process::exit(1);
     }
 
-    let query_labels = match read_and_parse_queries(query_label_file) {
+    let query_labels = match read_and_parse_queries(&args.query_label_file) {
         Ok(queries) => queries,
         Err(e) => {
             eprintln!("Error reading query labels: {}", e);
@@ -68,7 +74,7 @@ fn main() {
         })
         .collect();
 
-    if let Some(path) = output_file {
+    if let Some(path) = &args.specificity_output_file {
         let mut file = match File::create(path) {
             Ok(f) => f,
             Err(e) => {
