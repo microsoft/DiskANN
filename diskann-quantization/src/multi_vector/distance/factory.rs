@@ -19,7 +19,7 @@ use super::isa::{MaxSimIsa, NotSupported};
 use super::kernel::{Erase, MaxSimKernel};
 use super::kernels::f16::F16Entry;
 use super::kernels::f32::F32Kernel;
-use super::max_sim::MaxSim;
+use super::max_sim::{MaxSim, MaxSimError};
 use crate::multi_vector::distance::QueryMatRef;
 use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Standard};
 
@@ -27,10 +27,6 @@ use crate::multi_vector::{BlockTransposed, BlockTransposedRef, Mat, MatRef, Stan
 //  Prepared<A, Q> — concrete kernel for the arch-dispatched paths.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Concrete kernel: owns an arch token and a block-transposed prepared query.
-/// One generic `MaxSimKernel<T>` impl covers every arch (Scalar/V3/V4/Neon)
-/// for every supported element type (f32, f16) via the `Kernel<A>` / `Target3`
-/// dispatch in the `kernels` module.
 #[derive(Debug)]
 struct Prepared<A, Q> {
     arch: A,
@@ -52,7 +48,18 @@ where
         self.prepared.nrows()
     }
 
-    fn compute_max_sim(&self, doc: MatRef<'_, Standard<f32>>, scores: &mut [f32]) {
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<f32>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+        if doc.num_vectors() == 0 {
+            scores.fill(f32::MAX);
+            return Ok(());
+        }
         let mut scratch = vec![f32::MIN; self.prepared.padded_nrows()];
         self.arch.run3(
             F32Kernel::<GROUP>,
@@ -63,6 +70,7 @@ where
         for (dst, &src) in scores.iter_mut().zip(&scratch[..self.prepared.nrows()]) {
             *dst = -src;
         }
+        Ok(())
     }
 }
 
@@ -82,7 +90,18 @@ where
         self.prepared.nrows()
     }
 
-    fn compute_max_sim(&self, doc: MatRef<'_, Standard<half::f16>>, scores: &mut [f32]) {
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<half::f16>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+        if doc.num_vectors() == 0 {
+            scores.fill(f32::MAX);
+            return Ok(());
+        }
         let mut scratch = vec![f32::MIN; self.prepared.padded_nrows()];
         self.arch.run3(
             F16Entry::<GROUP>,
@@ -93,6 +112,7 @@ where
         for (dst, &src) in scores.iter_mut().zip(&scratch[..self.prepared.nrows()]) {
             *dst = -src;
         }
+        Ok(())
     }
 }
 
@@ -100,8 +120,6 @@ where
 //  ReferenceKernel<T> — non-SIMD fallback that wraps MaxSim::evaluate.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `MaxSimIsa::Reference` path. Owns the query as a `Mat<Standard<T>>` and
-/// delegates to [`MaxSim`] per `compute_max_sim` call.
 struct ReferenceKernel<T: Copy> {
     query: Mat<Standard<T>>,
 }
@@ -116,15 +134,9 @@ impl<T: Copy + std::fmt::Debug> std::fmt::Debug for ReferenceKernel<T> {
 
 impl<T: Copy> ReferenceKernel<T> {
     fn new(query: MatRef<'_, Standard<T>>) -> Self {
-        let repr = *query.repr();
-        let src = query.as_slice();
-        let mut idx = 0usize;
-        let owned = Mat::<Standard<T>>::from_fn(repr, || {
-            let v = src[idx];
-            idx += 1;
-            v
-        });
-        Self { query: owned }
+        Self {
+            query: query.to_owned(),
+        }
     }
 }
 
@@ -137,15 +149,21 @@ where
         self.query.num_vectors()
     }
 
-    fn compute_max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]) {
-        if scores.is_empty() {
-            return;
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<T>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError> {
+        if scores.len() != self.nrows() {
+            return Err(MaxSimError::InvalidBufferLength(scores.len(), self.nrows()));
+        }
+        if doc.num_vectors() == 0 {
+            scores.fill(f32::MAX);
+            return Ok(());
         }
         let query: QueryMatRef<'_, Standard<T>> = self.query.as_view().into();
-        let Ok(mut max_sim) = MaxSim::new(scores) else {
-            return;
-        };
-        let _ = max_sim.evaluate(query, doc);
+        let mut max_sim = MaxSim::new(scores);
+        max_sim.evaluate(query, doc)
     }
 }
 
@@ -153,10 +171,6 @@ where
 //  BuildAndErase<E> — Target1 impls used by `dispatch1_no_features` (Auto).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Internal `Target1` carrier used by the `MaxSimIsa::Auto` arm of
-/// [`MaxSimElement::build`]. `dispatch1_no_features` picks the highest
-/// available arch on the host CPU and calls the matching `Target1::run`
-/// below.
 struct BuildAndErase<E>(E);
 
 // ───── f32 Target1 impls ─────
@@ -269,8 +283,12 @@ mod sealed {
 /// will get dedicated factory functions when they are added.
 pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
     /// Build the concrete kernel for this element type and hand it to
-    /// `erase.erase(...)`. Returns [`NotSupported`] when the requested ISA
-    /// cannot run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64).
+    /// `erase.erase(...)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotSupported`] when the requested ISA cannot run on this
+    /// build (e.g. AVX-512 unavailable; aarch64 on x86_64).
     fn build<E: Erase<Self>>(
         isa: MaxSimIsa,
         query: MatRef<'_, Standard<Self>>,
@@ -389,10 +407,13 @@ impl MaxSimElement for half::f16 {
 
 /// Build a multi-vector MaxSim kernel for any [`MaxSimElement`] type.
 ///
-/// Thin wrapper over [`MaxSimElement::build`] — exists so generic callers can
-/// write `build_max_sim::<T, _>(isa, query, erase)` without naming the trait
-/// at the call site. Returns [`NotSupported`] when the requested ISA cannot
-/// run on this build (e.g. AVX-512 unavailable; aarch64 on x86_64).
+/// Thin wrapper over [`MaxSimElement::build`] so generic callers can write
+/// `build_max_sim::<T, _>(isa, query, erase)` without naming the trait at
+/// the call site.
+///
+/// # Errors
+///
+/// Returns [`NotSupported`] when the requested ISA cannot run on this build.
 pub fn build_max_sim<T: MaxSimElement, E: Erase<T>>(
     isa: MaxSimIsa,
     query: MatRef<'_, Standard<T>>,
@@ -464,7 +485,7 @@ mod tests {
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
             let mut scores = vec![0.0f32; nq];
-            kernel.compute_max_sim(doc, &mut scores);
+            kernel.compute_max_sim(doc, &mut scores).unwrap();
             let actual: f32 = scores.iter().sum();
 
             assert!(
@@ -487,13 +508,11 @@ mod tests {
             let doc = make_mat(&doc_data, nd, dim);
 
             let mut expected_scores = vec![0.0f32; nq];
-            let _ = MaxSim::new(&mut expected_scores)
-                .unwrap()
-                .evaluate(QueryMatRef::from(query), doc);
+            let _ = MaxSim::new(&mut expected_scores).evaluate(QueryMatRef::from(query), doc);
 
             let kernel = build_max_sim::<T, _>(MaxSimIsa::Auto, query, BoxErase).unwrap();
             let mut actual_scores = vec![0.0f32; nq];
-            kernel.compute_max_sim(doc, &mut actual_scores);
+            kernel.compute_max_sim(doc, &mut actual_scores).unwrap();
 
             for i in 0..nq {
                 assert!(
@@ -522,6 +541,61 @@ mod tests {
         assert_eq!(kernel.nrows(), 5);
     }
 
+    fn check_size_mismatch<T>(label: &str)
+    where
+        T: MaxSimElement + FromF32,
+        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+    {
+        let query_data = make_test_data::<T>(3 * 4, 4, 0);
+        let doc_data = make_test_data::<T>(2 * 4, 4, 1);
+        let query = make_mat(&query_data, 3, 4);
+        let doc = make_mat(&doc_data, 2, 4);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
+
+            let mut too_short = vec![0.0f32; 2];
+            match kernel.compute_max_sim(doc, &mut too_short) {
+                Err(MaxSimError::InvalidBufferLength(2, 3)) => {}
+                other => {
+                    panic!("{label}({isa:?}) expected InvalidBufferLength(2, 3), got {other:?}",)
+                }
+            }
+
+            let mut too_long = vec![0.0f32; 4];
+            match kernel.compute_max_sim(doc, &mut too_long) {
+                Err(MaxSimError::InvalidBufferLength(4, 3)) => {}
+                other => {
+                    panic!("{label}({isa:?}) expected InvalidBufferLength(4, 3), got {other:?}",)
+                }
+            }
+        }
+    }
+
+    fn check_zero_docs_fills_sentinel<T>(label: &str)
+    where
+        T: MaxSimElement + FromF32,
+        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+    {
+        let query_data = make_test_data::<T>(3 * 4, 4, 0);
+        let doc_data: Vec<T> = Vec::new();
+        let query = make_mat(&query_data, 3, 4);
+        let doc = make_mat(doc_data.as_slice(), 0, 4);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
+            let mut scores = vec![0.0f32; 3];
+            kernel.compute_max_sim(doc, &mut scores).unwrap();
+            for (i, &s) in scores.iter().enumerate() {
+                assert_eq!(
+                    s,
+                    f32::MAX,
+                    "{label}({isa:?}) zero-doc slot {i} should be f32::MAX sentinel",
+                );
+            }
+        }
+    }
+
     macro_rules! test_matches_fallback {
         ($mod_name:ident, $ty:ty, $tol:expr, $label:literal) => {
             mod $mod_name {
@@ -535,6 +609,16 @@ mod tests {
                 #[test]
                 fn max_sim_matches_fallback() {
                     check_max_sim_matches::<$ty>($tol, $label);
+                }
+
+                #[test]
+                fn errors_on_size_mismatch() {
+                    check_size_mismatch::<$ty>($label);
+                }
+
+                #[test]
+                fn zero_docs_fills_sentinel() {
+                    check_zero_docs_fills_sentinel::<$ty>($label);
                 }
             }
         };

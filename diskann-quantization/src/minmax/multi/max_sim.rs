@@ -264,7 +264,7 @@ mod tests {
                 .collect();
 
             let mut scores = vec![0.0f32; nq];
-            MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+            MaxSim::new(&mut scores).evaluate(query, doc);
 
             for (i, (&got, &exp)) in scores.iter().zip(expected.iter()).enumerate() {
                 assert!(
@@ -307,6 +307,6 @@ mod tests {
         let doc = MatRef::new(MinMaxMeta::<8>::new(3, dim), &doc_data).unwrap();
 
         let mut scores = vec![0.0f32; 5]; // Wrong size
-        MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+        MaxSim::new(&mut scores).evaluate(query, doc);
     }
 }

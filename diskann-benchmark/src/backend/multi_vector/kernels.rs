@@ -3,14 +3,11 @@
  * Licensed under the MIT license.
  */
 
-//! `Benchmark` impls for the multi-vector MaxSim factory.
+//! `Benchmark` and `Regression` impls for the multi-vector MaxSim factory.
 //!
-//! A single generic [`Kernel<T>`] carrier supplies the `Benchmark` and
-//! `Regression` impls for every element type accepted by the library's
-//! [`MaxSimElement`] sealed trait. Each `try_match` checks `element_type`
-//! only; the JSON `isa` field is passed to the library factory at run time,
-//! and arch unavailability surfaces as a job-level error via
-//! [`NotSupported`](diskann_quantization::multi_vector::NotSupported).
+//! A single generic [`Kernel<T>`] carrier covers every element type accepted
+//! by [`MaxSimElement`]; `try_match` also rejects ISAs unavailable on the
+//! host so unsupported jobs fail at job-selection rather than mid-run.
 
 use std::io::Write;
 use std::marker::PhantomData;
@@ -20,11 +17,11 @@ use diskann_benchmark_runner::{
     utils::{datatype::AsDataType, num::relative_change},
     Benchmark, Checkpoint, Output, Registry,
 };
-use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimElement};
+use diskann_quantization::multi_vector::{build_max_sim, BoxErase, MaxSimElement, MaxSimIsa};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::driver::{
-    run_with_distance, BoxedKernel, CheckResult, Comparison, Data, MultiVectorTolerance, RunResult,
+    run_with_kernel, CheckResult, Comparison, Data, MultiVectorTolerance, RunResult,
 };
 use crate::inputs::multi_vector::MultiVectorOp;
 use crate::utils::DisplayWrapper;
@@ -51,7 +48,18 @@ where
     type Output = Vec<RunResult>;
 
     fn try_match(&self, from: &MultiVectorOp) -> Result<MatchScore, FailureScore> {
-        crate::utils::match_data_type::<T>(from.element_type)
+        let mut failscore: Option<u32> = None;
+        if crate::utils::match_data_type::<T>(from.element_type).is_err() {
+            *failscore.get_or_insert(0) += 1;
+        }
+        let isa: MaxSimIsa = from.isa.into();
+        if !isa.is_available() {
+            *failscore.get_or_insert(0) += 1;
+        }
+        match failscore {
+            None => Ok(MatchScore(0)),
+            Some(score) => Err(FailureScore(score)),
+        }
     }
 
     fn run(
@@ -63,10 +71,9 @@ where
         writeln!(output, "{}", input)?;
         let mut results = Vec::with_capacity(input.runs.len());
         for run in input.runs.iter() {
-            let data = Data::<T>::new(run);
+            let data = Data::<T>::new(run)?;
             let kernel = build_max_sim::<T, _>(input.isa.into(), data.queries.as_view(), BoxErase)?;
-            let dist = BoxedKernel(kernel);
-            results.push(run_with_distance(run, data.docs.as_view(), &dist));
+            results.push(run_with_kernel(run, data.docs.as_view(), &*kernel));
         }
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
         Ok(results)
@@ -83,6 +90,10 @@ where
                 let desc = <T as AsDataType>::describe(input.element_type);
                 if !desc.is_match() {
                     writeln!(f, "\n    - Mismatched element type: {}", desc)?;
+                }
+                let isa: MaxSimIsa = input.isa.into();
+                if !isa.is_available() {
+                    writeln!(f, "\n    - ISA unavailable on this CPU: {}", isa)?;
                 }
             }
         }

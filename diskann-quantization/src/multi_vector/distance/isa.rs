@@ -30,6 +30,29 @@ pub enum MaxSimIsa {
     Reference,
 }
 
+impl MaxSimIsa {
+    /// Whether a kernel for this ISA can be built on the current host.
+    /// Variants that depend on CPU features (`X86_64_V3`, `X86_64_V4`,
+    /// `Neon`) may return `false` even when the crate is compiled for the
+    /// matching target architecture. `Auto`, `Scalar`, and `Reference` are
+    /// always available.
+    pub fn is_available(self) -> bool {
+        match self {
+            Self::Auto | Self::Scalar | Self::Reference => true,
+            #[cfg(target_arch = "x86_64")]
+            Self::X86_64_V3 => diskann_wide::arch::x86_64::V3::new_checked().is_some(),
+            #[cfg(target_arch = "x86_64")]
+            Self::X86_64_V4 => diskann_wide::arch::x86_64::V4::new_checked().is_some(),
+            #[cfg(not(target_arch = "x86_64"))]
+            Self::X86_64_V3 | Self::X86_64_V4 => false,
+            #[cfg(target_arch = "aarch64")]
+            Self::Neon => diskann_wide::arch::aarch64::Neon::new_checked().is_some(),
+            #[cfg(not(target_arch = "aarch64"))]
+            Self::Neon => false,
+        }
+    }
+}
+
 impl std::fmt::Display for MaxSimIsa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {

@@ -3,44 +3,39 @@
 
 //! Object-safe kernel boundary trait plus BYOTE visitor trait.
 
-use crate::multi_vector::{MatRef, Standard};
+use crate::multi_vector::{MatRef, MaxSimError, Standard};
 
 /// Object-safe interface for computing per-query MaxSim scores.
-///
-/// # Contract
-///
-/// - `scores.len() == self.nrows()` (caller's precondition).
-/// - The implementation must populate **all** `nrows()` entries of `scores`.
-///   Callers that derive quantities from the full score vector (e.g. sums)
-///   would silently corrupt their result if any trailing entry were left
-///   unwritten.
 pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
     /// Number of query rows whose scores this kernel produces.
     fn nrows(&self) -> usize;
 
-    /// Compute per-query MaxSim scores against `doc` into `scores`.
-    fn compute_max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]);
+    /// Compute per-query MaxSim scores into `scores`. On zero docs, fills
+    /// every slot with `f32::MAX`.
+    ///
+    /// # Errors
+    ///
+    /// [`MaxSimError::InvalidBufferLength`] if `scores.len() != self.nrows()`.
+    fn compute_max_sim(
+        &self,
+        doc: MatRef<'_, Standard<T>>,
+        scores: &mut [f32],
+    ) -> Result<(), MaxSimError>;
 }
 
-/// "Bring your own type erasure" visitor. The factory hands an implementation
-/// to `erase`, which decides how to package / type-erase it. Lets different
-/// callers produce different output shapes (e.g. `Box<dyn MaxSimKernel<T>>`,
-/// a chamfer-only closure, a batched evaluator, ...) from the same factory.
-///
-/// See [`BoxErase`] for the default impl used by most callers.
+/// "Bring your own type erasure" visitor: the factory hands a concrete
+/// kernel to [`Erase::erase`], which decides how to package it (e.g. as
+/// `Box<dyn MaxSimKernel<T>>` via [`BoxErase`], a chamfer-only closure, a
+/// batched evaluator, …).
 pub trait Erase<T: Copy> {
     /// What the visitor produces.
     type Output;
-    /// Visit the concrete kernel. `K` is generic so the body sees its concrete
-    /// type and the compiler can inline it into the wrapper.
+    /// `K` is generic so the body sees its concrete type and the compiler
+    /// can inline it.
     fn erase<K: MaxSimKernel<T> + 'static>(self, kernel: K) -> Self::Output;
 }
 
-/// Default [`Erase`] impl: produces `Box<dyn MaxSimKernel<T>>`.
-///
-/// Use this when the caller just wants a heap-allocated kernel object behind
-/// a vtable. For custom packaging (chamfer-only, batched, composed), write
-/// your own `Erase` impl and pass it to the factory in place of `BoxErase`.
+/// Default [`Erase`] impl that boxes the kernel as `Box<dyn MaxSimKernel<T>>`.
 #[derive(Debug, Clone, Copy)]
 pub struct BoxErase;
 

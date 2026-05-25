@@ -3,12 +3,8 @@
  * Licensed under the MIT license.
  */
 
-//! Shared benchmark infrastructure for multi-vector kernels.
-//!
-//! Houses the timing harness ([`run_loops`]), data fixtures ([`Data`]), result
-//! types ([`RunResult`], [`Comparison`], [`CheckResult`]), and the trait-object
-//! [`Distance<T>`] boundary the driver dispatches through. None of the
-//! contents are kernel-aware.
+//! Shared benchmark infrastructure for multi-vector kernels: timing harness,
+//! data fixtures, result types. None of the contents are kernel-aware.
 
 use diskann_benchmark_runner::{
     utils::{
@@ -18,7 +14,7 @@ use diskann_benchmark_runner::{
     },
     Checker, Input,
 };
-use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Standard};
+use diskann_quantization::multi_vector::{Mat, MatRef, MaxSimKernel, Overflow, Standard};
 use rand::{
     distr::{Distribution, StandardUniform},
     rngs::StdRng,
@@ -34,9 +30,6 @@ use crate::utils::DisplayWrapper;
 //////////////////////
 
 /// Tolerance thresholds for multi-vector benchmark regression detection.
-///
-/// Each field specifies the maximum allowed relative increase in the corresponding metric.
-/// For example, a value of `0.05` means a 5% increase is tolerated.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(super) struct MultiVectorTolerance {
     pub(super) min_time_regression: NonNegativeFinite,
@@ -83,51 +76,17 @@ impl<T: Copy> Data<T>
 where
     StandardUniform: Distribution<T>,
 {
-    pub(super) fn new(run: &Run) -> Self {
+    pub(super) fn new(run: &Run) -> Result<Self, Overflow> {
         let mut rng = StdRng::seed_from_u64(0x12345);
         let queries = Mat::from_fn(
-            Standard::new(run.num_query_vectors.get(), run.dim.get()).unwrap(),
+            Standard::new(run.num_query_vectors.get(), run.dim.get())?,
             || StandardUniform.sample(&mut rng),
         );
         let docs = Mat::from_fn(
-            Standard::new(run.num_doc_vectors.get(), run.dim.get()).unwrap(),
+            Standard::new(run.num_doc_vectors.get(), run.dim.get())?,
             || StandardUniform.sample(&mut rng),
         );
-        Self { queries, docs }
-    }
-}
-
-//////////////////////
-// Distance trait   //
-//////////////////////
-
-/// Object-safe distance executor. The library factory's `Erase` visitor
-/// already produces a `Box<dyn MaxSimKernel<T>>`, but the driver wants its
-/// own narrow trait so the kernel + its assertions are tucked inside one
-/// vtable boundary. Simpler than threading `Box<dyn MaxSimKernel<T>>`
-/// generically through the timing harness.
-pub(super) trait Distance<T: Copy> {
-    fn max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]);
-}
-
-/// Distance executor wrapping a boxed `MaxSimKernel<T>` from the library
-/// factory. One vtable hop in the hot loop.
-pub(super) struct BoxedKernel<T: Copy>(pub(super) Box<dyn MaxSimKernel<T>>);
-
-impl<T: Copy> Distance<T> for BoxedKernel<T> {
-    fn max_sim(&self, doc: MatRef<'_, Standard<T>>, scores: &mut [f32]) {
-        let nq = self.0.nrows();
-        assert_eq!(
-            scores.len(),
-            nq,
-            "scores buffer not right size: {} != {}",
-            scores.len(),
-            nq
-        );
-        if doc.num_vectors() == 0 {
-            return;
-        }
-        self.0.compute_max_sim(doc, scores);
+        Ok(Self { queries, docs })
     }
 }
 
@@ -154,17 +113,16 @@ fn run_loops(run: &Run, body: &mut dyn FnMut()) -> RunResult {
     }
 }
 
-/// Shared loop nest. The trait-object dispatch happens once per outer iteration
-/// of `run_loops`; the work inside each `max_sim` call is O(Q·D·dim), so the
-/// vtable hop is in the noise.
-pub(super) fn run_with_distance<T: Copy>(
+pub(super) fn run_with_kernel<T: Copy>(
     run: &Run,
     doc: MatRef<'_, Standard<T>>,
-    dist: &dyn Distance<T>,
+    kernel: &dyn MaxSimKernel<T>,
 ) -> RunResult {
     let mut scores = vec![0.0f32; run.num_query_vectors.get()];
     run_loops(run, &mut || {
-        dist.max_sim(doc, &mut scores);
+        kernel
+            .compute_max_sim(doc, &mut scores)
+            .expect("scores.len() == kernel.nrows() by construction");
         std::hint::black_box(&mut scores);
     })
 }

@@ -3,15 +3,9 @@
 
 //! Distance computation for multi-vector representations.
 //!
-//! Provides asymmetric distance primitives for multi-vector search:
-//!
-//! - [`MaxSim`]: per-query-vector maximum similarities.
-//! - [`Chamfer`]: sum of MaxSim scores (asymmetric Chamfer distance).
-//! - [`MaxSimKernel`]: object-safe interface implemented by every concrete
-//!   kernel constructed through [`build_max_sim`].
-//! - [`Erase`]: BYOTE visitor — caller decides how to type-erase the kernel.
-//! - [`MaxSimElement`]: sealed trait gating which element types the factory
-//!   accepts.
+//! Provides asymmetric distance primitives (MaxSim, Chamfer) plus the
+//! factory entry point [`build_max_sim`] that returns ISA-selected
+//! [`MaxSimKernel`] implementations.
 //!
 //! The fallback path uses a double-loop kernel over
 //! [`InnerProduct`](diskann_vector::distance::InnerProduct). The factory
@@ -45,7 +39,7 @@
 //!
 //! // MaxSim (per-query-vector scores)
 //! let mut scores = vec![0.0f32; 2];
-//! let mut max_sim = MaxSim::new(&mut scores).unwrap();
+//! let mut max_sim = MaxSim::new(&mut scores);
 //! max_sim.evaluate(query, doc);
 //! // scores[0] = -1.0 (query[0] matches doc[0]: negated max inner product)
 //! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
