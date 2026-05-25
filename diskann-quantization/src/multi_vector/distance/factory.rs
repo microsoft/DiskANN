@@ -596,6 +596,30 @@ mod tests {
         }
     }
 
+    fn check_zero_query<T>(label: &str)
+    where
+        T: MaxSimElement + FromF32,
+        InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
+    {
+        let query_data: Vec<T> = Vec::new();
+        let doc_data = make_test_data::<T>(2 * 4, 4, 0);
+        let query = make_mat(query_data.as_slice(), 0, 4);
+        let doc = make_mat(&doc_data, 2, 4);
+
+        for isa in [MaxSimIsa::Auto, MaxSimIsa::Reference] {
+            let kernel = build_max_sim::<T, _>(isa, query, BoxErase).unwrap();
+            assert_eq!(
+                kernel.nrows(),
+                0,
+                "{label}({isa:?}) empty query should yield nrows=0",
+            );
+            let mut scores: Vec<f32> = Vec::new();
+            kernel
+                .compute_max_sim(doc, &mut scores)
+                .unwrap_or_else(|e| panic!("{label}({isa:?}) expected Ok, got {e:?}"));
+        }
+    }
+
     macro_rules! test_matches_fallback {
         ($mod_name:ident, $ty:ty, $tol:expr, $label:literal) => {
             mod $mod_name {
@@ -619,6 +643,11 @@ mod tests {
                 #[test]
                 fn zero_docs_fills_sentinel() {
                     check_zero_docs_fills_sentinel::<$ty>($label);
+                }
+
+                #[test]
+                fn zero_query_returns_ok() {
+                    check_zero_query::<$ty>($label);
                 }
             }
         };
