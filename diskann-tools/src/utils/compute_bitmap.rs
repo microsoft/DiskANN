@@ -1,3 +1,35 @@
+    #[test]
+    fn test_compute_query_bitmap_not_with_missing_field() {
+        use serde_json::json;
+        // Three documents: two with "color", one without
+        let base_labels = vec![
+            Document {
+                doc_id: 0,
+                label: json!({"color": "red"}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"color": "blue"}),
+            },
+            Document {
+                doc_id: 2,
+                label: json!({"shape": "circle"}), // no color field
+            },
+        ];
+
+        // Query: NOT color == "red"
+        let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
+            field: "color".to_string(),
+            op: CompareOp::Eq(json!("red")),
+        }));
+        let queries = vec![(0, not_query)];
+        let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("Should succeed");
+        // Only doc 1 should match (has color and is not red)
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(0));
+        // Doc 2 does not have color, so should not be included in the NOT universe
+        assert!(!bitmaps[0].contains(2));
+    }
 /*
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
@@ -5,12 +37,13 @@
 
 use bit_set::BitSet;
 use diskann_label_filter::attribute::AttributeValue;
-use diskann_label_filter::parser::{evaluator::eval_query_expr, format::Document};
+use diskann_label_filter::parser::format::Document;
 use diskann_label_filter::utils::flatten_utils::{
     flatten_json_pointers_with_config, FlattenConfig,
 };
 use diskann_label_filter::{ASTExpr, CompareOp};
 use rayon::prelude::*;
+use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -57,9 +90,137 @@ impl Ord for OrderedFloat {
     }
 }
 
-enum QueryAccelerator {
-    InvertedIndex(HashMap<AttributeValue, BitSet>),
-    BTree(BTreeMap<OrderedFloat, Vec<usize>>),
+trait QueryAccelerator: Send + Sync {
+    fn eval(&self, op: &CompareOp) -> Result<BitSet, anyhow::Error>;
+
+    fn universe(&self) -> BitSet;
+
+    // method for testing
+    #[allow(dead_code)]
+    fn as_any(&self) -> &dyn Any;
+}
+
+struct InvertedIndexAccelerator {
+    map: HashMap<AttributeValue, BitSet>,
+}
+
+impl QueryAccelerator for InvertedIndexAccelerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn universe(&self) -> BitSet {
+        let mut result = BitSet::new();
+        for (_, bits) in self.map.iter() {
+            result.extend(bits);
+        }
+        result
+    }
+
+    fn eval(&self, op: &CompareOp) -> Result<BitSet, anyhow::Error> {
+        match op {
+            CompareOp::Eq(v) => {
+                let attr_val = AttributeValue::try_from(v)
+                    .map_err(|e| anyhow::anyhow!("Failed to convert value for Eq: {e}"))?;
+                Ok(self.map.get(&attr_val).cloned().unwrap_or_default())
+            }
+            CompareOp::Ne(v) => {
+                let attr_val = AttributeValue::try_from(v)
+                    .map_err(|e| anyhow::anyhow!("Failed to convert value for Ne: {e}"))?;
+                let mut result = BitSet::new();
+                for (val, bits) in self.map.iter() {
+                    if val != &attr_val {
+                        result.extend(bits);
+                    }
+                }
+                Ok(result)
+            }
+            _ => Err(anyhow::anyhow!(
+                "Only equality comparisons are supported with the inverted index accelerator"
+            )),
+        }
+    }
+}
+
+struct BTreeAccelerator {
+    map: BTreeMap<OrderedFloat, Vec<usize>>,
+}
+
+impl QueryAccelerator for BTreeAccelerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn universe(&self) -> BitSet {
+        let mut result = BitSet::new();
+        for (_, ids) in self.map.iter() {
+            result.extend(ids.iter().cloned());
+        }
+        result
+    }
+
+    fn eval(&self, op: &CompareOp) -> Result<BitSet, anyhow::Error> {
+        match op {
+            CompareOp::Eq(v) => {
+                let fval = v
+                    .as_f64()
+                    .ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Eq"))?;
+                let fval = OrderedFloat::new(fval)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                if let Some(ids) = self.map.get(&fval) {
+                    Ok(insert_into_bitset(ids.to_vec()))
+                } else {
+                    Ok(BitSet::new())
+                }
+            }
+            CompareOp::Ne(v) => {
+                let fval = v
+                    .as_f64()
+                    .ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Ne"))?;
+                let fval = OrderedFloat::new(fval)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let mut bitset = BitSet::new();
+                for (val, ids) in self.map.iter() {
+                    if val != &fval {
+                        bitset.extend(ids.iter().cloned());
+                    }
+                }
+                Ok(bitset)
+            }
+            CompareOp::Lt(num) => {
+                let fval = OrderedFloat::new(*num)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let iter = self.map.range((Unbounded, Excluded(fval)));
+                Ok(insert_into_bitset(
+                    iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+                ))
+            }
+            CompareOp::Lte(num) => {
+                let fval = OrderedFloat::new(*num)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let iter = self.map.range((Unbounded, Included(fval)));
+                Ok(insert_into_bitset(
+                    iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+                ))
+            }
+            CompareOp::Gt(num) => {
+                let fval = OrderedFloat::new(*num)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let iter = self.map.range((Excluded(fval), Unbounded));
+                Ok(insert_into_bitset(
+                    iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+                ))
+            }
+            CompareOp::Gte(num) => {
+                let fval = OrderedFloat::new(*num)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let iter = self.map.range((Included(fval), Unbounded));
+                Ok(insert_into_bitset(
+                    iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+                ))
+            }
+        }
+    }
 }
 
 fn check_for_nonaccelerated_operators(query_expr: &ASTExpr) -> bool {
@@ -71,6 +232,48 @@ fn check_for_nonaccelerated_operators(query_expr: &ASTExpr) -> bool {
     }
 }
 
+
+// Helper to prepend the separator if not present
+fn prepend_separator(field: &str) -> String {
+    let separator = FlattenConfig::dot_notation().separator;
+    if !field.starts_with(&separator) {
+        format!("{}{}", separator, field)
+    } else {
+        field.to_string()
+    }
+}
+
+// Takes in an expression and returns a vector of all the labels used in the expression (raw field names, no separator prepending)
+fn compute_label_set(expr: &ASTExpr) -> Vec<String> {
+    match expr {
+        ASTExpr::Not(sub) => compute_label_set(sub),
+        ASTExpr::And(subs) => subs.iter().flat_map(compute_label_set).collect(),
+        ASTExpr::Or(subs) => subs.iter().flat_map(compute_label_set).collect(),
+        ASTExpr::Compare { field, .. } => vec![field.clone()],
+    }
+}
+
+// Takes in a set of labels and returns the universe of all possible values for those labels
+fn compute_universe(universe_labels: Vec<String>, query_accelerators: &HashMap<String, Box<dyn QueryAccelerator>>) -> BitSet {
+     let mut universe_iter = universe_labels.iter();
+    // Initialize universe to the first accelerator's universe, then intersect with the rest
+    let mut universe = if let Some(first_label) = universe_iter.next() {
+        if let Some(accelerator) = query_accelerators.get(first_label) {
+            accelerator.universe()
+        } else {
+            BitSet::new()
+        }
+    } else {
+        BitSet::new()
+    };
+    for label in universe_iter {
+        if let Some(accelerator) = query_accelerators.get(label) {
+            universe = universe.intersection(&accelerator.universe()).collect();
+        }
+    }
+    universe     
+}
+
 fn insert_into_bitset(ids: Vec<usize>) -> BitSet {
     let mut bitset = BitSet::new();
     bitset.extend(ids);
@@ -79,7 +282,7 @@ fn insert_into_bitset(ids: Vec<usize>) -> BitSet {
 
 fn eval_query_using_accelerators(
     query_expr: &ASTExpr,
-    query_accelerators: &HashMap<String, QueryAccelerator>,
+    query_accelerators: &HashMap<String, Box<dyn QueryAccelerator>>,
 ) -> Result<BitSet, anyhow::Error> {
     match query_expr {
         ASTExpr::And(subs) => {
@@ -104,88 +307,23 @@ fn eval_query_using_accelerators(
             }
             Ok(acc.unwrap_or_else(BitSet::new))
         }
-        ASTExpr::Not(_) => Err(anyhow::anyhow!(
-            "NOT operator is not supported when using query accelerators"
-        )),
+        ASTExpr::Not(sub) => {
+            // compute the universe of all possible values
+            let universe_labels_raw = compute_label_set(query_expr);
+            let universe_labels: Vec<String> = universe_labels_raw.iter().map(|f| prepend_separator(f)).collect();
+            let universe = compute_universe(universe_labels, query_accelerators);
+
+            // Evaluate the sub-expression
+            let sub_result = eval_query_using_accelerators(sub, query_accelerators)?;
+
+            // Return the difference between the sub-expression result and the universe
+            Ok(universe.difference(&sub_result).collect())
+        },
         ASTExpr::Compare { field, op } => {
-            let separator = FlattenConfig::dot_notation().separator;
-            let field = if !field.starts_with(&separator) {
-                format!("{}{}", separator, field)
-            } else {
-                field.clone()
-            };
+            let field = prepend_separator(field);
             if let Some(accelerator) = query_accelerators.get(&field) {
-                match accelerator {
-                    QueryAccelerator::InvertedIndex(bitmap) => {
-                        match op {
-                            CompareOp::Eq(value) => {
-                                let attr_val = AttributeValue::try_from(value).map_err(|e| anyhow::anyhow!("Failed to convert value for Eq: {e}"))?;
-                                Ok(bitmap.get(&attr_val).cloned().unwrap_or_default())
-                            }
-                            CompareOp::Ne(value) => {
-                                let attr_val = AttributeValue::try_from(value).map_err(|e| anyhow::anyhow!("Failed to convert value for Ne: {e}"))?;
-                                let mut result = BitSet::new();
-                                for (val, bits) in bitmap.iter() {
-                                    if val != &attr_val {
-                                        result.extend(bits);
-                                    }
-                                }
-                                Ok(result)
-                            }
-                            _ => {
-                                Err(anyhow::anyhow!("Only equality comparisons are supported with the inverted index accelerator"))
-                            }
-                        }
-                    }
-                    QueryAccelerator::BTree(btree) => {
-                        match op {
-                            CompareOp::Eq(value) => {
-                                let fval = value.as_f64().ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Eq"))?;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                if let Some(ids) = btree.get(&fval) {
-                                    let mut bitset = BitSet::new();
-                                    bitset.extend(ids.iter().cloned());
-                                    Ok(bitset)
-                                } else {
-                                    Ok(BitSet::new())
-                                }
-                            }
-                            CompareOp::Ne(value) => {
-                                let fval = value.as_f64().ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Ne"))?;
-                                let fval = OrderedFloat::new(fval).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                let mut bitset = BitSet::new();
-                                for (val, ids) in btree.iter() {
-                                    if val != &fval {
-                                        bitset.extend(ids.iter().cloned());
-                                    }
-                                }
-                                Ok(bitset)
-                            }
-                            CompareOp::Lt(num) => {
-                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                let iter = btree.range((Unbounded, Excluded(fval)));
-                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
-                            }
-                            CompareOp::Lte(num) => {
-                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                let iter = btree.range((Unbounded, Included(fval)));
-                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
-                            }
-                            CompareOp::Gt(num) => {
-                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                let iter = btree.range((Excluded(fval), Unbounded));
-                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
-                            }
-                            CompareOp::Gte(num) => {
-                                let fval = OrderedFloat::new(*num).map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
-                                let iter = btree.range((Included(fval), Unbounded));
-                                Ok(insert_into_bitset(iter.flat_map(|(_, ids)| ids.iter().cloned()).collect::<Vec<_>>()))
-                            }
-                        }
-                    }
-                }
+                accelerator.eval(op)
             } else {
-                // if field not present, return an empty bitset
                 Ok(BitSet::new())
             }
         }
@@ -270,16 +408,15 @@ fn compute_query_accelerator(
     value: AttributeValue,
     doc_ids: &[usize],
     flattened_base_labels: &[HashMap<String, AttributeValue>],
-) -> Result<QueryAccelerator, anyhow::Error> {
+) -> Result<Box<dyn QueryAccelerator>, anyhow::Error> {
     match value {
         AttributeValue::String(_) | AttributeValue::Bool(_) => {
             let bitmap = compute_inverted_index_accelerator(&key, doc_ids, flattened_base_labels)?;
-            Ok(QueryAccelerator::InvertedIndex(bitmap))
+            Ok(Box::new(InvertedIndexAccelerator { map: bitmap }))
         }
         AttributeValue::Integer(_) | AttributeValue::Real(_) => {
-            // For integers and reals, we use an BTree
             let btree = compute_btree_accelerator(&key, flattened_base_labels, doc_ids)?;
-            Ok(QueryAccelerator::BTree(btree))
+            Ok(Box::new(BTreeAccelerator { map: btree }))
         }
         AttributeValue::Empty => Err(anyhow::anyhow!("Empty attribute value is not allowed")),
     }
@@ -289,99 +426,70 @@ pub fn compute_query_bitmaps(
     base_labels: Vec<Document>,
     query_labels: Vec<(usize, ASTExpr)>,
 ) -> Result<Vec<BitSet>, anyhow::Error> {
-    // read query labels and differentiate between fast and slow path
-    let bitmaps = if query_labels
+    // Flatten base labels so that nested structures are converted to a flat list of key-value pairs
+    let flattened_base_labels: Vec<Vec<(std::string::String, AttributeValue)>> = base_labels
         .iter()
-        .any(|(_, expr)| check_for_nonaccelerated_operators(expr))
-    {
-        // using the global threadpool is fine here
-        #[allow(clippy::disallowed_methods)]
-        let query_bitmaps: Vec<BitSet> = query_labels
-            .par_iter()
-            .map(|(_query_id, query_expr)| {
-                let mut bitmap = BitSet::new();
-                for base_label in base_labels.iter() {
-                    if eval_query_expr(query_expr, &base_label.label) {
-                        bitmap.insert(base_label.doc_id);
-                    }
+        .map(|base_label| {
+            flatten_json_pointers_with_config(&base_label.label, &FlattenConfig::dot_notation())
+        })
+        .collect();
+
+    let flattened_base_label_hashmaps: Result<
+        Vec<HashMap<String, AttributeValue>>,
+        anyhow::Error,
+    > = flattened_base_labels
+        .iter()
+        .map(|labels| {
+            let mut map = HashMap::new();
+            for (key, value) in labels {
+                // a base label may not have two values for the same key
+                if let Some(_existing_value) = map.get(key) {
+                    return Err(anyhow::anyhow!(
+                        "Duplicate keys in the same document: {}",
+                        key
+                    ));
                 }
-                bitmap
-            })
-            .collect();
-        query_bitmaps
-    } else {
-        // Flatten base labels so that nested structures are converted to a flat list of key-value pairs
-        let flattened_base_labels: Vec<Vec<(std::string::String, AttributeValue)>> = base_labels
-            .iter()
-            .map(|base_label| {
-                flatten_json_pointers_with_config(&base_label.label, &FlattenConfig::dot_notation())
-            })
-            .collect();
+                map.insert(key.clone(), value.clone());
+            }
+            Ok(map)
+        })
+        .collect();
 
-        let flattened_base_label_hashmaps: Result<
-            Vec<HashMap<String, AttributeValue>>,
-            anyhow::Error,
-        > = flattened_base_labels
-            .iter()
-            .map(|labels| {
-                let mut map = HashMap::new();
-                for (key, value) in labels {
-                    // a base label may not have two values for the same key
-                    if let Some(_existing_value) = map.get(key) {
-                        return Err(anyhow::anyhow!(
-                            "Duplicate keys in the same document: {}",
-                            key
-                        ));
-                    }
-                    map.insert(key.clone(), value.clone());
-                }
-                Ok(map)
-            })
-            .collect();
+    let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
+    let base_doc_ids: Vec<usize> = base_labels
+        .iter()
+        .map(|base_label| base_label.doc_id)
+        .collect();
 
-        let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
-        let base_doc_ids: Vec<usize> = base_labels
-            .iter()
-            .map(|base_label| base_label.doc_id)
-            .collect();
+    // compute the global set of labels ahead of time so that we can compute
+    // each accelerator in parallel
+    let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
 
-        // compute the global set of labels ahead of time so that we can compute
-        // each accelerator in parallel
-        let global_label_set = compute_global_label_set(&flattened_base_label_hashmaps)?;
+    // Compute the accelerators for each label in the global set
+    #[allow(clippy::disallowed_methods)]
+    let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = global_label_set
+        .par_iter()
+        .map(|(key, value)| {
+            compute_query_accelerator(
+                key.clone(),
+                value.clone(),
+                &base_doc_ids,
+                &flattened_base_label_hashmaps,
+            )
+            .map(|accel| (key.clone(), accel))
+        })
+        .collect::<Result<_, _>>()?;
 
-        // Compute the accelerators for each label in the global set
-        #[allow(clippy::disallowed_methods)]
-        let query_accelerators: Result<Vec<(String, QueryAccelerator)>, anyhow::Error> =
-            global_label_set
-                .par_iter()
-                .map(|(key, value)| {
-                    compute_query_accelerator(
-                        key.clone(),
-                        value.clone(),
-                        &base_doc_ids,
-                        &flattened_base_label_hashmaps,
-                    )
-                    .map(|accel| (key.clone(), accel))
-                })
-                .collect();
+    // Evaluate each query using the precomputed accelerators
+    #[allow(clippy::disallowed_methods)]
+    let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
+        .par_iter()
+        .map(|(_query_id, query_expr)| {
+            eval_query_using_accelerators(query_expr, &query_accelerators)
+        })
+        .collect();
 
-        // Convert the query accelerators to a hashmap for faster lookups
-        let query_accelerators: HashMap<String, QueryAccelerator> =
-            query_accelerators?.into_iter().collect();
-
-        // Evaluate each query using the precomputed accelerators
-        #[allow(clippy::disallowed_methods)]
-        let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
-            .par_iter()
-            .map(|(_query_id, query_expr)| {
-                eval_query_using_accelerators(query_expr, &query_accelerators)
-            })
-            .collect();
-
-        query_bitmaps?
-    };
-
-    Ok(bitmaps)
+    Ok(query_bitmaps?)
 }
 
 #[cfg(test)]
@@ -392,6 +500,62 @@ mod tests {
     use diskann_label_filter::{ASTExpr, CompareOp};
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_compute_universe_function() {
+        // Sub-test 1: universe label not in query_accelerators, should return empty
+        let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = HashMap::new();
+        let universe_labels = vec!["missing_label".to_string()];
+        let result = compute_universe(universe_labels, &query_accelerators);
+        assert!(result.is_empty(), "Universe should be empty if label is missing");
+
+        // Sub-test 2: both accelerator types, non-empty intersection
+        // InvertedIndexAccelerator for 'foo' with docs 1, 2
+        let mut inv_map = HashMap::new();
+        inv_map.insert(AttributeValue::String("a".to_string()), [1, 2].iter().cloned().collect());
+        let inv_accel = Box::new(InvertedIndexAccelerator { map: inv_map });
+
+        // BTreeAccelerator for 'bar' with docs 2, 3
+        let mut btree_map = BTreeMap::new();
+        btree_map.insert(OrderedFloat(1.0), vec![2, 3]);
+        let btree_accel = Box::new(BTreeAccelerator { map: btree_map });
+
+        let mut query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = HashMap::new();
+        query_accelerators.insert("foo".to_string(), inv_accel);
+        query_accelerators.insert("bar".to_string(), btree_accel);
+
+        // The intersection of {1,2} and {2,3} is {2}
+        let universe_labels = vec!["foo".to_string(), "bar".to_string()];
+        let result = compute_universe(universe_labels, &query_accelerators);
+        let expected: BitSet = [2].iter().cloned().collect();
+        assert_eq!(result, expected, "Universe should be the intersection of both accelerator universes");
+    }
+
+    #[test]
+    fn test_compute_label_set() {
+        // OR expression: foo == 1 OR bar == 2
+        let expr_or = ASTExpr::Or(vec![
+            ASTExpr::Compare {
+                field: "foo".to_string(),
+                op: CompareOp::Eq(json!(1)),
+            },
+            ASTExpr::Compare {
+                field: "bar".to_string(),
+                op: CompareOp::Eq(json!(2)),
+            },
+        ]);
+            let mut result_or = compute_label_set(&expr_or);
+            result_or.sort();
+            assert_eq!(result_or, vec!["bar".to_string(), "foo".to_string()]);
+
+        // NOT expression: NOT (baz == 3)
+        let expr_not = ASTExpr::Not(Box::new(ASTExpr::Compare {
+            field: "baz".to_string(),
+            op: CompareOp::Eq(json!(3)),
+        }));
+        let result_not = compute_label_set(&expr_not);
+        assert_eq!(result_not, vec!["baz".to_string()]);
+    }
 
     #[test]
     fn test_compute_query_bitmap_duplicate_key_in_doc() {
@@ -501,9 +665,9 @@ mod tests {
         assert!(bitmaps[0].contains(0));
         assert!(!bitmaps[0].contains(1));
 
-        // Query: NOT car.color == "red" (should match blue)
+        // Query: NOT .car.color == "red" (should match blue)
         let query_not = ASTExpr::Not(Box::new(ASTExpr::Compare {
-            field: "car.color".to_string(),
+            field: ".car.color".to_string(),
             op: CompareOp::Eq(json!("red")),
         }));
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_not)])
@@ -806,13 +970,8 @@ mod tests {
             op: CompareOp::Eq(serde_json::json!("red")),
         }));
         let queries_with_not = vec![(0, not_query)];
-        let result = compute_query_bitmaps(base_labels.clone(), queries_with_not);
-        assert!(
-            result.is_ok(),
-            "Slow path should not error, but NOT is not accelerated"
-        );
+        let bitmaps = compute_query_bitmaps(base_labels.clone(), queries_with_not).expect("Should succeed");
         // The result should be a bitmap with doc 1 (not red)
-        let bitmaps = result.unwrap();
         assert!(bitmaps[0].contains(1));
         assert!(!bitmaps[0].contains(0));
         assert!(!bitmaps[0].contains(2));
@@ -842,27 +1001,34 @@ mod tests {
             &base,
         )
         .expect("Should succeed for String");
-        match accel {
-            QueryAccelerator::InvertedIndex(map) => {
-                assert!(map.contains_key(&AttributeValue::String("bar".to_string())));
-                assert!(map.contains_key(&AttributeValue::String("baz".to_string())));
-                assert_eq!(
-                    map.get(&AttributeValue::String("bar".to_string()))
-                        .expect("bar key should exist")
-                        .iter()
-                        .collect::<Vec<_>>(),
-                    vec![10]
-                );
-                assert_eq!(
-                    map.get(&AttributeValue::String("baz".to_string()))
-                        .expect("baz key should exist")
-                        .iter()
-                        .collect::<Vec<_>>(),
-                    vec![42]
-                );
-            }
-            _ => panic!("Expected InvertedIndex for String"),
-        }
+        let accel = accel
+            .as_any()
+            .downcast_ref::<InvertedIndexAccelerator>()
+            .expect("Expected InvertedIndexAccelerator");
+        assert!(accel
+            .map
+            .contains_key(&AttributeValue::String("bar".to_string())));
+        assert!(accel
+            .map
+            .contains_key(&AttributeValue::String("baz".to_string())));
+        assert_eq!(
+            accel
+                .map
+                .get(&AttributeValue::String("bar".to_string()))
+                .expect("bar key should exist")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![10]
+        );
+        assert_eq!(
+            accel
+                .map
+                .get(&AttributeValue::String("baz".to_string()))
+                .expect("baz key should exist")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![42]
+        );
 
         // Bool
         let accel = compute_query_accelerator(
@@ -872,13 +1038,12 @@ mod tests {
             &base,
         )
         .expect("Should succeed for Bool");
-        match accel {
-            QueryAccelerator::InvertedIndex(map) => {
-                assert!(map.contains_key(&AttributeValue::Bool(true)));
-                assert!(map.contains_key(&AttributeValue::Bool(false)));
-            }
-            _ => panic!("Expected InvertedIndex for Bool"),
-        }
+        let accel = accel
+            .as_any()
+            .downcast_ref::<InvertedIndexAccelerator>()
+            .expect("Expected InvertedIndexAccelerator");
+        assert!(accel.map.contains_key(&AttributeValue::Bool(true)));
+        assert!(accel.map.contains_key(&AttributeValue::Bool(false)));
 
         // Integer
         let accel = compute_query_accelerator(
@@ -888,13 +1053,12 @@ mod tests {
             &base,
         )
         .expect("Should succeed for Integer");
-        match accel {
-            QueryAccelerator::BTree(map) => {
-                assert!(map.contains_key(&super::OrderedFloat(42.0)));
-                assert!(map.contains_key(&super::OrderedFloat(7.0)));
-            }
-            _ => panic!("Expected BTree for Integer"),
-        }
+        let accel = accel
+            .as_any()
+            .downcast_ref::<BTreeAccelerator>()
+            .expect("Expected BTreeAccelerator");
+        assert!(accel.map.contains_key(&super::OrderedFloat(42.0)));
+        assert!(accel.map.contains_key(&super::OrderedFloat(7.0)));
 
         // Real
         let accel = compute_query_accelerator(
@@ -904,13 +1068,12 @@ mod tests {
             &base,
         )
         .expect("Should succeed for Real");
-        match accel {
-            QueryAccelerator::BTree(map) => {
-                assert!(map.contains_key(&super::OrderedFloat(3.13)));
-                assert!(map.contains_key(&super::OrderedFloat(2.71)));
-            }
-            _ => panic!("Expected BTree for Real"),
-        }
+        let accel = accel
+            .as_any()
+            .downcast_ref::<BTreeAccelerator>()
+            .expect("Expected BTreeAccelerator");
+        assert!(accel.map.contains_key(&super::OrderedFloat(3.13)));
+        assert!(accel.map.contains_key(&super::OrderedFloat(2.71)));
 
         // Empty
         let err =
