@@ -212,6 +212,22 @@ CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 - Add tests for derived traits (Clone, Debug, PartialEq)
 - Add tests for enums unless they have explicit functionality
 
+### Documentation
+
+Less is more. Documentation goes out of date; rustdoc-generated output
+doesn't. Build with `cargo doc --no-deps` and read the rendered page to see
+what rustdoc already provides for free (type listings, signatures,
+re-exports, intra-doc links).
+
+**DO**:
+- Document non-obvious *behavior*, *errors*, *safety*, and *design intent*.
+- Use `# Errors`, `# Safety`, `# Panics`, `# Example` sections.
+
+**DON'T**:
+- Maintain explicit lists of types/functions in module-level docs.
+- Restate what the signature already shows (e.g. "owns an `Arc<T>`" on a struct whose only field is `Arc<T>`).
+- Document internal `pub(crate)` / `pub(super)` items unless intent isn't obvious from usage.
+
 ---
 
 ## Pre-commit Checklist
