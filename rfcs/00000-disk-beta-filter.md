@@ -1,4 +1,4 @@
-# Search Plan API for Disk Search (with Beta-Biased Filtering)
+# Beta Filter For Disk Search
 
 |                  |                                |
 |------------------|--------------------------------|
