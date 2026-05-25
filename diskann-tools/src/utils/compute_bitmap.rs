@@ -1,35 +1,3 @@
-#[test]
-fn test_compute_query_bitmap_not_with_missing_field() {
-    use serde_json::json;
-    // Three documents: two with "color", one without
-    let base_labels = vec![
-        Document {
-            doc_id: 0,
-            label: json!({"color": "red"}),
-        },
-        Document {
-            doc_id: 1,
-            label: json!({"color": "blue"}),
-        },
-        Document {
-            doc_id: 2,
-            label: json!({"shape": "circle"}), // no color field
-        },
-    ];
-
-    // Query: NOT color == "red"
-    let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
-        field: "color".to_string(),
-        op: CompareOp::Eq(json!("red")),
-    }));
-    let queries = vec![(0, not_query)];
-    let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("Should succeed");
-    // Only doc 1 should match (has color and is not red)
-    assert!(bitmaps[0].contains(1));
-    assert!(!bitmaps[0].contains(0));
-    // Doc 2 does not have color, so should not be included in the NOT universe
-    assert!(!bitmaps[0].contains(2));
-}
 /*
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
@@ -496,6 +464,37 @@ mod tests {
     use diskann_label_filter::{ASTExpr, CompareOp};
     use serde_json::json;
     use std::collections::HashMap;
+
+    fn test_compute_query_bitmap_not_with_missing_field() {
+        // Three documents: two with "color", one without
+        let base_labels = vec![
+            Document {
+                doc_id: 0,
+                label: json!({"color": "red"}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"color": "blue"}),
+            },
+            Document {
+                doc_id: 2,
+                label: json!({"shape": "circle"}), // no color field
+            },
+        ];
+
+        // Query: NOT color == "red"
+        let not_query = ASTExpr::Not(Box::new(ASTExpr::Compare {
+            field: "color".to_string(),
+            op: CompareOp::Eq(json!("red")),
+        }));
+        let queries = vec![(0, not_query)];
+        let bitmaps = compute_query_bitmaps(base_labels.clone(), queries).expect("Should succeed");
+        // Only doc 1 should match (has color and is not red)
+        assert!(bitmaps[0].contains(1));
+        assert!(!bitmaps[0].contains(0));
+        // Doc 2 does not have color, so should not be included in the NOT universe
+        assert!(!bitmaps[0].contains(2));
+    }
 
     #[test]
     fn test_compute_universe_function() {
