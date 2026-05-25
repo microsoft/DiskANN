@@ -26,6 +26,8 @@ jobs:
             artifact-name: linux
             lib-path: target/release/libdiskann_garnet.so
           - os: windows-latest
+            env:
+              EXTRA_RUSTFLAGS: -C control-flow-guard
             artifact-name: windows
             lib-path: target/release/diskann_garnet.dll
             pdb-path: target/release/diskann_garnet.pdb
@@ -35,6 +37,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build diskann-garnet (release)
+        env:
+          RUSTC_BOOTSTRAP: 1
+          # NOTE: this overrides flags in /.cargo/config.toml so those must be manually merged in here.
+          RUSTFLAGS: -Z stack-protector=all -C target-cpu=x86-64-v3 ${{ env.EXTRA_RUSTFLAGS }}
         run: cargo build --locked --release --package diskann-garnet
 
       - name: Stage native library

@@ -73,15 +73,12 @@ impl PartialEq for PivotContainer {
 
 impl Eq for PivotContainer {}
 
-/// The implementation of computing L2-squared norm of a vector
-fn compute_vec_l2sq(data: &[f32], index: usize, dim: usize) -> f32 {
-    let start = index * dim;
-    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr().add(start), dim) };
+/// Compute the L2-squared norm of a single vector slice.
+fn compute_vec_l2sq(slice: &[f32]) -> f32 {
     let mut sum_squared = 0.0;
     for &value in slice {
         sum_squared += value * value;
     }
-
     sum_squared
 }
 
@@ -93,6 +90,12 @@ pub fn compute_vecs_l2sq(
     dim: usize,
     pool: RayonThreadPoolRef<'_>,
 ) -> ANNResult<()> {
+    if dim == 0 {
+        return Err(ANNError::log_index_error(format_args!(
+            "dim must be non-zero"
+        )));
+    }
+
     let expected_data_len = vecs_l2sq.len().checked_mul(dim).ok_or_else(|| {
         ANNError::log_index_error(format_args!(
             "vecs_l2sq.len() * dim overflowed: vecs_l2sq.len() ({}) * dim ({})",
@@ -100,6 +103,7 @@ pub fn compute_vecs_l2sq(
             dim
         ))
     })?;
+
     if data.len() != expected_data_len {
         return Err(ANNError::log_index_error(format_args!(
             "data.len() ({}) should be vecs_l2sq.len() ({}) * dim ({})",
@@ -110,15 +114,15 @@ pub fn compute_vecs_l2sq(
     }
 
     if dim < 5 {
-        for (i, vec_l2sq) in vecs_l2sq.iter_mut().enumerate() {
-            *vec_l2sq = compute_vec_l2sq(data, i, dim);
+        for (vec_l2sq, chunk) in vecs_l2sq.iter_mut().zip(data.chunks_exact(dim)) {
+            *vec_l2sq = compute_vec_l2sq(chunk);
         }
     } else {
         vecs_l2sq
             .par_iter_mut()
-            .enumerate()
-            .for_each_in_pool(pool, |(i, vec_l2sq)| {
-                *vec_l2sq = compute_vec_l2sq(data, i, dim);
+            .zip(data.par_chunks_exact(dim))
+            .for_each_in_pool(pool, |(vec_l2sq, chunk)| {
+                *vec_l2sq = compute_vec_l2sq(chunk);
             });
     }
 
@@ -688,6 +692,20 @@ mod math_util_test {
             .unwrap_err()
             .to_string()
             .contains("data.len() (12) should be vecs_l2sq.len() (5) * dim (3)"));
+    }
+
+    #[test]
+    fn test_compute_vecs_l2sq_zero_dim() {
+        let data: Vec<f32> = vec![];
+        let mut vecs_l2sq = vec![0.0; 4];
+        let pool = create_thread_pool_for_test();
+
+        let result = compute_vecs_l2sq(&mut vecs_l2sq, &data, 0, pool.as_ref());
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("dim must be non-zero"));
     }
 
     #[test]

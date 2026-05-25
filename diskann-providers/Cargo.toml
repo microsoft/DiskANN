@@ -34,10 +34,8 @@ diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
-bf-tree = { workspace = true, optional = true }
 prost = "0.14.1"
-futures-util.workspace = true
-serde_json = { workspace = true, optional = true }
+futures-util = { workspace = true, features = ["async-await"] }
 vfs = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -75,7 +73,6 @@ targets = [
 default = []
 perf_test = ["dep:opentelemetry"]
 testing = ["dep:tempfile"]
-bf_tree = ["dep:bf-tree", "dep:serde_json"]
 experimental_diversity_search = ["diskann/experimental_diversity_search"]
 virtual_storage = ["dep:vfs"]
 
