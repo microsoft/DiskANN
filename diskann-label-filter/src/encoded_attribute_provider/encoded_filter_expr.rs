@@ -15,7 +15,7 @@ use crate::{
     ASTExpr,
 };
 
-pub(crate) struct EncodedFilterExpr {
+pub struct EncodedFilterExpr {
     ast_id_expr: ASTIdExpr<u64>,
 }
 
@@ -29,7 +29,7 @@ impl EncodedFilterExpr {
         Ok(Self { ast_id_expr })
     }
 
-    pub(crate) fn encoded_filter_expr(&self) -> &ASTIdExpr<u64> {
+    pub fn encoded_filter_expr(&self) -> &ASTIdExpr<u64> {
         &self.ast_id_expr
     }
 }

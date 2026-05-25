@@ -20,6 +20,7 @@ pub mod utils {
 pub mod inline_beta_search {
     pub mod encoded_document_accessor;
     pub mod inline_beta_filter;
+    pub mod inverted_predicate_evaluator;
     pub mod predicate_evaluator;
 }
 
@@ -37,12 +38,12 @@ pub mod traits {
 //Modules that  handle predicates by mapping them
 // to integers.
 pub mod encoded_attribute_provider {
-    pub(crate) mod ast_id_expr;
+    pub mod ast_id_expr;
     pub(crate) mod ast_label_id_mapper;
-    pub(crate) mod attribute_encoder;
+    pub mod attribute_encoder;
     pub mod document_provider;
     pub mod encoded_attribute_accessor;
-    pub(crate) mod encoded_filter_expr;
+    pub mod encoded_filter_expr;
     pub mod roaring_attribute_store;
 }
 

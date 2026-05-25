@@ -8,12 +8,12 @@
 use crate::{
     attribute::{Attribute, AttributeValue},
     encoded_attribute_provider::roaring_attribute_store::RoaringAttributeStore,
+    set::bitset_provider::LabelBitSet,
     traits::attribute_store::AttributeStore,
 };
 
 use diskann_utils::future::AsyncFriendly;
 use rand::{rng, Rng};
-use roaring::RoaringTreemap;
 use std::{
     collections::HashMap,
     sync::{Arc, Barrier},
@@ -132,7 +132,7 @@ pub(crate) fn create_read_threads<F>(
     func: F,
 ) -> Vec<JoinHandle<()>>
 where
-    F: Fn(TestIdType, &Arc<RoaringAttributeStore<TestIdType>>) -> Option<RoaringTreemap>
+    F: Fn(TestIdType, &Arc<RoaringAttributeStore<TestIdType>>) -> Option<LabelBitSet>
         + AsyncFriendly
         + Clone,
 {

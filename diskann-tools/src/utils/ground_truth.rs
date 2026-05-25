@@ -4,7 +4,20 @@
  */
 
 use bit_set::BitSet;
-use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels};
+use diskann_label_filter::{
+    attribute::Attribute,
+    encoded_attribute_provider::{
+        encoded_filter_expr::EncodedFilterExpr,
+        roaring_attribute_store::RoaringAttributeStore,
+    },
+    read_and_parse_queries, read_baselabels,
+    traits::attribute_store::AttributeStore,
+    utils::flatten_utils::flatten_json_pointers_with_separator,
+};
+#[cfg(not(feature = "use_inverted_evaluator"))]
+use diskann_label_filter::inline_beta_search::predicate_evaluator::PredicateEvaluator;
+#[cfg(feature = "use_inverted_evaluator")]
+use diskann_label_filter::inline_beta_search::inverted_predicate_evaluator::InvertedPredicateEvaluator;
 
 use std::{io::Write, mem::size_of, str::FromStr};
 
@@ -35,20 +48,62 @@ pub fn read_labels_and_compute_bitmap(
     // Read base labels
     let base_labels = read_baselabels(base_label_filename)?;
 
+    // Insert document attributes into RoaringAttributeStore
+    let store = RoaringAttributeStore::<u64>::new();
+    for base_label in base_labels.iter() {
+        let attributes: Vec<Attribute> = flatten_json_pointers_with_separator(&base_label.label, "")
+            .into_iter()
+            .map(|(path, val)| Attribute::from_value(path, val))
+            .collect();
+        store.set_element(&(base_label.doc_id as u64), &attributes)?;
+    }
+
     // Parse queries and evaluate against labels
     let parsed_queries = read_and_parse_queries(query_label_filename)?;
+    let attribute_map = store.attribute_map();
+
+    tracing::info!("Numer of <attr_name, value> pairs {}.", attribute_map.read().unwrap().len());
+
+    #[cfg(not(feature = "use_inverted_evaluator"))]
+    let index = store.get_index();
+    #[cfg(feature = "use_inverted_evaluator")]
+    let inv_index = store.get_inv_index();
 
     // using the global threadpool is fine here
     #[allow(clippy::disallowed_methods)]
     let query_bitmaps: Vec<BitSet> = parsed_queries
         .par_iter()
         .map(|(_query_id, query_expr)| {
+            let encoded_expr =
+                EncodedFilterExpr::new(query_expr, attribute_map.clone()).unwrap();
             let mut bitmap = BitSet::new();
-            for base_label in base_labels.iter() {
-                if eval_query_expr(query_expr, &base_label.label) {
-                    bitmap.insert(base_label.doc_id);
+
+            #[cfg(not(feature = "use_inverted_evaluator"))]
+            {
+                let index_guard = index.read().unwrap();
+                for base_label in base_labels.iter() {
+                    let vec_id = base_label.doc_id;
+                    if let Ok(Some(label_set)) = index_guard.get(&(vec_id as u64)) {
+                        let evaluator = PredicateEvaluator::new(&*label_set);
+                        if let Ok(true) = encoded_expr.encoded_filter_expr().accept(&evaluator) {
+                            bitmap.insert(base_label.doc_id as usize);
+                        }
+                    }
                 }
             }
+
+            #[cfg(feature = "use_inverted_evaluator")]
+            {
+                let inv_index_guard = inv_index.read().unwrap();
+                for base_label in base_labels.iter() {
+                    let vec_id = base_label.doc_id as u64;
+                    let evaluator = InvertedPredicateEvaluator::new(&*inv_index_guard, vec_id);
+                    if let Ok(true) = encoded_expr.encoded_filter_expr().accept(&evaluator) {
+                        bitmap.insert(base_label.doc_id as usize);
+                    }
+                }
+            }
+
             bitmap
         })
         .collect();

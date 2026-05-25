@@ -9,6 +9,7 @@
 //! It provides a common abstraction over different backends, so the same interface can be
 //! used regardless of the underlying system.
 
+pub mod bitset_provider;
 pub mod roaring_set;
 pub mod roaring_set_provider;
 pub mod traits;

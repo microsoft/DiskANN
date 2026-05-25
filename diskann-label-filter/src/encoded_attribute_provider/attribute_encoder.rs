@@ -51,7 +51,7 @@ impl InternalAttribute {
 /// string matches with id matches. Of course this works only for a subset of queries that
 /// do not use relational operators (>, <, <=, >=), but that subset is large enough for us
 /// to add this feature.
-pub(crate) struct AttributeEncoder {
+pub struct AttributeEncoder {
     attribute_index: HashMap<InternalAttribute, u64>,
     running_index: u64,
 }
@@ -96,8 +96,7 @@ impl AttributeEncoder {
     }
 
     ///Return the number of entries in the attribute map.
-    #[expect(dead_code, reason = "Will be used in the next PR")]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.attribute_index.len()
     }
 

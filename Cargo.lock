@@ -788,6 +788,7 @@ version = "0.52.0"
 dependencies = [
  "anyhow",
  "bf-tree",
+ "bit-set",
  "criterion",
  "diskann",
  "diskann-utils",

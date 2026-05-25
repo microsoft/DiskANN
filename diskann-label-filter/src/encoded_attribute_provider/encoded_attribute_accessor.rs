@@ -2,15 +2,11 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use crate::{set::SetProvider, traits::attribute_accessor::AttributeAccessor};
+use crate::{set::bitset_provider::{BitSetProvider, LabelBitSet}, traits::attribute_accessor::AttributeAccessor};
 use diskann::utils::VectorId;
 use diskann::ANNError;
 use std::borrow::Cow;
 use std::sync::{Arc, RwLock};
-
-/// Type alias for the SetType used in MappedAttributeAccessor
-type AccessorSetType<IdType, SP> =
-    <EncodedAttributeAccessor<SP> as AttributeAccessor<IdType>>::SetType;
 
 /// Implementation of a AttributeAccessor where attributes are mapped to
 /// u64s for efficient matching. Is a read-only view of attribute data that
@@ -18,35 +14,33 @@ type AccessorSetType<IdType, SP> =
 /// Set<u64>.
 ///
 /// Type Parameters:
-///     SP: Store containing attributes per point. In theory this can be
-/// any KV store.
+///     IdType: The vector id type used as keys in the BitSetProvider.
 ///
 /// Assumptions:
 ///     Queries do not have relational operators.
-pub struct EncodedAttributeAccessor<SP> {
+pub struct EncodedAttributeAccessor<IdType> {
     //Ideally, we don't want to expose internal details of the provider like
     // locking to an external class like the accessor. However, this is the
     // simplest way to maintain sanity in a multi-threaded environment.
-    locked_attr_index: Arc<RwLock<SP>>,
+    locked_attr_index: Arc<RwLock<BitSetProvider<IdType>>>,
 }
 
-impl<SP> EncodedAttributeAccessor<SP> {
-    pub fn new(locked_attribute_index: Arc<RwLock<SP>>) -> Self {
+impl<IdType> EncodedAttributeAccessor<IdType> {
+    pub fn new(locked_attribute_index: Arc<RwLock<BitSetProvider<IdType>>>) -> Self {
         Self {
             locked_attr_index: locked_attribute_index,
         }
     }
 
-    fn invoke_visitor<IdType, F, R>(
+    fn invoke_visitor<F, R>(
         &self,
         vec_id: IdType,
         visitor: F,
-        attr_index: std::sync::RwLockReadGuard<'_, SP>,
+        attr_index: std::sync::RwLockReadGuard<'_, BitSetProvider<IdType>>,
     ) -> Result<R, ANNError>
     where
         IdType: VectorId,
-        SP: SetProvider<IdType, u64>,
-        F: FnOnce(IdType, Option<Cow<'_, AccessorSetType<IdType, SP>>>) -> R,
+        F: FnOnce(IdType, Option<Cow<'_, LabelBitSet>>) -> R,
     {
         match attr_index.get(&vec_id) {
             Ok(s) => Ok(visitor(vec_id, s)),
@@ -54,16 +48,15 @@ impl<SP> EncodedAttributeAccessor<SP> {
         }
     }
 
-    fn invoke_visitor_for_each<IdType, F>(
+    fn invoke_visitor_for_each<F>(
         &self,
         vec_id: IdType,
         visitor: &mut F,
-        attr_index: &std::sync::RwLockReadGuard<'_, SP>,
+        attr_index: &std::sync::RwLockReadGuard<'_, BitSetProvider<IdType>>,
     ) -> Result<(), ANNError>
     where
         IdType: VectorId,
-        SP: SetProvider<IdType, u64>,
-        F: FnMut(IdType, Option<Cow<'_, AccessorSetType<IdType, SP>>>),
+        F: FnMut(IdType, Option<Cow<'_, LabelBitSet>>),
     {
         match attr_index.get(&vec_id) {
             Ok(s) => {
@@ -75,14 +68,13 @@ impl<SP> EncodedAttributeAccessor<SP> {
     }
 }
 
-impl<IdType, SP> AttributeAccessor<IdType> for EncodedAttributeAccessor<SP>
+impl<IdType> AttributeAccessor<IdType> for EncodedAttributeAccessor<IdType>
 where
     IdType: VectorId,
-    SP: SetProvider<IdType, u64>,
 {
     type AT = u64;
 
-    type SetType = SP::S;
+    type SetType = LabelBitSet;
 
     fn visit_labels_of_point<F, R>(&mut self, vec_id: IdType, visitor: F) -> Result<R, ANNError>
     where

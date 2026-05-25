@@ -8,19 +8,19 @@ use crate::{
     encoded_attribute_provider::{
         attribute_encoder::AttributeEncoder, encoded_attribute_accessor::EncodedAttributeAccessor,
     },
-    set::{roaring_set_provider::RoaringTreemapSetProvider, SetProvider},
+    set::{bitset_provider::BitSetProvider, roaring_set_provider::RoaringTreemapSetProvider, SetProvider},
     traits::attribute_store::AttributeStore,
 };
 use diskann::{utils::VectorId, ANNError, ANNErrorKind, ANNResult};
 use diskann_utils::future::AsyncFriendly;
 use std::sync::{Arc, RwLock};
 
-pub(crate) struct RoaringAttributeStore<IT>
+pub struct RoaringAttributeStore<IT>
 where
     IT: VectorId + AsyncFriendly,
 {
     attribute_map: Arc<RwLock<AttributeEncoder>>,
-    index: Arc<RwLock<RoaringTreemapSetProvider<IT>>>,
+    index: Arc<RwLock<BitSetProvider<IT>>>,
     inv_index: Arc<RwLock<RoaringTreemapSetProvider<u64>>>,
 }
 
@@ -35,17 +35,20 @@ where
     pub fn new() -> Self {
         Self {
             attribute_map: Arc::new(RwLock::new(AttributeEncoder::new())),
-            index: Arc::new(RwLock::new(RoaringTreemapSetProvider::<IT>::new())),
+            index: Arc::new(RwLock::new(BitSetProvider::<IT>::new())),
             inv_index: Arc::new(RwLock::new(RoaringTreemapSetProvider::<u64>::new())),
         }
     }
 
-    #[cfg(test)]
-    pub fn get_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<IT>>> {
+    pub fn get_index(&self) -> Arc<RwLock<BitSetProvider<IT>>> {
         self.index.clone()
     }
 
-    pub(crate) fn attribute_map(&self) -> Arc<RwLock<AttributeEncoder>> {
+    pub fn get_inv_index(&self) -> Arc<RwLock<RoaringTreemapSetProvider<u64>>> {
+        self.inv_index.clone()
+    }
+
+    pub fn attribute_map(&self) -> Arc<RwLock<AttributeEncoder>> {
         self.attribute_map.clone()
     }
 }
@@ -55,7 +58,7 @@ where
     IT: VectorId,
 {
     type AT = u64;
-    type Accessor = EncodedAttributeAccessor<RoaringTreemapSetProvider<IT>>;
+    type Accessor = EncodedAttributeAccessor<IT>;
     type StoreError = ANNError;
 
     fn attribute_accessor(&self) -> Result<Self::Accessor, Self::StoreError> {

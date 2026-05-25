@@ -12,8 +12,8 @@ use diskann::{
     ANNError, ANNErrorKind,
 };
 use diskann_utils::Reborrow;
-use roaring::RoaringTreemap;
 
+use crate::set::bitset_provider::LabelBitSet;
 use crate::traits::attribute_accessor::AttributeAccessor;
 use crate::{
     document::EncodedDocument,
@@ -23,12 +23,11 @@ use crate::{
     },
     inline_beta_search::inline_beta_filter::InlineBetaComputer,
     query::FilteredQuery,
-    set::roaring_set_provider::RoaringTreemapSetProvider,
 };
 
-type AttrAccessor<IA> = EncodedAttributeAccessor<RoaringTreemapSetProvider<<IA as HasId>::Id>>;
+type AttrAccessor<IA> = EncodedAttributeAccessor<<IA as HasId>::Id>;
 
-pub(crate) struct EncodedDocumentAccessor<IA>
+pub struct EncodedDocumentAccessor<IA>
 where
     IA: HasId,
 {
@@ -73,10 +72,10 @@ where
     IA: Accessor,
 {
     type Element<'a>
-        = EncodedDocument<IA::Element<'a>, RoaringTreemap>
+        = EncodedDocument<IA::Element<'a>, LabelBitSet>
     where
         Self: 'a;
-    type ElementRef<'a> = EncodedDocument<IA::ElementRef<'a>, &'a RoaringTreemap>;
+    type ElementRef<'a> = EncodedDocument<IA::ElementRef<'a>, &'a LabelBitSet>;
     type GetError = ANNError;
 
     async fn get_element(&mut self, id: Self::Id) -> Result<Self::Element<'_>, Self::GetError> {

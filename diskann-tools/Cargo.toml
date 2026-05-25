@@ -47,6 +47,9 @@ diskann-utils = { workspace = true, features = ["testing"] }
 default = []
 # When a feature is enabled in tools, enable it in dependencies
 perf_test = ["diskann-providers/perf_test", "diskann-disk/perf_test"]
+# Use the inverted predicate evaluator instead of the forward evaluator
+# for label-filtered ground truth computation.
+use_inverted_evaluator = []
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"

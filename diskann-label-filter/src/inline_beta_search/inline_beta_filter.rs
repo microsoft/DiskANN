@@ -10,7 +10,6 @@ use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
 use diskann::ANNError;
 use diskann_vector::PreprocessedDistanceFunction;
-use roaring::RoaringTreemap;
 
 use crate::document::EncodedDocument;
 use crate::encoded_attribute_provider::{
@@ -20,6 +19,7 @@ use crate::encoded_attribute_provider::{
 use crate::inline_beta_search::encoded_document_accessor::EncodedDocumentAccessor;
 use crate::inline_beta_search::predicate_evaluator::PredicateEvaluator;
 use crate::query::FilteredQuery;
+use crate::set::bitset_provider::LabelBitSet;
 use crate::traits::attribute_store::AttributeStore;
 
 pub struct InlineBetaStrategy<Strategy> {
@@ -107,12 +107,12 @@ impl<Inner> InlineBetaComputer<Inner> {
     }
 }
 
-impl<Inner, V> PreprocessedDistanceFunction<EncodedDocument<V, &RoaringTreemap>, f32>
+impl<Inner, V> PreprocessedDistanceFunction<EncodedDocument<V, &LabelBitSet>, f32>
     for InlineBetaComputer<Inner>
 where
     Inner: PreprocessedDistanceFunction<V>,
 {
-    fn evaluate_similarity(&self, changing: EncodedDocument<V, &RoaringTreemap>) -> f32 {
+    fn evaluate_similarity(&self, changing: EncodedDocument<V, &LabelBitSet>) -> f32 {
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
