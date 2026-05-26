@@ -465,6 +465,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
+    #[test]
     fn test_compute_query_bitmap_not_with_missing_field() {
         // Three documents: two with "color", one without
         let base_labels = vec![
