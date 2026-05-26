@@ -482,7 +482,8 @@ The hybrid threshold (`matching_count ≤ 200K` + `match_rate ≤ 25%`) correctl
 ## Future Work
 
 - [ ] **Adaptive beta value.** The current design uses a fixed `beta = 0.5`. Future work could adapt beta based on match rate — higher beta (less bias) at higher match rates, lower beta (more bias) at lower match rates — to improve recall in the transition zone.
-- [ ] **Multi-strategy planner.** The current planner selects between two strategies. Future graph algorithms (e.g., `MultihopSearch`) could be added as additional `GraphMode` variants with their own match-rate ranges.
+- [ ] **Multi-strategy planner.** The current planner selects between two strategies. Future graph algorithms (e.g., `MultihopSearch`) could be added as additional `GraphMode` variants with their own match-rate ranges. Each new variant lands with its own threshold derivation and a new `QueryStrategy` arm.
+- [ ] **`PostFilter` dominance validation.** The planner currently omits `GraphMode::PostFilter` because it is strictly dominated by `BetaFilter` — `BetaFilter` applies the same hard post-filter plus beta-biased beam traversal. No `(matching_count, match_rate)` cell in the benchmark data shows `PostFilter` outperforming both `FlatScan` and `BetaFilter`. If future datasets or workloads reveal a regime where `PostFilter` wins, the planner should add a corresponding `QueryStrategy` arm.
 
 ## References
 
