@@ -368,18 +368,18 @@ fn compute_global_label_set(
 }
 
 fn compute_query_accelerator(
-    key: String,
-    value: AttributeValue,
+    key: &str,
+    value: &AttributeValue,
     doc_ids: &[usize],
     flattened_base_labels: &[HashMap<String, AttributeValue>],
 ) -> Result<Box<dyn QueryAccelerator>, anyhow::Error> {
     match value {
         AttributeValue::String(_) | AttributeValue::Bool(_) => {
-            let bitmap = compute_inverted_index_accelerator(&key, doc_ids, flattened_base_labels)?;
+            let bitmap = compute_inverted_index_accelerator(key, doc_ids, flattened_base_labels)?;
             Ok(Box::new(InvertedIndexAccelerator { map: bitmap }))
         }
         AttributeValue::Integer(_) | AttributeValue::Real(_) => {
-            let btree = compute_btree_accelerator(&key, flattened_base_labels, doc_ids)?;
+            let btree = compute_btree_accelerator(key, flattened_base_labels, doc_ids)?;
             Ok(Box::new(BTreeAccelerator { map: btree }))
         }
         AttributeValue::Empty => Err(anyhow::anyhow!("Empty attribute value is not allowed")),
@@ -432,13 +432,8 @@ pub fn compute_query_bitmaps(
     let query_accelerators: HashMap<String, Box<dyn QueryAccelerator>> = global_label_set
         .par_iter()
         .map(|(key, value)| {
-            compute_query_accelerator(
-                key.clone(),
-                value.clone(),
-                &base_doc_ids,
-                &flattened_base_label_hashmaps,
-            )
-            .map(|accel| (key.clone(), accel))
+            compute_query_accelerator(key, value, &base_doc_ids, &flattened_base_label_hashmaps)
+                .map(|accel| (key.clone(), accel))
         })
         .collect::<Result<_, _>>()?;
 
@@ -1001,8 +996,8 @@ mod tests {
 
         // String
         let accel = compute_query_accelerator(
-            "foo".to_string(),
-            AttributeValue::String("bar".to_string()),
+            "foo",
+            &AttributeValue::String("bar".to_string()),
             &doc_ids,
             &base,
         )
@@ -1037,13 +1032,8 @@ mod tests {
         );
 
         // Bool
-        let accel = compute_query_accelerator(
-            "flag".to_string(),
-            AttributeValue::Bool(true),
-            &doc_ids,
-            &base,
-        )
-        .expect("Should succeed for Bool");
+        let accel = compute_query_accelerator("flag", &AttributeValue::Bool(true), &doc_ids, &base)
+            .expect("Should succeed for Bool");
         let accel = accel
             .as_any()
             .downcast_ref::<InvertedIndexAccelerator>()
@@ -1052,13 +1042,8 @@ mod tests {
         assert!(accel.map.contains_key(&AttributeValue::Bool(false)));
 
         // Integer
-        let accel = compute_query_accelerator(
-            "num".to_string(),
-            AttributeValue::Integer(42),
-            &doc_ids,
-            &base,
-        )
-        .expect("Should succeed for Integer");
+        let accel = compute_query_accelerator("num", &AttributeValue::Integer(42), &doc_ids, &base)
+            .expect("Should succeed for Integer");
         let accel = accel
             .as_any()
             .downcast_ref::<BTreeAccelerator>()
@@ -1067,13 +1052,8 @@ mod tests {
         assert!(accel.map.contains_key(&super::OrderedFloat(7.0)));
 
         // Real
-        let accel = compute_query_accelerator(
-            "real".to_string(),
-            AttributeValue::Real(3.13),
-            &doc_ids,
-            &base,
-        )
-        .expect("Should succeed for Real");
+        let accel = compute_query_accelerator("real", &AttributeValue::Real(3.13), &doc_ids, &base)
+            .expect("Should succeed for Real");
         let accel = accel
             .as_any()
             .downcast_ref::<BTreeAccelerator>()
@@ -1082,8 +1062,7 @@ mod tests {
         assert!(accel.map.contains_key(&super::OrderedFloat(2.71)));
 
         // Empty
-        let err =
-            compute_query_accelerator("none".to_string(), AttributeValue::Empty, &doc_ids, &base);
+        let err = compute_query_accelerator("none", &AttributeValue::Empty, &doc_ids, &base);
         assert!(err.is_err());
     }
 }
