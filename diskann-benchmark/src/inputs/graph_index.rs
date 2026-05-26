@@ -401,18 +401,11 @@ impl SearchPhase {
 impl SearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
-<<<<<<< HEAD
-            SearchPhase::Topk(phase) => phase.check_deserialization(checker),
-            SearchPhase::Range(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkAdaptiveLFilter(phase) => phase.check_deserialization(checker),
-=======
             SearchPhase::Topk(phase) => phase.validate(checker),
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
->>>>>>> f0830355f6b11fff60575f6680296ad6f62c2bfa
+            SearchPhase::TopkAdaptiveLFilter(phase) => phase.validate(checker),
         }
     }
 }

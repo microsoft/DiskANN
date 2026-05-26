@@ -160,7 +160,12 @@ where
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Flexible,
+            ),
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())
