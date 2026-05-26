@@ -193,7 +193,6 @@ impl HashPruneReservoir {
     ///
     /// Unsorted storage: find_hash is O(l_max) linear scan but insert/evict
     /// are O(1) via push/swap_remove.
-    #[inline]
     #[inline(always)]
     pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
         let dist_bf16 = f32_to_bf16(distance);
@@ -400,6 +399,108 @@ impl HashPrune {
                 .relative_hash(edge.src as usize, edge.dst as usize);
             reservoir.insert(hash, edge.dst, edge.distance);
         }
+    }
+
+    /// Insert leaf edges in CSR-grouped form.
+    ///
+    /// `group_starts[i]..group_starts[i+1]` indexes into `group_data` for
+    /// edges with local source `i`. Each entry is `(local_dst, distance)`.
+    /// `local_indices` maps local index → global point id.
+    ///
+    /// One lock acquisition per source — reservoir + sketch loaded into cache
+    /// once and used for all edges of that source, eliminating ~5x of HP
+    /// insert cost versus interleaved-source insertion.
+    pub fn add_edges_grouped(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+    ) {
+        if group_data.is_empty() {
+            return;
+        }
+        let n = local_indices.len();
+        debug_assert!(group_starts.len() >= n + 1);
+
+        for local_src in 0..n {
+            let start = group_starts[local_src] as usize;
+            let end = group_starts[local_src + 1] as usize;
+            if start == end {
+                continue;
+            }
+            let global_src = local_indices[local_src] as usize;
+            let mut reservoir = self.reservoirs[global_src].lock();
+            // SAFETY: bounds checked by `group_starts[n] == group_data.len()`
+            // (caller invariant — see build_leaf_with_buffers Pass 2).
+            for &(dst_local, dist) in &group_data[start..end] {
+                let global_dst = local_indices[dst_local as usize];
+                let hash = self
+                    .sketches
+                    .relative_hash(global_src, global_dst as usize);
+                reservoir.insert(hash, global_dst, dist);
+            }
+        }
+    }
+
+    /// CSR-grouped insert that consumes a leaf-local sketches buffer.
+    /// `local_sketches` is `n × num_planes` row-major (caller gathered it
+    /// during the leaf's data gather). Hash compute happens against this
+    /// L1-resident buffer instead of the multi-hundred-MB global sketches —
+    /// eliminates the per-edge global sketches cache miss in HP insertion.
+    pub fn add_edges_grouped_local_sketches(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        local_sketches: &[f32],
+    ) {
+        if group_data.is_empty() {
+            return;
+        }
+        let n = local_indices.len();
+        let m = self.sketches.num_planes();
+        debug_assert!(group_starts.len() >= n + 1);
+        debug_assert!(local_sketches.len() >= n * m);
+
+        for local_src in 0..n {
+            let start = group_starts[local_src] as usize;
+            let end = group_starts[local_src + 1] as usize;
+            if start == end {
+                continue;
+            }
+            let global_src = local_indices[local_src] as usize;
+            let src_sketch = &local_sketches[local_src * m..(local_src + 1) * m];
+            let mut reservoir = self.reservoirs[global_src].lock();
+            for &(dst_local, dist) in &group_data[start..end] {
+                let global_dst = local_indices[dst_local as usize];
+                let dst_sketch =
+                    &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
+                // relative_hash inlined against local sketches (L1-resident).
+                let mut hash: u16 = 0;
+                for j in 0..m {
+                    if dst_sketch[j] - src_sketch[j] >= 0.0 {
+                        hash |= 1u16 << j;
+                    }
+                }
+                reservoir.insert(hash, global_dst, dist);
+            }
+        }
+    }
+
+    /// Copy sketches for `indices` into `out` (length must be `indices.len() * num_planes`).
+    /// Used by leaf build to pre-gather a small L1-resident sketches buffer.
+    pub fn gather_sketches_into(&self, indices: &[u32], out: &mut [f32]) {
+        let m = self.sketches.num_planes();
+        let src = self.sketches.sketches();
+        debug_assert_eq!(out.len(), indices.len() * m);
+        for (i, &idx) in indices.iter().enumerate() {
+            let g = idx as usize;
+            out[i * m..(i + 1) * m].copy_from_slice(&src[g * m..(g + 1) * m]);
+        }
+    }
+
+    pub fn num_planes(&self) -> usize {
+        self.sketches.num_planes()
     }
 
     /// Extract the final graph as adjacency lists, consuming the HashPrune.

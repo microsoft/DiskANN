@@ -24,6 +24,10 @@ parking_lot = "0.12"
 criterion = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
+half = { workspace = true }
+bytemuck = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

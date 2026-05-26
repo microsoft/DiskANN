@@ -451,11 +451,12 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
         // overhead across multiple leaves.
         const LEAF_BATCH: usize = 256;
+        let num_planes = hash_prune.num_planes();
         leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();
                 for leaf in chunk {
-                    let edge_count = leaf_build::build_leaf_into(
+                    let _edge_count = leaf_build::build_leaf_into(
                         data,
                         ndims,
                         &leaf.indices,
@@ -463,8 +464,24 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
                         metric,
                         &mut bufs,
                     );
-                    total_edges.fetch_add(edge_count, Ordering::Relaxed);
-                    hash_prune.add_edges_batched(&bufs.edges[..edge_count]);
+                    let n = leaf.indices.len();
+                    let group_edges = bufs.group_starts[n] as usize;
+                    total_edges.fetch_add(group_edges, Ordering::Relaxed);
+
+                    // Gather a small (n × num_planes) per-leaf sketches cache.
+                    // L1-resident: 130 × 12 × 4 = ~6 KB.
+                    let need = n * num_planes;
+                    if bufs.local_sketches.len() < need {
+                        bufs.local_sketches.resize(need, 0.0);
+                    }
+                    hash_prune.gather_sketches_into(&leaf.indices, &mut bufs.local_sketches[..need]);
+
+                    hash_prune.add_edges_grouped_local_sketches(
+                        &bufs.group_starts,
+                        &bufs.group_data[..group_edges],
+                        &leaf.indices,
+                        &bufs.local_sketches[..need],
+                    );
                 }
             });
         });

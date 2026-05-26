@@ -111,6 +111,14 @@ impl LshSketches {
         self.num_planes
     }
 
+    /// Raw access to the row-major `npoints × num_planes` sketch buffer.
+    /// Callers can scatter-gather a small per-leaf cache of sketches to avoid
+    /// touching the multi-hundred-MB global buffer in tight inner loops.
+    #[inline]
+    pub fn sketches(&self) -> &[f32] {
+        &self.sketches
+    }
+
     /// Hash candidate `c` relative to anchor `p`.
     ///
     /// `h_p(c) = concat(sign(Sketch(c)[j] - Sketch(p)[j]) for j in 0..num_planes)`.
