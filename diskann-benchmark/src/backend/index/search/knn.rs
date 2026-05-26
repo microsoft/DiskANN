@@ -5,6 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use diskann_benchmark_core::recall::GroundTruthMode;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 use crate::{backend::index::result::SearchResults, inputs::graph_index::GraphSearch};
@@ -97,7 +98,12 @@ where
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Fixed,
+            ),
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())
@@ -123,7 +129,12 @@ where
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Flexible,
+            ),
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())

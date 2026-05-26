@@ -44,8 +44,11 @@ use crate::{
 
 mod greedy_filter_search;
 mod knn_search;
-mod multihop_search;
+pub(crate) mod multihop_search;
 mod range_search;
+
+mod paged;
+pub use paged::PagedSearch;
 
 pub mod record;
 pub(crate) mod scratch;

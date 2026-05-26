@@ -136,7 +136,7 @@ mod imp {
                 f32::converting_load(datafiles::BinFile(&input.search.queries), input.data_type)?;
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), None)?;
             let mut search_results = Vec::<SearchResults>::new();
             let threadpool = rayon::ThreadPoolBuilder::new()
                 .num_threads(input.search.num_threads.get())

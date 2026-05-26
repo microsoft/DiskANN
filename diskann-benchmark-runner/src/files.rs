@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::checker::{CheckDeserialization, Checker};
+use super::Checker;
 
 /// A file that is used as an input to for a benchmark.
 ///
@@ -37,17 +37,8 @@ impl InputFile {
             path: PathBuf::from(path),
         }
     }
-}
 
-impl std::ops::Deref for InputFile {
-    type Target = Path;
-    fn deref(&self) -> &Self::Target {
-        &self.path
-    }
-}
-
-impl CheckDeserialization for InputFile {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+    pub fn resolve(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         let checked_path = checker.check_path(self);
         match checked_path {
             Ok(p) => {
@@ -56,6 +47,13 @@ impl CheckDeserialization for InputFile {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+impl std::ops::Deref for InputFile {
+    type Target = Path;
+    fn deref(&self) -> &Self::Target {
+        &self.path
     }
 }
 
@@ -86,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_deserialization() {
+    fn test_resolve() {
         // We create a directory that looks like this:
         //
         // dir/
@@ -113,13 +111,13 @@ mod tests {
             let absolute = path.join("file_a.txt");
             let mut file = InputFile::new(absolute.clone());
             let mut checker = Checker::new(Vec::new(), None);
-            file.check_deserialization(&mut checker).unwrap();
+            file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, absolute);
 
             let absolute = path.join("dir0/file_b.txt");
             let mut file = InputFile::new(absolute.clone());
             let mut checker = Checker::new(Vec::new(), None);
-            file.check_deserialization(&mut checker).unwrap();
+            file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, absolute);
         }
 
@@ -128,7 +126,7 @@ mod tests {
             let absolute = path.join("dir0/file_c.txt");
             let mut file = InputFile::new(absolute.clone());
             let mut checker = Checker::new(Vec::new(), None);
-            let err = file.check_deserialization(&mut checker).unwrap_err();
+            let err = file.resolve(&mut checker).unwrap_err();
             let message = err.to_string();
             assert!(message.contains("input file with absolute path"));
             assert!(message.contains("either does not exist or is not a file"));
@@ -143,23 +141,23 @@ mod tests {
 
             // Directories are searched in order.
             let mut file = InputFile::new("file_c.txt");
-            file.check_deserialization(&mut checker).unwrap();
+            file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, path.join("dir1/dir0/file_c.txt"));
 
             let mut file = InputFile::new("file_b.txt");
-            file.check_deserialization(&mut checker).unwrap();
+            file.resolve(&mut checker).unwrap();
             assert_eq!(file.path, path.join("dir0/file_b.txt"));
 
             // Directory search can fail.
             let mut file = InputFile::new("file_a.txt");
-            let err = file.check_deserialization(&mut checker).unwrap_err();
+            let err = file.resolve(&mut checker).unwrap_err();
             let message = err.to_string();
             assert!(message.contains("could not find input file"));
             assert!(message.contains("in the search directories"));
 
             // If we give an absolute path, no directory search is performed.
             let mut file = InputFile::new(path.join("file_c.txt"));
-            let err = file.check_deserialization(&mut checker).unwrap_err();
+            let err = file.resolve(&mut checker).unwrap_err();
             let message = err.to_string();
             assert!(message.starts_with("input file with absolute path"));
         }
