@@ -14,7 +14,7 @@ Adds a lightweight **query planner** that automatically selects between flat sca
 
 ### Background
 
-When a query is scoped to a specific filter category, the caller extracts a list of items matching that category, maps them to DiskANN's internal vector IDs, and constructs a bitmap. The caller wraps the bitmap in a `Predicate` closure and passes it to the disk searcher.
+When a query is scoped to a specific filter category, the caller constructs a bitmap of matching vector IDs and wraps it in a `Predicate` closure. The caller passes the predicate to the disk searcher.
 
 The **match rate** — the fraction of index points present in the bitmap — varies widely across filter categories and tenants. One category may cover 80% of the index, while another may cover 0.05%. No single search strategy is optimal across this range.
 Without a query planner, callers must either hard-code a strategy or pass `is_flat_search` manually — neither adapts to the actual data distribution.
@@ -55,12 +55,12 @@ The query planner is a lightweight routing layer that sits between the caller an
 ┌─────────────────────────────────────────────────────────┐
 │  Caller code (bitmap construction boundary)             │
 │                                                         │
-│  // Wrap bitmap in Arc for shared ownership             │
-│  let bitmap: Arc<RoaringBitmap> = Arc::new(bitmap);     │
+│  // Build predicate from any bitmap type                │
+│  let predicate = move |id| bitmap.contains(id);         │
 │  let matching_count = bitmap.len();                     │
 │                                                         │
 │  // Call query planner                                  │
-│  let search_plan = planner.plan_search(bitmap,          │
+│  let search_plan = planner.plan_search(predicate,       │
 │                                    matching_count);     │
 │  searcher.search(query, ..., search_plan)               │
 └────────────────────┬────────────────────────────────────┘
@@ -173,6 +173,16 @@ impl Default for QueryPlannerConfig {
         }
     }
 }
+
+impl QueryPlannerConfig {
+    /// Validate the configuration. Returns an error if beta is not in (0, 1].
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !(self.beta > 0.0 && self.beta <= 1.0) {
+            return Err("beta must be in (0, 1]");
+        }
+        Ok(())
+    }
+}
 ```
 
 #### 4.3 `QueryPlanner`
@@ -184,8 +194,9 @@ pub struct QueryPlanner {
 }
 
 impl QueryPlanner {
-    pub fn new(config: QueryPlannerConfig, total_points: u64) -> Self {
-        Self { config, total_points }
+    pub fn new(config: QueryPlannerConfig, total_points: u64) -> Result<Self, &'static str> {
+        config.validate()?;
+        Ok(Self { config, total_points })
     }
 
     /// Determine the search strategy based on matching count and match rate.
@@ -211,30 +222,29 @@ impl QueryPlanner {
 
     /// Plan and produce a `SearchPlan` with the appropriate predicate wiring.
     ///
-    /// The caller provides the bitmap (as an `Arc<RoaringBitmap>`) and the
-    /// matching count. The planner selects the strategy and constructs the
-    /// `SearchPlan` with the closure already wired to the bitmap.
-    pub fn plan_search(
+    /// The caller provides a predicate closure (wrapping any bitmap type) and
+    /// the matching count. The planner selects the strategy and constructs the
+    /// `SearchPlan` with the predicate wired in.
+    ///
+    /// Returns `Err` if beta validation fails (e.g. beta not in (0, 1]).
+    pub fn plan_search<F>(
         &self,
-        bitmap: Arc<RoaringBitmap>,
+        predicate: F,
         matching_count: u64,
-    ) -> SearchPlan {
+    ) -> Result<SearchPlan, &'static str>
+    where
+        F: Fn(u32) -> bool + Send + Sync + 'static,
+    {
         let strategy = self.plan(matching_count);
         let beta = self.config.beta;
 
         match strategy {
             QueryStrategy::FlatSearch => {
-                let bm = bitmap.clone();
-                SearchPlan::FlatScan {
-                    filter: Some(Box::new(move |id| bm.contains(id))),
-                }
+                Ok(SearchPlan::flat_filtered(predicate))
             }
             QueryStrategy::BetaFilter => {
-                let bm = bitmap.clone();
-                SearchPlan::Graph(GraphMode::BetaFilter {
-                    predicate: Box::new(move |id| bm.contains(id)),
-                    beta,
-                })
+                GraphMode::beta_filter(predicate, beta)
+                    .map(SearchPlan::graph_with)
             }
         }
     }
@@ -250,13 +260,13 @@ impl QueryPlanner {
 let planner = QueryPlanner::new(
     QueryPlannerConfig::default(),
     total_points as u64,
-);
+)?;
 
-// Per-query — bitmap comes from the caller's filter infrastructure.
-// `bitmap.len()` returns the number of set bits as u64.
+// Per-query — predicate wraps any bitmap type (RoaringBitmap, BitSet, HashSet, etc.).
 let bitmap: Arc<RoaringBitmap> = /* vector IDs for the target filter category */;
 let matching_count = bitmap.len();
-let search_plan = planner.plan_search(bitmap, matching_count);
+let bm = bitmap.clone();
+let search_plan = planner.plan_search(move |id| bm.contains(id), matching_count)?;
 let results = searcher.search(
     query,
     return_list_size,
@@ -358,7 +368,7 @@ The hybrid approach fixes 2 mistakes the original makes on the 292K index: when 
 
 ### `plan()` returning `QueryStrategy` vs. directly returning `SearchPlan`
 
-**Chosen: both.** `plan()` returns the lightweight `QueryStrategy` enum (no allocation, `Copy`), useful for logging, metrics, and testing. `plan_search()` takes the bitmap and produces a ready-to-use `SearchPlan` with the closure wired in. Callers that need fine-grained control use `plan()` + manual `SearchPlan` construction; callers that want convenience use `plan_search()`.
+**Chosen: both.** `plan()` returns the lightweight `QueryStrategy` enum (no allocation, `Copy`), useful for logging, metrics, and testing. `plan_search()` takes a generic predicate closure and produces a ready-to-use `SearchPlan`. The planner is bitmap-agnostic — callers wrap any bitmap type (`RoaringBitmap`, `BitSet`, `HashSet<u32>`) into a closure before calling `plan_search()`.
 
 ## Benchmark Results
 
