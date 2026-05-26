@@ -97,14 +97,14 @@ mod imp {
     };
 
     type SQProvider = inmem::DefaultProvider<
-        inmem::FullPrecisionStore<f32>,
+        inmem::FullPrecisionStore<i8>,
         inmem::spherical::SphericalStore,
         common::NoDeletes,
         diskann::provider::DefaultContext,
     >;
 
     impl QueryType for SQProvider {
-        type Element = f32;
+        type Element = i8;
     }
 
     /// A [`Benchmark`] for spherical-quantized searches containing a dynamic list of search
@@ -191,7 +191,7 @@ mod imp {
                         failure_score = Some(1);
                     }
 
-                    if !f32::is_match(input.build.data_type) {
+                    if !i8::is_match(input.build.data_type) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -243,7 +243,7 @@ mod imp {
                                 )?;
                             }
 
-                            if !f32::is_match(input.build.data_type) {
+                            if !i8::is_match(input.build.data_type) {
                                 writeln!(
                                     f,
                                     "- Only `float32` data type is supported. Instead, got {}",
@@ -280,7 +280,7 @@ mod imp {
 
                     let build = &input.build;
 
-                    let data: Arc<Matrix<f32>> =
+                    let data: Arc<Matrix<i8>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
 
                     let start = std::time::Instant::now();
@@ -303,7 +303,7 @@ mod imp {
 
                     // We manually inline the build and search loops because we support
                     // multiple different kinds of searches.
-                    let index = diskann_async::new_quant_index::<f32, _, _>(
+                    let index = diskann_async::new_quant_index::<i8, _, _>(
                         input.try_as_config()?.build()?,
                         input.inmem_parameters(data.nrows(), data.ncols()),
                         diskann_quantization::spherical::iface::Impl::<$N>::new(quantizer)?,
@@ -381,7 +381,7 @@ mod imp {
             // compute the maximum value of k used in any search
             let max_k = topk.max_k();
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<Matrix<i8>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
             let groundtruth =
@@ -421,7 +421,7 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let range = phase.as_range()?;
 
-            let queries: Arc<Matrix<f32>> =
+            let queries: Arc<Matrix<i8>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&range.queries))?);
 
             let groundtruth =
@@ -463,7 +463,7 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let betafilter = phase.as_topk_beta_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            let queries: Arc<Matrix<i8>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
                 &betafilter.queries,
             ))?);
 
@@ -517,7 +517,7 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let multihop = phase.as_topk_multihop_filter()?;
 
-            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            let queries: Arc<Matrix<i8>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
                 &multihop.queries,
             ))?);
 
