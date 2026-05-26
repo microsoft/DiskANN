@@ -289,13 +289,13 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 
 **Dataset Overview:**
 
-| Dataset Size | Embedding Model | Dim | Vectors | PQ Chunks | Pass Rates Tested |
-|---|---|---|---|---|---|
-| 150K | FBV8_V2 | 896 | 150,000 | 384 | 0.01% – 100% (19 points) |
-| 292K | FBV8_V2 | 896 | 292,697 | 384 | 0.01% – 100% (19 points) |
-| 1M | FBV8_V2 | 896 | 958,152 | 384 | 0.01% – 100% (19 points) |
-| 1M | FBV4 | 384 | 1,087,932 | 192 | 0.01% – 100% (19 points) |
-| 10M | FBV4 | 384 | 10,000,000 | 192 | 0.01% – 100% (19 points) |
+| Dataset Size | Dim | Vectors | PQ Chunks | Pass Rates Tested |
+|---|---|---|---|---|
+| 150K | 896 | 150,000 | 384 | 0.01% – 100% (19 points) |
+| 292K | 896 | 292,697 | 384 | 0.01% – 100% (19 points) |
+| 1M | 896 | 958,152 | 384 | 0.01% – 100% (19 points) |
+| 1M | 384 | 1,087,932 | 192 | 0.01% – 100% (19 points) |
+| 10M | 384 | 10,000,000 | 192 | 0.01% – 100% (19 points) |
 
 #### 5.2 Key Observations
 
@@ -364,7 +364,7 @@ The hybrid approach fixes 2 mistakes the original makes on the 292K index: when 
 
 All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=10`, `beam_width=4`, `squared_l2` distance.
 
-### Experiment 1: MERB 150K (FBV8_V2, 896d, 150,000 vectors)
+### Experiment 1: 150K vectors (dim=896)
 
 | Pass Rate | Matching | Flat Recall | Flat Latency (μs) | Beta L=2000 Recall | Beta L=2000 Latency (μs) | Beta L=3000 Recall | Beta L=3000 Latency (μs) |
 |---|---|---|---|---|---|---|---|
@@ -384,7 +384,7 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 
 **Observation:** Flat scan achieves ~100% recall at constant ~313ms latency across all pass rates. Beta filter has similar or higher latency (~319–327ms for L=2000) but worse recall at low pass rates. **No benefit to beta filter on this index size.**
 
-### Experiment 2: MERB 292K (FBV8_V2, 896d, 292,697 vectors)
+### Experiment 2: 292K vectors (dim=896)
 
 | Pass Rate | Matching | Flat Recall | Flat Latency (μs) | Beta L=2000 Recall | Beta L=2000 Latency (μs) | Beta L=3000 Recall | Beta L=3000 Latency (μs) |
 |---|---|---|---|---|---|---|---|
@@ -404,7 +404,7 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 
 **Observation:** Beta recall is near 0% at very low pass rates, dips severely below 4%, then recovers above 10%. Flat scan is ~100% recall at constant ~313ms. Above 25%, beta achieves 95%+ recall but flat scan latency is still similar (~313ms), so beta's advantage is marginal on this index size.
 
-### Experiment 3: Enron 958K (FBV8_V2, 896d, 958,152 vectors)
+### Experiment 3: 958K vectors (dim=896)
 
 | Pass Rate | Matching | Flat Recall | Flat Latency (μs) | Beta L=2000 Recall | Beta L=2000 Latency (μs) | Beta L=3000 Recall | Beta L=3000 Latency (μs) |
 |---|---|---|---|---|---|---|---|
@@ -424,7 +424,7 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 
 **Observation:** Beta recall dips to 34.5% at 3% pass rate (the "beta saturation dip"). Above 26%, beta achieves 95%+ recall at constant ~315ms. Flat scan latency rises linearly — from 314ms at 10% to **1,076ms at 100%**. Beta is clearly faster at high pass rates.
 
-### Experiment 4: Enron 1M (FBV4, 384d, 1,087,932 vectors)
+### Experiment 4: 1M vectors (dim=384)
 
 | Pass Rate | Matching | Flat Recall | Flat Latency (μs) | Beta L=2000 Recall | Beta L=2000 Latency (μs) | Beta L=3000 Recall | Beta L=3000 Latency (μs) |
 |---|---|---|---|---|---|---|---|
@@ -442,9 +442,9 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 | 69.00% | 750,000* | 99.9% | 490,339 | 97.4% | 315,909 | 97.1% | 470,516 |
 | 100.00% | 1,087,932 | 99.9% | 665,666 | 99.7% | 314,767 | 99.8% | 475,439 |
 
-**Observation:** Similar pattern to FBV8 but with worse beta recall at low pass rates (0% below 1%). Beta recall dip zone extends to ~10%. Above 23%, beta achieves 89%+ recall. Flat scan latency rises from 313ms to **666ms at 100%**. Beta latency constant at ~315ms.
+**Observation:** Similar pattern to the 896d experiments but with worse beta recall at low pass rates (0% below 1%). Beta recall dip zone extends to ~10%. Above 23%, beta achieves 89%+ recall. Flat scan latency rises from 313ms to **666ms at 100%**. Beta latency constant at ~315ms.
 
-### Experiment 5: Enron 10M (FBV4, 384d, 10,000,000 vectors)
+### Experiment 5: 10M vectors (dim=384)
 
 | Pass Rate | Matching | Flat Recall | Flat Latency (μs) | Beta L=2000 Recall | Beta L=2000 Latency (μs) | Beta L=3000 Recall | Beta L=3000 Latency (μs) |
 |---|---|---|---|---|---|---|---|
