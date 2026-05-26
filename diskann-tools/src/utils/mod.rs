@@ -54,3 +54,6 @@ pub mod multi_label;
 pub use multi_label::MultiLabel;
 pub mod relative_contrast;
 pub use relative_contrast::*;
+
+pub mod compute_bitmap;
+pub use compute_bitmap::compute_query_bitmaps;
