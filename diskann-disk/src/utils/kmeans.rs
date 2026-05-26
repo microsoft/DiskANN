@@ -562,6 +562,76 @@ mod kmeans_test {
     }
 
     #[test]
+    fn k_means_clustering_produces_valid_clusters() {
+        let dim = 2;
+        let num_points = 10;
+        let num_centers = 3;
+        let max_reps = 10;
+
+        let data: Vec<f32> = (1..=num_points * dim).map(|x| x as f32).collect();
+        let mut centers = vec![0.0; num_centers * dim];
+        let pool = create_thread_pool_for_test();
+
+        let (closest_docs, closest_center, residual) = k_means_clustering(
+            &data,
+            num_points,
+            dim,
+            &mut centers,
+            num_centers,
+            max_reps,
+            &mut create_rnd_in_tests(),
+            &mut false,
+            pool.as_ref(),
+        )
+        .unwrap();
+
+        // Every point must be assigned to a valid center.
+        assert_eq!(closest_center.len(), num_points);
+        for &c in &closest_center {
+            assert!((c as usize) < num_centers);
+        }
+
+        // closest_docs must have one entry per center, and contain all point indices exactly once.
+        assert_eq!(closest_docs.len(), num_centers);
+        let mut all_points: Vec<usize> = closest_docs
+            .iter()
+            .flat_map(|v| v.iter().copied())
+            .collect();
+        all_points.sort();
+        assert_eq!(all_points, (0..num_points).collect::<Vec<_>>());
+
+        // Residual must be non-negative.
+        assert!(residual >= 0.0);
+    }
+
+    #[test]
+    fn k_means_clustering_returns_err_when_canceled() {
+        let dim = 2;
+        let num_points = 10;
+        let num_centers = 3;
+        let max_reps = 5;
+
+        let data: Vec<f32> = (1..=num_points * dim).map(|x| x as f32).collect();
+        let mut centers = vec![0.0; num_centers * dim];
+        let pool = create_thread_pool_for_test();
+
+        let err = k_means_clustering(
+            &data,
+            num_points,
+            dim,
+            &mut centers,
+            num_centers,
+            max_reps,
+            &mut create_rnd_in_tests(),
+            &mut true, // cancellation requested
+            pool.as_ref(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ANNErrorKind::PQError);
+    }
+
+    #[test]
     fn selecting_random_pivots_test() {
         let dim = 2;
         let num_points = 10;
