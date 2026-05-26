@@ -40,7 +40,6 @@ pub type VectorFilter<'a, Data> =
 ### Goals
 
 1. Add beta-biased disk graph search as a first-class capability.
-2. Provide a single extension point for future filter algorithms without changing the public `search()` signature.
 
 ## Proposal
 
@@ -118,6 +117,8 @@ impl<'a> SearchPlan<'a> {
 
 The lifetime parameter `'a` carries the borrow scope of any captured data in the predicate. For closures that own (move in) their captures, callers don't need to write the lifetime — Rust infers `'static`. Callers that need to borrow from a stack frame for a single `search()` call get a shorter inferred `'a`, matching today's `VectorFilter<'a, Data>` flexibility.
 
+The `u32` argument to a `Predicate` is the **external ID**. See §ID convention for the rationale and the call sites updated in this change.
+
 ### Supported configurations
 
 | # | Case | `SearchPlan` value |
@@ -132,7 +133,7 @@ The lifetime parameter `'a` carries the borrow scope of any captured data in the
 
 - **Hierarchical, not flat.** `SearchPlan { FlatScan, Graph(GraphMode) }` separates the graph-vs-linear-scan break (different code paths) from the choice of graph algorithm/modifier. Future graph algorithms slot into `GraphMode`, not the top-level enum.
 - **Invalid states unrepresentable.** `BetaFilter` carries the predicate inline; the `FlatScan` path has no `GraphMode` field. Beta-without-predicate and beta-on-flat-scan are compile-time errors, not runtime asserts.
-- **Project at the boundary.** `GraphMode` exposes constructors only — no accessors. `search_strategy()` projects `(Option<&Predicate>, Option<f32>)` from the plan via one exhaustive match. Adding a `GraphMode` variant updates exactly one match site.
+- **Project at the boundary into a sum type.** `GraphMode` exposes constructors only — no accessors. `search_strategy()` projects the plan into a `FilterMode<'a>` sum type via one exhaustive match (see below). Adding a `GraphMode` variant updates exactly one match site. The sum-type shape (rather than two independent `Option` fields) is what makes `(None, Some(β))` unrepresentable at the strategy layer — same pattern as the public `GraphMode`, extended one layer down.
 
 ### `search()` signature
 
@@ -148,7 +149,26 @@ pub fn search(..., plan: SearchPlan<'_>) -> ...
 
 ### `search_strategy` projection — the single `GraphMode` match site
 
-`search_strategy` is the **only** place that introspects `GraphMode`'s variants. One exhaustive match produces `(predicate, beta)`; the strategy carries them as fields. Every downstream consumer reads `strategy.predicate` and `strategy.beta` — no further variant matching anywhere.
+`search_strategy` is the **only** place that introspects `GraphMode`'s variants. One exhaustive match produces a `FilterMode<'a>` value, which the strategy stores as a single field. Every downstream consumer matches on `strategy.filter` — no further `GraphMode` knowledge anywhere.
+
+The projection target is a disk-local sum type that captures the three filter shapes the strategy needs to dispatch on. Each variant carries exactly the fields it uses:
+
+```rust
+// Disk-local; lives in filter_parameter.rs alongside SearchPlan/GraphMode.
+pub(crate) enum FilterMode<'a> {
+    None,
+    Filter(&'a (dyn Fn(u32) -> bool + Send + Sync + 'a)),
+    BetaFilter {
+        predicate: &'a (dyn Fn(u32) -> bool + Send + Sync + 'a),
+        beta: f32,
+    },
+    // Future graph algorithms with their own supplementary data slot in here:
+    //   Multihop { predicate, depth: u32 },
+    //   LabelBeta { labels: &'a LabelMap, beta: f32 },
+}
+```
+
+Variants hold `&'a dyn Fn(...)` directly (not `&'a Box<dyn Fn>`), so calling the predicate is one indirection instead of two. The owning `Box` still lives in `SearchPlan`; the strategy projects via `predicate.as_ref()` in the match.
 
 ```rust
 fn search_strategy<'a>(
@@ -156,22 +176,27 @@ fn search_strategy<'a>(
     query: &'a [Data::VectorDataType],
     plan: &'a SearchPlan<'a>,
 ) -> DiskSearchStrategy<'a, ...> {
-    let (predicate, beta) = match plan {
-        SearchPlan::FlatScan { filter } => (filter.as_ref(), None),
-        SearchPlan::Graph(GraphMode::Unfiltered) => (None, None),
-        SearchPlan::Graph(GraphMode::PostFilter(p)) => (Some(p), None),
+    let filter = match plan {
+        SearchPlan::FlatScan { filter: None }
+        | SearchPlan::Graph(GraphMode::Unfiltered) => FilterMode::None,
+
+        SearchPlan::FlatScan { filter: Some(p) }
+        | SearchPlan::Graph(GraphMode::PostFilter(p)) => FilterMode::Filter(p.as_ref()),
+
         SearchPlan::Graph(GraphMode::BetaFilter { predicate, beta }) =>
-            (Some(predicate), Some(*beta)),
+            FilterMode::BetaFilter { predicate: predicate.as_ref(), beta: *beta },
     };
-    DiskSearchStrategy { predicate, beta, query, ... }
+    DiskSearchStrategy { filter, query, ... }
 }
 ```
 
-The compiler's exhaustiveness check forces every new `GraphMode` variant to add exactly one arm here. `DiskAccessor::new` and `RerankAndFilter::new` consume `strategy.predicate` and `strategy.beta` directly — no further `GraphMode` knowledge downstream.
+The exhaustiveness check forces every new `GraphMode` variant to add exactly one arm. `DiskAccessor` and `RerankAndFilter` read `strategy.filter` and dispatch on the `FilterMode` variant — they never look at `GraphMode`.
+
+**Why a sum type instead of `(Option<&Predicate>, Option<f32>)` on the strategy?** Two independent `Option` fields would admit a structurally-invalid `(None, Some(β))` state, prevented today only by the exhaustive `match` here. A sum type makes it unrepresentable, and extends better than nesting `beta` inside a struct: each future variant (e.g. `Multihop { predicate, depth }`) carries exactly its own supplementary data, where a struct-with-Options shape would degrade the moment a modifier needs non-`f32` supplementary data or no predicate at all.
 
 ### `DiskSearchStrategy` struct change
 
-The strategy stops carrying a single closure and starts carrying the two projected fields:
+The strategy stops carrying a single closure and starts carrying the projected `FilterMode`:
 
 ```rust
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
@@ -185,14 +210,32 @@ where
     // === Changed ===
     // Removed: vector_filter: &'a VectorFilter<'a, Data>
     // Added: projected from `plan` once in search_strategy()
-    predicate: Option<&'a Predicate<'a>>,
-    beta: Option<f32>,
+    filter: FilterMode<'a>,
 
     // === Unchanged ===
     vertex_provider_factory: &'a ProviderFactory,
     scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
 }
 ```
+
+Consumer sites then dispatch directly on the variant:
+
+```rust
+// pq_distances:
+if let FilterMode::BetaFilter { predicate, beta } = self.filter {
+    if predicate(id) {
+        distance *= beta;
+    }
+}
+
+// RerankAndFilter — extracting the post-filter predicate uniformly:
+match &self.filter {
+    FilterMode::None => None,
+    FilterMode::Filter(p) | FilterMode::BetaFilter { predicate: p, .. } => Some(*p),
+}
+```
+
+Exhaustiveness forces every future `FilterMode` variant through both sites.
 
 ### Caller migration
 
@@ -205,6 +248,31 @@ where
 | (not expressible) | `SearchPlan::graph_with(GraphMode::beta_filter(p, β)?)` |
 
 Boundary code in the benchmark and tools constructs `SearchPlan` once and passes it down. The `--is_flat_search` benchmark flag and the corresponding `is_flat_search` field in benchmark JSON schemas (`diskann-benchmark/example/*.json`, `diskann-benchmark/perf_test_inputs/*.json`) are removed in the same change — no external consumers depend on the old schema, so no migration grace period is needed.
+
+### ID convention — fix the internal/external mismatch in `RerankAndFilter`
+
+Current state:
+
+- **Input predicate is keyed on `ExternalId`** by `DataProvider` contract.
+- **`Index::flat_search`** is correct — calls `to_external_id` before invoking the predicate ([diskann/src/graph/index.rs](../diskann/src/graph/index.rs)).
+- **`RerankAndFilter::post_process`** is incorrect — invokes the predicate with `Neighbor::id` (the **internal ID**) with no conversion ([disk_provider.rs:315](../diskann-disk/src/search/provider/disk_provider.rs)). Works today only because `DiskProvider::to_internal_id` and `to_external_id` are identity ([disk_provider.rs:93-124](../diskann-disk/src/search/provider/disk_provider.rs)) — `internal_id == external_id == u32`. A non-identity disk provider would silently produce different results between flat-scan and graph paths.
+
+This RFC fixes the mismatch: every site invokes the predicate with `ExternalId`.
+
+**Sites updated in the implementation PR:**
+
+- **`RerankAndFilter::post_process`** — call `to_external_id` on each candidate before invoking the predicate.
+- **`pq_distances`** (new code path for `FilterMode::BetaFilter`) — call `to_external_id` on each id before invoking the predicate.
+
+**Sites already correct:**
+
+- **`Index::flat_search`** — already converts to external before invoking.
+
+**Cost** in the identity case is negligible: `to_external_id` returns `Ok(id)`; `#[inline]` lets LLVM fold it, leaving only a `Result` tag-check that the inliner constant-folds when it sees the `Ok(_)` body. In the PQ-distance hot loop this is branch-predicted free.
+
+**Caller impact:** none. Bitmaps that callers build from prior search results are already keyed on external IDs by the `DataProvider` contract — they were the *intended* input all along; this RFC just makes every invocation site honor it.
+
+**Caveat:** the "external" contract stays documented but not type-enforced — both ID kinds are bare `u32` today. Making it type-level (newtyping `ExternalId`) is deferred (see §Non-Goals).
 
 ### Where beta is/isn't applied
 
@@ -227,8 +295,8 @@ The exhaustiveness check guarantees the compiler refuses to build until every `m
 ### Validation
 
 - `β ∈ (0, 1]` enforced by `GraphMode::beta_filter()`, the only constructor; returns `BetaError::OutOfRange` on invalid input (no panic). This is the validation point for `β` values read from JSON/CLI config — boundary code propagates the error to the user.
-- Beta on `FlatScan` and beta without a predicate are compile-time errors by enum shape.
-- No allocation on `SearchPlan::graph()` or `SearchPlan::flat()` — both produce variants carrying `None` predicates.
+- Beta on `FlatScan` and beta without a predicate are compile-time errors at both layers: unrepresentable in the public `GraphMode` enum, and unrepresentable in the internal `FilterMode` sum type.
+- No allocation on `SearchPlan::graph()` or `SearchPlan::flat()` — both project to `FilterMode::None`.
 
 ### Files modified
 
@@ -247,19 +315,10 @@ The exhaustiveness check guarantees the compiler refuses to build until every `m
 - **Beta on `flat_search`.** Brute-force enumeration doesn't benefit from traversal biasing; the type system forbids it.
 - **`VectorIdType` genericity.** `Predicate` pins `u32`. The disk path already constrains `Data::VectorIdType = u32` ([disk_provider.rs:548-557](../diskann-disk/src/search/provider/disk_provider.rs)); a future `u64` ID type would touch this API surface — accepted cost.
 - **Additional `GraphMode` variants in this change.** The enum is built for extension, but each new variant should land with its own consumer integration, tests, and (for traversal modifiers) recall data.
+- **Newtyping `DiskProvider::ExternalId`.** The "predicate sees external IDs" contract (§Types) is documented but not type-enforced — both ID kinds are bare `u32` today. Making the distinction type-level (e.g. `struct ExternalId(u32);`) would catch accidental cross-space passing at compile time but touches the broader `DataProvider` surface beyond this RFC's scope. Deferred.
 
-## Trade-offs
-
-N/A
-
-## Benchmark Results
-
-N/A
 
 ## Future Work
 
-- [ ] **Align disk and in-memory beta-filter behavior.** After this change, `GraphMode::BetaFilter` on the disk path applies *both* beta-biased traversal *and* a hard post-filter (non-matching IDs are dropped in `RerankAndFilter`). The in-memory `BetaFilter` strategy ([diskann-providers/.../betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) only applies the beta bias — non-matching IDs can still appear in results. A user asking for "beta filter" gets different result sets depending on which side they're on. Future work: pick one semantics (most likely "bias + post-filter," matching the disk side) and align the in-memory strategy, or document the divergence explicitly in both APIs.
+- [ ] **Align disk and in-memory beta-filter behavior.** After this change, `GraphMode::BetaFilter` on the disk path applies *both* beta-biased traversal *and* a hard post-filter (non-matching IDs are dropped in `RerankAndFilter`). The in-memory `BetaFilter` strategy ([diskann-providers/.../betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) only applies the beta bias — non-matching IDs can still appear in results. A user asking for "beta filter" gets different result sets depending on which side they're on. Future work: pick one semantics (most likely "bias + post-filter," matching the disk side) and align the in-memory strategy, or document the divergence explicitly in both APIs. **Note**: keying the disk `Predicate` on `ExternalId` (§Types) already closes one corner of this divergence — both sides now address the caller's ID space.
 
-## References
-
-N/A
