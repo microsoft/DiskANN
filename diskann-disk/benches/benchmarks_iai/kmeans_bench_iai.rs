@@ -30,16 +30,13 @@ fn setup_data() -> (Vec<f32>, RayonThreadPool) {
 }
 #[iai_callgrind::library_benchmark(setup = setup_data)]
 pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
-    let centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
+    let mut centers: Vec<f32> = vec![0.0; NUM_CENTERS * DIM];
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
-
-    let data_copy = data.clone();
-    let mut centers_copy = centers.clone();
     k_means_clustering(
-        black_box(&data_copy),
+        black_box(&data),
         NUM_POINTS,
         DIM,
-        black_box(&mut centers_copy),
+        black_box(&mut centers),
         NUM_CENTERS,
         MAX_KMEANS_REPS,
         rng,
@@ -47,7 +44,7 @@ pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
         pool.as_ref(),
     )
     .unwrap();
-    black_box(centers_copy);
+    black_box(centers);
 }
 
 #[iai_callgrind::library_benchmark(setup = setup_data)]
