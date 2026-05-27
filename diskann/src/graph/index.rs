@@ -2938,6 +2938,12 @@ struct BatchIdMismatch {
 //////////////////////////////////
 // diskann-record Save/Load     //
 //////////////////////////////////
+//
+// A [`DiskANNIndex`] is persisted as its `(config, data_provider)` pair: the saved
+// schema, plus everything the chosen [`DataProvider`] chooses to write. Runtime-only
+// state \u2014 most notably the scratch pool \u2014 is deliberately omitted; loaders pass
+// `None` and let the index recreate it on first use, with thread sizing left as a
+// deployment decision.
 
 impl<DP> diskann_record::save::Save for DiskANNIndex<DP>
 where

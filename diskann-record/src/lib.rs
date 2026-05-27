@@ -3,6 +3,83 @@
  * Licensed under the MIT license.
  */
 
+//! # Versioned Save/Load for DiskANN
+//!
+//! This crate provides a small framework for persisting structured Rust values to disk
+//! as a JSON manifest plus a set of side-car binary artifacts, and reloading them later.
+//! It is the substrate used by `diskann` providers and indexes to implement durable
+//! checkpoints.
+//!
+//! The model is:
+//!
+//! * Each [`save::Save`] / [`load::Load`] implementation describes how a single Rust type
+//!   maps to a [`save::Record`] (a versioned map of named fields).
+//! * Field values are either [`save::Value`]s embedded directly in the manifest, or
+//!   [`save::Handle`]s pointing at side-car binary artifacts written via the
+//!   [`save::Context`].
+//! * Every record carries a [`Version`] so that loaders can detect schema changes and
+//!   either upgrade ([`load::Load::load_legacy`]) or fall back through a probing chain
+//!   (see [`load::Error::is_recoverable`]).
+//!
+//! # Entry Points
+//!
+//! - [`save::save_to_disk`]: Save a value to a directory plus a manifest path.
+//! - [`load::load_from_disk`]: Reload a value from a manifest and its artifact directory.
+//!
+//! # Defining Save / Load
+//!
+//! User code is expected to implement [`save::Save`] and [`load::Load`] for the types it
+//! wants to persist. For plain structs, the [`save_fields!`] and [`load_fields!`] macros
+//! handle the field-by-field plumbing. See [`save`] and [`load`] for the relevant traits
+//! and helpers.
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use diskann_record::{Version, save, load};
+//!
+//! #[derive(Debug, PartialEq)]
+//! struct Config { dim: usize, label: String }
+//!
+//! impl save::Save for Config {
+//!     const VERSION: Version = Version::new(0, 0, 0);
+//!     fn save(&self, context: save::Context<'_>) -> save::Result<save::Record<'_>> {
+//!         Ok(diskann_record::save_fields!(self, context, [dim, label]))
+//!     }
+//! }
+//!
+//! impl load::Load<'_> for Config {
+//!     const VERSION: Version = Version::new(0, 0, 0);
+//!     fn load(object: load::Object<'_>) -> load::Result<Self> {
+//!         diskann_record::load_fields!(object, [dim: usize, label: String]);
+//!         Ok(Self { dim, label })
+//!     }
+//!     fn load_legacy(_: load::Object<'_>) -> load::Result<Self> {
+//!         Err(load::error::Kind::UnknownVersion.into())
+//!     }
+//! }
+//! ```
+//!
+//! # Wire Format
+//!
+//! The manifest is JSON. Every object carries a `$version` field; side-car artifacts are
+//! referenced through `$handle` strings whose value is a file name relative to the
+//! manifest directory. Keys beginning with `$` are reserved for framework metadata and
+//! cannot be used as user field names (see [`is_reserved`]).
+//!
+//! # Platform Requirements
+//!
+//! `usize` and `isize` are serialized as 64-bit numbers. The crate statically asserts
+//! that `usize::BITS == 64` to guarantee that the saver never produces values the
+//! canonical wire width cannot represent. Loaders still range-check at runtime.
+//!
+//! # Error Handling
+//!
+//! Both [`save::Error`] and [`load::Error`] wrap [`anyhow::Error`] for rich context
+//! chains. Load errors additionally carry a recoverable / critical bit, used by probing
+//! call sites to decide whether to fall back to an alternative loader. See
+//! [`load::error::Kind`] for the classification.
+
 mod number;
 pub use number::Number;
 
@@ -22,7 +99,11 @@ const _: () = assert!(
     "diskann-record requires a 64-bit target: usize/isize MUST be 64 bits wide !!",
 );
 
-/// Return `true` if `s` is a reserved string for purposes of saving and loading.
+/// Return `true` if `s` is a reserved manifest key.
+///
+/// Keys beginning with `$` are reserved for framework metadata (e.g. `$version`,
+/// `$handle`) and may not be used as user field names. Attempting to insert one via
+/// [`save::Record::insert`] returns an error.
 #[doc(hidden)]
 pub const fn is_reserved(s: &str) -> bool {
     if let Some(first) = s.as_bytes().first()

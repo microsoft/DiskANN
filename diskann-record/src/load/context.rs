@@ -3,6 +3,20 @@
  * Licensed under the MIT license.
  */
 
+//! Load-side context, object, array, and side-car reader.
+//!
+//! [`Context`] is the cheap, clonable handle threaded through every
+//! [`super::Load::load`] / [`super::Loadable::load`] impl. From a [`Context`], loaders
+//! ask:
+//!
+//! * [`Context::as_object`] / [`Object::field`] for nested records.
+//! * [`Context::as_array`] / [`Array::iter`] for sequences.
+//! * [`Context::as_str`] / [`Context::as_number`] / [`Context::as_bool`] / [`Context::is_null`] for scalars.
+//! * [`Object::read`] for side-car artifacts referenced by a
+//!   [`save::Handle`](super::save::Handle).
+//!
+//! [`Reader`] implements [`std::io::Read`] and [`std::io::Seek`] over the artifact file.
+
 use std::{
     collections::HashSet,
     fs::File,
@@ -79,6 +93,9 @@ impl ContextInner {
     }
 }
 
+/// A borrowed reader over a side-car artifact.
+///
+/// Produced by [`Object::read`]. Implements [`std::io::Read`] and [`std::io::Seek`].
 pub struct Reader<'a> {
     io: BufReader<File>,
     _lifetime: std::marker::PhantomData<&'a ()>,
@@ -125,6 +142,11 @@ impl std::io::Seek for Reader<'_> {
 // User facing types //
 ///////////////////////
 
+/// A cheap, clonable handle threaded through every load impl.
+///
+/// Loaders use the `as_*` accessors to peek at the underlying [`save::Value`] kind
+/// (e.g. [`Context::as_object`], [`Context::as_array`], [`Context::as_str`]) and
+/// [`Context::load`] to recursively deserialize a nested value into a concrete type.
 #[derive(Debug, Clone)]
 pub struct Context<'a> {
     inner: &'a ContextInner,
@@ -140,6 +162,10 @@ impl<'a> Context<'a> {
         self.inner
     }
 
+    /// Recursively deserialize the underlying value into a `T`.
+    ///
+    /// Equivalent to calling `T::load(self.clone())`. Use this from inner loaders that
+    /// want to delegate to another [`Loadable`].
     pub fn load<T>(&self) -> Result<T>
     where
         T: Loadable<'a>,
@@ -147,6 +173,7 @@ impl<'a> Context<'a> {
         T::load(self.clone())
     }
 
+    /// Returns `Some(Object)` if the value is a versioned object, else `None`.
     pub fn as_object(&self) -> Option<Object<'a>> {
         match self.value {
             save::Value::Object(versioned) => {
@@ -161,6 +188,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Returns `Some(s)` if the value is a string, else `None`.
     pub fn as_str(&self) -> Option<&'a str> {
         match self.value {
             save::Value::String(s) => Some(s),
@@ -168,6 +196,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Returns `Some(Array)` if the value is an array, else `None`.
     pub fn as_array(&self) -> Option<Array<'a>> {
         match self.value {
             save::Value::Array(array) => Some(Array::new(self.context(), array)),
@@ -175,6 +204,11 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Returns `Some(Number)` if the value is numeric, else `None`.
+    ///
+    /// Use the conversion methods on [`Number`] (e.g. `as_u32`, `as_i64`) to narrow to
+    /// the target Rust type; out-of-range conversions return `None` and should be
+    /// surfaced as [`error::Kind::NumberOutOfRange`].
     pub fn as_number(&self) -> Option<Number> {
         match self.value {
             save::Value::Number(number) => Some(*number),
@@ -182,6 +216,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Returns `Some(b)` if the value is a boolean, else `None`.
     pub fn as_bool(&self) -> Option<bool> {
         match self.value {
             save::Value::Bool(value) => Some(*value),
@@ -189,6 +224,9 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Returns `true` if the value is null.
+    ///
+    /// Used by [`Loadable`] impls for [`Option<T>`] to detect the absent variant.
     pub fn is_null(&self) -> bool {
         matches!(self.value, save::Value::Null)
     }
@@ -201,6 +239,12 @@ impl<'a> Context<'a> {
     }
 }
 
+/// A versioned record reached through [`Context::as_object`].
+///
+/// `Object` is the entry point for record-based deserialization: it exposes the schema
+/// version via [`Object::version`], the user keys via [`Object::keys`], typed field
+/// extraction via [`Object::field`] (and the [`load_fields!`](crate::load_fields)
+/// macro), and side-car artifact access via [`Object::read`].
 #[derive(Debug)]
 pub struct Object<'a> {
     inner: &'a ContextInner,
@@ -209,6 +253,7 @@ pub struct Object<'a> {
 }
 
 impl<'a> Object<'a> {
+    /// The schema [`Version`] recorded in the manifest for this object.
     pub fn version(&self) -> Version {
         self.version
     }
@@ -255,6 +300,15 @@ impl<'a> Object<'a> {
         }
     }
 
+    /// Extract the value under `key` and deserialize it into a `T`.
+    ///
+    /// This is the typed counterpart to [`Object::child`] and the primitive used by the
+    /// [`load_fields!`](crate::load_fields) macro.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::Kind::MissingField`] if the key is absent. Errors raised by
+    /// `T::load` (e.g. [`error::Kind::TypeMismatch`]) are propagated unchanged.
     pub fn field<T>(&self, key: &str) -> Result<T>
     where
         T: Loadable<'a>,
@@ -265,6 +319,12 @@ impl<'a> Object<'a> {
         }
     }
 
+    /// Open the side-car artifact identified by `handle` for reading.
+    ///
+    /// The handle must have been previously written through the matching
+    /// [`save::Context::write`](super::save::Context::write) call and embedded in this
+    /// record. Returns [`error::Kind::MissingFile`] if the file is not registered in the
+    /// manifest or if the handle attempts to escape the manifest directory.
     pub fn read(&self, handle: &save::Handle) -> Result<Reader<'_>> {
         self.inner.read(handle.as_str())
     }
@@ -274,6 +334,11 @@ impl<'a> Object<'a> {
     }
 }
 
+/// A homogeneous sequence of values reached through [`Context::as_array`].
+///
+/// Backed by a borrowed `&[Value]`. Use [`Array::iter`] to walk the elements; each
+/// item is yielded as a [`Context`] that can be further deserialized via
+/// [`Context::load`].
 #[derive(Debug)]
 pub struct Array<'a> {
     inner: &'a ContextInner,
@@ -285,14 +350,17 @@ impl<'a> Array<'a> {
         Self { inner, array }
     }
 
+    /// Number of elements in the array.
     pub fn len(&self) -> usize {
         self.array.len()
     }
 
+    /// Returns `true` if the array is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Iterate over the elements, each as a [`Context`] ready for further deserialization.
     pub fn iter(&self) -> Iter<'a> {
         Iter::new(self.context(), self.array.iter())
     }
@@ -302,6 +370,7 @@ impl<'a> Array<'a> {
     }
 }
 
+/// Iterator returned by [`Array::iter`].
 pub struct Iter<'a> {
     inner: &'a ContextInner,
     iter: std::slice::Iter<'a, save::Value<'a>>,

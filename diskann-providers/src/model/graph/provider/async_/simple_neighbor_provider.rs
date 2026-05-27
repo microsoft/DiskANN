@@ -364,6 +364,10 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
 //////////////////////////////////
 // diskann-record Save/Load     //
 //////////////////////////////////
+//
+// The adjacency-list bytes are streamed to a side-car file (`graph.bin`) via the
+// existing `save_direct` / `load_direct` helpers; the manifest itself only carries the
+// resulting [`diskann_record::save::Handle`] under the `"graph"` key.
 
 /// On-disk filename used for the adjacency-list blob inside the manifest directory.
 const GRAPH_ARTIFACT: &str = "graph.bin";

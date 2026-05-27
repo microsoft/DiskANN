@@ -3,10 +3,26 @@
  * Licensed under the MIT license.
  */
 
+//! Save-side context and side-car writer.
+//!
+//! [`Context`] is the cheap handle handed to every [`super::Save::save`] impl. It owns
+//! nothing visible to the user; cloning it is free, and it can be passed to children to
+//! propagate the same artifact-tracking state.
+//!
+//! [`Writer`] is the borrowed side-car artifact handle returned by [`Context::write`].
+//! It implements [`std::io::Write`] and [`std::io::Seek`]; calling
+//! [`Writer::finish`] flushes the buffer and yields a [`Handle`] that can be inserted
+//! into a [`super::Record`].
+
 use std::{collections::HashSet, fs::File, io::BufWriter, path::PathBuf, sync::Mutex};
 
 use crate::save::{Error, Handle, Result, Value};
 
+/// The owned context behind a [`Context`].
+///
+/// Holds the manifest directory, the manifest path, and the set of artifact file names
+/// registered so far. Lookup and insertion go through a [`Mutex`] so that concurrent
+/// [`Save`](super::Save) impls cannot accidentally hand out the same artifact name twice.
 #[derive(Debug)]
 pub(super) struct ContextInner {
     dir: PathBuf,
@@ -57,6 +73,11 @@ impl ContextInner {
         })
     }
 
+    /// Finalize the manifest.
+    ///
+    /// Writes the manifest JSON atomically: serializes to a `<metadata>.temp` file first,
+    /// then renames it into place. Fails if the temp file already exists (an in-flight
+    /// save is in progress, or a previous run aborted between rename steps).
     pub fn finish(self, value: Value<'_>) -> Result<()> {
         let temp = format!("{}.temp", self.metadata.display());
         if std::path::Path::new(&temp).exists() {
@@ -91,17 +112,38 @@ impl ContextInner {
     }
 }
 
+/// A cheap, clonable handle threaded through every [`Save::save`](super::Save) impl.
+///
+/// `Context` exposes one operation — [`Context::write`] — for allocating a side-car
+/// artifact. The same context is passed to nested [`Save`](super::Save) impls (typically
+/// via the [`save_fields!`](crate::save_fields) macro), so a single save tree shares
+/// artifact-name bookkeeping.
 #[derive(Debug, Clone)]
 pub struct Context<'a> {
     inner: &'a ContextInner,
 }
 
 impl<'a> Context<'a> {
+    /// Allocate a new side-car artifact named `key` in the manifest directory.
+    ///
+    /// The returned [`Writer`] is positioned at offset 0 and implements
+    /// [`std::io::Write`] / [`std::io::Seek`]. Call [`Writer::finish`] to obtain a
+    /// [`Handle`] that may be inserted into a [`Record`](super::Record).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if `key` has already been registered with this context (names
+    /// must be unique within a single save), or if the underlying file cannot be created
+    /// (e.g. because the artifact already exists on disk).
     pub fn write(&self, key: &str) -> Result<Writer<'_>> {
         self.inner.write(key)
     }
 }
 
+/// A borrowed side-car artifact writer produced by [`Context::write`].
+///
+/// Implements [`std::io::Write`] and [`std::io::Seek`]. Writes are buffered; calling
+/// [`Writer::finish`] flushes the buffer, closes the file, and returns a [`Handle`].
 #[derive(Debug)]
 pub struct Writer<'a> {
     io: BufWriter<File>,
@@ -110,6 +152,11 @@ pub struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    /// Flush and close the writer, returning a [`Handle`] for the artifact.
+    ///
+    /// Insert the returned handle into a [`Record`](super::Record) (typically via
+    /// [`Record::insert`](super::Record::insert)) so that load-side code can locate the
+    /// artifact through the manifest.
     pub fn finish(self) -> Result<Handle> {
         // NOTE: self.io.into_inner() will flush the buffer and close the file.
         self.io

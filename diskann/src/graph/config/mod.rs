@@ -698,6 +698,12 @@ impl Builder {
 //////////////////////////////////
 // diskann-record Save/Load     //
 //////////////////////////////////
+//
+// `Config` and its component enums (`PruneKind`, `IntraBatchCandidates`) are persisted
+// as plain records. Enum variant names live in `const` strings (`PRUNE_KIND_*`,
+// `INTRA_BATCH_*`) rather than being derived from the Rust identifiers, so renaming a
+// variant in the source does not silently change the wire format. Such a change
+// must bump the saved version or old manifests will fail to load.
 
 /// Stable wire names for [`PruneKind`] variants.
 const PRUNE_KIND_TRIANGLE_INEQUALITY: &str = "TriangleInequality";

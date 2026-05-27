@@ -75,6 +75,9 @@ impl InsertRetry {
 //////////////////////////////////
 // diskann-record Save/Load     //
 //////////////////////////////////
+//
+// [`InsertRetry`] is a small, all-scalar config record. Persisted by name; no side-car
+// artifacts are needed.
 
 impl diskann_record::save::Save for InsertRetry {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);

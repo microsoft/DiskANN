@@ -3,8 +3,16 @@
  * Licensed under the MIT license.
  */
 
+//! Load-side error type and classification.
+//!
+//! The [`Error`] type wraps [`anyhow::Error`] for rich diagnostics and carries a
+//! recoverable / critical bit used by probing call sites. The [`Kind`] enum enumerates
+//! the well-known structural failure modes; [`Kind::is_recoverable`] is the canonical
+//! source of truth for the recoverable / critical classification.
+
 use std::fmt::{Debug, Display};
 
+/// A specialized [`std::result::Result`] for load-side operations.
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 /// Load-side error.
@@ -98,12 +106,29 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Well-known classes of load-side failure.
+///
+/// Used in two roles:
+///
+/// * As the source of an [`Error`] via `From<Kind>` (and the matching `From<Kind>` for
+///   [`Error`] which classifies recoverable / critical according to
+///   [`Kind::is_recoverable`]).
+/// * As a probe value in error chains — high-level callers can introspect the kind to
+///   decide whether to try a fallback loader.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Kind {
+    /// The manifest's `$version` does not match the loader's expected
+    /// [`Load::VERSION`](crate::load::Load::VERSION).
     VersionMismatch,
+    /// A required field is absent from the record.
     MissingField,
+    /// The shape of the saved value does not match what the loader expected (e.g. found
+    /// an array where an object was needed).
     TypeMismatch,
+    /// The manifest's version is recognized as not matching the current schema, and the
+    /// type's [`Load::load_legacy`](crate::load::Load::load_legacy) has no upgrade path
+    /// for it.
     UnknownVersion,
     /// The variant tag read from the wire format does not match any known
     /// variant of the target enum.
@@ -117,6 +142,8 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Stable, human-readable description of this kind. Used as the default error
+    /// message when constructing an [`Error`] from a `Kind`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::VersionMismatch => "version mismatch",

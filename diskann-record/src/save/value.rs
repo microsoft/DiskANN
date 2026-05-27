@@ -3,6 +3,22 @@
  * Licensed under the MIT license.
  */
 
+//! Wire-level value types used in the on-disk manifest.
+//!
+//! Every saveable field is one of:
+//!
+//! * [`Value::Null`] / [`Value::Bool`] / [`Value::Number`] / [`Value::String`] /
+//!   [`Value::Bytes`] — primitive scalars.
+//! * [`Value::Array`] — a homogeneous sequence (used by `Vec<T>` and `&[T]`).
+//! * [`Value::Object`] — a [`Versioned`] [`Record`] (the canonical encoding for a
+//!   `T: super::Save`).
+//! * [`Value::Handle`] — a reference to a side-car artifact (produced by
+//!   [`super::Context::write`] + [`super::context::Writer::finish`]).
+//!
+//! Most user code never touches these enums directly: [`super::Saveable`] impls turn
+//! Rust values into [`Value`]s, and the [`save_fields!`](crate::save_fields) macro
+//! assembles the surrounding [`Record`].
+
 use std::{borrow::Cow, collections::HashMap};
 
 use serde::{
@@ -13,6 +29,11 @@ use serde::{
 
 use crate::{Number, Version, save::Error};
 
+/// The wire-level union of every saveable kind.
+///
+/// See the module-level docs for an overview of when each variant is produced. The
+/// borrowing parameter `'a` lets [`Value::String`], [`Value::Bytes`], and nested
+/// records reuse memory owned by the caller without copying.
 #[derive(Debug)]
 pub enum Value<'a> {
     Null,
@@ -161,6 +182,12 @@ impl From<Handle> for Value<'_> {
     }
 }
 
+/// A map of named [`Value`]s.
+///
+/// `Record` is the body of a saved object: each call to [`super::Save::save`] returns
+/// one, and [`Record::into_value`] wraps it as a [`Versioned`] [`Value::Object`] ready
+/// for insertion into another record. Keys beginning with `$` are reserved for
+/// framework metadata (see [`crate::is_reserved`]).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Record<'a> {
@@ -175,10 +202,12 @@ impl<'a> Record<'a> {
         }
     }
 
+    /// Returns `true` if a value is registered under `key`.
     pub fn contains_key(&self, key: &str) -> bool {
         self.record.contains_key(key)
     }
 
+    /// Look up the [`Value`] registered under `key`, if any.
     pub fn get(&self, key: &str) -> Option<&Value<'a>> {
         self.record.get(key)
     }
@@ -189,6 +218,7 @@ impl<'a> Record<'a> {
         self.record.len()
     }
 
+    /// Returns `true` if this record has no user keys.
     pub fn is_empty(&self) -> bool {
         self.record.is_empty()
     }
@@ -200,6 +230,12 @@ impl<'a> Record<'a> {
         }
     }
 
+    /// Insert `value` under `key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if `key` begins with `$`, which is reserved for the
+    /// save/load framework (see [`crate::is_reserved`]).
     pub fn insert<K, V>(&mut self, key: K, value: V) -> crate::save::Result<Option<Value<'a>>>
     where
         K: Into<Cow<'a, str>>,
@@ -252,6 +288,10 @@ impl<'a> FromIterator<(Cow<'a, str>, Value<'a>)> for Record<'a> {
     }
 }
 
+/// A [`Record`] paired with the schema [`Version`] used to produce it.
+///
+/// Serialized as a normal object plus a `$version` field on the wire. Constructed by
+/// [`Record::into_value`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Versioned<'a> {
     #[serde(flatten)]
@@ -274,6 +314,12 @@ impl<'a> Versioned<'a> {
     }
 }
 
+/// A reference to a side-car artifact in the manifest directory.
+///
+/// Produced by [`Writer::finish`](super::Writer::finish) after a side-car write completes and
+/// inserted into a [`Record`] like any other value. Serializes as `{"$handle": "<name>"}`
+/// on the wire; the load side rehydrates it through
+/// [`crate::load::Object::read`].
 #[derive(Debug, Clone)]
 pub struct Handle(String);
 

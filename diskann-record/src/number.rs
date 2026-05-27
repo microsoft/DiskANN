@@ -3,9 +3,22 @@
  * Licensed under the MIT license.
  */
 
+//! Lossless container for the on-wire numeric kinds (`u64`, `i64`, `f64`).
+//!
+//! [`Number`] is the value type produced by the manifest deserializer for every JSON
+//! number. The conversion accessors (`as_u32`, `as_i64`, etc.) attempt to narrow into a
+//! target Rust type and return `None` when the value is out of range or would lose
+//! precision; loaders surface this as [`crate::load::error::Kind::NumberOutOfRange`].
+
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// A numeric value carried in a manifest, preserving the kind the writer chose.
+///
+/// The wire format distinguishes unsigned, signed, and floating-point numbers; the
+/// deserializer preserves that distinction by selecting the matching variant. Use the
+/// narrowing accessors (e.g. [`Number::as_u32`], [`Number::as_f64`]) to extract a Rust
+/// value of the desired type.
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
     U64(u64),

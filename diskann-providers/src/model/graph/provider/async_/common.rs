@@ -469,6 +469,15 @@ impl Default for TestCallCount {
 //////////////////////////////////
 // diskann-record Save/Load     //
 //////////////////////////////////
+//
+// Persistence helpers for the small leaf types in this module.
+//
+// * [`StartPoints`] is a two-field range: persisted as `{ start, end }`.
+// * [`NoStore`] / [`NoDeletes`] are zero-sized marker types; their wire form is an
+//   empty versioned record so that loaders can still verify the schema version.
+// * [`PrefetchCacheLineLevel`] is encoded by its variant name (see
+//   `PREFETCH_CACHE_LINE_*`); renaming a Rust variant must bump the saved version or
+//   old manifests will fail to load.
 
 impl diskann_record::save::Save for StartPoints {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);

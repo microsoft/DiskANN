@@ -3,17 +3,48 @@
  * Licensed under the MIT license.
  */
 
+//! # Saving Records to Disk
+//!
+//! This module provides the writer-side of the framework. User types implement [`Save`]
+//! (or, for primitive-like leaves, [`Saveable`]) and obtain a [`Context`] from which they
+//! request side-car artifact writers and assemble a [`Record`] of named fields.
+//!
+//! The top-level entry point is [`save_to_disk`], which serializes a value into a
+//! caller-chosen directory plus a manifest path.
+//!
+//! # Building Records
+//!
+//! The [`save_fields!`](crate::save_fields) macro is the idiomatic way to build a record
+//! from a struct or destructured enum variant. It handles per-field error context and
+//! invokes [`Saveable::save`] on each value.
+//!
+//! # Side-Car Artifacts
+//!
+//! Binary blobs (e.g. vector buffers) are written to side-car files via
+//! [`Context::write`], which returns a [`Writer`](Context). The handle returned by
+//! [`Writer::finish`](context::Writer::finish) can be embedded into the record as a
+//! [`Handle`]; it serializes as a `$handle` reference and is rehydrated on the load side.
 mod value;
 pub use value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
-pub use context::Context;
+pub use context::{Context, Writer};
 
 mod error;
 pub use error::{Error, Result};
 
 use crate::Version;
 
+/// Serialize `x` to disk.
+///
+/// The manifest (a JSON document) is written atomically to `metadata`; any side-car
+/// artifacts the type's [`Save::save`] impl creates via [`Context::write`] are written
+/// into `dir`.
+///
+/// # Errors
+///
+/// Returns [`Error`] if the directory cannot be written to, if the manifest cannot be
+/// serialized, or if a user impl returns an error.
 pub fn save_to_disk<T>(
     x: &T,
     dir: impl AsRef<std::path::Path>,
@@ -27,18 +58,47 @@ where
     inner.finish(value)
 }
 
-/// Save objects!
+/// Implemented by user types that map to a versioned [`Record`].
 ///
-/// Enums are serialized by their [`Save::save`] impl returning a [`Record`] with a
-/// single user key whose name is the variant tag and whose value is the variant's
-/// payload. See the crate-level docs for examples.
+/// This is the primary trait for structured user types. A [`Save`] impl describes the
+/// versioned schema of `Self`: its associated [`VERSION`](Self::VERSION) is attached to
+/// the [`Record`] produced by [`Self::save`](Self::save).
+///
+/// # Enums
+///
+/// Enum types are encoded by returning a [`Record`] with a single user key whose name
+/// is the variant tag and whose value is the variant's payload (frequently
+/// [`Value::Null`] for unit variants). See the crate-level docs for a worked example.
 pub trait Save {
+    /// The schema version attached to records produced by this impl.
+    ///
+    /// Loaders compare this against the version stored in the manifest to decide
+    /// between [`Load::load`](crate::load::Load::load) and
+    /// [`Load::load_legacy`](crate::load::Load::load_legacy).
     const VERSION: Version;
+
+    /// Serialize `self` into a [`Record`].
+    ///
+    /// Use the supplied [`Context`] to request side-car artifact writers. Use the
+    /// [`save_fields!`](crate::save_fields) macro to populate the record.
     fn save(&self, context: Context<'_>) -> Result<Record<'_>>;
 }
 
-/// Save anything!
+/// Implemented by any value that can be written into a [`Value`].
+///
+/// This is the bottom of the trait hierarchy and is implemented for:
+///
+/// * Primitive numeric types (signed, unsigned, floats, `NonZero*`).
+/// * [`bool`], [`str`], [`String`], and [`Handle`].
+/// * [`Option<T>`] (serializes `None` as [`Value::Null`]).
+/// * `&[T]` and [`Vec<T>`] (serialize as [`Value::Array`]).
+/// * Any `T: Save` (wraps the produced record in [`Value::Object`] with the type's
+///   [`Save::VERSION`]).
+///
+/// Most user types should implement [`Save`] (which gets a [`Saveable`] impl for free
+/// via the blanket below) rather than [`Saveable`] directly.
 pub trait Saveable {
+    /// Serialize `self` into a [`Value`].
     fn save(&self, context: Context<'_>) -> Result<Value<'_>>;
 }
 
