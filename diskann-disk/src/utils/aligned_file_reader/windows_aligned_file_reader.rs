@@ -11,7 +11,7 @@ use diskann_platform::{
 };
 
 use super::traits::AlignedFileReader;
-use crate::utils::aligned_file_reader::AlignedRead;
+use crate::utils::aligned_file_reader::{AlignedRead, A512};
 
 pub const MAX_IO_CONCURRENCY: usize = 128;
 pub const IO_COMPLETION_TIMEOUT: DWORD = u32::MAX; // Infinite timeout.
@@ -53,8 +53,13 @@ impl WindowsAlignedFileReader {
 }
 
 impl AlignedFileReader for WindowsAlignedFileReader {
+    /// Overlapped/`FILE_FLAG_NO_BUFFERING` I/O requires the buffer pointer to
+    /// be aligned to the device sector size in memory (512 bytes on typical
+    /// Windows volumes).
+    type Alignment = A512;
+
     // Read the data from the file by sending concurrent io requests in batches.
-    fn read(&mut self, read_requests: &mut [AlignedRead<u8>]) -> ANNResult<()> {
+    fn read(&mut self, read_requests: &mut [AlignedRead<u8, A512>]) -> ANNResult<()> {
         let n_requests = read_requests.len();
         let n_batches = n_requests.div_ceil(MAX_IO_CONCURRENCY);
         let ctx = &self.io_context;
@@ -122,8 +127,8 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::utils::aligned_file_reader::AlignedRead;
-    use diskann_providers::common::AlignedBoxWithSlice;
+    use crate::utils::aligned_file_reader::{AlignedRead, A512};
+    use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
     fn test_index_path() -> String {
         test_data_root()
@@ -169,14 +174,13 @@ mod tests {
 
         let read_length = 512; // adjust according to your logic
         let num_read = 10;
-        let mut aligned_mem = AlignedBoxWithSlice::<u8>::new(read_length * num_read, 512).unwrap();
+        let mut aligned_mem =
+            Poly::broadcast(0u8, read_length * num_read, AlignedAllocator::A512).unwrap();
 
         // create and add AlignedReads to the vector
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
-        let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
+        let mut aligned_reads: Vec<AlignedRead<'_, u8, A512>> = mem_slices
             .iter_mut()
             .enumerate()
             .map(|(i, slice)| {
@@ -210,14 +214,12 @@ mod tests {
         let read_length = DEFAULT_DISK_SECTOR_LEN; // adjust according to your logic
         let num_sector = 10;
         let mut aligned_mem =
-            AlignedBoxWithSlice::<u8>::new(read_length * num_sector, 512).unwrap();
+            Poly::broadcast(0u8, read_length * num_sector, AlignedAllocator::A512).unwrap();
 
         // Each slice will be used as the buffer for a read request of a sector.
-        let mut mem_slices = aligned_mem
-            .split_into_nonoverlapping_mut_slices(0..aligned_mem.len(), read_length)
-            .unwrap();
+        let mut mem_slices: Vec<&mut [u8]> = aligned_mem.chunks_mut(read_length).collect();
 
-        let mut aligned_reads: Vec<AlignedRead<'_, u8>> = mem_slices
+        let mut aligned_reads: Vec<AlignedRead<'_, u8, A512>> = mem_slices
             .iter_mut()
             .enumerate()
             .map(|(sector_id, slice)| {
@@ -312,7 +314,7 @@ mod tests {
     fn test_read_no_requests() {
         let mut reader = WindowsAlignedFileReader::new(&test_index_path()).unwrap();
 
-        let mut read_requests = Vec::<AlignedRead<u8>>::new();
+        let mut read_requests = Vec::<AlignedRead<u8, A512>>::new();
         let result = reader.read(&mut read_requests);
         assert!(result.is_ok());
     }

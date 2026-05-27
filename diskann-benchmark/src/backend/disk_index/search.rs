@@ -12,7 +12,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
-    data_model::CachingStrategy,
+    data_model::{AdHoc, CachingStrategy},
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
@@ -28,15 +28,15 @@ use diskann_providers::{
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
+    backend::disk_index::json_spancollector::JsonSpanCollector,
     inputs::disk::{DiskIndexLoad, DiskSearchPhase},
     utils::{datafiles, SimilarityMeasure},
 };
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskSearchStats {
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
@@ -49,7 +49,7 @@ pub(super) struct DiskSearchStats {
     span_metrics: serde_json::Value,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(super) struct DiskSearchResult {
     pub(super) search_l: u32,
     pub(super) qps: f32,
@@ -217,7 +217,7 @@ where
     let reader_factory = AlignedFileReaderFactory::new(disk_index_path);
     let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
+    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim
@@ -261,48 +261,51 @@ where
             .zip(statistics_vec.par_iter_mut())
             .zip(result_counts.par_iter_mut());
 
-        zipped.for_each_in_pool(&pool, |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-            let vector_filter = if search_params.vector_filters_file.is_none() {
-                None
-            } else {
-                Some(Box::new(move |vid: &u32| vf.contains(vid))
-                    as Box<dyn Fn(&u32) -> bool + Send + Sync>)
-            };
+        zipped.for_each_in_pool(
+            pool.as_ref(),
+            |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+                let vector_filter = if search_params.vector_filters_file.is_none() {
+                    None
+                } else {
+                    Some(Box::new(move |vid: &u32| vf.contains(vid))
+                        as Box<dyn Fn(&u32) -> bool + Send + Sync>)
+                };
 
-            match searcher.search(
-                q,
-                search_params.recall_at,
-                l,
-                Some(search_params.beam_width),
-                vector_filter,
-                search_params.is_flat_search,
-            ) {
-                Ok(search_result) => {
-                    *stats = search_result.stats.query_statistics;
-                    *rc = search_result.results.len() as u32;
-                    let actual_results = search_result
-                        .results
-                        .len()
-                        .min(search_params.recall_at as usize);
-                    for (i, result_item) in search_result
-                        .results
-                        .iter()
-                        .take(actual_results)
-                        .enumerate()
-                    {
-                        id_chunk[i] = result_item.vertex_id;
-                        dist_chunk[i] = result_item.distance;
+                match searcher.search(
+                    q,
+                    search_params.recall_at,
+                    l,
+                    Some(search_params.beam_width),
+                    vector_filter,
+                    search_params.is_flat_search,
+                ) {
+                    Ok(search_result) => {
+                        *stats = search_result.stats.query_statistics;
+                        *rc = search_result.results.len() as u32;
+                        let actual_results = search_result
+                            .results
+                            .len()
+                            .min(search_params.recall_at as usize);
+                        for (i, result_item) in search_result
+                            .results
+                            .iter()
+                            .take(actual_results)
+                            .enumerate()
+                        {
+                            id_chunk[i] = result_item.vertex_id;
+                            dist_chunk[i] = result_item.distance;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Search failed for query: {:?}", e);
+                        *rc = 0;
+                        id_chunk.fill(0);
+                        dist_chunk.fill(0.0);
+                        has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Search failed for query: {:?}", e);
-                    *rc = 0;
-                    id_chunk.fill(0);
-                    dist_chunk.fill(0.0);
-                    has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
-                }
-            }
-        });
+            },
+        );
         let total_time = start.elapsed();
 
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {

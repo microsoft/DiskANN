@@ -35,18 +35,15 @@ use thiserror::Error;
 use super::{GetFullPrecision, PassThrough, Rerank};
 use crate::{
     common::IgnoreLockPoison,
-    model::graph::{
-        provider::async_::{
-            FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
-            common::{
-                AlignedMemoryVectorStore, CreateVectorStore, NoStore, SetElementHelper,
-                TestCallCount, VectorStore,
-            },
-            distances::UnwrapErr,
-            inmem::{DefaultProvider, FullPrecisionProvider, FullPrecisionStore},
-            postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
+    model::graph::provider::async_::{
+        FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
+        common::{
+            AlignedMemoryVectorStore, CreateVectorStore, NoStore, SetElementHelper, TestCallCount,
+            VectorStore,
         },
-        traits::AdHoc,
+        distances::UnwrapErr,
+        inmem::{DefaultProvider, FullPrecisionProvider, FullPrecisionStore},
+        postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     utils::{Bridge, BridgeErr},
 };
@@ -323,7 +320,7 @@ where
     T: VectorRepr,
 {
     type Repr = T;
-    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<AdHoc<T>> {
+    fn as_full_precision(&self) -> &FastMemoryVectorProviderAsync<T> {
         &self.provider.base_vectors
     }
 }
@@ -617,7 +614,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer =
+    type DistanceComputer<'a> =
         UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
     type PruneAccessor<'a> = QuantAccessor<'a, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;

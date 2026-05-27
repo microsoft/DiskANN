@@ -16,10 +16,6 @@ use diskann_utils::{
     views::{Matrix, MatrixView},
 };
 
-use crate::utils::DatasetDto;
-
-const DEFAULT_BUF_SIZE: usize = 1024 * 1024;
-
 /// Load a list of vector ids from the stream.
 pub fn load_vector_ids<Reader: Read>(reader: &mut Reader) -> std::io::Result<(usize, Vec<u32>)> {
     // The first 4 bytes are the number of vector ids.
@@ -35,46 +31,6 @@ pub fn load_vector_ids<Reader: Read>(reader: &mut Reader) -> std::io::Result<(us
     }
 
     Ok((num_ids, ids))
-}
-
-/// Copies data from a reader into a dataset with alignment.
-/// This function reads vector data and aligns it within the given dataset.
-///
-/// # Arguments
-/// * `reader` - A mutable reference to a type implementing the `Read` trait, where the data is read from.
-/// * `dataset_dto` - Destination dataset DTO to which the data is copied. It must have the correct rounded dimension.
-/// * `pts_offset` - Offset of points. Data will be loaded after this point in the dataset.
-///
-/// # Returns
-/// * `npts` - Number of points read from the reader.
-/// * `dim` - Point dimension read from the reader.
-#[cfg(target_endian = "little")]
-pub fn copy_aligned_data<T: Default + bytemuck::Pod, Reader: Read>(
-    reader: &mut Reader,
-    dataset_dto: DatasetDto<T>,
-    pts_offset: usize,
-) -> std::io::Result<(usize, usize)> {
-    let mut reader = BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-
-    let metadata = Metadata::read(&mut reader)?;
-    let (npts, dim) = metadata.into_dims();
-    let rounded_dim = dataset_dto.rounded_dim;
-    let offset = pts_offset * rounded_dim;
-
-    for i in 0..npts {
-        let data_slice =
-            &mut dataset_dto.data[offset + i * rounded_dim..offset + i * rounded_dim + dim];
-
-        // Casting Pod type to bytes always succeeds (u8 has alignment of 1)
-        let byte_slice: &mut [u8] = bytemuck::must_cast_slice_mut(data_slice);
-        reader.read_exact(byte_slice)?;
-
-        let remaining = &mut dataset_dto.data
-            [offset + i * rounded_dim + dim..offset + i * rounded_dim + rounded_dim];
-        remaining.fill_with(Default::default);
-    }
-
-    Ok((npts, dim))
 }
 
 /// Load a list of type T data from a stream.
@@ -288,41 +244,5 @@ mod storage_util_test {
         assert_eq!(num_pts, metadata.npoints());
         assert_eq!(dims, metadata.ndims());
         assert_eq!(data, data_read);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use super::*;
-
-    #[test]
-    fn test_copy_aligned_data() -> std::io::Result<()> {
-        let mut data = Vec::with_capacity(24);
-        data.extend_from_slice(&(2_i32.to_le_bytes()));
-        data.extend_from_slice(&(2_i32.to_le_bytes()));
-        data.extend_from_slice(&(1_f32.to_le_bytes()));
-        data.extend_from_slice(&(2_f32.to_le_bytes()));
-        data.extend_from_slice(&(3_f32.to_le_bytes()));
-        data.extend_from_slice(&(4_f32.to_le_bytes()));
-
-        let mut reader = Cursor::new(data);
-
-        let rounded_dim = 4;
-        let mut aligned_data = vec![0f32; 2 * rounded_dim];
-        let dataset_dto = DatasetDto::<f32> {
-            data: &mut aligned_data,
-            rounded_dim,
-        };
-
-        let (npts, dim) = copy_aligned_data(&mut reader, dataset_dto, 0)?;
-
-        assert_eq!(npts, 2);
-        assert_eq!(dim, 2);
-
-        assert_eq!(aligned_data, vec![1.0, 2.0, 0.0, 0.0, 3.0, 4.0, 0.0, 0.0]);
-
-        Ok(())
     }
 }

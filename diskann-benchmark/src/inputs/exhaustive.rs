@@ -6,9 +6,7 @@
 use std::num::NonZeroUsize;
 
 use anyhow::{anyhow, Context};
-use diskann_benchmark_runner::{
-    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
-};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -31,15 +29,6 @@ as_input!(Spherical);
 as_input!(Product);
 as_input!(MinMax);
 
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<Spherical>()?;
-    registry.register::<Product>()?;
-    registry.register::<MinMax>()?;
-    Ok(())
-}
-
 ////////////
 // Search //
 ////////////
@@ -50,8 +39,8 @@ pub(crate) struct SearchValues {
     pub(crate) recall_n: Vec<usize>,
 }
 
-impl CheckDeserialization for SearchValues {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl SearchValues {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         // Ensure that both `recall_k` and `recall_n` are non-empty.
         if self.recall_k.is_empty() {
             return Err(anyhow!("field `recall_k` cannot be empty"));
@@ -105,12 +94,11 @@ pub(crate) struct SearchPhase {
     pub(crate) recalls: SearchValues,
 }
 
-impl CheckDeserialization for SearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-        self.groundtruth.check_deserialization(checker)?;
-        self.recalls.check_deserialization(checker)?;
+impl SearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        self.recalls.validate(checker)?;
         Ok(())
     }
 }
@@ -228,14 +216,12 @@ impl Product {
     pub(crate) const fn tag() -> &'static str {
         "exhaustive-product-quantization"
     }
-}
 
-impl CheckDeserialization for Product {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.data.check_deserialization(checker)?;
-        self.search.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.data.resolve(checker)?;
+        self.search.validate(checker)?;
 
-        // Chcck that provided data type is compatible with `f32`.
+        // Check that provided data type is compatible with `f32`.
         f32::check_converting_load(self.data_type)?;
 
         let num_centers = self.num_pq_centers.get();
@@ -377,8 +363,8 @@ impl std::fmt::Display for PreScale {
     }
 }
 
-impl CheckDeserialization for PreScale {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
+impl PreScale {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
         if let Self::Some(v) = self {
             if *v <= 0.0 {
                 anyhow::bail!("pre-scaling {} must be positive", v);
@@ -410,12 +396,10 @@ impl Spherical {
     pub(crate) const fn tag() -> &'static str {
         "exhaustive-spherical-quantization"
     }
-}
 
-impl CheckDeserialization for Spherical {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.data.check_deserialization(checker)?;
-        self.search.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.data.resolve(checker)?;
+        self.search.validate(checker)?;
 
         // Chcck that provided data type is compatible with `f32`.
         f32::check_converting_load(self.data_type)?;
@@ -431,7 +415,7 @@ impl CheckDeserialization for Spherical {
             })?;
         }
 
-        self.pre_scale.check_deserialization(checker)?;
+        self.pre_scale.validate(checker)?;
         Ok(())
     }
 }
@@ -482,6 +466,7 @@ impl std::fmt::Display for Spherical {
 pub(crate) enum MinMaxQuery {
     SameAsData,
     FullPrecision,
+    EightBit,
 }
 
 impl std::fmt::Display for MinMaxQuery {
@@ -489,6 +474,7 @@ impl std::fmt::Display for MinMaxQuery {
         let st = match self {
             Self::SameAsData => "same_as_data",
             Self::FullPrecision => "full_precision",
+            Self::EightBit => "eight_bit",
         };
         write!(f, "{}", st)
     }
@@ -511,12 +497,10 @@ impl MinMax {
     pub(crate) const fn tag() -> &'static str {
         "exhaustive-minmax-quantization"
     }
-}
 
-impl CheckDeserialization for MinMax {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.data.check_deserialization(checker)?;
-        self.search.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.data.resolve(checker)?;
+        self.search.validate(checker)?;
 
         // Chcck that provided data type is compatible with `f32`.
         f32::check_converting_load(self.data_type)?;
@@ -541,7 +525,11 @@ impl Example for MinMax {
             data_type: DataType::Float32,
             distance: SimilarityMeasure::SquaredL2,
             search: SearchPhase::example(),
-            query_layouts: vec![MinMaxQuery::SameAsData, MinMaxQuery::FullPrecision],
+            query_layouts: vec![
+                MinMaxQuery::SameAsData,
+                MinMaxQuery::FullPrecision,
+                MinMaxQuery::EightBit,
+            ],
             num_bits: NUM_BITS,
             transform_kind: TransformKind::DoubleHadamard(TargetDim::Same),
             seed: 0x6cae32c479ac3407,

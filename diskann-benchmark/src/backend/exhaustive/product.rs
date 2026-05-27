@@ -3,18 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
 crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register::<imp::ProductQ<'static>>(NAME);
+    registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, benchmarks)
+    imp::register(NAME, registry)?;
+
+    Ok(())
 }
 
 //////////////
@@ -26,8 +28,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        describeln,
-        dispatcher::{FailureScore, MatchScore},
+        benchmark::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -65,18 +66,16 @@ mod imp {
     }
 
     /// The dispatcher target for `spherical-quantization` operations.
-    pub(super) struct ProductQ<'a> {
-        input: &'a inputs::exhaustive::Product,
-    }
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct ProductQ;
 
-    impl<'a> ProductQ<'a> {
-        pub(super) fn new(input: &'a inputs::exhaustive::Product) -> Self {
-            Self { input }
-        }
-
-        pub(super) fn run(self, mut output: &mut dyn Output) -> anyhow::Result<Results> {
-            let input = &self.input;
-            writeln!(output, "{}", self.input)?;
+    impl ProductQ {
+        pub(super) fn run(
+            &self,
+            input: &inputs::exhaustive::Product,
+            mut output: &mut dyn Output,
+        ) -> anyhow::Result<Results> {
+            writeln!(output, "{}", input)?;
 
             // Training
             let data = f32::converting_load(datafiles::BinFile(&input.data), input.data_type)?;
@@ -87,10 +86,10 @@ mod imp {
                 5,
             );
 
-            let offsets = diskann_providers::model::pq::calculate_chunk_offsets_auto(
-                data.ncols(),
-                input.num_pq_chunks.get(),
-            );
+            let dim = std::num::NonZeroUsize::new(data.ncols())
+                .ok_or_else(|| anyhow::anyhow!("data has zero columns"))?;
+            let offsets =
+                diskann_quantization::views::ChunkOffsets::partition(dim, input.num_pq_chunks)?;
 
             let base = {
                 let threadpool = rayon::ThreadPoolBuilder::new()
@@ -99,7 +98,7 @@ mod imp {
                 threadpool.install(|| -> anyhow::Result<_> {
                     Ok(parameters.train(
                         data.as_view(),
-                        diskann_quantization::views::ChunkOffsetsView::new(offsets.as_slice())?,
+                        offsets.as_view(),
                         diskann_quantization::Parallelism::Rayon,
                         &diskann_quantization::random::StdRngBuilder::new(input.seed),
                         &diskann_quantization::cancel::DontCancel,
@@ -110,9 +109,7 @@ mod imp {
             let quantizer = diskann_providers::model::pq::FixedChunkPQTable::new(
                 data.ncols(),
                 base.flatten().into(),
-                vec![0.0; data.ncols()].into(),
-                offsets.into(),
-                None,
+                offsets.as_slice().into(),
             )?;
 
             let training_time: MicroSeconds = start.elapsed().into();
@@ -138,7 +135,7 @@ mod imp {
                 f32::converting_load(datafiles::BinFile(&input.search.queries), input.data_type)?;
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), None)?;
 
             let search_progress =
                 make_progress_bar("running search", queries.nrows(), output.draw_target())?;
@@ -191,31 +188,36 @@ mod imp {
         }
     }
 
-    impl Benchmark for ProductQ<'static> {
+    impl Benchmark for ProductQ {
         type Input = inputs::exhaustive::Product;
         type Output = Results;
 
-        fn try_match(_input: &inputs::exhaustive::Product) -> Result<MatchScore, FailureScore> {
+        fn try_match(
+            &self,
+            _input: &inputs::exhaustive::Product,
+        ) -> Result<MatchScore, FailureScore> {
             Ok(MatchScore(0))
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&inputs::exhaustive::Product>,
         ) -> std::fmt::Result {
             if input.is_none() {
-                describeln!(f, "- Exhaustive search for product quantization",)?;
-                describeln!(f, "- Requires `float32` data")?;
+                writeln!(f, "- Exhaustive search for product quantization",)?;
+                writeln!(f, "- Requires `float32` data")?;
             }
             Ok(())
         }
 
         fn run(
+            &self,
             input: &inputs::exhaustive::Product,
             _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
             output: &mut dyn Output,
         ) -> anyhow::Result<Results> {
-            ProductQ::new(input).run(output)
+            self.run(input, output)
         }
     }
 

@@ -10,10 +10,7 @@ use diskann_utils::Reborrow;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{
-    QueryComputer,
-    dynamic::{DistanceComputerConstructionError, VTable},
-};
+use super::{QueryComputer, dynamic::VTable};
 use crate::model::FixedChunkPQTable;
 
 pub trait PQVersion: Eq + Copy {}
@@ -192,27 +189,11 @@ where
 {
     /// Construct a `MultiDistanceComputer` from the provided table implementing the
     /// requested metric.
-    pub fn new(
-        table: MultiTable<T, I>,
-        metric: Metric,
-    ) -> Result<Self, DistanceComputerConstructionError> {
-        // Check if OPQ is used. If so, we cannot correctly perform distance computations.
-        match &table {
-            MultiTable::One { table, .. } => {
-                if table.has_opq() {
-                    return Err(DistanceComputerConstructionError::OPQNotSupported);
-                }
-            }
-            MultiTable::Two { new, old, .. } => {
-                if new.has_opq() || old.has_opq() {
-                    return Err(DistanceComputerConstructionError::OPQNotSupported);
-                }
-            }
-        };
-        Ok(Self {
+    pub fn new(table: MultiTable<T, I>, metric: Metric) -> Self {
+        Self {
             table,
             vtable: VTable::new(metric),
-        })
+        }
     }
 
     /// Return the versions associated with the tables in this schema.
@@ -389,10 +370,7 @@ where
     I: PQVersion,
 {
     /// Construct a new `MultiQueryComputer` with the requested metric and query.
-    pub fn new<U>(table: MultiTable<T, I>, metric: Metric, query: &[U]) -> ANNResult<Self>
-    where
-        U: Into<f32> + Copy,
-    {
+    pub fn new(table: MultiTable<T, I>, metric: Metric, query: &[f32]) -> ANNResult<Self> {
         let s = match table {
             MultiTable::One { table, version } => Self::One {
                 computer: { QueryComputer::new(table, metric, query, None)? },
@@ -484,11 +462,9 @@ where
 /// get sent to the right location and that the error handling is correct.
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use approx::assert_relative_eq;
     use diskann::utils::{IntoUsize, VectorRepr};
-    use diskann_vector::{Half, PreprocessedDistanceFunction};
+    use diskann_vector::PreprocessedDistanceFunction;
     use rand::{Rng, SeedableRng, distr::Distribution};
     use rstest::rstest;
 
@@ -496,13 +472,6 @@ mod tests {
         super::test_utils::{self, TestDistribution},
         *,
     };
-
-    fn to_f32<T>(x: &[T]) -> Vec<f32>
-    where
-        T: Into<f32> + Copy,
-    {
-        x.iter().map(|i| (*i).into()).collect()
-    }
 
     /////////////////////////
     // Versioned PQ Vector //
@@ -549,7 +518,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new = test_utils::seed_pivot_table(config);
@@ -600,7 +568,7 @@ mod tests {
                 config.start_value,
             );
 
-            let expected = reference.evaluate_similarity(&expected0, &expected1);
+            let expected = reference.evaluate_similarity(&*expected0, &*expected1);
 
             // Test full-precision/quant.
             let got = computer
@@ -654,7 +622,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -666,7 +633,7 @@ mod tests {
         assert_eq!(*n, version);
         assert!(o.is_none());
 
-        let computer = MultiDistanceComputer::new(multi_table, metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table, metric);
 
         test_distance_computer_multi_with_one(
             &computer,
@@ -720,9 +687,9 @@ mod tests {
             );
 
             // Generate reference results.
-            let oo = reference.evaluate_similarity(&old_expected, &old_expected);
-            let nn = reference.evaluate_similarity(&new_expected, &new_expected);
-            let on = reference.evaluate_similarity(&old_expected, &new_expected);
+            let oo = reference.evaluate_similarity(&*old_expected, &*old_expected);
+            let nn = reference.evaluate_similarity(&*new_expected, &*new_expected);
+            let on = reference.evaluate_similarity(&*old_expected, &*new_expected);
 
             // Quant + Quant
             {
@@ -818,7 +785,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new_config = test_utils::TableConfig {
@@ -826,7 +792,6 @@ mod tests {
             pq_chunks: 5,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let new = test_utils::seed_pivot_table(new_config);
@@ -840,7 +805,7 @@ mod tests {
         assert_eq!(*n, new_version);
         assert_eq!(*o.unwrap(), old_version);
 
-        let computer = MultiDistanceComputer::new(multi_table.clone(), metric).unwrap();
+        let computer = MultiDistanceComputer::new(multi_table.clone(), metric);
         test_distance_computer_multi_with_two(
             &computer,
             &new,
@@ -851,56 +816,6 @@ mod tests {
             100,
             &mut rng,
         );
-    }
-
-    ///////////////////////////////////////////
-    // Distance Computer Construction Errors //
-    ///////////////////////////////////////////
-
-    #[rstest]
-    fn test_multi_distance_computer_opq_error(
-        #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) {
-        let config_with_opq = test_utils::TableConfig {
-            dim: 17,
-            pq_chunks: 4,
-            num_pivots: 20,
-            start_value: 10.0,
-            use_opq: true,
-        };
-
-        let config = test_utils::TableConfig {
-            dim: 17,
-            pq_chunks: 4,
-            num_pivots: 20,
-            start_value: 10.0,
-            use_opq: false,
-        };
-
-        let expected_err = (DistanceComputerConstructionError::OPQNotSupported).to_string();
-        let table_with_opq = test_utils::seed_pivot_table(config_with_opq);
-        let table = test_utils::seed_pivot_table(config);
-
-        let schema = MultiTable::one(&table_with_opq, 0);
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        // Try all combinations of tables with OPQ.
-        let schema = MultiTable::two(&table_with_opq, &table, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        let schema = MultiTable::two(&table, &table_with_opq, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
-
-        let schema = MultiTable::two(&table_with_opq, &table_with_opq, 0, 1).unwrap();
-        let result = MultiDistanceComputer::new(schema, metric);
-        assert!(result.is_err(), "expected OPQ to not be supported");
-        assert_eq!(result.unwrap_err().to_string(), expected_err);
     }
 
     ////////////////////////////////
@@ -940,8 +855,8 @@ mod tests {
         );
     }
 
-    fn test_query_computer_multi_with_one<'a, T, R>(
-        mut create: impl FnMut(usize, &[T]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+    fn test_query_computer_multi_with_one<'a, R>(
+        mut create: impl FnMut(usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         table: &'a FixedChunkPQTable,
         config: &test_utils::TableConfig,
         reference: &<f32 as VectorRepr>::Distance,
@@ -949,19 +864,17 @@ mod tests {
         rng: &mut R,
         errors: test_utils::RelativeAndAbsolute,
     ) where
-        T: Into<f32> + TestDistribution,
         R: Rng,
     {
         let standard = rand::distr::StandardUniform {};
         for _ in 0..num_trials {
-            let input: Vec<T> = T::generate(config.dim, rng);
-            let input_f32 = to_f32(&input);
+            let input_f32: Vec<f32> = f32::generate(config.dim, rng);
 
             let version: u64 = standard.sample(rng);
             let version: usize = version.into_usize();
             let invalid_version = version.wrapping_add(1);
 
-            let computer = create(version, &input);
+            let computer = create(version, &input_f32);
 
             assert_eq!(
                 computer.versions(),
@@ -984,13 +897,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_query_computer_one<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<u8>, PhantomData::<i8>)]
-        _datatype: PhantomData<T>,
+    fn test_query_computer_one(
         #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    ) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0x6b53bef1bc26571e);
 
         let config = test_utils::TableConfig {
@@ -998,7 +907,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let table = test_utils::seed_pivot_table(config);
@@ -1009,7 +917,7 @@ mod tests {
             absolute: 0.0,
         };
 
-        let create = |version: usize, query: &[T]| {
+        let create = |version: usize, query: &[f32]| {
             let schema = MultiTable::one(&table, version);
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };
@@ -1029,8 +937,8 @@ mod tests {
     /////////////////////////////////
 
     #[allow(clippy::too_many_arguments)]
-    fn test_query_computer_multi_with_two<'a, T, R>(
-        create: impl Fn(usize, usize, &[T]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
+    fn test_query_computer_multi_with_two<'a, R>(
+        create: impl Fn(usize, usize, &[f32]) -> MultiQueryComputer<&'a FixedChunkPQTable, usize>,
         new: &'a FixedChunkPQTable,
         old: &'a FixedChunkPQTable,
         new_config: &test_utils::TableConfig,
@@ -1040,13 +948,11 @@ mod tests {
         rng: &mut R,
         errors: test_utils::RelativeAndAbsolute,
     ) where
-        T: Into<f32> + TestDistribution,
         R: Rng,
     {
         let standard = rand::distr::StandardUniform {};
         for _ in 0..num_trials {
-            let input: Vec<T> = T::generate(old_config.dim, rng);
-            let input_f32: Vec<f32> = to_f32(&input);
+            let input_f32: Vec<f32> = f32::generate(old_config.dim, rng);
 
             // Create a computer with two random versions.
             let old_version: u64 = standard.sample(rng);
@@ -1064,7 +970,7 @@ mod tests {
             let new_version = new_version.into_usize();
             let invalid_version = invalid_version.into_usize();
 
-            let computer = create(new_version, old_version, &input);
+            let computer = create(new_version, old_version, &input_f32);
 
             assert_eq!(
                 computer.versions(),
@@ -1113,13 +1019,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_query_computer_two<T>(
-        #[values(PhantomData::<f32>, PhantomData::<Half>, PhantomData::<u8>, PhantomData::<i8>)]
-        _datatype: PhantomData<T>,
+    fn test_query_computer_two(
         #[values(Metric::L2, Metric::InnerProduct, Metric::Cosine)] metric: Metric,
-    ) where
-        T: Into<f32> + TestDistribution,
-    {
+    ) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0xc8da1164a88cef0f);
 
         let old_config = test_utils::TableConfig {
@@ -1127,7 +1029,6 @@ mod tests {
             pq_chunks: 4,
             num_pivots: 20,
             start_value: 10.0,
-            use_opq: false,
         };
 
         let new_config = test_utils::TableConfig {
@@ -1135,14 +1036,13 @@ mod tests {
             pq_chunks: 5,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let old = test_utils::seed_pivot_table(old_config);
         let new = test_utils::seed_pivot_table(new_config);
         let num_trials = 20;
 
-        let create = |new_version: usize, old_version: usize, query: &[T]| {
+        let create = |new_version: usize, old_version: usize, query: &[f32]| {
             let schema = MultiTable::two(&new, &old, new_version, old_version).unwrap();
             MultiQueryComputer::new(schema, metric, query).unwrap()
         };

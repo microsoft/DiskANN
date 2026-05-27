@@ -58,15 +58,12 @@ pub(crate) fn simplified_builder(
     Ok((config, params))
 }
 
-pub fn train_pq<Pool>(
+pub fn train_pq(
     data: diskann_utils::views::MatrixView<f32>,
     num_pq_chunks: usize,
     rng: &mut dyn rand::RngCore,
-    pool: Pool,
-) -> ANNResult<model::pq::FixedChunkPQTable>
-where
-    Pool: crate::utils::AsThreadPool,
-{
+    pool: crate::utils::RayonThreadPoolRef<'_>,
+) -> ANNResult<model::pq::FixedChunkPQTable> {
     let dim = data.ncols();
     let pivot_args = model::GeneratePivotArguments::new(
         data.nrows(),
@@ -74,16 +71,13 @@ where
         model::pq::NUM_PQ_CENTROIDS,
         num_pq_chunks,
         5,
-        false,
     )?;
-    let mut centroid = vec![0.0; dim];
     let mut offsets = vec![0; num_pq_chunks + 1];
     let mut full_pivot_data = vec![0.0; model::pq::NUM_PQ_CENTROIDS * dim];
 
     model::pq::generate_pq_pivots_from_membuf(
         &pivot_args,
         data.as_slice(),
-        &mut centroid,
         &mut offsets,
         &mut full_pivot_data,
         rng,
@@ -91,13 +85,7 @@ where
         pool,
     )?;
 
-    model::pq::FixedChunkPQTable::new(
-        dim,
-        full_pivot_data.into(),
-        centroid.into(),
-        offsets.into(),
-        None,
-    )
+    model::pq::FixedChunkPQTable::new(dim, full_pivot_data.into(), offsets.into())
 }
 
 pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
@@ -164,23 +152,23 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use std::{
-        collections::HashSet,
         marker::PhantomData,
         num::{NonZeroU32, NonZeroUsize},
-        sync::{Arc, Mutex},
+        sync::Arc,
     };
 
     use crate::storage::VirtualStorageProvider;
+    use diskann::graph::test::synthetic::Grid;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
+            self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
             glue::{
                 DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
                 SearchStrategy,
             },
-            index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
-            search::{Knn, Range},
+            index::QueryLabelProvider,
+            search::Range,
             search_output_buffer,
         },
         neighbor::Neighbor,
@@ -213,7 +201,7 @@ pub(crate) mod tests {
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
+        utils::{VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -284,6 +272,17 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn grid_from_dim(dim: usize) -> Grid {
+        Grid::from_dim(dim)
+            .unwrap_or_else(|| panic!("{dim}-dimensions is not supported for grid-generation"))
+    }
+
+    fn grid_to_vecs<T: Clone>(matrix: &Matrix<T>) -> Vec<Vec<T>> {
+        (0..matrix.nrows())
+            .map(|i| matrix.row(i).to_vec())
+            .collect()
+    }
+
     // Grid generators for different types //
     pub(crate) trait GenerateGrid: Sized {
         /// Generate a synthetic dataset that is a hypercube of point beginning at the
@@ -301,34 +300,19 @@ pub(crate) mod tests {
 
     impl GenerateGrid for f32 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_f32(size as u32),
-                3 => utils::generate_3d_grid_vectors_f32(size as u32),
-                4 => utils::generate_4d_grid_vectors_f32(size as u32),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data(size))
         }
     }
 
     impl GenerateGrid for i8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_i8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_i8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_i8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| i8::try_from(v).unwrap()))
         }
     }
 
     impl GenerateGrid for u8 {
         fn generate_grid(dim: usize, size: usize) -> Vec<Vec<Self>> {
-            match dim {
-                1 => utils::generate_1d_grid_vectors_u8(size.try_into().unwrap()),
-                3 => utils::generate_3d_grid_vectors_u8(size.try_into().unwrap()),
-                4 => utils::generate_4d_grid_vectors_u8(size.try_into().unwrap()),
-                _ => panic!("{}-dimensions is not support for grid-generation", size),
-            }
+            grid_to_vecs(&grid_from_dim(dim).data_as(size, |v| u8::try_from(v).unwrap()))
         }
     }
 
@@ -387,54 +371,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Check the contents of a single search for the query.
-    ///
-    /// # Arguments
-    async fn test_multihop_search<DP, S, Q, Checker>(
-        index: &DiskANNIndex<DP>,
-        parameters: &SearchParameters<DP::Context>,
-        strategy: &S,
-        query: Q,
-        mut checker: Checker,
-        filter: &dyn QueryLabelProvider<DP::InternalId>,
-    ) where
-        DP: DataProvider<InternalId = u32>,
-        S: DefaultSearchStrategy<DP, Q>,
-        Q: Copy + std::fmt::Debug + Send + Sync,
-        Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
-    {
-        let mut ids = vec![0; parameters.search_k];
-        let mut distances = vec![0.0; parameters.search_k];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        let search_params = Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, filter);
-        index
-            .search(
-                multihop,
-                strategy,
-                &parameters.context,
-                query,
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        // Loop over the requested number of results to check, invoking the checker closure.
-        //
-        // If the checker closure detects an error, embed that error in a more descriptive
-        // formatted panic.
-        for i in 0..parameters.to_check {
-            println!("{ids:?}");
-            if let Err(message) = checker(i, (ids[i], distances[i])) {
-                panic!(
-                    "Check failed for result {} with error: {}. Query = {:?}. Result: ({}, {})",
-                    i, message, query, ids[i], distances[i]
-                );
-            }
-        }
-    }
-
     async fn test_paged_search<DP, S, Q>(
         index: &DiskANNIndex<DP>,
         strategy: S,
@@ -448,25 +384,16 @@ pub(crate) mod tests {
         Q: Copy + std::fmt::Debug + Send + Sync,
     {
         assert!(max_candidates <= groundtruth.len());
-        let mut state = index
-            .start_paged_search(strategy, &parameters.context, query, parameters.search_l)
+        let mut search = index
+            .paged_search(strategy, &parameters.context, query, parameters.search_l)
             .await
             .unwrap();
 
-        let mut buffer = vec![Neighbor::<u32>::default(); parameters.search_k];
         let mut iter = 0;
         let mut seen = 0;
         while !groundtruth.is_empty() {
-            let count = index
-                .next_search_results::<S, Q>(
-                    &parameters.context,
-                    &mut state,
-                    parameters.search_k,
-                    &mut buffer,
-                )
-                .await
-                .unwrap();
-            for (i, b) in buffer.iter().enumerate().take(count) {
+            let page = search.next_page(parameters.search_k).await.unwrap();
+            for (i, b) in page.iter().enumerate() {
                 let m = is_match(groundtruth, *b, 0.01);
                 match m {
                     None => {
@@ -481,7 +408,7 @@ pub(crate) mod tests {
                             b,
                             iter,
                             i,
-                            &buffer[i..],
+                            &page[i..],
                         );
                     }
                     Some(j) => groundtruth.remove(j),
@@ -662,12 +589,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = match dim {
-            1 => utils::generate_1d_grid_adj_list(grid_size as u32),
-            3 => utils::genererate_3d_grid_adj_list(grid_size as u32),
-            4 => utils::generate_4d_grid_adj_list(grid_size as u32),
-            _ => panic!("Unsupported number of dimensions"),
-        };
+        let mut adjacency_lists = grid_from_dim(dim).neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -681,7 +603,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -778,7 +700,7 @@ pub(crate) mod tests {
             matrix.map(|i| (*i).into()).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -950,7 +872,13 @@ pub(crate) mod tests {
         let data = T::generate_spherical(num, dim, radius, rng);
         let table = {
             let train_data: diskann_utils::views::Matrix<f32> = squish(data.iter(), dim);
-            train_pq(train_data.as_view(), 2.min(dim), rng, 1usize).unwrap()
+            train_pq(
+                train_data.as_view(),
+                2.min(dim),
+                rng,
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
+            )
+            .unwrap()
         };
 
         let index = new_quant_index::<T, _, _>(config, params, table, NoDeletes).unwrap();
@@ -1116,7 +1044,7 @@ pub(crate) mod tests {
         let (config, parameters) =
             simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
 
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
+        let mut adjacency_lists = Grid::Three.neighbors(grid_size);
         let mut vectors = f32::generate_grid(dim, grid_size);
 
         assert_eq!(adjacency_lists.len(), num_points);
@@ -1130,7 +1058,7 @@ pub(crate) mod tests {
             squish(vectors.iter(), dim).as_view(),
             2.min(dim), // Number of PQ chunks is bounded by the dimension.
             &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -1217,684 +1145,9 @@ pub(crate) mod tests {
         test_beta_filtering(filter, 3, 7).await;
     }
 
-    /////////////////////////
-    // Multi-Hop Filtering //
-    /////////////////////////
-
-    async fn test_multihop_filtering(
-        filter: &dyn QueryLabelProvider<u32>,
-        dim: usize,
-        grid_size: usize,
-    ) {
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        assert_eq!(adjacency_lists.len(), num_points);
-        assert_eq!(vectors.len(), num_points);
-
-        // Append an additional item to the input vectors for the start point.
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim), // Number of PQ chunks is bounded by the dimension.
-            &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let corpus: diskann_utils::views::Matrix<f32> =
-            squish(vectors.iter().take(num_points), dim);
-        let query = vec![grid_size as f32; dim];
-
-        // The strategy we use here for checking is that we pull in a lot of neighbors and
-        // then walk through the list, verifying monotonicity and that the filter was
-        // applied properly.
-        let parameters = SearchParameters {
-            context: DefaultContext,
-            search_l: 40,
-            search_k: 20,
-            to_check: 20,
-        };
-
-        // Compute the raw groundtruth, then screen out any points that don't match the filter
-        let gt = {
-            let mut gt = groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
-            gt.retain(|n| filter.is_match(n.id));
-            gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
-            gt
-        };
-
-        // Clone the base groundtruth so we don't need to recompute every time.
-        let mut gt_clone = gt.clone();
-        let strategy = FullPrecision;
-
-        test_multihop_search(
-            &index,
-            &parameters,
-            &strategy.clone(),
-            query.as_slice(),
-            |_, (id, distance)| -> Result<(), Box<dyn std::fmt::Display>> {
-                if let Some(position) = is_match(&gt_clone, Neighbor::new(id, distance), 0.0) {
-                    gt_clone.remove(position);
-                    Ok(())
-                } else {
-                    if id.into_usize() == num_points + 1 {
-                        return Err(Box::new("The start point should not be returned"));
-                    }
-                    Err(Box::new("mismatch"))
-                }
-            },
-            filter,
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn test_even_filtering_multihop() {
-        test_multihop_filtering(&EvenFilter, 3, 7).await;
-    }
-
-    /// Metrics tracked by [`CallbackFilter`] for test validation.
-    #[derive(Debug, Clone, Default)]
-    struct CallbackMetrics {
-        /// Total number of callback invocations.
-        total_visits: usize,
-        /// Number of candidates that were rejected.
-        rejected_count: usize,
-        /// Number of candidates that had distance adjusted.
-        adjusted_count: usize,
-        /// All visited candidate IDs in order.
-        visited_ids: Vec<u32>,
-    }
-
-    #[derive(Debug)]
-    struct CallbackFilter {
-        blocked: u32,
-        adjusted: u32,
-        adjustment_factor: f32,
-        metrics: Mutex<CallbackMetrics>,
-    }
-
-    impl CallbackFilter {
-        fn new(blocked: u32, adjusted: u32, adjustment_factor: f32) -> Self {
-            Self {
-                blocked,
-                adjusted,
-                adjustment_factor,
-                metrics: Mutex::new(CallbackMetrics::default()),
-            }
-        }
-
-        fn hits(&self) -> Vec<u32> {
-            self.metrics
-                .lock()
-                .expect("callback metrics mutex should not be poisoned")
-                .visited_ids
-                .clone()
-        }
-
-        fn metrics(&self) -> CallbackMetrics {
-            self.metrics
-                .lock()
-                .expect("callback metrics mutex should not be poisoned")
-                .clone()
-        }
-    }
-
-    impl QueryLabelProvider<u32> for CallbackFilter {
-        fn is_match(&self, _: u32) -> bool {
-            true
-        }
-
-        fn on_visit(&self, neighbor: Neighbor<u32>) -> QueryVisitDecision<u32> {
-            let mut metrics = self
-                .metrics
-                .lock()
-                .expect("callback metrics mutex should not be poisoned");
-
-            metrics.total_visits += 1;
-            metrics.visited_ids.push(neighbor.id);
-
-            if neighbor.id == self.blocked {
-                metrics.rejected_count += 1;
-                return QueryVisitDecision::Reject;
-            }
-            if neighbor.id == self.adjusted {
-                metrics.adjusted_count += 1;
-                let adjusted =
-                    Neighbor::new(neighbor.id, neighbor.distance * self.adjustment_factor);
-                return QueryVisitDecision::Accept(adjusted);
-            }
-            QueryVisitDecision::Accept(neighbor)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_multihop_callback_enforces_filtering() {
-        // Test configuration
-        let dim = 3;
-        let grid_size: usize = 5;
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut create_rnd_from_seed_in_tests(0xdd81b895605c73d4),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let corpus: diskann_utils::views::Matrix<f32> =
-            squish(vectors.iter().take(num_points), dim);
-        let query = vec![grid_size as f32; dim];
-
-        let parameters = SearchParameters {
-            context: DefaultContext,
-            search_l: 40,
-            search_k: 20,
-            to_check: 10,
-        };
-
-        let mut ids = vec![0; parameters.search_k];
-        let mut distances = vec![0.0; parameters.search_k];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-        let blocked = (num_points - 2) as u32;
-        let adjusted = (num_points - 1) as u32;
-
-        // Compute baseline groundtruth for validation
-        let mut baseline_gt =
-            groundtruth(corpus.as_view(), &query, |a, b| SquaredL2::evaluate(a, b));
-        baseline_gt.sort_unstable_by(|a, b| a.cmp(b).reverse());
-
-        assert!(
-            baseline_gt.iter().any(|n| n.id == blocked),
-            "blocked candidate must exist in groundtruth"
-        );
-
-        let baseline_adjusted_distance = baseline_gt
-            .iter()
-            .find(|n| n.id == adjusted)
-            .expect("adjusted node should exist in groundtruth")
-            .distance;
-
-        let filter = CallbackFilter::new(blocked, adjusted, 0.5);
-
-        let search_params = Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
-        let stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &parameters.context,
-                query.as_slice(),
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        // Retrieve callback metrics for detailed validation
-        let callback_metrics = filter.metrics();
-
-        // Validate search statistics
-        assert!(
-            stats.result_count >= parameters.to_check as u32,
-            "expected at least {} results, got {}",
-            parameters.to_check,
-            stats.result_count
-        );
-
-        // Validate callback was invoked and tracked the blocked candidate
-        assert!(
-            callback_metrics.total_visits > 0,
-            "callback should have been invoked at least once"
-        );
-        assert!(
-            filter.hits().contains(&blocked),
-            "callback must evaluate the blocked candidate (visited {} candidates)",
-            callback_metrics.total_visits
-        );
-        assert_eq!(
-            callback_metrics.rejected_count, 1,
-            "exactly one candidate (blocked={}) should be rejected",
-            blocked
-        );
-
-        // Validate blocked candidate is excluded from results
-        let produced = stats.result_count as usize;
-        let inspected = produced.min(parameters.to_check);
-        assert!(
-            !ids.iter().take(inspected).any(|&id| id == blocked),
-            "blocked candidate {} should not appear in final results (found in: {:?})",
-            blocked,
-            &ids[..inspected]
-        );
-
-        // Validate distance adjustment was applied
-        assert!(
-            callback_metrics.adjusted_count >= 1,
-            "adjusted candidate {} should have been visited",
-            adjusted
-        );
-
-        let adjusted_idx = ids
-            .iter()
-            .take(inspected)
-            .position(|&id| id == adjusted)
-            .expect("adjusted candidate should be present in results");
-        let expected_distance = baseline_adjusted_distance * 0.5;
-        assert!(
-            (distances[adjusted_idx] - expected_distance).abs() < 1e-5,
-            "callback should adjust distances before ranking: \
-             expected {:.6}, got {:.6} (baseline: {:.6}, factor: 0.5)",
-            expected_distance,
-            distances[adjusted_idx],
-            baseline_adjusted_distance
-        );
-
-        // Log metrics for debugging/review
-        println!(
-            "test_multihop_callback_enforces_filtering metrics:\n\
-             - total callback visits: {}\n\
-             - rejected count: {}\n\
-             - adjusted count: {}\n\
-             - search hops: {}\n\
-             - search comparisons: {}\n\
-             - result count: {}",
-            callback_metrics.total_visits,
-            callback_metrics.rejected_count,
-            callback_metrics.adjusted_count,
-            stats.hops,
-            stats.cmps,
-            stats.result_count
-        );
-    }
-
     //////////////
     // Deletion //
     //////////////
-
-    async fn setup_inplace_delete_test() -> Arc<TestIndex> {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([2, 3]),
-            AdjacencyList::from_iter_untrusted([1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4]),
-            AdjacencyList::from_iter_untrusted([1, 3]),
-        ];
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        index
-    }
-
-    #[tokio::test]
-    async fn test_return_refs_to_deleted_vertex() {
-        let index = setup_inplace_delete_test().await;
-
-        // Expected outcome:
-        // * Index 0 is unchanged because it doesn't contain an edge to 1
-        // * Index 2's adjacency list should be changed to remove index 1.
-        // * Index 4's adjacency list should be changed to remove index 1.
-        //
-        // Indices 2 and 4 should be returned.
-
-        let candidates: Vec<u32> = vec![0, 2, 4];
-
-        let ret_list = index
-            .return_refs_to_deleted_vertex(&mut index.provider().neighbors(), 1, &candidates)
-            .await
-            .unwrap();
-
-        // Check that the return list contains only candidates 2 and 4.
-        assert_eq!(&ret_list, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_is_any_neighbor_deleted() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-        let mut neighbor_accessor = index.provider().neighbors();
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let ctx = DefaultContext;
-        populate_graph(&mut neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // expected outcome: adjacency lists 0, 1, 4 should return true
-        // adjacency lists 2, 3 should return false
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let msg = "Error in is_any_neighbor_deleted";
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 0))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 1))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 2))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            !(index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 3))
-                .await
-                .expect(msg)
-        );
-        assert!(
-            (index.is_any_neighbor_deleted(&ctx, neighbor_accessor, 4))
-                .await
-                .expect(msg)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_drop_deleted_neighbors() {
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        //build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        // FIXME: Provider an interface at the index level!.
-        index
-            .data_provider
-            .delete(&ctx, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        let drop_msg = "Error in drop_deleted_neighbors";
-        let adj_msg = "Error in get_neighbors";
-
-        // call drop_deleted_neighbors on vertex 0 with check_delete = false
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 0, false)
-            .await
-            .expect(drop_msg);
-
-        let mut list0 = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(0, &mut list0)
-            .await
-            .expect(adj_msg);
-        list0.sort();
-        assert_eq!(&*list0, &[1, 2]);
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is not dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_before_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_before_drop)
-            .await
-            .expect(adj_msg);
-        list1_before_drop.sort();
-        assert_eq!(&*list1_before_drop, &[2, 3, 4]);
-
-        // drop vertex 3's adjacency list
-
-        index
-            .drop_adj_list(neighbor_accessor, 3)
-            .await
-            .expect("Error in drop_adj_list");
-
-        // call drop_deleted_neighbors on vertex 1 with check_delete = true
-        // expected outcome: deleted neighbor is dropped
-
-        index
-            .drop_deleted_neighbors(&ctx, neighbor_accessor, 1, true)
-            .await
-            .expect(drop_msg);
-
-        let mut list1_after_drop = AdjacencyList::new();
-        neighbor_accessor
-            .get_neighbors(1, &mut list1_after_drop)
-            .await
-            .expect(adj_msg);
-        list1_after_drop.sort();
-        assert_eq!(&*list1_after_drop, &[2, 4]);
-    }
-
-    #[tokio::test]
-    async fn test_get_undeleted_neighbors() {
-        // create small index instance
-        let dim = 1;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            3,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            5,          // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0]),
-            Box::new([0.0]),
-            Box::new([0, 1]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        // build graph
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([2, 3, 1]),
-            AdjacencyList::from_iter_untrusted([2, 3, 4]),
-            AdjacencyList::from_iter_untrusted([0, 1, 4]),
-            AdjacencyList::from_iter_untrusted([2, 4, 0]),
-            AdjacencyList::from_iter_untrusted([0, 3, 2]),
-        ];
-
-        let neighbor_accessor = &mut index.provider().neighbors();
-        let ctx = DefaultContext;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        // delete id number 3
-        index
-            .data_provider
-            .delete(&DefaultContext, &3_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0 and 2
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1, 2]);
-            deleted.sort();
-            assert_eq!(&deleted, &[3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in deleted");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-        }
-
-        // delete id number 2
-        index
-            .data_provider
-            .delete(&DefaultContext, &2_u32)
-            .await
-            .expect("Error in delete");
-
-        // we'll check vertices 0, 2, and 3
-        {
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 0)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[1]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2, 3]);
-
-            let PartitionedNeighbors { undeleted, deleted } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 2)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            assert!(undeleted.len() == 3);
-            assert!(deleted.is_empty());
-
-            let PartitionedNeighbors {
-                mut undeleted,
-                mut deleted,
-            } = index
-                .get_undeleted_neighbors(&ctx, neighbor_accessor, 3)
-                .await
-                .expect("Error in get_undeleted_neighbors");
-            undeleted.sort();
-            assert_eq!(&undeleted, &[0, 4]);
-            deleted.sort();
-            assert_eq!(&deleted, &[2]);
-        }
-    }
 
     #[tokio::test]
     async fn test_inplace_delete_2d() {
@@ -1921,14 +1174,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
@@ -2043,14 +1290,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
+        let pqtable =
+            model::pq::FixedChunkPQTable::new(dim, Box::new([0.0, 0.0]), Box::new([0, 2])).unwrap();
 
         let index =
             new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
@@ -2830,7 +2071,7 @@ pub(crate) mod tests {
                 data.as_view(),
                 32,
                 &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-                1,
+                crate::utils::create_thread_pool(1).unwrap().as_ref(),
             )
             .unwrap();
 
@@ -2977,10 +2218,7 @@ pub(crate) mod tests {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
-            file, None, &storage,
-        )
-        .unwrap();
+        let mut iter = VectorDataIterator::<_, f32>::new(file, None, &storage).unwrap();
 
         let start_vectors: Matrix<f32> = start_strategy.compute(train_data).unwrap();
 
@@ -3039,7 +2277,7 @@ pub(crate) mod tests {
             train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
-            1,
+            crate::utils::create_thread_pool(1).unwrap().as_ref(),
         )
         .unwrap();
 
@@ -3373,7 +2611,10 @@ pub(crate) mod tests {
 
         let neighbor_accessor = &mut index.provider().neighbors();
         // check that we have an unpruned graph
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() > max_degree);
 
         // prune graph and check that max_degree is respected
@@ -3381,7 +2622,10 @@ pub(crate) mod tests {
             .prune_range(&FullPrecision, ctx, 0..256)
             .await
             .unwrap();
-        let stats = index.get_degree_stats(neighbor_accessor).await.unwrap();
+        let stats = index
+            .get_degree_stats(neighbor_accessor, index.provider().iter())
+            .await
+            .unwrap();
         assert!(stats.max_degree.into_usize() <= max_degree);
     }
 
@@ -3619,81 +2863,6 @@ pub(crate) mod tests {
         }
     }
 
-    // This test uses a "Flaky" accessor that spuriously fails with non-critical errors to
-    // check that such errors are not propagated by DiskANN.
-    #[tokio::test]
-    async fn test_flaky_consolidate() {
-        // What we need to do is populate a graph with an element that has an adjacency list
-        // that exceeds the configured maximum degree.
-        //
-        // We then need to try to consolidate that element and ensure that retrieval of
-        // that element's data results in a transient error.
-
-        // create small index instance
-        let dim = 2;
-        let (config, parameters) = simplified_builder(
-            10,         // l_search
-            4,          // max_degree
-            Metric::L2, // metric
-            dim,        // dim
-            10,         // max_points
-            no_modify,
-        )
-        .unwrap();
-
-        let pqtable = model::pq::FixedChunkPQTable::new(
-            dim,
-            Box::new([0.0, 0.0]),
-            Box::new([0.0, 0.0]),
-            Box::new([0, 2]),
-            None,
-        )
-        .unwrap();
-
-        let index =
-            new_quant_index::<f32, _, _>(config, parameters, pqtable, TableBasedDeletes).unwrap();
-
-        let start_point: &[f32] = &[0.5, 0.5];
-
-        index
-            .provider()
-            .set_start_points(std::iter::once(start_point))
-            .unwrap();
-
-        // vectors are the four corners of a square, with the start point in the middle
-        // the middle point forms an edge to each corner, while corners form an edge
-        // to their opposite vertex vertically and horizontally as well as the middle
-        let vectors = [
-            vec![0.0, 0.0], // point 0
-            vec![0.0, 1.0], // point 1
-            vec![1.0, 0.0], // point 2
-            vec![1.0, 1.0], // point 3
-            vec![2.0, 2.0], // point 4
-            vec![0.0, 2.0], // point 5
-            vec![2.0, 0.0], // point 6
-        ];
-        let adjacency_lists = [
-            AdjacencyList::from_iter_untrusted([1, 2, 3, 4, 5]), // point 0
-            AdjacencyList::from_iter_untrusted([4, 0, 3, 6]),    // point 1
-            AdjacencyList::from_iter_untrusted([4, 3, 0, 6]),    // point 2
-            AdjacencyList::from_iter_untrusted([4, 2, 1, 6]),    // point 3
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 3, 6]), // point 4
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 6]), // point 5
-            AdjacencyList::from_iter_untrusted([0, 1, 2, 5, 3]), // point 6 -- start point
-        ];
-
-        let ctx = &DefaultContext;
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-        populate_data(&index.data_provider, ctx, &vectors).await;
-
-        let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
-            .await
-            .unwrap();
-        assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
-    }
-
     async fn create_retry_saturated_index(
         retry: NonZeroU32,
         saturated: bool,
@@ -3735,14 +2904,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
-        let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+        let res_unsat = index_unsat
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(
@@ -3757,14 +2929,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
-        let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
+        let res_sat = index_sat
+            .get_degree_stats(&mut accessor_sat, index_sat.provider().iter())
+            .await
+            .unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
         let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
         let res_unsat = index_sat
-            .get_degree_stats(&mut accessor_unsat)
+            .get_degree_stats(&mut accessor_unsat, index_unsat.provider().iter())
             .await
             .unwrap();
         assert!(
@@ -3976,417 +3151,6 @@ pub(crate) mod tests {
         );
     }
 
-    /////////////////////////////////////
-    // Multi-Hop Callback Edge Cases   //
-    /////////////////////////////////////
-
-    /// Filter that rejects all candidates via on_visit callback.
-    /// Used to test the fallback behavior when all candidates are rejected.
-    #[derive(Debug)]
-    struct RejectAllFilter {
-        allowed_in_results: HashSet<u32>,
-    }
-
-    impl RejectAllFilter {
-        fn only<I: IntoIterator<Item = u32>>(ids: I) -> Self {
-            Self {
-                allowed_in_results: ids.into_iter().collect(),
-            }
-        }
-    }
-
-    impl QueryLabelProvider<u32> for RejectAllFilter {
-        fn is_match(&self, vec_id: u32) -> bool {
-            self.allowed_in_results.contains(&vec_id)
-        }
-
-        fn on_visit(&self, _neighbor: Neighbor<u32>) -> QueryVisitDecision<u32> {
-            QueryVisitDecision::Reject
-        }
-    }
-
-    /// Filter that tracks visit order and can terminate early.
-    #[derive(Debug)]
-    struct TerminatingFilter {
-        target: u32,
-        hits: Mutex<Vec<u32>>,
-    }
-
-    impl TerminatingFilter {
-        fn new(target: u32) -> Self {
-            Self {
-                target,
-                hits: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn hits(&self) -> Vec<u32> {
-            self.hits
-                .lock()
-                .expect("mutex should not be poisoned")
-                .clone()
-        }
-    }
-
-    impl QueryLabelProvider<u32> for TerminatingFilter {
-        fn is_match(&self, vec_id: u32) -> bool {
-            vec_id == self.target
-        }
-
-        fn on_visit(&self, neighbor: Neighbor<u32>) -> QueryVisitDecision<u32> {
-            self.hits
-                .lock()
-                .expect("mutex should not be poisoned")
-                .push(neighbor.id);
-            if neighbor.id == self.target {
-                QueryVisitDecision::Terminate
-            } else {
-                QueryVisitDecision::Accept(neighbor)
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_multihop_reject_all_returns_zero_results() {
-        // When on_visit rejects all candidates, the search should return zero results
-        // because rejected candidates don't get added to the frontier.
-        let dim = 3;
-        let grid_size: usize = 4;
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut create_rnd_from_seed_in_tests(0x1234567890abcdef),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let query = vec![grid_size as f32; dim];
-
-        let mut ids = vec![0; 10];
-        let mut distances = vec![0.0; 10];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-        // Allow only the first start point (0) in results via is_match,
-        // but reject everything via on_visit
-        let filter = RejectAllFilter::only([0_u32]);
-
-        let search_params = Knn::new_default(10, 20).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
-        let stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        // When all candidates are rejected via on_visit, result_count should be 0
-        // because rejected candidates are not added to the search frontier
-        assert_eq!(
-            stats.result_count, 0,
-            "rejecting all via on_visit should result in zero results"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_multihop_early_termination() {
-        // Test that Terminate causes the search to stop early
-        let dim = 3;
-        let grid_size: usize = 5;
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut create_rnd_from_seed_in_tests(0xfedcba0987654321),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let query = vec![grid_size as f32; dim];
-
-        let mut ids = vec![0; 10];
-        let mut distances = vec![0.0; 10];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-        // Target a point in the middle of the grid
-        let target = (num_points / 2) as u32;
-        let filter = TerminatingFilter::new(target);
-
-        let search_params = Knn::new_default(10, 40).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
-        let stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        let hits = filter.hits();
-
-        // The search should have terminated after finding the target
-        assert!(
-            hits.contains(&target),
-            "search should have visited the target"
-        );
-        assert!(
-            stats.result_count >= 1,
-            "should have at least one result (the target)"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_multihop_distance_adjustment_affects_ranking() {
-        // Test that distance adjustments in on_visit affect the final ranking
-        let dim = 3;
-        let grid_size: usize = 4;
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut create_rnd_from_seed_in_tests(0xabcdef1234567890),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let query = vec![0.0; dim]; // Query at origin
-
-        // First, run without adjustment to get baseline
-        let mut baseline_ids = vec![0; 10];
-        let mut baseline_distances = vec![0.0; 10];
-        let mut baseline_buffer =
-            search_output_buffer::IdDistance::new(&mut baseline_ids, &mut baseline_distances);
-
-        let search_params = Knn::new_default(10, 20).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, &EvenFilter);
-        let baseline_stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &mut baseline_buffer,
-            )
-            .await
-            .unwrap();
-
-        // Now run with a filter that boosts a specific far-away point
-        let boosted_point = (num_points - 2) as u32; // A point far from origin
-        let filter = CallbackFilter::new(u32::MAX, boosted_point, 0.01); // Shrink its distance
-
-        let mut adjusted_ids = vec![0; 10];
-        let mut adjusted_distances = vec![0.0; 10];
-        let mut adjusted_buffer =
-            search_output_buffer::IdDistance::new(&mut adjusted_ids, &mut adjusted_distances);
-
-        let search_params = Knn::new_default(10, 20).unwrap();
-        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
-        let adjusted_stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &mut adjusted_buffer,
-            )
-            .await
-            .unwrap();
-
-        // Both searches should return results
-        assert!(
-            baseline_stats.result_count > 0,
-            "baseline should have results"
-        );
-        assert!(
-            adjusted_stats.result_count > 0,
-            "adjusted should have results"
-        );
-
-        // If the boosted point was visited and adjusted, it should appear earlier
-        // in the adjusted results than in the baseline (or appear when it didn't before)
-        let boosted_in_baseline = baseline_ids
-            .iter()
-            .take(baseline_stats.result_count as usize)
-            .position(|&id| id == boosted_point);
-        let boosted_in_adjusted = adjusted_ids
-            .iter()
-            .take(adjusted_stats.result_count as usize)
-            .position(|&id| id == boosted_point);
-
-        // The distance adjustment should have some effect if the point was visited
-        if filter.hits().contains(&boosted_point) {
-            assert!(
-                boosted_in_adjusted.is_some(),
-                "boosted point should appear in adjusted results when visited"
-            );
-            if let (Some(baseline_pos), Some(adjusted_pos)) =
-                (boosted_in_baseline, boosted_in_adjusted)
-            {
-                assert!(
-                    adjusted_pos <= baseline_pos,
-                    "boosted point should rank equal or better after distance reduction"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_multihop_terminate_stops_traversal() {
-        // Test that Terminate (without accept) stops traversal immediately
-        #[derive(Debug)]
-        struct TerminateAfterN {
-            max_visits: usize,
-            visits: Mutex<usize>,
-        }
-
-        impl TerminateAfterN {
-            fn new(max_visits: usize) -> Self {
-                Self {
-                    max_visits,
-                    visits: Mutex::new(0),
-                }
-            }
-
-            fn visit_count(&self) -> usize {
-                *self.visits.lock().unwrap()
-            }
-        }
-
-        impl QueryLabelProvider<u32> for TerminateAfterN {
-            fn is_match(&self, _: u32) -> bool {
-                true
-            }
-
-            fn on_visit(&self, neighbor: Neighbor<u32>) -> QueryVisitDecision<u32> {
-                let mut visits = self.visits.lock().unwrap();
-                *visits += 1;
-                if *visits >= self.max_visits {
-                    QueryVisitDecision::Terminate
-                } else {
-                    QueryVisitDecision::Accept(neighbor)
-                }
-            }
-        }
-
-        let dim = 3;
-        let grid_size: usize = 5;
-        let l = 10;
-        let max_degree = 2 * dim;
-        let num_points = (grid_size).pow(dim as u32);
-
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, no_modify).unwrap();
-
-        let mut adjacency_lists = utils::genererate_3d_grid_adj_list(grid_size as u32);
-        let mut vectors = f32::generate_grid(dim, grid_size);
-
-        adjacency_lists.push((num_points as u32 - 1).into());
-        vectors.push(vec![grid_size as f32; dim]);
-
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim),
-            &mut create_rnd_from_seed_in_tests(0x9876543210fedcba),
-            1usize,
-        )
-        .unwrap();
-
-        let index = new_quant_index::<f32, _, _>(config, parameters, table, NoDeletes).unwrap();
-        let neighbor_accessor = &mut index.provider().neighbors();
-        populate_data(&index.data_provider, &DefaultContext, &vectors).await;
-        populate_graph(neighbor_accessor, &adjacency_lists).await;
-
-        let query = vec![grid_size as f32; dim];
-
-        let mut ids = vec![0; 10];
-        let mut distances = vec![0.0; 10];
-        let mut result_output_buffer =
-            search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-
-        let max_visits = 5;
-        let filter = TerminateAfterN::new(max_visits);
-
-        let search_params = Knn::new_default(10, 100).unwrap(); // Large L to ensure we'd visit more without termination
-        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
-        let _stats = index
-            .search(
-                multihop,
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &mut result_output_buffer,
-            )
-            .await
-            .unwrap();
-
-        // The search should have stopped after max_visits
-        assert!(
-            filter.visit_count() <= max_visits + 10, // Allow some slack for beam expansion
-            "search should have terminated early, got {} visits",
-            filter.visit_count()
-        );
-    }
-
     #[tokio::test]
     async fn vectors_with_infinity_values_should_be_inserted_and_searched_without_panic() {
         let l_build: usize = 20;
@@ -4433,19 +3197,7 @@ pub(crate) mod tests {
         }
 
         let query_count: usize = 1;
-        let mut queries = crate::common::AlignedBoxWithSlice::<half::f16>::new(
-            query_count * VECTORS_DIMENSION,
-            32,
-        )
-        .unwrap();
-
-        for i in 0..query_count {
-            for val in queries.as_mut_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION]
-                .iter_mut()
-            {
-                *val = half::f16::from_f32(0f32);
-            }
-        }
+        let queries: Vec<half::f16> = vec![half::f16::default(); query_count * VECTORS_DIMENSION];
 
         let top_k = l_build;
         let search_l = l_build;
@@ -4454,8 +3206,7 @@ pub(crate) mod tests {
         let ctx = DefaultContext;
         let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
         for i in 0..query_count {
-            let query_vector =
-                &queries.as_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
+            let query_vector = &queries[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);

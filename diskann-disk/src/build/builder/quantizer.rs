@@ -3,19 +3,17 @@
  * Licensed under the MIT license.
  */
 //! Disk index quantizer implementation.
+use crate::data_model::GraphDataType;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
-        graph::{
-            provider::async_::{common::NoStore, inmem::WithBits},
-            traits::GraphDataType,
-        },
+        graph::provider::async_::{common::NoStore, inmem::WithBits},
         FixedChunkPQTable, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE,
     },
     storage::{PQStorage, SQStorage},
-    utils::{BridgeErr, PQPathNames},
+    utils::{create_thread_pool, BridgeErr, PQPathNames},
 };
 use diskann_quantization::scalar::train::ScalarQuantizationParameters;
 use diskann_utils::views::MatrixView;
@@ -65,7 +63,7 @@ impl BuildQuantizer {
                         MatrixView::try_from(&train_data, train_size, train_dim).bridge_err()?,
                         num_chunks,
                         &mut rnd,
-                        index_configuration.num_threads,
+                        create_thread_pool(index_configuration.num_threads)?.as_ref(),
                     )?
                 };
                 // Save at checkpoint. Note the the compressed data path and pivots path here
@@ -75,7 +73,7 @@ impl BuildQuantizer {
                     PQStorage::new(&pq_paths.pivots, &pq_paths.compressed_data, None);
                 pq_build_storage.write_pivot_data(
                     table.get_pq_table(),
-                    table.get_centroids(),
+                    None,
                     table.get_chunk_offsets(),
                     table.get_num_centers(),
                     table.get_dim(),

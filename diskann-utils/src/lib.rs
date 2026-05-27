@@ -15,6 +15,7 @@ pub use lifetime::WithLifetime;
 pub mod future;
 
 pub mod io;
+pub mod object_pool;
 pub mod sampling;
 
 // Views

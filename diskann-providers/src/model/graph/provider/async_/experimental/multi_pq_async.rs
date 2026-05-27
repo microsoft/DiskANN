@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use arc_swap::{ArcSwap, Guard};
-use diskann::{ANNError, ANNResult};
+use diskann::{ANNError, ANNResult, error::IntoANNResult, utils::VectorRepr};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -77,23 +77,23 @@ impl TestMultiPQProviderAsync {
 
     pub fn get_query_computer<T>(&self, query: &[T]) -> ANNResult<NoneToInfinity<QueryComputer>>
     where
-        T: Copy + Into<f32>,
+        T: VectorRepr,
     {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
         Ok(NoneToInfinity(QueryComputer::new(
             table,
             self.metric,
-            query,
+            &T::as_f32(query).into_ann_result()?,
         )?))
     }
 
     pub fn get_distance_computer(&self) -> ANNResult<NoneToInfinity<DistanceComputer>> {
         let table = self.multi_table().map_err(|err| {
-            ANNError::log_index_error(format_args!("Table consruction failed with: {}", err))
+            ANNError::log_index_error(format_args!("Table construction failed with: {}", err))
         })?;
-        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)?))
+        Ok(NoneToInfinity(DistanceComputer::new(table, self.metric)))
     }
 
     pub fn get_vector(&self, id: usize) -> ANNResult<Guard<Arc<VersionedPQVector>>> {
@@ -150,7 +150,6 @@ impl TestMultiPQProviderAsync {
             &vector_f32,
             table.get_pq_table(),
             table.get_num_centers(),
-            Some(table.get_centroids()),
             table.get_chunk_offsets(),
             &mut quant_vector,
         )
@@ -302,7 +301,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(
@@ -438,7 +436,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 1.0,
-            use_opq: false,
         };
 
         let config_new = test_utils::TableConfig {
@@ -446,7 +443,6 @@ mod tests {
             pq_chunks: 6,
             num_pivots: 16,
             start_value: 2.0,
-            use_opq: false,
         };
 
         let provider = TestMultiPQProviderAsync::new(

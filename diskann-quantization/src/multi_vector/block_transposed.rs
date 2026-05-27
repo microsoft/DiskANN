@@ -80,7 +80,7 @@
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
-    ReborrowMut,
+    Reborrow, ReborrowMut,
     strided::StridedView,
     views::{MatrixView, MutMatrixView},
 };
@@ -229,6 +229,15 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
     #[inline]
     pub fn remainder(&self) -> usize {
         self.nrows % GROUP
+    }
+
+    /// Total number of logical rows rounded up to the next multiple of `GROUP`.
+    ///
+    /// This is the number of "available" row slots in the backing allocation,
+    /// including zero-padded rows in the last (possibly partial) block.
+    #[inline]
+    pub fn padded_nrows(&self) -> usize {
+        self.num_blocks() * GROUP
     }
 
     /// The stride (in elements) between the start of consecutive blocks.
@@ -743,6 +752,15 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
         self.data.repr().remainder()
     }
 
+    /// Total number of logical rows rounded up to the next multiple of `GROUP`.
+    ///
+    /// This is the number of "available" row slots in the backing allocation,
+    /// including zero-padded rows in the last (possibly partial) block.
+    #[inline]
+    pub fn padded_nrows(&self) -> usize {
+        self.data.repr().padded_nrows()
+    }
+
     /// Return a raw typed pointer to the start of the backing data.
     #[inline]
     pub fn as_ptr(&self) -> *const T {
@@ -870,6 +888,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1017,6 +1036,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn full_blocks(&self) -> usize);
     delegate_to_ref!(pub fn num_blocks(&self) -> usize);
     delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn padded_nrows(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
     delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
@@ -1069,6 +1089,19 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     #[inline]
     pub fn get_row_mut(&mut self, i: usize) -> Option<RowMut<'_, T, GROUP, PACK>> {
         self.data.get_row_mut(i)
+    }
+}
+
+// ── Reborrow ─────────────────────────────────────────────────────
+
+impl<'this, T: Copy, const GROUP: usize, const PACK: usize> Reborrow<'this>
+    for BlockTransposed<T, GROUP, PACK>
+{
+    type Target = BlockTransposedRef<'this, T, GROUP, PACK>;
+
+    #[inline]
+    fn reborrow(&'this self) -> Self::Target {
+        self.as_view()
     }
 }
 
@@ -1675,6 +1708,15 @@ mod tests {
                 );
             }
         }
+
+        // ── padded_nrows() returns padded row count ──────────────
+
+        assert_eq!(
+            transpose.as_view().padded_nrows(),
+            padded_nrows,
+            "padded_nrows() mismatch -- {}",
+            context,
+        );
 
         // ── from_matrix_view produces identical results ──────────
 

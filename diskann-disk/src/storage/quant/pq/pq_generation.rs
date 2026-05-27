@@ -8,13 +8,12 @@ use std::marker::PhantomData;
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
-    forward_threadpool,
     model::{
         pq::{accum_row_inplace, generate_pq_pivots},
         GeneratePivotArguments,
     },
     storage::PQStorage,
-    utils::{AsThreadPool, BridgeErr, Timer},
+    utils::{BridgeErr, RayonThreadPoolRef, Timer},
 };
 use diskann_quantization::{product::TransposedTable, CompressInto};
 use diskann_utils::views::MatrixBase;
@@ -23,43 +22,39 @@ use tracing::info;
 
 use crate::storage::quant::compressor::{CompressionStage, QuantCompressor};
 
-pub struct PQGenerationContext<'a, Storage, Pool>
+pub struct PQGenerationContext<'a, Storage>
 where
     Storage: StorageReadProvider + StorageWriteProvider,
-    Pool: AsThreadPool,
 {
     pub pq_storage: PQStorage,
     pub num_chunks: usize,
     pub seed: Option<u64>,
     pub p_val: f64,
     pub storage_provider: &'a Storage,
-    pub pool: Pool,
+    pub pool: RayonThreadPoolRef<'a>,
     pub metric: Metric,
     pub dim: usize,
     pub max_kmeans_reps: usize,
     pub num_centers: usize,
 }
 
-pub struct PQGeneration<'a, T, Storage, Pool>
+pub struct PQGeneration<'a, T, Storage>
 where
     T: VectorRepr,
     Storage: StorageReadProvider + StorageWriteProvider + 'a,
-    Pool: AsThreadPool,
 {
     table: TransposedTable,
     num_chunks: usize,
     phantom_data: PhantomData<T>,
     phantom_storage: PhantomData<&'a Storage>,
-    phantom_pool: PhantomData<Pool>,
 }
 
-impl<'a, T, Storage, Pool> QuantCompressor<T> for PQGeneration<'a, T, Storage, Pool>
+impl<'a, T, Storage> QuantCompressor<T> for PQGeneration<'a, T, Storage>
 where
     T: VectorRepr,
     Storage: StorageReadProvider + StorageWriteProvider + 'a,
-    Pool: AsThreadPool,
 {
-    type CompressorContext = PQGenerationContext<'a, Storage, Pool>;
+    type CompressorContext = PQGenerationContext<'a, Storage>;
 
     fn new_at_stage(
         stage: CompressionStage,
@@ -76,8 +71,7 @@ where
             .pq_storage
             .pivot_data_exist(context.storage_provider);
 
-        let pool = &context.pool;
-        forward_threadpool!(pool = pool: Pool);
+        let pool = context.pool;
 
         if !pivots_exists {
             if stage == CompressionStage::Resume {
@@ -106,8 +100,8 @@ where
                     context.num_centers,
                     context.num_chunks,
                     context.max_kmeans_reps,
-                    context.metric == Metric::L2,
                 )?,
+                context.metric == Metric::L2,
                 &mut train_data,
                 &context.pq_storage,
                 context.storage_provider,
@@ -127,13 +121,12 @@ where
 
         //Load the pivots
         let num_chunks = context.num_chunks;
-        let (mut full_pivot_data, centroid, chunk_offsets, _) =
+        let (mut full_pivot_data, centroid, chunk_offsets) =
             context.pq_storage.load_existing_pivot_data(
                 &num_chunks,
                 &context.num_centers,
                 &full_dim,
                 context.storage_provider,
-                false,
             )?;
 
         let mut full_pivot_data_mat = diskann_utils::views::MutMatrixView::try_from(
@@ -157,7 +150,6 @@ where
             table,
             num_chunks,
             phantom_data: PhantomData,
-            phantom_pool: PhantomData,
             phantom_storage: PhantomData,
         })
     }
@@ -189,7 +181,7 @@ mod pq_generation_tests {
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool_for_test, AsThreadPool};
+    use diskann_providers::utils::{create_thread_pool_for_test, RayonThreadPoolRef};
     use diskann_utils::{
         io::{read_bin, write_bin},
         test_data_root,
@@ -213,7 +205,7 @@ mod pq_generation_tests {
         100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
     ];
     #[allow(clippy::too_many_arguments)]
-    fn create_new_compressor<'a, R: AsThreadPool, F: vfs::FileSystem>(
+    fn create_new_compressor<'a, F: vfs::FileSystem>(
         stage: CompressionStage,
         provider: &'a VirtualStorageProvider<F>,
         dim: usize,
@@ -221,13 +213,13 @@ mod pq_generation_tests {
         max_kmeans_reps: usize,
         num_centers: usize,
         p_val: f64,
-        pool: R,
+        pool: RayonThreadPoolRef<'a>,
         pivots_path: String,
         compressed_path: String,
         data_path: Option<&str>,
-    ) -> Result<PQGeneration<'a, f32, VirtualStorageProvider<F>, R>, ANNError> {
+    ) -> Result<PQGeneration<'a, f32, VirtualStorageProvider<F>>, ANNError> {
         let pq_storage = PQStorage::new(&pivots_path, &compressed_path, data_path);
-        let context = PQGenerationContext::<'_, _, _> {
+        let context = PQGenerationContext::<'_, _> {
             pq_storage,
             num_chunks,
             num_centers,
@@ -239,7 +231,7 @@ mod pq_generation_tests {
             metric: Metric::L2,
             dim,
         };
-        PQGeneration::<_, _, _>::new_at_stage(stage, &context)
+        PQGeneration::<_, _>::new_at_stage(stage, &context)
     }
 
     #[rstest]
@@ -268,20 +260,14 @@ mod pq_generation_tests {
 
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
-            GeneratePivotArguments::new(
-                ndata,
-                dim,
-                num_centers,
-                num_chunks,
-                max_k_means_reps,
-                true,
-            )
-            .unwrap(),
+            GeneratePivotArguments::new(ndata, dim, num_centers, num_chunks, max_k_means_reps)
+                .unwrap(),
+            true,
             &mut train_data,
             &pq_storage,
             &storage_provider,
             diskann_providers::utils::create_rnd_provider_from_seed_in_tests(42),
-            &pool,
+            pool.as_ref(),
         )
         .unwrap();
 
@@ -293,7 +279,7 @@ mod pq_generation_tests {
             max_k_means_reps,
             num_centers,
             1.0, //take all the data to compute codebook
-            &pool,
+            pool.as_ref(),
             pivot_file_name_compressor.to_string(),
             compressed_file_name.to_string(),
             Some(data_path),
@@ -350,7 +336,7 @@ mod pq_generation_tests {
             max_k_means_reps,
             num_centers,
             1.0,
-            &pool,
+            pool.as_ref(),
             pivot_file_name.to_string(),
             compressed_file_name.to_string(),
             Some(data_path),
@@ -376,7 +362,7 @@ mod pq_generation_tests {
             max_k_means_reps,
             256,
             1.0,
-            &pool,
+            pool.as_ref(),
             TEST_PQ_PIVOTS_PATH.to_string(),
             "".to_string(),
             None,
@@ -428,7 +414,7 @@ mod pq_generation_tests {
             max_k_means_reps,
             centers,
             1.0,
-            &pool,
+            pool.as_ref(),
             TEST_PQ_PIVOTS_PATH.to_string(),
             "".to_string(),
             None,

@@ -16,6 +16,8 @@ use crate::{
     storage::{AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
 
+pub use diskann::graph::strategy::{FullPrecision, Quantized};
+
 /// Represents a range of start points for an index.
 /// The range includes `start` and excludes `end`.
 /// `start` is the first valid point, and `end - 1` is the last valid point.
@@ -378,19 +380,6 @@ impl CreateDeleteProvider for TableBasedDeletes {
         TableDeleteProviderAsync::new(total_points)
     }
 }
-
-/// Operates entirely in full precision.
-///
-/// All indexing and search operations use the uncompressed full-precision vectors.
-#[derive(Debug, Clone, Copy)]
-pub struct FullPrecision;
-
-/// Operates entirely in the quantized space.
-///
-/// All indexing and search operations use quantized vectors.
-/// If full-precision vectors are available, they are only used for the final reranking step.
-#[derive(Debug, Clone, Copy)]
-pub struct Quantized;
 
 /// Operates primarily in the quantized space with selective use of full precision.
 ///

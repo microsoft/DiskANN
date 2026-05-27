@@ -61,18 +61,42 @@ pub(crate) struct TestProblem {
 }
 
 #[derive(Debug, Error)]
-#[error("mismatch in test problem. got {:?}, expected {:?}", got, expected)]
-pub(crate) struct ReferenceError {
-    got: Vec<f32>,
-    expected: Vec<f32>,
+pub(crate) enum CheckError {
+    #[error("mismatch in test problem. got {:?}, expected {:?}", got, expected)]
+    ReferenceError { got: Vec<f32>, expected: Vec<f32> },
+    #[error(transparent)]
+    SgemmError(#[from] crate::SgemmError),
 }
 
 pub(crate) trait GemmFunction:
-    Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32])
+    Fn(
+    Transpose,
+    Transpose,
+    usize,
+    usize,
+    usize,
+    f32,
+    &[f32],
+    &[f32],
+    Option<f32>,
+    &mut [f32],
+) -> Result<(), crate::SgemmError>
 {
 }
+
 impl<F> GemmFunction for F where
-    F: Fn(Transpose, Transpose, usize, usize, usize, f32, &[f32], &[f32], Option<f32>, &mut [f32])
+    F: Fn(
+        Transpose,
+        Transpose,
+        usize,
+        usize,
+        usize,
+        f32,
+        &[f32],
+        &[f32],
+        Option<f32>,
+        &mut [f32],
+    ) -> Result<(), crate::SgemmError>
 {
 }
 
@@ -111,7 +135,7 @@ impl TestProblem {
         }
     }
 
-    pub(crate) fn check<F: GemmFunction>(&self, f: F) -> Result<(), ReferenceError> {
+    pub(crate) fn check<F: GemmFunction>(&self, f: F) -> Result<(), CheckError> {
         let mut result = self.c.clone();
         f(
             self.atranspose,
@@ -124,12 +148,12 @@ impl TestProblem {
             &self.b,
             self.beta,
             &mut result,
-        );
+        )?;
 
         if result == self.expected {
             Ok(())
         } else {
-            Err(ReferenceError {
+            Err(CheckError::ReferenceError {
                 got: result,
                 expected: self.expected.clone(),
             })
@@ -254,9 +278,26 @@ mod tests {
 
     #[test]
     fn test_reference_implementation() {
+        #[allow(clippy::too_many_arguments)]
+        fn sgemm_impl_wrapper(
+            atranspose: Transpose,
+            btranspose: Transpose,
+            m: usize,
+            n: usize,
+            k: usize,
+            alpha: f32,
+            a: &[f32],
+            b: &[f32],
+            beta: Option<f32>,
+            c: &mut [f32],
+        ) -> Result<(), crate::SgemmError> {
+            sgemm_impl(atranspose, btranspose, m, n, k, alpha, a, b, beta, c);
+            Ok(())
+        }
+
         let problems = test_sgemm_problems();
         for (i, problem) in problems.iter().enumerate() {
-            let result = problem.check(sgemm_impl);
+            let result = problem.check(sgemm_impl_wrapper);
             if let Err(err) = result {
                 panic!("{} on iteration {}. Problem: {:?}", err, i, problem);
             }

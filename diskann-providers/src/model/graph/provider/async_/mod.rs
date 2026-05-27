@@ -31,11 +31,3 @@ pub use fast_memory_quant_vector_provider::FastMemoryQuantVectorProviderAsync;
 
 // The default `inmem` data provider for the async index.
 pub mod inmem;
-
-// Bf-tree based data provider for the async index
-#[cfg(feature = "bf_tree")]
-pub mod bf_tree;
-
-// Caching proxy provider to accelerate slow providers.
-#[cfg(feature = "bf_tree")]
-pub mod caching;

@@ -9,12 +9,12 @@ edition = "2024"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
-targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
 [dependencies]
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["must_cast"]}
-diskann-utils = { workspace = true }
+diskann-utils = { workspace = true, default-features = false }
 futures-util = { workspace = true, default-features = false }
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 # Note: hashbrown not using workspace because diskann needs default-features = false

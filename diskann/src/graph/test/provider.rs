@@ -6,6 +6,7 @@
 //! A pedantic provider implementation used for testing alorithmic logic.
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
@@ -351,7 +352,7 @@ impl Provider {
     }
 
     /// Return `true` is `id` is a start point. Otherwise, return `false`.
-    fn is_start_point(&self, id: u32) -> bool {
+    pub(crate) fn is_start_point(&self, id: u32) -> bool {
         self.config.start_points.contains_key(&id)
     }
 
@@ -442,6 +443,34 @@ impl Provider {
         }
 
         neighbors
+    }
+
+    pub(crate) fn get_neighbors(
+        &self,
+        id: u32,
+        neighbors: &mut AdjacencyList<u32>,
+    ) -> ANNResult<()> {
+        match self.terms.get(&id) {
+            Some(v) => {
+                self.get_neighbors.increment();
+                neighbors.overwrite_trusted(&v.neighbors);
+                Ok(())
+            }
+            None => Err(ANNError::opaque(AccessedInvalidId(id))),
+        }
+    }
+
+    /// Capture all ids including deleted and startpoints
+    pub fn all_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.terms.iter().map(|ref_multi| *ref_multi.key())
+    }
+
+    /// Capture all ids including deleted
+    pub fn non_start_points_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.terms
+            .iter()
+            .map(|ref_multi| *ref_multi.key())
+            .filter(|id| !self.is_start_point(*id))
     }
 }
 
@@ -897,14 +926,8 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> ANNResult<Self> {
-        match self.provider.terms.get(&id) {
-            Some(v) => {
-                self.provider.get_neighbors.increment();
-                neighbors.overwrite_trusted(&v.neighbors);
-                Ok(self)
-            }
-            None => Err(ANNError::opaque(AccessedInvalidId(id))),
-        }
+        self.provider.get_neighbors(id, neighbors)?;
+        Ok(self)
     }
 }
 
@@ -981,7 +1004,7 @@ pub struct Accessor<'a> {
     buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
     /// IDs that will produce transient errors when accessed.
-    transient_ids: Option<HashSet<u32>>,
+    transient_ids: Option<Cow<'a, HashSet<u32>>>,
 }
 
 impl<'a> Accessor<'a> {
@@ -998,11 +1021,11 @@ impl<'a> Accessor<'a> {
     /// Creates an accessor where `get_element` returns a transient error for
     /// any ID in `transient_ids`. The ID must still exist in the provider —
     /// accessing a truly missing ID remains a critical `InvalidId` error.
-    pub fn flaky(provider: &'a Provider, transient_ids: HashSet<u32>) -> Self {
+    pub fn flaky(provider: &'a Provider, transient_ids: Cow<'a, HashSet<u32>>) -> Self {
         Self::new_inner(provider, Some(transient_ids))
     }
 
-    fn new_inner(provider: &'a Provider, transient_ids: Option<HashSet<u32>>) -> Self {
+    fn new_inner(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
         let buffer = (0..provider.dim()).map(|_| 0.0).collect();
         Self {
             provider,
@@ -1088,40 +1111,37 @@ impl glue::SearchExt for Accessor<'_> {
 
 impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
-impl provider::CacheableAccessor for Accessor<'_> {
-    type Map = diskann_utils::lifetime::Slice<f32>;
-
-    fn from_cached<'a>(element: &'a [f32]) -> &'a [f32]
-    where
-        Self: 'a,
-    {
-        element
-    }
-
-    fn as_cached<'a, 'b>(element: &'a &'b [f32]) -> &'a &'b [f32]
-    where
-        Self: 'a + 'b,
-    {
-        element
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Strategy {
     // Set this flag to enable reuse within the [`workingset::Map`]. For multi-threaded
     // baseline tests, this must be set to `false` to obtain repeatable `get_vector` calls.
     working_set_reuse: bool,
+    transient_ids: Option<Arc<HashSet<u32>>>,
 }
 
 impl Strategy {
     pub fn new() -> Self {
         Self {
             working_set_reuse: true,
+            transient_ids: None,
         }
     }
 
     pub fn with_options(working_set_reuse: bool) -> Self {
-        Self { working_set_reuse }
+        Self {
+            working_set_reuse,
+            transient_ids: None,
+        }
+    }
+
+    pub fn with_transient(
+        working_set_reuse: bool,
+        transient_ids: impl IntoIterator<Item = u32>,
+    ) -> Self {
+        Self {
+            working_set_reuse,
+            transient_ids: Some(Arc::new(transient_ids.into_iter().collect())),
+        }
     }
 }
 
@@ -1151,7 +1171,7 @@ impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
 
 impl glue::PruneStrategy<Provider> for Strategy {
     type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-    type DistanceComputer = <f32 as VectorRepr>::Distance;
+    type DistanceComputer<'a> = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
 
@@ -1170,7 +1190,10 @@ impl glue::PruneStrategy<Provider> for Strategy {
         provider: &'a Provider,
         _context: &'a Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(Accessor::new(provider))
+        match &self.transient_ids {
+            Some(ids) => Ok(Accessor::flaky(provider, Cow::Borrowed(ids))),
+            None => Ok(Accessor::new(provider)),
+        }
     }
 }
 
@@ -1178,7 +1201,7 @@ impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn insert_search_accessor<'a>(
@@ -1197,7 +1220,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
-        *self
+        self.clone()
     }
 
     fn finish<Itr>(
@@ -1272,11 +1295,11 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type SearchPostProcessor = glue::Pipeline<FilterDeleted, glue::CopyIds>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
-        *self
+        self.clone()
     }
 
     fn search_strategy(&self) -> Self::SearchStrategy {
-        *self
+        self.clone()
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {

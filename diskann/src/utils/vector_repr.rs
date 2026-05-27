@@ -53,11 +53,16 @@ pub trait VectorRepr: VectorElement {
 
     /// An implementation of [`DistanceFunction`] for computing similarity between two
     /// equal sized slices of `Self`.
-    type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32> + Send + Sync + 'static;
+    type Distance: for<'a, 'b> DistanceFunction<&'a [Self], &'b [Self], f32>
+        + Debug
+        + Send
+        + Sync
+        + 'static;
 
     /// An implementation of [`PreprocessedDistanceFunciton`] for computing similarity
     /// between a fixed query and slices of `Self`.
     type QueryDistance: for<'a> PreprocessedDistanceFunction<&'a [Self], f32>
+        + Debug
         + Send
         + Sync
         + 'static;
@@ -201,6 +206,7 @@ default_impl!(
 ///
 /// As a [`diskann_vector::PreprocessedDistanceFunction`], this implementation needs to work
 /// in a standalone manner, meaning that we need to keep a copy of the query.
+#[derive(Debug)]
 pub struct BufferedDistance<T, U = T>
 where
     U: 'static,

@@ -17,6 +17,7 @@ use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
 use crate::{
     recall,
+    recall::GroundTruthMode,
     search::{self, Search, graph::Strategy},
     utils,
 };
@@ -186,6 +187,7 @@ pub struct Aggregator<'a, I> {
     groundtruth: &'a dyn crate::recall::Rows<I>,
     recall_k: usize,
     recall_n: usize,
+    groundtruth_mode: GroundTruthMode,
 }
 
 impl<'a, I> Aggregator<'a, I> {
@@ -199,11 +201,13 @@ impl<'a, I> Aggregator<'a, I> {
         groundtruth: &'a dyn crate::recall::Rows<I>,
         recall_k: usize,
         recall_n: usize,
+        groundtruth_mode: GroundTruthMode,
     ) -> Self {
         Self {
             groundtruth,
             recall_k,
             recall_n,
+            groundtruth_mode,
         }
     }
 }
@@ -227,7 +231,7 @@ where
                 first.ids().as_rows(),
                 self.recall_k,
                 self.recall_n,
-                true,
+                self.groundtruth_mode,
             )?,
             None => anyhow::bail!("Results must be non-empty"),
         };
@@ -349,8 +353,12 @@ mod tests {
         let recall_k = nearest_neighbors;
         let recall_n = nearest_neighbors;
 
-        let all =
-            search::search_all(knn, parameters, Aggregator::new(rows, recall_k, recall_n)).unwrap();
+        let all = search::search_all(
+            knn,
+            parameters,
+            Aggregator::new(rows, recall_k, recall_n, GroundTruthMode::Fixed),
+        )
+        .unwrap();
 
         assert_eq!(all.len(), 2);
         for summary in all {
@@ -381,7 +389,7 @@ mod tests {
         let err = KNN::new(
             index,
             queries.clone(),
-            Strategy::collection([strategy, strategy]),
+            Strategy::collection([strategy.clone(), strategy.clone()]),
         )
         .unwrap_err();
         let msg = err.to_string();
