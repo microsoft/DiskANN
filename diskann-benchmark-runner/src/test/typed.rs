@@ -8,34 +8,36 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
-    utils::datatype::{DataType, Type},
-    Any, Benchmark, CheckDeserialization, Checker, Checkpoint, Input, Output,
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
+    utils::datatype::{AsDataType, DataType},
+    Benchmark, Checker, Checkpoint, Input, Output,
 };
 
 ///////////
 // Input //
 ///////////
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub(crate) struct TypeInput {
     pub(super) data_type: DataType,
     pub(super) dim: usize,
-    // Should we return an error when `check_deserialization` is called?
-    pub(super) error_when_checked: bool,
-    // A flag to verify that [`CheckDeserialization`] has run.
-    #[serde(skip)]
-    pub(crate) checked: bool,
+    error_when_checked: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TypeInputRaw {
+    data_type: DataType,
+    dim: usize,
+    // Should we return an error when deserializing?
+    error_when_checked: bool,
 }
 
 impl TypeInput {
-    pub(crate) fn new(data_type: DataType, dim: usize, error_when_checked: bool) -> Self {
+    pub(crate) fn new(data_type: DataType, dim: usize) -> Self {
         Self {
             data_type,
             dim,
-            error_when_checked,
-            checked: false,
+            error_when_checked: false,
         }
     }
 
@@ -45,33 +47,29 @@ impl TypeInput {
 }
 
 impl Input for TypeInput {
+    type Raw = TypeInputRaw;
+
     fn tag() -> &'static str {
         "test-input-types"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(TypeInput::deserialize(serialized)?)
-    }
-
-    fn example() -> anyhow::Result<serde_json::Value> {
-        Ok(serde_json::to_value(TypeInput::new(
-            DataType::Float32,
-            128,
-            false,
-        ))?)
-    }
-}
-
-impl CheckDeserialization for TypeInput {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        if self.error_when_checked {
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.error_when_checked {
             Err(anyhow::anyhow!("test input erroring when checked"))
         } else {
-            self.checked = true;
-            Ok(())
+            Ok(Self::new(raw.data_type, raw.dim))
+        }
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        TypeInputRaw {
+            data_type: DataType::Float32,
+            dim: 128,
+            error_when_checked: false,
         }
     }
 }
@@ -82,42 +80,32 @@ impl CheckDeserialization for TypeInput {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct Tolerance {
-    // Should we return an error when `check_deserialization` is called?
+    // Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,
-
-    // A flag to verify that [`CheckDeserialization`] has run.
-    #[serde(skip)]
-    pub(crate) checked: bool,
 }
 
 impl Input for Tolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "test-input-types-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
-    }
-
-    fn example() -> anyhow::Result<serde_json::Value> {
-        let this = Self {
-            error_when_checked: false,
-            checked: false,
-        };
-        Ok(serde_json::to_value(this)?)
-    }
-}
-
-impl CheckDeserialization for Tolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> anyhow::Result<()> {
-        if self.error_when_checked {
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        if raw.error_when_checked {
             Err(anyhow::anyhow!("test input erroring when checked"))
         } else {
-            self.checked = true;
-            Ok(())
+            Ok(raw)
+        }
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
+        Self {
+            error_when_checked: false,
         }
     }
 }
@@ -137,8 +125,7 @@ impl<T> TypeBench<T> {
 
 impl<T> Benchmark for TypeBench<T>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Input = TypeInput;
     type Output = String;
@@ -146,7 +133,11 @@ where
     fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         // Try to match based on data type.
         // Add a small penalty so `ExactTypeBench` can be more specific if it hits.
-        Type::<T>::try_match(&input.data_type).map(|m| MatchScore(m.0 + 10))
+        if T::is_match(input.data_type) {
+            Ok(MatchScore(10))
+        } else {
+            Err(FailureScore(1000))
+        }
     }
 
     fn description(
@@ -154,7 +145,10 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&TypeInput>,
     ) -> std::fmt::Result {
-        Type::<T>::description(f, input.map(|i| &i.data_type))
+        match input {
+            None => write!(f, "{}", T::DATA_TYPE),
+            Some(input) => write!(f, "{}", T::describe(input.data_type)),
+        }
     }
 
     fn run(
@@ -172,8 +166,7 @@ where
 
 impl<T> Regression for TypeBench<T>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Tolerances = Tolerance;
     type Pass = DataType;
@@ -209,15 +202,18 @@ impl<T, const N: usize> ExactTypeBench<T, N> {
 
 impl<T, const N: usize> Benchmark for ExactTypeBench<T, N>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Input = TypeInput;
     type Output = String;
 
     fn try_match(&self, input: &TypeInput) -> Result<MatchScore, FailureScore> {
         if input.dim == N {
-            Type::<T>::try_match(&input.data_type)
+            if T::is_match(input.data_type) {
+                Ok(MatchScore(0))
+            } else {
+                Err(FailureScore(1000))
+            }
         } else {
             Err(FailureScore(1000))
         }
@@ -230,22 +226,22 @@ where
     ) -> std::fmt::Result {
         match input {
             None => {
-                write!(f, "{}, dim={}", Description::<DataType, Type<T>>::new(), N)
+                write!(f, "{}, dim={}", T::DATA_TYPE, N)
             }
             Some(input) => {
-                let type_result = Type::<T>::try_match_verbose(&input.data_type);
+                let type_description = T::describe(input.data_type);
                 let dim_ok = input.dim == N;
-                match (type_result, dim_ok) {
-                    (Ok(_), true) => write!(f, "successful match"),
-                    (Err(err), true) => write!(f, "{}", err),
-                    (Ok(_), false) => {
+                match (type_description.is_match(), dim_ok) {
+                    (true, true) => write!(f, "successful match"),
+                    (false, true) => write!(f, "{}", type_description),
+                    (true, false) => {
                         write!(f, "expected dim={}, but found dim={}", N, input.dim)
                     }
-                    (Err(err), false) => {
+                    (false, false) => {
                         write!(
                             f,
                             "{}; expected dim={}, but found dim={}",
-                            err, N, input.dim
+                            type_description, N, input.dim
                         )
                     }
                 }
@@ -268,8 +264,7 @@ where
 
 impl<T, const N: usize> Regression for ExactTypeBench<T, N>
 where
-    T: 'static,
-    Type<T>: DispatchRule<DataType, Error: std::error::Error + Send + Sync + 'static>,
+    T: AsDataType,
 {
     type Tolerances = Tolerance;
     type Pass = String;

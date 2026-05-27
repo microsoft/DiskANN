@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::{files::InputFile, CheckDeserialization, Checker};
+use diskann_benchmark_runner::{files::InputFile, Checker};
 use serde::{Deserialize, Serialize};
 
 use crate::inputs::{as_input, Example};
@@ -13,13 +13,6 @@ use crate::inputs::{as_input, Example};
 //////////////
 
 as_input!(MetadataIndexBuild);
-
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<MetadataIndexBuild>()?;
-    Ok(())
-}
 
 ///////////////////////////////
 // Metadata-only Index Build //
@@ -62,17 +55,10 @@ impl MetadataIndexBuild {
     pub(crate) const fn tag() -> &'static str {
         "metadata-index-build"
     }
-}
 
-impl CheckDeserialization for MetadataIndexBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Validate filter parameters (which include the paths to queries and label files)
-        self.filter_params
-            .data_labels
-            .check_deserialization(checker)?;
-        self.filter_params
-            .query_predicates
-            .check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.filter_params.data_labels.resolve(checker)?;
+        self.filter_params.query_predicates.resolve(checker)?;
         Ok(())
     }
 }

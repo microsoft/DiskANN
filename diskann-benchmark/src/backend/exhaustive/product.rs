@@ -3,18 +3,20 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "product-exhaustive-search";
 
 crate::utils::stub_impl!("product-quantization", inputs::exhaustive::Product);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
-    benchmarks.register(NAME, imp::ProductQ);
+    registry.register(NAME, imp::ProductQ)?;
 
     #[cfg(not(feature = "product-quantization"))]
-    imp::register(NAME, benchmarks)
+    imp::register(NAME, registry)?;
+
+    Ok(())
 }
 
 //////////////
@@ -26,7 +28,7 @@ mod imp {
     use std::io::Write;
 
     use diskann_benchmark_runner::{
-        dispatcher::{FailureScore, MatchScore},
+        benchmark::{FailureScore, MatchScore},
         utils::{percentiles, MicroSeconds},
         Benchmark, Output,
     };
@@ -107,7 +109,6 @@ mod imp {
             let quantizer = diskann_providers::model::pq::FixedChunkPQTable::new(
                 data.ncols(),
                 base.flatten().into(),
-                vec![0.0; data.ncols()].into(),
                 offsets.as_slice().into(),
             )?;
 
@@ -134,7 +135,7 @@ mod imp {
                 f32::converting_load(datafiles::BinFile(&input.search.queries), input.data_type)?;
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), None)?;
 
             let search_progress =
                 make_progress_bar("running search", queries.nrows(), output.draw_target())?;

@@ -16,10 +16,10 @@ use diskann_benchmark_core::{
     streaming::{executors::bigann, Executor},
 };
 use diskann_benchmark_runner::{
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore},
     output::Output,
-    utils::datatype,
-    Benchmark, Checkpoint,
+    utils::datatype::AsDataType,
+    Benchmark, Checkpoint, Registry,
 };
 use diskann_providers::{
     index::diskann_async,
@@ -57,7 +57,7 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     // Notes on registration:
     //
     // We register all supported search types for `f32`, but intentionally limit the number
@@ -70,49 +70,50 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     // care.
 
     // Full Precision
-    benchmarks.register(
+    registry.register(
         "graph-index-full-precision-f32",
         FullPrecision::<f32>::new()
             .search(plugins::Topk)
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter),
-    );
+    )?;
 
-    benchmarks.register(
+    registry.register(
         "graph-index-full-precision-f16",
         FullPrecision::<f16>::new().search(plugins::Topk),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-full-precision-u8",
         FullPrecision::<u8>::new().search(plugins::Topk),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-full-precision-i8",
         FullPrecision::<i8>::new().search(plugins::Topk),
-    );
+    )?;
 
     // Dynamic Full Precision
-    benchmarks.register(
+    registry.register(
         "graph-index-dynamic-full-precision-f32",
         DynamicFullPrecision::<f32>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-f16",
         DynamicFullPrecision::<f16>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-u8",
         DynamicFullPrecision::<u8>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-i8",
         DynamicFullPrecision::<i8>::new(),
-    );
+    )?;
 
-    product::register_benchmarks(benchmarks);
-    scalar::register_benchmarks(benchmarks);
-    spherical::register_benchmarks(benchmarks);
+    product::register_benchmarks(registry)?;
+    scalar::register_benchmarks(registry)?;
+    spherical::register_benchmarks(registry)?;
+    Ok(())
 }
 
 type FullPrecisionProvider<T> = inmem::DefaultProvider<
@@ -169,14 +170,14 @@ impl<T> Benchmark for FullPrecision<T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
+        + diskann::graph::SampleableForStart
+        + AsDataType,
 {
     type Input = IndexOperation;
     type Output = BuildResult;
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        let score = datatype::Type::<T>::try_match(input.source.data_type());
+        let score = utils::match_data_type::<T>(*input.source.data_type());
         if self.plugins.is_match(&input.search_phase) {
             score
         } else {
@@ -192,17 +193,11 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&IndexOperation>,
     ) -> std::fmt::Result {
-        use diskann_benchmark_runner::dispatcher::{Description, Why};
-
         match input {
             Some(arg) => {
-                let data_type = arg.source.data_type();
-                if datatype::Type::<T>::try_match(data_type).is_err() {
-                    writeln!(
-                        f,
-                        "Data/Query Type: {}",
-                        Why::<datatype::DataType, datatype::Type<T>>::new(data_type)
-                    )?;
+                let desc = T::describe(*arg.source.data_type());
+                if !desc.is_match() {
+                    writeln!(f, "Data/Query Type: {}", desc)?;
                 }
 
                 if !self.plugins.is_match(&arg.search_phase) {
@@ -216,12 +211,7 @@ where
                 Ok(())
             }
             None => {
-                writeln!(
-                    f,
-                    "Data/Query Type: {}",
-                    Description::<datatype::DataType, datatype::Type<T>>::new()
-                )?;
-
+                writeln!(f, "Data/Query Type: {}", T::DATA_TYPE)?;
                 writeln!(f, "Search Kinds: {}", self.plugins.format_kinds())
             }
         }
@@ -307,14 +297,14 @@ impl<T> Benchmark for DynamicFullPrecision<T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
-        + diskann::graph::SampleableForStart,
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
+        + diskann::graph::SampleableForStart
+        + AsDataType,
 {
     type Input = DynamicIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        datatype::Type::<T>::try_match(&input.build.data_type)
+        utils::match_data_type::<T>(input.build.data_type)
     }
 
     fn description(
@@ -322,7 +312,10 @@ where
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&DynamicIndexRun>,
     ) -> std::fmt::Result {
-        datatype::Type::<T>::description(f, input.map(|f| f.build.data_type).as_ref())
+        match input {
+            Some(i) => write!(f, "{}", T::describe(i.build.data_type)),
+            None => write!(f, "{}", T::DATA_TYPE),
+        }
     }
 
     fn run(
@@ -471,7 +464,11 @@ where
         let queries: Arc<Matrix<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+        // compute the maximum value of k used in any search
+        let max_k = topk.max_k();
+
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
         let knn = benchmark_core::search::graph::KNN::new(
             index.clone(),
@@ -657,10 +654,8 @@ fn full_precision_streaming<T>(
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
-    let topk = match &input.search_phase {
-        SearchPhase::Topk(topk) => topk,
-        _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
-    };
+    let topk = input.search_phase.as_topk()?;
+
     let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(&input.build.data))?;
@@ -695,10 +690,14 @@ where
 
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
-    let layered = bigann::WithData::new(managed, data, queries, |path| {
-        Ok(Box::new(datafiles::load_groundtruth(datafiles::BinFile(
-            path,
-        ))?))
+    // compute the maximum value of k used in any search
+    let max_k = topk.max_k();
+
+    let layered = bigann::WithData::new(managed, data, queries, move |path| {
+        Ok(Box::new(datafiles::load_groundtruth(
+            datafiles::BinFile(path),
+            Some(max_k),
+        )?))
     });
 
     Ok(layered)

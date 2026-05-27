@@ -4,7 +4,7 @@
  */
 //! Aligned allocator
 
-use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
+use diskann::{ANNError, ANNResult};
 
 use diskann_quantization::alloc::{AlignedAllocator, Poly};
 
@@ -23,13 +23,17 @@ pub struct PQScratch {
     /// This is used to store the pq coordinates of the candidate vectors.
     pub aligned_pq_coord_scratch: Poly<[u8], AlignedAllocator>,
 
-    /// Query scratch buffer stored as `f32`. `set` initializes it by copying/converting the
-    /// raw query values; `PQTable.PreprocessQuery` can then rotate or otherwise preprocess it.
-    pub rotated_query: Vec<f32>,
+    /// Query scratch buffer stored as `f32`, sized by the PQ table's logical dimension.
+    /// `set` populates it from a caller-provided `&[f32]`; `PQTable::preprocess_query` can
+    /// then rotate or otherwise preprocess it.
+    pub query_scratch: Vec<f32>,
 }
 
 impl PQScratch {
-    /// Create a new pq scratch
+    /// Create a new pq scratch.
+    ///
+    /// `dim` is the PQ table's logical dimension (`PQData::get_dim()`); the
+    /// internal `query_scratch` buffer is sized to exactly this many `f32` slots.
     pub fn new(
         graph_degree: usize,
         dim: usize,
@@ -44,42 +48,41 @@ impl PQScratch {
                 .map_err(ANNError::log_index_error)?;
         let aligned_dist_scratch = Poly::broadcast(0f32, graph_degree, AlignedAllocator::A128)
             .map_err(ANNError::log_index_error)?;
-        let rotated_query = vec![0.0f32; dim];
+        let query_scratch = vec![0.0f32; dim];
 
         Ok(Self {
             aligned_pqtable_dist_scratch,
             aligned_dist_scratch,
             aligned_pq_coord_scratch,
-            rotated_query,
+            query_scratch,
         })
     }
 
-    /// Copy `query` into `rotated_query`, converting to `f32`.
+    /// Copy the first `dim` elements of `query` into `query_scratch`.
     ///
-    /// `dim` is the element count in the `T` representation. The decompressed
-    /// `f32` length returned by `T::as_f32` may differ (e.g. `MinMaxElement`
-    /// expands to more `f32`s than its raw element count), so the destination
-    /// slice is sized by that actual length.
+    /// `query` must already be in full-precision `f32` representation; quantized
+    /// inputs (e.g. `MinMaxElement`) should be decoded via `VectorRepr::as_f32`
+    /// at the caller boundary before invoking this method.
     ///
-    /// Returns `DimensionMismatchError` if `dim > query.len()` or the
-    /// decompressed vector does not fit in `rotated_query`.
-    pub fn set<T: VectorRepr>(&mut self, dim: usize, query: &[T]) -> ANNResult<()> {
-        if dim > query.len() {
+    /// Accepts oversized `query` (only the first `dim` elements are used) for
+    /// backwards compatibility with callers that hold alignment-padded buffers.
+    /// Returns `DimensionMismatchError` if `query.len() < query_scratch.len()`.
+    pub fn set(&mut self, query: &[f32]) -> ANNResult<()> {
+        let dim = self.query_scratch.len();
+        if query.len() < dim {
             return Err(ANNError::log_dimension_mismatch_error(format!(
                 "PQScratch::set: expected query of length >= {dim}, got {}",
                 query.len()
             )));
         }
-        let query = T::as_f32(&query[..dim]).into_ann_result()?;
-        if query.len() > self.rotated_query.len() {
-            return Err(ANNError::log_dimension_mismatch_error(format!(
-                "PQScratch::set: decompressed query of length {} does not fit rotated_query buffer of length {}",
-                query.len(),
-                self.rotated_query.len()
-            )));
-        }
-        self.rotated_query[..query.len()].copy_from_slice(&query);
+        self.query_scratch.copy_from_slice(&query[..dim]);
         Ok(())
+    }
+
+    /// Return the largest number of PQ vectors whose distances can be computed using this
+    /// scratch data structure.
+    pub(crate) fn max_vectors(&self) -> usize {
+        self.aligned_dist_scratch.len()
     }
 }
 
@@ -115,12 +118,14 @@ mod tests {
             0
         );
 
+        assert_eq!(pq_scratch.max_vectors(), graph_degree);
+
         // Test set() method
-        let query: Vec<u8> = (1..=dim).map(|i| i as u8).collect();
-        pq_scratch.set::<u8>(query.len(), &query).unwrap();
+        let query: Vec<f32> = (1..=dim).map(|i| i as f32).collect();
+        pq_scratch.set(&query).unwrap();
 
         (0..query.len()).for_each(|i| {
-            assert_eq!(pq_scratch.rotated_query[i], query[i] as f32);
+            assert_eq!(pq_scratch.query_scratch[i], query[i]);
         });
     }
 }

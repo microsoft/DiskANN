@@ -38,16 +38,13 @@
 //! use diskann_benchmark_runner::{App, registry};
 //!
 //! fn main() -> anyhow::Result<()> {
-//!     let mut inputs = registry::Inputs::new();
-//!     // inputs.register::<MyInput>()?;
-//!
-//!     let mut benchmarks = registry::Benchmarks::new();
-//!     // benchmarks.register::<MyBenchmark>("my-bench");
-//!     // benchmarks.register_regression::<MyRegressionBenchmark>("my-regression");
+//!     let mut registry = registry::Registry::new();
+//!     // registry.register("my-bench", MyBenchmark::default())?;
+//!     // registry.register_regression("my-regression", MyRegressionBenchmark::default())?;
 //!
 //!     let app = App::parse();
 //!     let mut output = diskann_benchmark_runner::output::default();
-//!     app.run(&inputs, &benchmarks, &mut output)
+//!     app.run(&registry, &mut output)
 //! }
 //! ```
 //!
@@ -192,15 +189,14 @@ impl App {
     /// Run the application using the registered `inputs` and `benchmarks`.
     pub fn run(
         &self,
-        inputs: &registry::Inputs,
-        benchmarks: &registry::Benchmarks,
+        registry: &registry::Registry,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<()> {
         match &self.command {
             // If a named benchmark isn't given, then list the available benchmarks.
             Commands::Inputs { describe } => {
                 if let Some(describe) = describe {
-                    if let Some(input) = inputs.get(describe) {
+                    if let Some(input) = registry.input(describe) {
                         let repr = jobs::Unprocessed::format_input(input)?;
                         writeln!(
                             output,
@@ -217,7 +213,7 @@ impl App {
                 }
 
                 writeln!(output, "Available input kinds are listed below:")?;
-                let mut tags: Vec<_> = inputs.tags().collect();
+                let mut tags: Vec<_> = registry.input_tags().collect();
                 tags.sort();
                 for i in tags.iter() {
                     writeln!(output, "    {}", i)?;
@@ -226,7 +222,7 @@ impl App {
             // List the available benchmarks.
             Commands::Benchmarks {} => {
                 writeln!(output, "Registered Benchmarks:")?;
-                for (name, description) in benchmarks.names() {
+                for (name, description) in registry.names() {
                     write!(output, "    {name}:")?;
                     if description.is_empty() {
                         writeln!(output)?;
@@ -248,11 +244,11 @@ impl App {
                 allow_debug,
             } => {
                 // Parse and validate the input.
-                let run = Jobs::load(input_file, inputs)?;
+                let run = Jobs::load(input_file, registry)?;
                 // Check if we have a match for each benchmark.
                 for job in run.jobs().iter() {
                     const MAX_METHODS: usize = 3;
-                    if let Err(mismatches) = benchmarks.debug(job, MAX_METHODS) {
+                    if let Err(mismatches) = registry.debug(job, MAX_METHODS) {
                         let repr = serde_json::to_string_pretty(&job.serialize()?)?;
 
                         writeln!(
@@ -297,12 +293,12 @@ impl App {
                 let serialized = jobs
                     .iter()
                     .map(|job| {
-                        serde_json::to_value(jobs::Unprocessed::new(
+                        Ok(serde_json::to_value(jobs::Unprocessed::new(
                             job.tag().into(),
                             job.serialize()?,
-                        ))
+                        ))?)
                     })
-                    .collect::<Result<Vec<_>, serde_json::Error>>()?;
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 for (i, job) in jobs.iter().enumerate() {
                     let prefix: &str = if i != 0 { "\n\n" } else { "" };
                     writeln!(
@@ -314,7 +310,7 @@ impl App {
 
                     // Run the specified job.
                     let checkpoint = Checkpoint::new(&serialized, &results, output_file)?;
-                    let r = benchmarks.call(job, checkpoint, output)?;
+                    let r = registry.call(job, checkpoint, output)?;
 
                     // Collect the results
                     results.push(r);
@@ -324,7 +320,7 @@ impl App {
                 }
             }
             // Extensions
-            Commands::Check(check) => return self.check(check, inputs, benchmarks, output),
+            Commands::Check(check) => return self.check(check, registry, output),
         };
         Ok(())
     }
@@ -333,8 +329,7 @@ impl App {
     fn check(
         &self,
         check: &Check,
-        inputs: &registry::Inputs,
-        benchmarks: &registry::Benchmarks,
+        registry: &registry::Registry,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<()> {
         match check {
@@ -350,7 +345,7 @@ impl App {
                 Ok(())
             }
             Check::Tolerances { describe } => {
-                let tolerances = benchmarks.tolerances();
+                let tolerances = registry.tolerances();
 
                 match describe {
                     Some(name) => match tolerances.get(&**name) {
@@ -405,12 +400,7 @@ impl App {
                 tolerances,
                 input_file,
             } => {
-                // For verification - we merely check that we can successfully construct
-                // the regression `Checks` struct. It performs all the necessary preflight
-                // checks.
-                let benchmarks = benchmarks.tolerances();
-                let _ =
-                    internal::regression::Checks::new(tolerances, input_file, inputs, &benchmarks)?;
+                let _ = internal::regression::Checks::new(tolerances, input_file, registry)?;
                 Ok(())
             }
             Check::Run {
@@ -420,9 +410,7 @@ impl App {
                 after,
                 output_file,
             } => {
-                let registered = benchmarks.tolerances();
-                let checks =
-                    internal::regression::Checks::new(tolerances, input_file, inputs, &registered)?;
+                let checks = internal::regression::Checks::new(tolerances, input_file, registry)?;
                 let jobs = checks.jobs(before, after)?;
                 jobs.run(output, output_file.as_deref())?;
                 Ok(())
@@ -605,13 +593,9 @@ mod tests {
         fn run(&self, tempdir: &Path) {
             let apps = self.parse_stdin(tempdir);
 
-            // Register inputs
-            let mut inputs = registry::Inputs::new();
-            crate::test::register_inputs(&mut inputs).unwrap();
-
             // Register outputs
-            let mut benchmarks = registry::Benchmarks::new();
-            crate::test::register_benchmarks(&mut benchmarks);
+            let mut registry = registry::Registry::new();
+            crate::test::register_benchmarks(&mut registry).unwrap();
 
             // Run each app invocation - collecting the last output into a buffer.
             //
@@ -631,7 +615,7 @@ mod tests {
                     &mut crate::output::Sink::new()
                 };
 
-                if let Err(err) = app.run(&inputs, &benchmarks, b) {
+                if let Err(err) = app.run(&registry, b) {
                     if is_last {
                         write!(b, "{:?}", err).unwrap();
                     } else {
