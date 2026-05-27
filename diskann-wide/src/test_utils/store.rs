@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use super::common::{USizeConvertTo, iota_slice};
+use super::common::{USizeConvertTo, bytes, iota_slice};
 use crate::{
     bitmask,
     constant::Const,
@@ -14,21 +14,78 @@ use crate::{
 // Since the pattern of tests is the same for many different implementations, we keep
 // testing utilities together in one place to ensure uniformity of testing methodology.
 
+fn check(output: &[u8], target: &[u8], offset: usize, message: &dyn std::fmt::Display) {
+    let iszero = |x: &u8| *x == 0;
+
+    assert!(
+        output[..offset].iter().all(iszero),
+        "prefix of {:?} up to {} is not zero -- {}",
+        output,
+        offset,
+        message
+    );
+
+    assert_eq!(
+        &output[offset..offset + target.len()],
+        target,
+        "output window from {} not equal to target -- {}",
+        offset,
+        message
+    );
+
+    assert!(
+        output[offset + target.len()..].iter().all(iszero),
+        "suffix of {:?} starting from {} is not zero -- {}",
+        output,
+        offset + target.len(),
+        message
+    );
+}
+
+struct FullStore(usize);
+impl std::fmt::Display for FullStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "full SIMD store at byte offset {}", self.0)
+    }
+}
+
+struct PredicatedStore {
+    api: &'static str,
+    keep_first: usize,
+    sub: usize,
+}
+impl std::fmt::Display for PredicatedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` with `keep_first` = {}, `sub` = {}",
+            self.api, self.keep_first, self.sub
+        )
+    }
+}
+
 // Test the store operations in `SIMDVector`.
 // Require that the input type is constructible from an unsigned, 64-bit integer to enable
 // initialization and comparison of the loaded result.
 pub(crate) fn test_store_simd<T, const N: usize, V>(arch: V::Arch)
 where
-    T: Default + std::marker::Copy + std::cmp::PartialEq + std::fmt::Debug + std::ops::AddAssign,
+    T: Default
+        + std::marker::Copy
+        + std::cmp::PartialEq
+        + std::fmt::Debug
+        + std::ops::AddAssign
+        + bytemuck::Pod,
     usize: USizeConvertTo<T>,
     Const<N>: ArrayType<T, Type = [T; N]>,
     bitmask::BitMask<N, V::Arch>: SIMDMask<Arch = V::Arch>,
     V: SIMDVector<Scalar = T, ConstLanes = Const<N>>,
 {
-    // Test stores for all alignments.
-    // Our strategy is to create an array of twice the underlying vector width and perform a
-    // full-width stores on each offset.
-    let mut output = vec![T::default(); 2 * N];
+    let elsize = std::mem::size_of::<T>();
+
+    // Test full-width stores at every byte offset to verify unaligned store correctness.
+    // A `u8` buffer of `2 * N * elsize` bytes lets us place the write at every byte
+    // position and confirm `store_simd` behaves like `ptr::write_unaligned`.
+    let mut output = vec![0u8; elsize * 2 * N];
 
     let mut input = [T::default(); N];
     iota_slice(input.as_mut_slice());
@@ -38,98 +95,65 @@ where
     }
     let v = V::from_array(arch, input);
 
-    for i in 0..N {
-        output.fill(T::default());
+    for i in 0..=N * elsize {
+        output.fill(0);
 
-        // SAFETY: By construction `input` is built to hold `2 * N` elements.
-        // The maximum offset we apply is `N`, so all stores are valid.
-        //
-        // `store_simd` does not have alignment requirements stricter than `N`.
-        unsafe { v.store_simd(output.as_mut_ptr().add(i)) };
-        // Ensure we read the correct window of the input array.
-        for (j, value) in output.iter().enumerate() {
-            if j < i {
-                assert_eq!(
-                    *value,
-                    T::default(),
-                    "values before the write pointer should not be accessed"
-                );
-            } else if j < i + N {
-                assert_eq!(
-                    *value,
-                    (j - i + 1).test_convert(),
-                    "expected index {} to be set to {}",
-                    j,
-                    (j - i + 1)
-                );
-            } else {
-                assert_eq!(
-                    *value,
-                    T::default(),
-                    "values after the write section should not be accessed"
-                );
-            }
-        }
+        // SAFETY: `i + N * elsize <= 2 * N * elsize`, so the write is in bounds.
+        unsafe { v.store_simd(output.as_mut_ptr().add(i).cast::<T>()) };
+
+        check(&output, bytes(&input), i, &FullStore(i));
     }
 
-    // Set up each store so that writing beyond the requested number of lanes will generate
-    // an out-of-bounds write.
+    let mut output = vec![0u8; elsize * (N + 1)];
+    let base = output.as_mut_ptr();
+
+    // Test predicated stores at every byte offset.
+    // The buffer is `(N + 1) * elsize` bytes so that writing beyond `kept` elements would
+    // exceed the allocation, letting miri catch over-writes.
     for keep_first in 0..=N + 5 {
-        let offset = N - keep_first.min(N);
+        let kept = keep_first.min(N);
+        let expected = bytes(&input[..kept]);
+        for sub in 0..(elsize + 1) {
+            let offset = elsize * (N - kept + 1) - sub;
 
-        // A helper lambda to provide uniform checking for the various ways we can invoke
-        // predicated loads.
-        let check = |arr: [T; N]| {
-            for (i, value) in arr.iter().enumerate() {
-                if i < offset {
-                    assert_eq!(*value, 0.test_convert());
-                } else {
-                    assert_eq!(*value, (i - offset + 1).test_convert());
-                }
-            }
-        };
+            // SAFETY: for all three stores below: `offset + kept * elsize <= (N + 1) * elsize`,
+            // so `ptr` through `ptr + kept` elements is within the allocation.
+            // Each API must not write beyond `keep_first` elements.
+            let ptr = unsafe { base.add(offset).cast::<T>() };
 
-        // Need miri to ensure the safety of these stores.
+            let label = |api| PredicatedStore {
+                api,
+                keep_first,
+                sub,
+            };
 
-        let mut output = [T::default(); N];
-        // SAFETY: `offset` is less than or equal to `N`, so the memory between
-        // `output.as_mut_ptr()` and `ptr` is valid and is contained within a single
-        // allocated object.
-        let ptr = unsafe { output.as_mut_ptr().add(offset) };
+            output.fill(0);
 
-        // Store using the `store_simd_first` API.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::store_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        unsafe { v.store_simd_first(ptr, keep_first) };
-        check(output);
+            // SAFETY:
+            // * `ptr` is valid for `kept` elements.
+            // * Each API must not read beyond `keep_first` elements.
+            unsafe { v.store_simd_first(ptr, keep_first) };
+            check(&output, expected, offset, &label("store_simd_first"));
 
-        let mut output = [T::default(); N];
-        // SAFETY: `offset` is less than or equal to `N`, so the memory between
-        // `output.as_mut_ptr()` and `ptr` is valid and is contained within a single
-        // allocated object.
-        let ptr = unsafe { output.as_mut_ptr().add(offset) };
+            output.fill(0);
+            // SAFETY: Same as `store_simd_first`.
+            unsafe { v.store_simd_masked_logical(ptr, V::Mask::keep_first(arch, keep_first)) };
+            check(
+                &output,
+                expected,
+                offset,
+                &label("store_simd_masked_logical"),
+            );
 
-        // Check by constructing a logical mask.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::store_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        unsafe { v.store_simd_masked_logical(ptr, V::Mask::keep_first(arch, keep_first)) };
-        check(output);
-
-        let mut output = [T::default(); N];
-        // SAFETY: `offset` is less than or equal to `N`, so the memory between
-        // `output.as_mut_ptr()` and `ptr` is valid and is contained within a single
-        // allocated object.
-        let ptr = unsafe { output.as_mut_ptr().add(offset) };
-
-        // Check by constructing a bit-mask mask.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::store_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        unsafe {
-            v.store_simd_masked(
-                ptr,
-                <Const<N> as BitMaskType<V::Arch>>::Type::keep_first(arch, keep_first),
-            )
-        };
-        check(output);
+            output.fill(0);
+            // SAFETY: Same as `store_simd_first`.
+            unsafe {
+                v.store_simd_masked(
+                    ptr,
+                    <Const<N> as BitMaskType<V::Arch>>::Type::keep_first(arch, keep_first),
+                )
+            };
+            check(&output, expected, offset, &label("store_simd_masked"));
+        }
     }
 }

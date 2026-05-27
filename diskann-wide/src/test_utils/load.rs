@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use super::common::{USizeConvertTo, iota_slice};
+use super::common::{USizeConvertTo, bytes, bytes_mut, iota_slice};
 use crate::{
     bitmask,
     constant::Const,
@@ -19,91 +19,93 @@ use crate::{
 // initialization and comparison of the loaded result.
 pub(crate) fn test_load_simd<T, const N: usize, V>(arch: V::Arch)
 where
-    T: Default + std::marker::Copy + std::cmp::PartialEq + std::fmt::Debug,
+    T: Default + std::marker::Copy + std::cmp::PartialEq + std::fmt::Debug + bytemuck::Pod,
     usize: USizeConvertTo<T>,
     Const<N>: ArrayType<T, Type = [T; N]>,
     bitmask::BitMask<N, V::Arch>: SIMDMask<Arch = V::Arch>,
     V: SIMDVector<Scalar = T, ConstLanes = Const<N>>,
 {
-    // Test loads for all alignments.
-    // Our strategy is to create an array of twice the underlying vector width and perform a
-    // full-width load on each offset.
-    let mut input = vec![T::default(); 2 * N];
-    iota_slice(input.as_mut_slice());
+    let mut reference = [T::default(); N];
+    iota_slice(&mut reference);
 
-    for i in 0..N {
-        // SAFETY: By construction `input` is built to hold `2 * N` elements.
-        // The maximum offset we apply is `N`, so all reads are valid.
-        //
-        // `load_simd` does not have alignment requirements stricter than `N`.
-        let v = unsafe { V::load_simd(arch, input.as_ptr().add(i)) };
+    // Test full-width loads at every byte offset to verify unaligned load correctness.
+    // A `u8` buffer of `2 * N * elsize` bytes lets us slide the reference data to every
+    // byte position and confirm `load_simd` behaves like `ptr::read_unaligned`.
+    let elsize: usize = std::mem::size_of::<T>();
+    let mut input = vec![0u8; elsize * 2 * N];
+
+    for i in 0..=N * elsize {
+        input.fill(0);
+        input[i..i + elsize * N].copy_from_slice(bytes(&reference));
+
+        // SAFETY: `i + N * elsize <= 2 * N * elsize`, so the read is in bounds.
+        let v = unsafe { V::load_simd(arch, input.as_ptr().add(i).cast::<T>()) };
         let arr = v.to_array();
-        // Ensure we read the correct window of the input array.
-        for (j, value) in arr.iter().enumerate().take(N) {
-            assert_eq!(*value, (i + j).test_convert());
-        }
+        assert_eq!(arr, reference);
     }
 
-    // Test `load_first`.
-    // We will use a sliding window over an array so `miri` can check for out-of-bounds
-    // reads.
-    let mut input = [T::default(); N];
-    iota_slice(input.as_mut_slice());
+    // Test predicated loads at every byte offset.
+    //
+    // `reference` is `N + 1` elements so the window can slide by up to one full element
+    // while still having room for a full-width masked load. The pointer is placed so that
+    // reading beyond `kept` elements would exceed the allocation, letting miri catch
+    // over-reads.
+    let mut reference = vec![T::default(); N + 1];
+    iota_slice(&mut reference);
 
-    // Set the loop bounds from 0 to one greater than the number of lanes.
-    // Set up each load so that reading beyond the requested number of lanes will generate
-    // an out-of-bounds read.
     for keep_first in 0..=N + 5 {
-        let offset = N - keep_first.min(N);
+        let kept = keep_first.min(N);
 
-        // SAFETY: `offset` less than or equal to `N`, the memory between `input.as_ptr()`
-        // and `ptr` is valid and is contained within a single allocated object.
-        let ptr = unsafe { input.as_ptr().add(offset) };
+        for sub in 0..(elsize + 1) {
+            let offset = elsize * (N - kept + 1) - sub;
 
-        // A helper lambda to provide uniform checking for the various ways we can invoke
-        // predicated loads.
-        let check = |arr: [T; N]| {
-            for (i, value) in arr.iter().enumerate().take(N) {
-                if i < keep_first {
-                    assert_eq!(*value, (N - keep_first.min(N) + i).test_convert());
-                } else {
-                    assert_eq!(*value, 0.test_convert());
-                }
-            }
-        };
+            let mut expected = [T::default(); N];
+            bytes_mut(&mut expected[..kept])
+                .copy_from_slice(&bytes(&reference)[offset..offset + kept * elsize]);
 
-        // Need miri to ensure the safety of this load.
+            // SAFETY: `offset + kept * elsize <= (N + 1) * elsize`, so `ptr` through
+            // `ptr + kept` elements is within the allocation.
+            let ptr = unsafe { reference.as_ptr().byte_add(offset) };
 
-        // Load using the `load_simd_first` API.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::load_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        let v = unsafe { V::load_simd_first(arch, ptr, keep_first) };
-        let arr = v.to_array();
-        println!("Array From First = {:?}", arr);
-        check(arr);
+            // SAFETY:
+            // * `ptr` is valid for `kept` elements.
+            // * Each API must not read beyond `keep_first` elements.
+            let v = unsafe { V::load_simd_first(arch, ptr, keep_first) };
+            assert_eq!(
+                v.to_array(),
+                expected,
+                "Failed `load_simd_first` for keep_first = {}, sub = {}",
+                keep_first,
+                sub
+            );
 
-        // Check by constructing a logical mask.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::load_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        let v = unsafe {
-            V::load_simd_masked_logical(arch, ptr, V::Mask::keep_first(arch, keep_first))
-        };
-        let arr = v.to_array();
-        println!("Array Logical Mask = {:?}", arr);
-        check(arr);
+            // SAFETY: Same a `V::load_simd_first`.
+            let v = unsafe {
+                V::load_simd_masked_logical(arch, ptr, V::Mask::keep_first(arch, keep_first))
+            };
+            assert_eq!(
+                v.to_array(),
+                expected,
+                "Failed `load_simd_masked_logical` for keep_first = {}, sub = {}",
+                keep_first,
+                sub
+            );
 
-        // Check by constructing a bit-mask mask.
-        // SAFETY: `ptr` points to valid memory and the contract of `V::load_simd_first`
-        // must guarantee that nothing beyond the `keep_first` elements is accessed.
-        let v = unsafe {
-            V::load_simd_masked(
-                arch,
-                ptr,
-                <Const<N> as BitMaskType<V::Arch>>::Type::keep_first(arch, keep_first),
-            )
-        };
-        let arr = v.to_array();
-        println!("Array Logical Mask = {:?}", arr);
-        check(arr);
+            // SAFETY: Same a `V::load_simd_first`.
+            let v = unsafe {
+                V::load_simd_masked(
+                    arch,
+                    ptr,
+                    <Const<N> as BitMaskType<V::Arch>>::Type::keep_first(arch, keep_first),
+                )
+            };
+            assert_eq!(
+                v.to_array(),
+                expected,
+                "Failed `load_simd_masked` for keep_first = {}, sub = {}",
+                keep_first,
+                sub
+            );
+        }
     }
 }
