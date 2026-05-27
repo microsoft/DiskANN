@@ -274,7 +274,12 @@ mod recompress_tests {
             Transform::Null(NullTransform::new(NonZeroUsize::new(dim).unwrap())),
             Positive::new(1.0).unwrap(),
         );
-        let recompressor = Recompressor::new(Positive::new(grid_scale).unwrap());
+
+        let g = Positive::new(grid_scale).unwrap();
+
+        let recompressor = Recompressor::new(g);
+
+        assert_eq!(recompressor.grid_scale(), g);
 
         // Generate random vector and compress to N bits
         let vector: Vec<f32> = distribution.sample_iter(rng).take(dim).collect();
@@ -374,7 +379,7 @@ mod recompress_tests {
     #[test]
     fn test_dimension_mismatch_error() {
         // SAFETY: I'm positive that 1.0 is positive.
-        let recompressor = Recompressor::new(unsafe { Positive::<f32>::new_unchecked(1.0) });
+        let recompressor = Recompressor::new(Positive::<f32>::new(1.0).unwrap());
 
         let mut src = Data::<8>::new_boxed(10);
         src.set_meta(MinMaxCompensation {
@@ -405,7 +410,7 @@ mod recompress_tests {
         );
 
         // SAFETY: I'm positive that 1.0 is positive.
-        let recompressor = Recompressor::new(unsafe { Positive::<f32>::new_unchecked(1.0) });
+        let recompressor = Recompressor::new(Positive::<f32>::new(1.0).unwrap());
 
         let constant_value = 42.5f32;
         let vector = vec![constant_value; dim];
