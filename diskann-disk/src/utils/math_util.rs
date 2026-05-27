@@ -15,6 +15,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 use diskann::{ANNError, ANNErrorKind, ANNResult};
 use diskann_linalg::{self, Transpose};
 use diskann_providers::utils::{ParallelIteratorInPool, RayonThreadPoolRef};
+use diskann_vector::{norm::FastL2NormSquared, Norm};
 use rayon::prelude::*;
 
 // This is the chunk size applied when computing the closest centers in a block.
@@ -73,15 +74,6 @@ impl PartialEq for PivotContainer {
 
 impl Eq for PivotContainer {}
 
-/// Compute the L2-squared norm of a single vector slice.
-fn compute_vec_l2sq(slice: &[f32]) -> f32 {
-    let mut sum_squared = 0.0;
-    for &value in slice {
-        sum_squared += value * value;
-    }
-    sum_squared
-}
-
 /// Compute L2-squared norms of data stored in row-major num_points * dim,
 /// need to be pre-allocated
 pub fn compute_vecs_l2sq(
@@ -115,14 +107,14 @@ pub fn compute_vecs_l2sq(
 
     if dim < 5 {
         for (vec_l2sq, chunk) in vecs_l2sq.iter_mut().zip(data.chunks_exact(dim)) {
-            *vec_l2sq = compute_vec_l2sq(chunk);
+            *vec_l2sq = FastL2NormSquared.evaluate(chunk);
         }
     } else {
         vecs_l2sq
             .par_iter_mut()
             .zip(data.par_chunks_exact(dim))
             .for_each_in_pool(pool, |(vec_l2sq, chunk)| {
-                *vec_l2sq = compute_vec_l2sq(chunk);
+                *vec_l2sq = FastL2NormSquared.evaluate(chunk);
             });
     }
 
