@@ -396,9 +396,7 @@ impl diskann_record::save::Save for SimpleNeighborProviderAsync<u32> {
 impl diskann_record::load::Load<'_> for SimpleNeighborProviderAsync<u32> {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(object, [graph: diskann_record::save::Handle]);
         let mut reader = object.read(&graph)?;
         let shim = crate::storage::SingleUseReadProvider::new(GRAPH_ARTIFACT, &mut reader)
@@ -507,8 +505,7 @@ mod tests {
     fn round_trip_helper(provider: &TestNeighborProvider) -> TestNeighborProvider {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = dir.path().join("manifest.json");
-        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
-            .expect("save_to_disk");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest).expect("save_to_disk");
         diskann_record::load::load_from_disk::<TestNeighborProvider>(&manifest, dir.path())
             .expect("load_from_disk")
     }
@@ -523,7 +520,11 @@ mod tests {
             let mut r = AdjacencyList::new();
             left.get_neighbors_sync(i, &mut l).unwrap();
             right.get_neighbors_sync(i, &mut r).unwrap();
-            assert_eq!(l, r, "adjacency list for node {} differs after round-trip", i);
+            assert_eq!(
+                l, r,
+                "adjacency list for node {} differs after round-trip",
+                i
+            );
         }
     }
 
@@ -541,8 +542,7 @@ mod tests {
         let max_points = 8;
         let additional_points = 2;
         let max_degree = 5;
-        let provider =
-            TestNeighborProvider::new(max_points, additional_points, max_degree, 1.0);
+        let provider = TestNeighborProvider::new(max_points, additional_points, max_degree, 1.0);
         for i in 0..max_points + additional_points {
             let neighbors: Vec<u32> = (1..4).map(|j| i as u32 + j).collect();
             provider.set_neighbors_sync(i, &neighbors).unwrap();
@@ -560,8 +560,7 @@ mod tests {
         let additional_points = 1;
         let max_degree = 4;
         let slack = 1.5;
-        let provider =
-            TestNeighborProvider::new(max_points, additional_points, max_degree, slack);
+        let provider = TestNeighborProvider::new(max_points, additional_points, max_degree, slack);
         // dim = (max_degree * slack) as usize + 1 = 7
         let expected_dim = (max_degree as f32 * slack) as usize + 1;
         // Fill each row to its inflated capacity to make sure the wider row width matters.

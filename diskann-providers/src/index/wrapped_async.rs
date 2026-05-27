@@ -798,15 +798,8 @@ mod tests {
             .map(|_| (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect())
             .collect();
 
-        let (build_config, parameters) = diskann_async::simplified_builder(
-            20,
-            16,
-            Metric::L2,
-            dim,
-            max_points,
-            |_| {},
-        )
-        .unwrap();
+        let (build_config, parameters) =
+            diskann_async::simplified_builder(20, 16, Metric::L2, dim, max_points, |_| {}).unwrap();
 
         let fp_precursor =
             CreateFullPrecision::new(parameters.dim, parameters.prefetch_cache_line_level);
@@ -830,8 +823,7 @@ mod tests {
 
         let mut ids_orig = vec![0u32; top_k];
         let mut dists_orig = vec![0.0f32; top_k];
-        let mut output_orig =
-            search_output_buffer::IdDistance::new(&mut ids_orig, &mut dists_orig);
+        let mut output_orig = search_output_buffer::IdDistance::new(&mut ids_orig, &mut dists_orig);
         let stats_orig = index
             .search(kind, &FullPrecision, &ctx, query, &mut output_orig)
             .unwrap();
@@ -849,8 +841,7 @@ mod tests {
         // -- Load via diskann-record into a fresh sync wrapper -----------------
         type TestProvider = inmem::FullPrecisionProvider<f32, NoStore, NoDeletes>;
         let loaded_inner: graph::DiskANNIndex<TestProvider> =
-            diskann_record::load::load_from_disk(&manifest, dir.path())
-                .expect("load_from_disk");
+            diskann_record::load::load_from_disk(&manifest, dir.path()).expect("load_from_disk");
         let (rt, handle) = create_current_thread_runtime();
         let loaded: DiskANNIndex<TestProvider> = DiskANNIndex {
             inner: Arc::new(loaded_inner),

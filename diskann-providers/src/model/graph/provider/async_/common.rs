@@ -484,9 +484,7 @@ impl diskann_record::save::Save for StartPoints {
 impl diskann_record::load::Load<'_> for StartPoints {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(object, [start: u32, end: u32]);
         Ok(Self { start, end })
     }
@@ -512,9 +510,7 @@ impl diskann_record::save::Save for NoStore {
 impl diskann_record::load::Load<'_> for NoStore {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        _object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(_object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         Ok(Self)
     }
 
@@ -539,9 +535,7 @@ impl diskann_record::save::Save for NoDeletes {
 impl diskann_record::load::Load<'_> for NoDeletes {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        _object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(_object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         Ok(Self)
     }
 
@@ -580,9 +574,7 @@ impl diskann_record::save::Save for PrefetchCacheLineLevel {
 impl diskann_record::load::Load<'_> for PrefetchCacheLineLevel {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         match object.single_key()? {
             PREFETCH_CACHE_LINE_4 => Ok(Self::CacheLine4),
             PREFETCH_CACHE_LINE_8 => Ok(Self::CacheLine8),
@@ -643,10 +635,8 @@ mod tests {
     {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = dir.path().join("manifest.json");
-        diskann_record::save::save_to_disk(value, dir.path(), &manifest)
-            .expect("save_to_disk");
-        diskann_record::load::load_from_disk::<T>(&manifest, dir.path())
-            .expect("load_from_disk")
+        diskann_record::save::save_to_disk(value, dir.path(), &manifest).expect("save_to_disk");
+        diskann_record::load::load_from_disk::<T>(&manifest, dir.path()).expect("load_from_disk")
     }
 
     #[test]

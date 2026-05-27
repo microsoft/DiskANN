@@ -131,9 +131,7 @@ impl diskann_record::save::Save for Metric {
 impl diskann_record::load::Load<'_> for Metric {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         match object.single_key()? {
             METRIC_VARIANT_COSINE => Ok(Self::Cosine),
             METRIC_VARIANT_INNER_PRODUCT => Ok(Self::InnerProduct),
@@ -206,9 +204,8 @@ mod tests {
             let manifest = dir.path().join("metric.json");
             diskann_record::save::save_to_disk(&metric, dir.path(), &manifest)
                 .expect("save_to_disk");
-            let restored: Metric =
-                diskann_record::load::load_from_disk(&manifest, dir.path())
-                    .expect("load_from_disk");
+            let restored: Metric = diskann_record::load::load_from_disk(&manifest, dir.path())
+                .expect("load_from_disk");
             assert_eq!(metric, restored);
         }
     }

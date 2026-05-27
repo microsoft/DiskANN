@@ -140,7 +140,11 @@ macro_rules! save_nonzero {
     }
 }
 
-save_nonzero!(std::num::NonZeroU32, std::num::NonZeroU64, std::num::NonZeroUsize);
+save_nonzero!(
+    std::num::NonZeroU32,
+    std::num::NonZeroU64,
+    std::num::NonZeroUsize
+);
 
 #[derive(Debug, Clone, Copy)]
 #[doc(hidden)]

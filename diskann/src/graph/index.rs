@@ -2963,9 +2963,7 @@ where
 {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'a>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'a>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(object, [config: Config, data_provider: DP]);
         // The scratch pool is transient runtime state; thread sizing is a deployment
         // decision and not part of the persisted index. Loaders that want a specific

@@ -773,9 +773,7 @@ where
 {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'a>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'a>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(
             object,
             [
@@ -952,8 +950,7 @@ mod tests {
         for i in 0..total as u32 {
             let v: Vec<f32> = (0..dim).map(|j| (i as f32) * 10.0 + j as f32).collect();
             provider.base_vectors.set_element(&i, &v).unwrap();
-            let neighbors: Vec<u32> =
-                (0..3).map(|j| (i + j + 1) % total as u32).collect();
+            let neighbors: Vec<u32> = (0..3).map(|j| (i + j + 1) % total as u32).collect();
             provider
                 .neighbor_provider
                 .set_neighbors_sync(i as usize, &neighbors)
@@ -976,8 +973,13 @@ mod tests {
 
             let mut a = AdjacencyList::new();
             let mut b = AdjacencyList::new();
-            left.neighbor_provider.get_neighbors_sync(i, &mut a).unwrap();
-            right.neighbor_provider.get_neighbors_sync(i, &mut b).unwrap();
+            left.neighbor_provider
+                .get_neighbors_sync(i, &mut a)
+                .unwrap();
+            right
+                .neighbor_provider
+                .get_neighbors_sync(i, &mut b)
+                .unwrap();
             assert_eq!(a, b, "adjacency list at {i} differs");
         }
     }
@@ -985,8 +987,7 @@ mod tests {
     fn round_trip_helper(provider: &TestProvider) -> TestProvider {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = dir.path().join("manifest.json");
-        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
-            .expect("save_to_disk");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest).expect("save_to_disk");
         diskann_record::load::load_from_disk::<TestProvider>(&manifest, dir.path())
             .expect("load_from_disk")
     }

@@ -145,9 +145,7 @@ impl diskann_record::save::Save for IndexConfiguration {
 impl diskann_record::load::Load<'_> for IndexConfiguration {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(
             object,
             [
@@ -260,10 +258,8 @@ mod tests {
     {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = dir.path().join("manifest.json");
-        diskann_record::save::save_to_disk(value, dir.path(), &manifest)
-            .expect("save_to_disk");
-        diskann_record::load::load_from_disk::<T>(&manifest, dir.path())
-            .expect("load_from_disk")
+        diskann_record::save::save_to_disk(value, dir.path(), &manifest).expect("save_to_disk");
+        diskann_record::load::load_from_disk::<T>(&manifest, dir.path()).expect("load_from_disk")
     }
 
     #[test]

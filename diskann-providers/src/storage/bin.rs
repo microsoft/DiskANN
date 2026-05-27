@@ -13,7 +13,6 @@ use diskann::{
 };
 use diskann_utils::io::Metadata;
 
-
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
 /// These traits are meant for IO purposes and are not meant as general access traits for
@@ -137,14 +136,13 @@ where
     // Open the reader exactly once: `VectorDataIterator::new` reads and exposes the
     // file's metadata header, so we don't need a separate `load_metadata_from_file`
     // call. This keeps single-use readers (e.g. record-shim streams) working.
-    let itr = crate::utils::VectorDataIterator::<_, T>::new(path, None, provider).map_err(
-        |err| {
+    let itr =
+        crate::utils::VectorDataIterator::<_, T>::new(path, None, provider).map_err(|err| {
             ANNError::log_index_error(format_args!(
                 "failed to load data file \"{}\" due to the following error: {}",
                 path, err
             ))
-        },
-    )?;
+        })?;
 
     let num_points = itr.get_num_points();
     let dimension = itr.get_dimension();

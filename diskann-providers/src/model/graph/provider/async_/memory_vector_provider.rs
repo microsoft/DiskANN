@@ -222,9 +222,7 @@ where
 {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(object, [vectors: diskann_record::save::Handle]);
         let mut reader = object.read(&vectors)?;
         let shim = crate::storage::SingleUseReadProvider::new(VECTORS_ARTIFACT, &mut reader)
@@ -414,8 +412,7 @@ mod tests {
     fn round_trip(provider: &TestVectorProvider) -> TestVectorProvider {
         let dir = tempfile::tempdir().expect("tempdir");
         let manifest = dir.path().join("manifest.json");
-        diskann_record::save::save_to_disk(provider, dir.path(), &manifest)
-            .expect("save_to_disk");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest).expect("save_to_disk");
         diskann_record::load::load_from_disk::<TestVectorProvider>(&manifest, dir.path())
             .expect("load_from_disk")
     }

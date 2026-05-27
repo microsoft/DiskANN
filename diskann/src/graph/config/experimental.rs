@@ -98,9 +98,7 @@ impl diskann_record::save::Save for InsertRetry {
 impl diskann_record::load::Load<'_> for InsertRetry {
     const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
 
-    fn load(
-        object: diskann_record::load::Object<'_>,
-    ) -> diskann_record::load::Result<Self> {
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
         diskann_record::load_fields!(
             object,
             [
