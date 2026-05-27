@@ -40,6 +40,7 @@ pub type VectorFilter<'a, Data> =
 ### Goals
 
 1. Add beta-biased disk graph search as a first-class capability.
+2. Provide a single extension point for future filter algorithms without changing the public `search()` signature
 
 ## Proposal
 
@@ -117,7 +118,7 @@ impl<'a> SearchPlan<'a> {
 
 The lifetime parameter `'a` carries the borrow scope of any captured data in the predicate. For closures that own (move in) their captures, callers don't need to write the lifetime — Rust infers `'static`. Callers that need to borrow from a stack frame for a single `search()` call get a shorter inferred `'a`, matching today's `VectorFilter<'a, Data>` flexibility.
 
-The `u32` argument to a `Predicate` is the **external ID**. See §ID convention for the rationale and the call sites updated in this change.
+The `u32` argument to a `Predicate` is the **internal ID** (`DiskProvider::InternalId`). All three invocation sites (`flat_search`, `pq_distances`, `RerankAndFilter::post_process`) pass internal IDs uniformly — no `to_external_id` conversion at the predicate boundary. 
 
 ### Supported configurations
 
@@ -133,7 +134,7 @@ The `u32` argument to a `Predicate` is the **external ID**. See §ID convention 
 
 - **Hierarchical, not flat.** `SearchPlan { FlatScan, Graph(GraphMode) }` separates the graph-vs-linear-scan break (different code paths) from the choice of graph algorithm/modifier. Future graph algorithms slot into `GraphMode`, not the top-level enum.
 - **Invalid states unrepresentable.** `BetaFilter` carries the predicate inline; the `FlatScan` path has no `GraphMode` field. Beta-without-predicate and beta-on-flat-scan are compile-time errors, not runtime asserts.
-- **Project at the boundary into a sum type.** `GraphMode` exposes constructors only — no accessors. `search_strategy()` projects the plan into a `FilterMode<'a>` sum type via one exhaustive match (see below). Adding a `GraphMode` variant updates exactly one match site. The sum-type shape (rather than two independent `Option` fields) is what makes `(None, Some(β))` unrepresentable at the strategy layer — same pattern as the public `GraphMode`, extended one layer down.
+- **All `GraphMode` variant matching is delegated to `search_strategy()`.** That's the only site that introspects the enum (see §`search_strategy` projection), so adding a new variant updates exactly one match arm.
 
 ### `search()` signature
 
@@ -249,31 +250,6 @@ Exhaustiveness forces every future `FilterMode` variant through both sites.
 
 Boundary code in the benchmark and tools constructs `SearchPlan` once and passes it down. The `--is_flat_search` benchmark flag and the corresponding `is_flat_search` field in benchmark JSON schemas (`diskann-benchmark/example/*.json`, `diskann-benchmark/perf_test_inputs/*.json`) are removed in the same change — no external consumers depend on the old schema, so no migration grace period is needed.
 
-### ID convention — fix the internal/external mismatch in `RerankAndFilter`
-
-Current state:
-
-- **Input predicate is keyed on `ExternalId`** by `DataProvider` contract.
-- **`Index::flat_search`** is correct — calls `to_external_id` before invoking the predicate ([diskann/src/graph/index.rs](../diskann/src/graph/index.rs)).
-- **`RerankAndFilter::post_process`** is incorrect — invokes the predicate with `Neighbor::id` (the **internal ID**) with no conversion ([disk_provider.rs:315](../diskann-disk/src/search/provider/disk_provider.rs)). Works today only because `DiskProvider::to_internal_id` and `to_external_id` are identity ([disk_provider.rs:93-124](../diskann-disk/src/search/provider/disk_provider.rs)) — `internal_id == external_id == u32`. A non-identity disk provider would silently produce different results between flat-scan and graph paths.
-
-This RFC fixes the mismatch: every site invokes the predicate with `ExternalId`.
-
-**Sites updated in the implementation PR:**
-
-- **`RerankAndFilter::post_process`** — call `to_external_id` on each candidate before invoking the predicate.
-- **`pq_distances`** (new code path for `FilterMode::BetaFilter`) — call `to_external_id` on each id before invoking the predicate.
-
-**Sites already correct:**
-
-- **`Index::flat_search`** — already converts to external before invoking.
-
-**Cost** in the identity case is negligible: `to_external_id` returns `Ok(id)`; `#[inline]` lets LLVM fold it, leaving only a `Result` tag-check that the inliner constant-folds when it sees the `Ok(_)` body. In the PQ-distance hot loop this is branch-predicted free.
-
-**Caller impact:** none. Bitmaps that callers build from prior search results are already keyed on external IDs by the `DataProvider` contract — they were the *intended* input all along; this RFC just makes every invocation site honor it.
-
-**Caveat:** the "external" contract stays documented but not type-enforced — both ID kinds are bare `u32` today. Making it type-level (newtyping `ExternalId`) is deferred (see §Non-Goals).
-
 ### Where beta is/isn't applied
 
 | Location | Beta? | Why |
@@ -315,10 +291,9 @@ The exhaustiveness check guarantees the compiler refuses to build until every `m
 - **Beta on `flat_search`.** Brute-force enumeration doesn't benefit from traversal biasing; the type system forbids it.
 - **`VectorIdType` genericity.** `Predicate` pins `u32`. The disk path already constrains `Data::VectorIdType = u32` ([disk_provider.rs:548-557](../diskann-disk/src/search/provider/disk_provider.rs)); a future `u64` ID type would touch this API surface — accepted cost.
 - **Additional `GraphMode` variants in this change.** The enum is built for extension, but each new variant should land with its own consumer integration, tests, and (for traversal modifiers) recall data.
-- **Newtyping `DiskProvider::ExternalId`.** The "predicate sees external IDs" contract (§Types) is documented but not type-enforced — both ID kinds are bare `u32` today. Making the distinction type-level (e.g. `struct ExternalId(u32);`) would catch accidental cross-space passing at compile time but touches the broader `DataProvider` surface beyond this RFC's scope. Deferred.
 
 
 ## Future Work
 
-- [ ] **Align disk and in-memory beta-filter behavior.** After this change, `GraphMode::BetaFilter` on the disk path applies *both* beta-biased traversal *and* a hard post-filter (non-matching IDs are dropped in `RerankAndFilter`). The in-memory `BetaFilter` strategy ([diskann-providers/.../betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) only applies the beta bias — non-matching IDs can still appear in results. A user asking for "beta filter" gets different result sets depending on which side they're on. Future work: pick one semantics (most likely "bias + post-filter," matching the disk side) and align the in-memory strategy, or document the divergence explicitly in both APIs. **Note**: keying the disk `Predicate` on `ExternalId` (§Types) already closes one corner of this divergence — both sides now address the caller's ID space.
+- [ ] **Align disk and in-memory beta-filter behavior.** After this change, `GraphMode::BetaFilter` on the disk path applies *both* beta-biased traversal *and* a hard post-filter (non-matching IDs are dropped in `RerankAndFilter`). The in-memory `BetaFilter` strategy ([diskann-providers/.../betafilter.rs](../diskann-providers/src/model/graph/provider/layers/betafilter.rs)) only applies the beta bias — non-matching IDs can still appear in results. A user asking for "beta filter" gets different result sets depending on which side they're on. Future work: pick one semantics (most likely "bias + post-filter," matching the disk side) and align the in-memory strategy, or document the divergence explicitly in both APIs.
 
