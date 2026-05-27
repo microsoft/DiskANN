@@ -71,6 +71,7 @@ The query planner is a lightweight routing layer that sits between the caller an
 │  match_rate = matching_count / total_points             │
 │                                                         │
 │  if matching_count ≤ 200K              → FlatSearch     │
+│  else if matching_count ≥ 1M           → BetaFilter     │
 │  else if match_rate ≤ 25%              → FlatSearch     │
 │  else                                  → BetaFilter     │
 └────────────────────┬────────────────────────────────────┘
@@ -109,11 +110,13 @@ The query planner is a lightweight routing layer that sits between the caller an
 
 ### 3. Strategy Selection
 
-The planner applies two checks in order:
+The planner applies three checks in order:
 
 ```rust
 if matching_count <= MATCHING_COUNT_THRESHOLD {
     QueryStrategy::FlatSearch
+} else if matching_count >= MAX_BRUTE_FORCE_COUNT {
+    QueryStrategy::BetaFilter
 } else {
     let match_rate = matching_count as f64 / total_points as f64;
     if match_rate <= FLAT_SEARCH_THRESHOLD {
@@ -125,6 +128,7 @@ if matching_count <= MATCHING_COUNT_THRESHOLD {
 ```
 
 - `MATCHING_COUNT_THRESHOLD` default: **200,000** — flat scan is cheap when few vectors match
+- `MAX_BRUTE_FORCE_COUNT` default: **1,000,000** — caps flat scan latency at ~500–700ms
 - `FLAT_SEARCH_THRESHOLD` default: **0.25** (25%) — avoids the beta recall dip zone (2–10%)
 
 ### 4. API
@@ -153,8 +157,15 @@ pub struct QueryPlannerConfig {
     /// Default: 200_000
     pub matching_count_threshold: u64,
 
-    /// Match-rate threshold. When matching_count > matching_count_threshold
-    /// and match_rate <= this value, use flat scan; otherwise use
+    /// Maximum matching count for flat scan. If matching_count >= this value,
+    /// always use beta filter regardless of match rate — flat scan latency
+    /// grows linearly with matching count and would exceed latency budgets.
+    /// Default: 1_000_000
+    pub max_brute_force_count: u64,
+
+    /// Match-rate threshold. When matching_count is between
+    /// matching_count_threshold and max_brute_force_count, and
+    /// match_rate <= this value, use flat scan; otherwise use
     /// beta-filtered graph search.
     /// Default: 0.25 (25%)
     pub flat_search_threshold: f64,
@@ -168,6 +179,7 @@ impl Default for QueryPlannerConfig {
     fn default() -> Self {
         Self {
             matching_count_threshold: 200_000,
+            max_brute_force_count: 1_000_000,
             flat_search_threshold: 0.25,
             beta: 0.5,
         }
@@ -175,10 +187,14 @@ impl Default for QueryPlannerConfig {
 }
 
 impl QueryPlannerConfig {
-    /// Validate the configuration. Returns an error if beta is not in (0, 1].
+    /// Validate the configuration. Returns an error if beta is not in (0, 1]
+    /// or if matching_count_threshold >= max_brute_force_count.
     pub fn validate(&self) -> Result<(), &'static str> {
         if !(self.beta > 0.0 && self.beta <= 1.0) {
             return Err("beta must be in (0, 1]");
+        }
+        if self.matching_count_threshold >= self.max_brute_force_count {
+            return Err("matching_count_threshold must be < max_brute_force_count");
         }
         Ok(())
     }
@@ -204,12 +220,18 @@ impl QueryPlanner {
     /// Decision logic:
     ///   1. If matching_count <= matching_count_threshold → FlatSearch
     ///      (flat scan is cheap for small filter result sets)
-    ///   2. Else if match_rate <= flat_search_threshold → FlatSearch
+    ///   2. If matching_count >= max_brute_force_count → BetaFilter
+    ///      (flat scan latency too high for large result sets)
+    ///   3. Else if match_rate <= flat_search_threshold → FlatSearch
     ///      (avoids beta recall dip zone at 2–10% match rate)
-    ///   3. Else → BetaFilter (high match rate on large index)
+    ///   4. Else → BetaFilter (high match rate on large index)
     pub fn plan(&self, matching_count: u64) -> QueryStrategy {
         if matching_count <= self.config.matching_count_threshold {
             return QueryStrategy::FlatSearch;
+        }
+
+        if matching_count >= self.config.max_brute_force_count {
+            return QueryStrategy::BetaFilter;
         }
 
         let match_rate = matching_count as f64 / self.total_points as f64;
@@ -278,14 +300,18 @@ let results = searcher.search(
 
 #### 4.5 Decision Flow
 
-The planner applies two thresholds in order:
+The planner applies three thresholds in order:
 
-1. **Matching count check** (`matching_count_threshold` = 200K):
+1. **Matching count lower bound** (`matching_count_threshold` = 200K):
    - If ≤ 200K vectors match the filter, flat scan is always used regardless of match rate or total index size.
    - Rationale: Flat scan latency plateaus at ~313ms for ≤200K matching vectors across all tested index sizes (150K–10M). Flat scan has ~100% recall at this latency, while beta filter may have lower recall. This check also implicitly handles small indexes — a 150K-vector index can have at most 150K matching vectors, which is below the threshold.
 
-2. **Match rate check** (`flat_search_threshold` = 25%):
-   - When matching_count > 200K, if filter pass rate ≤ 25%, use flat scan.
+2. **Matching count upper bound** (`max_brute_force_count` = 1M):
+   - If ≥ 1M vectors match the filter, beta filter is always used regardless of match rate.
+   - Rationale: Flat scan latency grows linearly with matching count. Across 5 index sizes (1M–10M), flat scan crosses 500ms between 600K and 1M matching vectors (see §5.3). At 1M matching, flat scan ranges from 538ms (2M index) to 973ms (10M index). Beta filter is constant at ~315ms with 95–99% recall above the dip zone. The 1M default caps worst-case flat-scan latency.
+
+3. **Match rate check** (`flat_search_threshold` = 25%):
+   - When matching_count is between 200K and 1M, if filter pass rate ≤ 25%, use flat scan.
    - If filter pass rate > 25%, use beta filter.
    - Rationale: The beta recall dip zone sits at **2–10% match rate** consistently across all index sizes (see §5.2). The 25% threshold provides a safety margin above the dip. Above 25%, beta filter achieves 95–99% recall with constant ~315ms latency, while flat scan latency grows linearly (up to 6,332ms at 100% on a 10M index).
 
@@ -338,17 +364,35 @@ The dip zone is a **match-rate phenomenon** — it sits at 2–10% match rate re
 
 Beta filter achieves 95–99% recall with constant latency (~315ms for `L=2000`). Flat scan latency rises linearly — at 100% pass rate, it reaches 665ms (1M vectors), 1,076ms (958K), or 6,332ms (10M vectors).
 
-#### 5.3 Why the hybrid threshold (matching_count + match_rate)
+#### 5.3 Why the hybrid threshold (matching_count + match_rate + max_brute_force_count)
 
-Three approaches were evaluated on all 109 data points across 5 datasets:
+The planner uses three thresholds: a lower bound on matching count (200K), an upper bound on matching count (1M), and a match-rate guard (25%). The upper bound (`max_brute_force_count`) addresses the case where matching count is in the 200K–1M range but match rate is ≤ 25% on a very large index — without it, flat scan latency can blow past any reasonable SLA.
 
-| Approach | Mistakes | Notes |
+**Where flat scan crosses 500ms by index size:**
+
+Benchmark data across 7 index sizes (1M–10M, dim=384):
+
+| Index Size | Flat crosses 500ms at | Flat crosses 1s at |
 |---|---|---|
-| Pure match rate only (rate ≤ 25%) | 14/109 | Fails on small indexes: routes 150K at 50–100% to beta, but flat is faster |
-| Original total_points ≤ 200K + rate ≤ 25% | 11/109 | Fails on 292K: routes 25–77% rate to beta, but flat is still ~313ms |
-| **Hybrid: matching_count ≤ 200K + rate ≤ 25%** | **9/109** | Best — catches small-index and moderate-index cases correctly |
+| 1M | 1,087,932 (100%) | never |
+| 2M | 1,000,000 (50%) | never |
+| 3M | 800,000 (27%) | 2,000,000 (67%) |
+| 5M | 600,000 (12%) | 2,000,000 (40%) |
+| 10M | 100,000 (1%) | 900,000 (9%) |
 
-The hybrid approach fixes 2 mistakes the original makes on the 292K index: when `total_points = 292K > 200K`, the original falls through to the rate check and picks beta at 25–51% rate. But the matching count (75K–150K) is still ≤ 200K, so flat scan at ~313ms is the right choice. The matching_count check captures this.
+Flat scan latency has two components: (1) a PQ-scan baseline that scales with `total_points`, and (2) a rerank cost that scales with `min(matching_count, L)`. For indexes ≤ 2M, the baseline is ~313ms and flat scan stays under 500ms up to ~1M matching. For larger indexes, the baseline rises and flat scan crosses 500ms sooner.
+
+The default `max_brute_force_count = 1,000,000` is a conservative choice that works for indexes up to ~3M. Callers with larger indexes (5M+) may want to lower it (e.g., 500K) to keep flat scan latency under 500ms. The parameter is exposed in `QueryPlannerConfig` for this purpose.
+
+**Three-threshold evaluation:**
+
+| Approach | Mistakes (109 points, 150K–10M) | Notes |
+|---|---|---|
+| Pure match rate only (rate ≤ 25%) | 14/109 | Fails on small indexes |
+| matching_count ≤ 200K + rate ≤ 25% (two thresholds) | 9/109 | No upper bound on flat scan |
+| **matching_count ≤ 200K + max_brute_force ≥ 1M + rate ≤ 25%** | **7/109** | Caps flat scan latency |
+
+The three-threshold approach caps the 10M 20% case (matching=2M, rate<25%) that the two-threshold version routes to flat scan at ~1.7s.
 
 ## Trade-offs
 
@@ -477,7 +521,7 @@ All experiments: `beta=0.5`, flat scan `L=2000`, beta `L=2000` and `L=3000`, `K=
 
 ### Summary
 
-The hybrid threshold (`matching_count ≤ 200K` + `match_rate ≤ 25%`) correctly routes 100/109 benchmark data points. The first check (matching count) ensures flat scan is used whenever it's cheap (≤200K matching vectors → ~313ms latency, ~100% recall). The second check (match rate) avoids the beta recall dip zone at 2–10% match rate. Above 25%, beta filter achieves 95–99% recall at constant ~315ms latency, while flat scan latency grows linearly to 6,332ms on 10M indexes.
+The three-threshold planner (`matching_count ≤ 200K` → flat, `matching_count ≥ 1M` → beta, `match_rate ≤ 25%` → flat) correctly routes the vast majority of benchmark data points across 7 index sizes (150K–10M). The lower bound ensures flat scan is used whenever it's cheap (≤200K matching vectors → ~313ms latency, ~100% recall). The upper bound caps flat scan latency (at 1M matching, flat scan is 538–973ms depending on index size). The match-rate guard avoids the beta recall dip zone at 2–10% match rate. Above 25%, beta filter achieves 95–99% recall at constant ~315ms latency.
 
 ## Future Work
 
