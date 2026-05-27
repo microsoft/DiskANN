@@ -10,6 +10,7 @@ edition.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+diskann-benchmark-runner-derive = { workspace = true }
 half = { workspace = true }
 indicatif = "0.18.3"
 serde = { workspace = true, features = ["derive"] }

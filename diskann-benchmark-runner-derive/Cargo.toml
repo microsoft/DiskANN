@@ -1,0 +1,19 @@
+[package]
+name = "diskann-benchmark-runner-derive"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[lints]
+workspace = true

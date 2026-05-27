@@ -703,12 +703,22 @@ version = "0.52.0"
 dependencies = [
  "anyhow",
  "clap",
+ "diskann-benchmark-runner-derive",
  "half",
  "indicatif",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "diskann-benchmark-runner-derive"
+version = "0.52.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.113",
 ]
 
 [[package]]
