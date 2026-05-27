@@ -39,6 +39,7 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
                     &mut false,
                     pool.as_ref(),
                 )
+                .expect("k_means_clustering call failed");
             },
             BatchSize::SmallInput,
         )
@@ -48,7 +49,8 @@ pub fn benchmark_kmeans(c: &mut Criterion) {
         f.iter_batched(
             || (data.clone(), vec![0.0f32; NUM_POINTS]),
             |(data_copy, mut docs_l2sq)| {
-                compute_vecs_l2sq(&mut docs_l2sq, &data_copy, DIM, pool.as_ref()).unwrap();
+                compute_vecs_l2sq(&mut docs_l2sq, &data_copy, DIM, pool.as_ref())
+                    .expect("compute_vecs_l2sq call failed");
             },
             BatchSize::SmallInput,
         )

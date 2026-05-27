@@ -43,13 +43,14 @@ pub fn benchmark_kmeans_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
         &mut false,
         pool.as_ref(),
     )
-    .unwrap();
+    .expect("k_means_clustering call failed");
     black_box(centers);
 }
 
 #[iai_callgrind::library_benchmark(setup = setup_data)]
 pub fn snrm2_benchmark_rust_iai((data, pool): (Vec<f32>, RayonThreadPool)) {
     let mut docs_l2sq = vec![0.0; NUM_POINTS];
-    compute_vecs_l2sq(&mut docs_l2sq, black_box(&data), DIM, pool.as_ref()).unwrap();
+    compute_vecs_l2sq(&mut docs_l2sq, black_box(&data), DIM, pool.as_ref())
+        .expect("compute_vecs_l2sq call failed");
     black_box(docs_l2sq);
 }
