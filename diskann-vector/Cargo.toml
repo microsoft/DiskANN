@@ -15,6 +15,7 @@ license.workspace = true
 cfg-if.workspace = true
 half.workspace = true
 diskann-wide.workspace = true
+diskann-record.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
@@ -24,6 +25,7 @@ criterion.workspace = true
 rand_distr.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits", "bytemuck"] }
 bytemuck = { workspace = true, features = ["must_cast"] }
+tempfile.workspace = true
 
 [[bench]]
 name = "bench_main"

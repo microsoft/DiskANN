@@ -361,6 +361,60 @@ impl storage::bin::GetAdjacencyList for DiskAdaptor<'_> {
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// The adjacency-list bytes are streamed to a side-car file (`graph.bin`) via the
+// existing `save_direct` / `load_direct` helpers; the manifest itself only carries the
+// resulting [`diskann_record::save::Handle`] under the `"graph"` key.
+
+/// On-disk filename used for the adjacency-list blob inside the manifest directory.
+const GRAPH_ARTIFACT: &str = "graph.bin";
+
+impl diskann_record::save::Save for SimpleNeighborProviderAsync<u32> {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        let mut writer = context.write(GRAPH_ARTIFACT)?;
+        {
+            let shim = crate::storage::SingleUseWriteProvider::new(GRAPH_ARTIFACT, &mut writer);
+            // The canonical graph file format records a `start_point` in its header that
+            // `load_direct` reads but discards. The graph's start point is tracked
+            // separately by `StartPoints` and persisted at the `DefaultProvider` level, so
+            // we write `0` here as a placeholder. Round-tripped `SimpleNeighborProviderAsync`
+            // values do not carry a start point on their own.
+            self.save_direct(&shim, 0, GRAPH_ARTIFACT)
+                .map_err(diskann_record::save::Error::new)?;
+        }
+        let handle = writer.finish()?;
+        let mut record = diskann_record::save::Record::empty();
+        record.insert("graph", handle)?;
+        Ok(record)
+    }
+}
+
+impl diskann_record::load::Load<'_> for SimpleNeighborProviderAsync<u32> {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(object, [graph: diskann_record::save::Handle]);
+        let mut reader = object.read(&graph)?;
+        let shim = crate::storage::SingleUseReadProvider::new(GRAPH_ARTIFACT, &mut reader)
+            .map_err(diskann_record::load::Error::new)?;
+        Self::load_direct(&shim, GRAPH_ARTIFACT).map_err(diskann_record::load::Error::new)
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -444,5 +498,98 @@ mod tests {
                 i
             );
         }
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    type TestNeighborProvider = SimpleNeighborProviderAsync<u32>;
+
+    fn round_trip_helper(provider: &TestNeighborProvider) -> TestNeighborProvider {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(provider, dir.path(), &manifest).expect("save_to_disk");
+        diskann_record::load::load_from_disk::<TestNeighborProvider>(&manifest, dir.path())
+            .expect("load_from_disk")
+    }
+
+    fn assert_adjacency_lists_match(
+        left: &TestNeighborProvider,
+        right: &TestNeighborProvider,
+        total: usize,
+    ) {
+        for i in 0..total {
+            let mut l = AdjacencyList::new();
+            let mut r = AdjacencyList::new();
+            left.get_neighbors_sync(i, &mut l).unwrap();
+            right.get_neighbors_sync(i, &mut r).unwrap();
+            assert_eq!(
+                l, r,
+                "adjacency list for node {} differs after round-trip",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn simple_neighbor_provider_round_trips_default_initialised() {
+        let max_points = 4;
+        let additional_points = 1;
+        let provider = TestNeighborProvider::new(max_points, additional_points, 5, 1.0);
+        let restored = round_trip_helper(&provider);
+        assert_adjacency_lists_match(&provider, &restored, max_points + additional_points);
+    }
+
+    #[test]
+    fn simple_neighbor_provider_round_trips_populated() {
+        let max_points = 8;
+        let additional_points = 2;
+        let max_degree = 5;
+        let provider = TestNeighborProvider::new(max_points, additional_points, max_degree, 1.0);
+        for i in 0..max_points + additional_points {
+            let neighbors: Vec<u32> = (1..4).map(|j| i as u32 + j).collect();
+            provider.set_neighbors_sync(i, &neighbors).unwrap();
+        }
+        let restored = round_trip_helper(&provider);
+        assert_adjacency_lists_match(&provider, &restored, max_points + additional_points);
+    }
+
+    #[test]
+    fn simple_neighbor_provider_round_trips_preserves_row_width() {
+        // The on-disk format records `max_degree = dim - 1`, so a non-unit slack factor
+        // round-trips through `save_direct` / `load_direct` even though the loader uses
+        // `slack = 1.0`.
+        let max_points = 3;
+        let additional_points = 1;
+        let max_degree = 4;
+        let slack = 1.5;
+        let provider = TestNeighborProvider::new(max_points, additional_points, max_degree, slack);
+        // dim = (max_degree * slack) as usize + 1 = 7
+        let expected_dim = (max_degree as f32 * slack) as usize + 1;
+        // Fill each row to its inflated capacity to make sure the wider row width matters.
+        for i in 0..max_points + additional_points {
+            let neighbors: Vec<u32> = (0..(expected_dim - 1) as u32)
+                .map(|j| (i as u32 * 10) + j)
+                .collect();
+            provider.set_neighbors_sync(i, &neighbors).unwrap();
+        }
+        let restored = round_trip_helper(&provider);
+        assert_adjacency_lists_match(&provider, &restored, max_points + additional_points);
+    }
+
+    #[test]
+    fn simple_neighbor_provider_round_trips_with_jagged_adjacency_lists() {
+        let max_points = 6;
+        let additional_points = 1;
+        let provider = TestNeighborProvider::new(max_points, additional_points, 5, 1.0);
+        // Mix of empty, short, and full adjacency lists.
+        provider.set_neighbors_sync(0, &[]).unwrap();
+        provider.set_neighbors_sync(1, &[10]).unwrap();
+        provider.set_neighbors_sync(2, &[20, 21]).unwrap();
+        provider.set_neighbors_sync(3, &[30, 31, 32, 33]).unwrap();
+        // Leave id=4, 5, 6 with the default-empty adjacency lists.
+        let restored = round_trip_helper(&provider);
+        assert_adjacency_lists_match(&provider, &restored, max_points + additional_points);
     }
 }

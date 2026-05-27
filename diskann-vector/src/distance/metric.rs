@@ -42,10 +42,10 @@ impl TryFrom<i32> for Metric {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            x if x == Metric::Cosine.into() => Ok(Metric::Cosine),
-            x if x == Metric::InnerProduct.into() => Ok(Metric::InnerProduct),
-            x if x == Metric::L2.into() => Ok(Metric::L2),
-            x if x == Metric::CosineNormalized.into() => Ok(Metric::CosineNormalized),
+            x if x == i32::from(Metric::Cosine) => Ok(Metric::Cosine),
+            x if x == i32::from(Metric::InnerProduct) => Ok(Metric::InnerProduct),
+            x if x == i32::from(Metric::L2) => Ok(Metric::L2),
+            x if x == i32::from(Metric::CosineNormalized) => Ok(Metric::CosineNormalized),
             _ => Err(TryFromMetricError(value)),
         }
     }
@@ -98,6 +98,58 @@ impl FromStr for Metric {
     }
 }
 
+////////////////////////
+// diskann-record I/O //
+////////////////////////
+
+/// Stable wire names for [`Metric`] variants. Renaming a Rust variant must not change
+/// these strings without bumping the saved version, or old manifests will fail to load.
+const METRIC_VARIANT_COSINE: &str = "Cosine";
+const METRIC_VARIANT_INNER_PRODUCT: &str = "InnerProduct";
+const METRIC_VARIANT_L2: &str = "L2";
+const METRIC_VARIANT_COSINE_NORMALIZED: &str = "CosineNormalized";
+
+impl diskann_record::save::Save for Metric {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        _context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        let mut record = diskann_record::save::Record::empty();
+        let key = match self {
+            Self::Cosine => METRIC_VARIANT_COSINE,
+            Self::InnerProduct => METRIC_VARIANT_INNER_PRODUCT,
+            Self::L2 => METRIC_VARIANT_L2,
+            Self::CosineNormalized => METRIC_VARIANT_COSINE_NORMALIZED,
+        };
+        record.insert(key, diskann_record::save::Value::Null)?;
+        Ok(record)
+    }
+}
+
+impl diskann_record::load::Load<'_> for Metric {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        match object.single_key()? {
+            METRIC_VARIANT_COSINE => Ok(Self::Cosine),
+            METRIC_VARIANT_INNER_PRODUCT => Ok(Self::InnerProduct),
+            METRIC_VARIANT_L2 => Ok(Self::L2),
+            METRIC_VARIANT_COSINE_NORMALIZED => Ok(Self::CosineNormalized),
+            other => Err(diskann_record::load::Error::message(format!(
+                "unknown Metric variant: {other:?}"
+            ))),
+        }
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -138,5 +190,45 @@ mod tests {
         assert_eq!(Metric::try_from(3), Ok(Metric::CosineNormalized));
         assert_eq!(Metric::try_from(-1), Err(TryFromMetricError(-1)));
         assert_eq!(Metric::try_from(4), Err(TryFromMetricError(4)));
+    }
+
+    #[test]
+    fn metric_round_trips_through_record() {
+        for metric in [
+            Metric::Cosine,
+            Metric::InnerProduct,
+            Metric::L2,
+            Metric::CosineNormalized,
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let manifest = dir.path().join("metric.json");
+            diskann_record::save::save_to_disk(&metric, dir.path(), &manifest)
+                .expect("save_to_disk");
+            let restored: Metric = diskann_record::load::load_from_disk(&manifest, dir.path())
+                .expect("load_from_disk");
+            assert_eq!(metric, restored);
+        }
+    }
+
+    #[test]
+    fn loading_metric_from_unknown_variant_is_rejected() {
+        // Save a valid metric, hand-edit the JSON to use an unrecognised variant,
+        // and confirm we get a load error mentioning the bogus name.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("metric.json");
+        diskann_record::save::save_to_disk(&Metric::L2, dir.path(), &manifest)
+            .expect("save_to_disk");
+
+        let raw = std::fs::read_to_string(&manifest).expect("read manifest");
+        let tampered = raw.replace("\"L2\"", "\"Bogus\"");
+        std::fs::write(&manifest, &tampered).expect("write manifest");
+
+        let err = diskann_record::load::load_from_disk::<Metric>(&manifest, dir.path())
+            .expect_err("load should fail for unknown variant");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Bogus"),
+            "error should embed the unknown variant name, got: {msg}",
+        );
     }
 }

@@ -25,6 +25,7 @@ members = [
     "diskann-tools",
     "vectorset",
     "diskann-bftree",
+    "diskann-record",
 ]
 
 default-members = [
@@ -55,6 +56,7 @@ diskann-linalg = { path = "diskann-linalg", version = "0.52.0" }
 diskann-utils = { path = "diskann-utils", default-features = false, version = "0.52.0" }
 diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.52.0" }
 diskann-platform = { path = "diskann-platform", version = "0.52.0" }
+diskann-record = { path = "diskann-record", version = "0.52.0" }
 # Algorithm
 diskann = { path = "diskann", version = "0.52.0" }
 # Providers

@@ -668,14 +668,15 @@ mod tests {
     };
     use diskann_utils::test_data_root;
     use diskann_vector::distance::Metric;
+    use rand::Rng;
 
-    use super::DiskANNIndex;
+    use super::{DiskANNIndex, create_current_thread_runtime};
     use crate::{
         index::diskann_async,
         model::{
             configuration::IndexConfiguration,
             graph::provider::async_::{
-                common::{FullPrecision, TableBasedDeletes},
+                common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
                 inmem::{self, CreateFullPrecision, DefaultProvider},
             },
         },
@@ -778,6 +779,90 @@ mod tests {
         // The query is itself in the dataset, so the nearest neighbor must be at distance 0.
         assert_eq!(ids[0], 0);
         assert_eq!(distances[0], 0.0);
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    #[test]
+    fn test_diskann_record_save_load_round_trip() {
+        // -- Build a `FullPrecisionProvider<f32, NoStore, NoDeletes>` index ----
+        let dim = 8;
+        let max_points = 32;
+        let num_points = 24;
+
+        // Deterministic synthetic data so the test is hermetic (no on-disk fixture).
+        let mut rng = create_rnd_from_seed_in_tests(0x9c6a1c3b29f74e51);
+        let train_data: Vec<Vec<f32>> = (0..num_points)
+            .map(|_| (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect())
+            .collect();
+
+        let (build_config, parameters) =
+            diskann_async::simplified_builder(20, 16, Metric::L2, dim, max_points, |_| {}).unwrap();
+
+        let fp_precursor =
+            CreateFullPrecision::new(parameters.dim, parameters.prefetch_cache_line_level);
+        let data_provider =
+            DefaultProvider::new_empty(parameters, fp_precursor, NoStore, NoDeletes).unwrap();
+
+        let index =
+            DiskANNIndex::new_with_current_thread_runtime(build_config.clone(), data_provider);
+        let ctx = DefaultContext;
+        for (i, v) in train_data.iter().enumerate() {
+            index
+                .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
+                .unwrap();
+        }
+
+        // -- Search on the original index --------------------------------------
+        let top_k = 5;
+        let search_l = 20;
+        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let query = train_data[0].as_slice();
+
+        let mut ids_orig = vec![0u32; top_k];
+        let mut dists_orig = vec![0.0f32; top_k];
+        let mut output_orig = search_output_buffer::IdDistance::new(&mut ids_orig, &mut dists_orig);
+        let stats_orig = index
+            .search(kind, &FullPrecision, &ctx, query, &mut output_orig)
+            .unwrap();
+        assert_eq!(stats_orig.result_count, top_k as u32);
+        // The query is itself in the dataset, so the nearest neighbor must be at distance 0.
+        assert_eq!(ids_orig[0], 0);
+        assert_eq!(dists_orig[0], 0.0);
+
+        // -- Save via diskann-record (synchronous) -----------------------------
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(&*index.inner, dir.path(), &manifest)
+            .expect("save_to_disk");
+
+        // -- Load via diskann-record into a fresh sync wrapper -----------------
+        type TestProvider = inmem::FullPrecisionProvider<f32, NoStore, NoDeletes>;
+        let loaded_inner: graph::DiskANNIndex<TestProvider> =
+            diskann_record::load::load_from_disk(&manifest, dir.path()).expect("load_from_disk");
+        let (rt, handle) = create_current_thread_runtime();
+        let loaded: DiskANNIndex<TestProvider> = DiskANNIndex {
+            inner: Arc::new(loaded_inner),
+            _runtime: Some(rt),
+            handle,
+        };
+
+        // -- Search on the loaded index ----------------------------------------
+        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let mut ids_loaded = vec![0u32; top_k];
+        let mut dists_loaded = vec![0.0f32; top_k];
+        let mut output_loaded =
+            search_output_buffer::IdDistance::new(&mut ids_loaded, &mut dists_loaded);
+        let stats_loaded = loaded
+            .search(kind, &FullPrecision, &ctx, query, &mut output_loaded)
+            .unwrap();
+
+        // -- Results must match the pre-save search ----------------------------
+        assert_eq!(stats_orig.result_count, stats_loaded.result_count);
+        assert_eq!(ids_orig, ids_loaded);
+        assert_eq!(dists_orig, dists_loaded);
     }
 
     fn wrapped_test_provider() -> DiskANNIndex<graph::test::provider::Provider> {

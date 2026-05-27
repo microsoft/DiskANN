@@ -13,8 +13,6 @@ use diskann::{
 };
 use diskann_utils::io::Metadata;
 
-use crate::utils::load_metadata_from_file;
-
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
 /// These traits are meant for IO purposes and are not meant as general access traits for
@@ -135,22 +133,28 @@ where
     S: SetData<Item = T>,
     T: VectorRepr,
 {
-    let metadata = load_metadata_from_file(provider, path).map_err(|err| {
-        ANNError::log_index_error(format_args!(
-            "failed to load data file \"{}\" due to the following error: {}",
-            path, err
-        ))
-    })?;
+    // Open the reader exactly once: `VectorDataIterator::new` reads and exposes the
+    // file's metadata header, so we don't need a separate `load_metadata_from_file`
+    // call. This keeps single-use readers (e.g. record-shim streams) working.
+    let itr =
+        crate::utils::VectorDataIterator::<_, T>::new(path, None, provider).map_err(|err| {
+            ANNError::log_index_error(format_args!(
+                "failed to load data file \"{}\" due to the following error: {}",
+                path, err
+            ))
+        })?;
+
+    let num_points = itr.get_num_points();
+    let dimension = itr.get_dimension();
 
     tracing::info!(
         "Loading {} vectors with dimension {} from storage system {} into dataset...",
-        metadata.npoints(),
-        metadata.ndims(),
+        num_points,
+        dimension,
         path
     );
 
-    let mut data = create(metadata.npoints(), metadata.ndims())?;
-    let itr = crate::utils::VectorDataIterator::<_, T>::new(path, None, provider)?;
+    let mut data = create(num_points, dimension)?;
     for (i, (vector, _)) in itr.enumerate() {
         data.set_data(i.into_usize(), &vector)?;
     }

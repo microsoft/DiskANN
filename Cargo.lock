@@ -626,6 +626,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "dashmap",
+ "diskann-record",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
@@ -638,6 +639,7 @@ dependencies = [
  "relative-path 2.0.1",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -865,6 +867,7 @@ dependencies = [
  "diskann",
  "diskann-platform",
  "diskann-quantization",
+ "diskann-record",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
@@ -908,6 +911,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "trybuild",
+]
+
+[[package]]
+name = "diskann-record"
+version = "0.52.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -967,11 +980,13 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "criterion",
+ "diskann-record",
  "diskann-wide",
  "half",
  "iai-callgrind",
  "rand 0.9.4",
  "rand_distr",
+ "tempfile",
 ]
 
 [[package]]

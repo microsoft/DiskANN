@@ -695,6 +695,179 @@ impl Builder {
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// `Config` and its component enums (`PruneKind`, `IntraBatchCandidates`) are persisted
+// as plain records. Enum variant names live in `const` strings (`PRUNE_KIND_*`,
+// `INTRA_BATCH_*`) rather than being derived from the Rust identifiers, so renaming a
+// variant in the source does not silently change the wire format. Such a change
+// must bump the saved version or old manifests will fail to load.
+
+/// Stable wire names for [`PruneKind`] variants.
+const PRUNE_KIND_TRIANGLE_INEQUALITY: &str = "TriangleInequality";
+const PRUNE_KIND_OCCLUDING: &str = "Occluding";
+
+impl diskann_record::save::Save for PruneKind {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        _context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        let mut record = diskann_record::save::Record::empty();
+        let key = match self {
+            Self::TriangleInequality => PRUNE_KIND_TRIANGLE_INEQUALITY,
+            Self::Occluding => PRUNE_KIND_OCCLUDING,
+        };
+        record.insert(key, diskann_record::save::Value::Null)?;
+        Ok(record)
+    }
+}
+
+impl diskann_record::load::Load<'_> for PruneKind {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        match object.single_key()? {
+            PRUNE_KIND_TRIANGLE_INEQUALITY => Ok(Self::TriangleInequality),
+            PRUNE_KIND_OCCLUDING => Ok(Self::Occluding),
+            other => Err(diskann_record::load::Error::message(format!(
+                "unknown PruneKind variant: {other:?}"
+            ))),
+        }
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
+/// Stable wire names for [`IntraBatchCandidates`] variants.
+const INTRA_BATCH_NONE: &str = "None";
+const INTRA_BATCH_MAX: &str = "Max";
+const INTRA_BATCH_ALL: &str = "All";
+
+impl diskann_record::save::Save for IntraBatchCandidates {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        let mut record = diskann_record::save::Record::empty();
+        match self {
+            Self::None => {
+                record.insert(INTRA_BATCH_NONE, diskann_record::save::Value::Null)?;
+            }
+            Self::All => {
+                record.insert(INTRA_BATCH_ALL, diskann_record::save::Value::Null)?;
+            }
+            Self::Max(max) => {
+                let payload = <_ as diskann_record::save::Saveable>::save(max, context)?;
+                record.insert(INTRA_BATCH_MAX, payload)?;
+            }
+        }
+        Ok(record)
+    }
+}
+
+impl diskann_record::load::Load<'_> for IntraBatchCandidates {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        match object.single_key()? {
+            INTRA_BATCH_NONE => Ok(Self::None),
+            INTRA_BATCH_ALL => Ok(Self::All),
+            INTRA_BATCH_MAX => {
+                let max: NonZeroU32 = object.field(INTRA_BATCH_MAX)?;
+                Ok(Self::Max(max))
+            }
+            other => Err(diskann_record::load::Error::message(format!(
+                "unknown IntraBatchCandidates variant: {other:?}"
+            ))),
+        }
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
+impl diskann_record::save::Save for Config {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [
+                pruned_degree,
+                max_degree,
+                l_build,
+                alpha,
+                prune_kind,
+                max_occlusion_size,
+                max_backedges,
+                max_minibatch_par,
+                intra_batch_candidates,
+                saturate_after_prune,
+                experimental_insert_retry,
+            ]
+        ))
+    }
+}
+
+impl diskann_record::load::Load<'_> for Config {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(
+            object,
+            [
+                pruned_degree: NonZeroU32,
+                max_degree: NonZeroU32,
+                l_build: NonZeroU32,
+                alpha: f32,
+                prune_kind: PruneKind,
+                max_occlusion_size: NonZeroU32,
+                max_backedges: NonZeroU32,
+                max_minibatch_par: NonZeroU32,
+                intra_batch_candidates: IntraBatchCandidates,
+                saturate_after_prune: bool,
+                experimental_insert_retry: Option<experimental::InsertRetry>,
+            ]
+        );
+        Ok(Self {
+            pruned_degree,
+            max_degree,
+            l_build,
+            alpha,
+            prune_kind,
+            max_occlusion_size,
+            max_backedges,
+            max_minibatch_par,
+            intra_batch_candidates,
+            saturate_after_prune,
+            experimental_insert_retry,
+        })
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -1272,5 +1445,63 @@ mod tests {
             kind.update_occlude_factor(-3.0, -4.0, current_factor, 1.0),
             1.0 + OCCLUDING_MASK,
         );
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    fn round_trip_helper<T>(value: &T) -> T
+    where
+        T: diskann_record::save::Saveable + for<'a> diskann_record::load::Loadable<'a>,
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(value, dir.path(), &manifest).expect("save_to_disk");
+        diskann_record::load::load_from_disk::<T>(&manifest, dir.path()).expect("load_from_disk")
+    }
+
+    #[test]
+    fn prune_kind_round_trips() {
+        for kind in [PruneKind::TriangleInequality, PruneKind::Occluding] {
+            let restored = round_trip_helper(&kind);
+            assert_eq!(kind, restored);
+        }
+    }
+
+    #[test]
+    fn intra_batch_candidates_round_trip_all_variants() {
+        let cases = [
+            IntraBatchCandidates::None,
+            IntraBatchCandidates::All,
+            IntraBatchCandidates::Max(NonZeroU32::new(7).unwrap()),
+        ];
+        for c in cases {
+            assert_eq!(c, round_trip_helper(&c));
+        }
+    }
+
+    #[test]
+    fn config_round_trips_minimal() {
+        // Build a minimal config via the public Builder.
+        let cfg = Builder::new(8, MaxDegree::Same, 16, PruneKind::TriangleInequality)
+            .build()
+            .expect("Builder::build");
+        assert_eq!(cfg, round_trip_helper(&cfg));
+    }
+
+    #[test]
+    fn config_round_trips_with_insert_retry() {
+        // Build a config and tack on an experimental InsertRetry to exercise
+        // Option<InsertRetry> through the wire.
+        let mut cfg = Builder::new(8, SLACK, 16, PruneKind::Occluding)
+            .build()
+            .expect("Builder::build");
+        cfg.experimental_insert_retry = Some(experimental::InsertRetry::new(
+            NonZeroU32::new(3).unwrap(),
+            NonZeroU32::new(2).unwrap(),
+            true,
+        ));
+        assert_eq!(cfg, round_trip_helper(&cfg));
     }
 }

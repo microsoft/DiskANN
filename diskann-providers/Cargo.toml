@@ -32,6 +32,7 @@ tracing.workspace = true
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
+diskann-record = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tempfile = { workspace = true, optional = true }
 prost = "0.14.1"

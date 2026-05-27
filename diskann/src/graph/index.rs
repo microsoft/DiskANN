@@ -2935,6 +2935,57 @@ struct BatchIdMismatch {
     ids_len: usize,
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// A [`DiskANNIndex`] is persisted as its `(config, data_provider)` pair: the saved
+// schema, plus everything the chosen [`DataProvider`] chooses to write. Runtime-only
+// state \u2014 most notably the scratch pool \u2014 is deliberately omitted; loaders pass
+// `None` and let the index recreate it on first use, with thread sizing left as a
+// deployment decision.
+
+impl<DP> diskann_record::save::Save for DiskANNIndex<DP>
+where
+    DP: DataProvider + diskann_record::save::Save,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [config, data_provider]
+        ))
+    }
+}
+
+impl<'a, DP> diskann_record::load::Load<'a> for DiskANNIndex<DP>
+where
+    DP: DataProvider + diskann_record::load::Load<'a>,
+{
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'a>) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(object, [config: Config, data_provider: DP]);
+        // The scratch pool is transient runtime state; thread sizing is a deployment
+        // decision and not part of the persisted index. Loaders that want a specific
+        // thread count should construct `DataProvider` and `Config` directly and call
+        // `DiskANNIndex::new`
+        // TODO :: Add a way to specify runtime state like ScratchPool params in `load`
+        Ok(Self::new(config, data_provider, None))
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'a>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

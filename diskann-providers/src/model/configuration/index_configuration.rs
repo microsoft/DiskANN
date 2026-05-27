@@ -108,6 +108,76 @@ impl IndexConfiguration {
     }
 }
 
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// The wire format preserves the same fields that `IndexConfiguration::new` takes
+// (`config`, `num_threads`, `dist_metric`, `dim`, `max_points`, `num_frozen_pts`) plus
+// `random_seed`, because the seed is part of reproducibility. The prefetch tunables
+// (`prefetch_lookahead`, `prefetch_cache_line_level`) are intentionally not persisted;
+// they are deployment knobs, not part of the index itself, so loaders apply their own
+// defaults (`None`).
+
+impl diskann_record::save::Save for IndexConfiguration {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [
+                config,
+                num_threads,
+                dist_metric,
+                dim,
+                max_points,
+                num_frozen_pts,
+                random_seed,
+            ]
+        ))
+    }
+}
+
+impl diskann_record::load::Load<'_> for IndexConfiguration {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(
+            object,
+            [
+                config: Config,
+                num_threads: usize,
+                dist_metric: Metric,
+                dim: usize,
+                max_points: usize,
+                num_frozen_pts: NonZeroUsize,
+                random_seed: Option<u64>,
+            ]
+        );
+        Ok(Self {
+            config,
+            num_threads,
+            dist_metric,
+            dim,
+            max_points,
+            num_frozen_pts,
+            prefetch_lookahead: None,
+            prefetch_cache_line_level: None,
+            random_seed,
+        })
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use diskann::utils::ONE;
@@ -176,5 +246,52 @@ mod tests {
             index_configuration.write_range(),
             index_configuration.config.pruned_degree().get()
         );
+    }
+
+    /////////////////////////////////
+    // diskann-record round-trips //
+    /////////////////////////////////
+
+    fn round_trip_helper<T>(value: &T) -> T
+    where
+        T: diskann_record::save::Saveable + for<'a> diskann_record::load::Loadable<'a>,
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("manifest.json");
+        diskann_record::save::save_to_disk(value, dir.path(), &manifest).expect("save_to_disk");
+        diskann_record::load::load_from_disk::<T>(&manifest, dir.path()).expect("load_from_disk")
+    }
+
+    #[test]
+    fn index_configuration_round_trips_minimal() {
+        let original = IndexConfiguration::new(Metric::L2, 128, 1000, ONE, 1, config());
+        assert_eq!(original, round_trip_helper(&original));
+    }
+
+    #[test]
+    fn index_configuration_round_trips_preserves_random_seed() {
+        let original = IndexConfiguration::new(Metric::Cosine, 64, 500, ONE, 4, config())
+            .with_pseudo_rng_from_seed(0xDEAD_BEEF_CAFE_F00D);
+        let restored = round_trip_helper(&original);
+        assert_eq!(original, restored);
+        assert_eq!(restored.random_seed, Some(0xDEAD_BEEF_CAFE_F00D));
+    }
+
+    #[test]
+    fn index_configuration_round_trips_drops_prefetch_fields() {
+        // Build a config with prefetch tunables set; they should NOT be persisted, so
+        // the loaded copy will differ from the original on those fields only.
+        let original = IndexConfiguration::new(Metric::L2, 128, 1000, ONE, 1, config())
+            .with_prefetch_lookahead(NonZeroUsize::new(8))
+            .with_prefetch_cache_line_level(Some(PrefetchCacheLineLevel::CacheLine8));
+        let restored = round_trip_helper(&original);
+        assert_eq!(restored.prefetch_lookahead, None);
+        assert_eq!(restored.prefetch_cache_line_level, None);
+
+        // Everything else still matches.
+        let mut expected = original.clone();
+        expected.prefetch_lookahead = None;
+        expected.prefetch_cache_line_level = None;
+        assert_eq!(expected, restored);
     }
 }

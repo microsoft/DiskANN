@@ -71,3 +71,55 @@ impl InsertRetry {
             && num_candidates < self.retry_if_candidates_shorter_than().get()
     }
 }
+
+//////////////////////////////////
+// diskann-record Save/Load     //
+//////////////////////////////////
+//
+// [`InsertRetry`] is a small, all-scalar config record. Persisted by name; no side-car
+// artifacts are needed.
+
+impl diskann_record::save::Save for InsertRetry {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn save(
+        &self,
+        context: diskann_record::save::Context<'_>,
+    ) -> diskann_record::save::Result<diskann_record::save::Record<'_>> {
+        Ok(diskann_record::save_fields!(
+            self,
+            context,
+            [
+                max_retries,
+                retry_if_candidates_shorter_than,
+                saturate_on_last_attempt,
+            ]
+        ))
+    }
+}
+
+impl diskann_record::load::Load<'_> for InsertRetry {
+    const VERSION: diskann_record::Version = diskann_record::Version::new(0, 0, 0);
+
+    fn load(object: diskann_record::load::Object<'_>) -> diskann_record::load::Result<Self> {
+        diskann_record::load_fields!(
+            object,
+            [
+                max_retries: NonZeroU32,
+                retry_if_candidates_shorter_than: NonZeroU32,
+                saturate_on_last_attempt: bool,
+            ]
+        );
+        Ok(Self {
+            max_retries,
+            retry_if_candidates_shorter_than,
+            saturate_on_last_attempt,
+        })
+    }
+
+    fn load_legacy(
+        _object: diskann_record::load::Object<'_>,
+    ) -> diskann_record::load::Result<Self> {
+        Err(diskann_record::load::error::Kind::UnknownVersion.into())
+    }
+}
