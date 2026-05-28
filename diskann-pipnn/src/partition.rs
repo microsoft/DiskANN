@@ -282,6 +282,54 @@ thread_local! {
     static STRIPE_BUFS: RefCell<StripeBuffers> = RefCell::new(StripeBuffers::new());
 }
 
+/// SIMD batch fp16 → fp32 gather. When `T` is `half::f16` (size 2, align 2),
+/// runtime-cast `&[T]` to `&[u16]` and use AVX-512 `vcvtph2ps` to convert
+/// 16 lanes per instruction. The generic `T::as_f32_into` path in
+/// `diskann::utils::vector_repr` defaults to a `.zip().map(.into())` loop
+/// that the compiler doesn't fully SIMD-batch, which surfaced as
+/// `Map::next` overhead in the c4-48 PMU profile after `||p||²` precompute.
+///
+/// SAFETY: only enters the SIMD path when `size_of::<T>() == 2` and
+/// `align_of::<T>() == 2` — matches `half::f16`'s `repr(transparent) u16`
+/// layout. Falls back to the generic trait for other `T`.
+#[inline]
+fn gather_f16_to_f32_simd<T: VectorRepr>(
+    src: &[T], gi: usize, ndims: usize, dst: &mut [f32],
+) {
+    debug_assert!(dst.len() >= ndims);
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        if std::mem::size_of::<T>() == 2 && std::mem::align_of::<T>() == 2 {
+            use std::arch::x86_64::*;
+            // SAFETY: f16 is repr(transparent) u16; the raw slice aliases the
+            // same bytes. ndims-sized rows of f16 at `gi * ndims` stay in
+            // bounds by `src.len() >= (gi + 1) * ndims` which the caller
+            // enforces via `data[gi * ndims..(gi+1) * ndims]` slicing.
+            let src_ptr = src.as_ptr() as *const u16;
+            let row_ptr = unsafe { src_ptr.add(gi * ndims) };
+            let dst_ptr = dst.as_mut_ptr();
+            let chunks = ndims / 16;
+            let tail = ndims - chunks * 16;
+            unsafe {
+                for c in 0..chunks {
+                    let h = _mm256_loadu_si256(row_ptr.add(c * 16) as *const __m256i);
+                    let f = _mm512_cvtph_ps(h);
+                    _mm512_storeu_ps(dst_ptr.add(c * 16), f);
+                }
+                if tail > 0 {
+                    let kmask: u16 = (1u16 << tail) - 1;
+                    let h = _mm256_maskz_loadu_epi16(kmask, row_ptr.add(chunks * 16) as *const i16);
+                    let f = _mm512_cvtph_ps(h);
+                    _mm512_mask_storeu_ps(dst_ptr.add(chunks * 16), kmask, f);
+                }
+            }
+            return;
+        }
+    }
+    let src_row = &src[gi * ndims..(gi + 1) * ndims];
+    T::as_f32_into(src_row, &mut dst[..ndims]).expect("f32 conversion");
+}
+
 /// SIMD batch compute of ||p_i||² for `np` rows of length `ndims`. Returns a
 /// `Vec<f32>` of length `np`. Replaces process_row's per-call
 /// `p_row.iter().map(|v| v*v).sum()` which showed up at 10% of partition
@@ -386,9 +434,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
             let p_slice = &mut p_data[..np * ndims];
             let dots_slice = &mut dots[..np * nl];
             for (i, &idx) in points.iter().enumerate() {
-                let src = &data[idx as usize * ndims..(idx as usize + 1) * ndims];
-                T::as_f32_into(src, &mut p_slice[i * ndims..(i + 1) * ndims])
-                    .expect("f32 conversion");
+                gather_f16_to_f32_simd(data, idx as usize, ndims,
+                    &mut p_slice[i * ndims..(i + 1) * ndims]);
             }
             diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice);
             // Batch-precompute ||p||² for all rows in one tight SIMD loop.
@@ -427,9 +474,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     let p_slice = &mut p_data[..chunk_rows * ndims];
                     let dots_slice = &mut dots[..chunk_rows * nl];
                     for (i, &gi) in points[row_start..row_start + chunk_rows].iter().enumerate() {
-                        let src = &data[gi as usize * ndims..(gi as usize + 1) * ndims];
-                        T::as_f32_into(src, &mut p_slice[i * ndims..(i + 1) * ndims])
-                            .expect("f32 conversion");
+                        gather_f16_to_f32_simd(data, gi as usize, ndims,
+                            &mut p_slice[i * ndims..(i + 1) * ndims]);
                     }
                     diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice);
                     let p_norm_sq = compute_p_norm_sq_batch(p_slice, chunk_rows, ndims);
