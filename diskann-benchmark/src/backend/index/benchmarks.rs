@@ -696,6 +696,58 @@ where
     }
 }
 
+//----------------//
+// InlineFilter //
+//----------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkInlineFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let inline_filter = phase.as_topk_inline_filter()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&inline_filter.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&inline_filter.groundtruth))?;
+
+        let steps =
+            search::knn::SearchSteps::new(inline_filter.reps, &inline_filter.num_threads, &inline_filter.runs);
+
+        let bit_maps = generate_bitmaps(&inline_filter.query_predicates, &inline_filter.data_labels)?;
+
+        let inline_filter = benchmark_core::search::graph::AdaptiveLGreedySearch::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect(),
+        )?;
+
+        let result = search::knn::run(&inline_filter, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
 /// The stack looks like this:
 ///
 /// - Bottom: [`FullPrecisionStream`]: The core streaming index implementation.

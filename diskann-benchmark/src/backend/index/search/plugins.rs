@@ -194,3 +194,14 @@ impl TopkAdaptiveLFilter {
         SearchPhaseKind::TopkAdaptiveLFilter
     }
 }
+
+/// A search plugin for inline filter search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkInlineFilter;
+
+impl TopkInlineFilter {
+    /// Returns [`SearchPhaseKind::TopkInlineFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkInlineFilter
+    }
+}

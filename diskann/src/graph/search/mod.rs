@@ -43,6 +43,7 @@ use crate::{
 };
 
 mod greedy_filter_search;
+mod inline_filter_search;
 mod knn_search;
 pub(crate) mod multihop_search;
 mod range_search;
@@ -113,6 +114,7 @@ where
 }
 
 pub use greedy_filter_search::AdaptiveLGreedySearch;
+pub use inline_filter_search::InlineFilterSearch;
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError};
