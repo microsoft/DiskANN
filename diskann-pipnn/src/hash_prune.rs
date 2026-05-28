@@ -492,12 +492,37 @@ impl HashPrune {
                 let global_dst = local_indices[dst_local as usize];
                 let dst_sketch =
                     &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
-                // relative_hash inlined against local sketches (L1-resident).
-                let mut hash: u16 = 0;
-                for j in 0..m {
-                    if dst_sketch[j] - src_sketch[j] >= 0.0 {
-                        hash |= 1u16 << j;
+                // relative_hash: bit j = (dst[j] - src[j] >= 0). Branch-free
+                // SIMD: compute diff in one AVX-512 sub, then cmp_ge_mask
+                // gives the bit pattern directly. Eliminates the 12-iter
+                // data-dependent `if >= 0` branch chain that contributed
+                // to HP's bad-spec slot share (PMU profile).
+                let hash: u16;
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                {
+                    use std::arch::x86_64::*;
+                    // SAFETY: AVX-512 cfg-gated. We bound the load to `m`
+                    // lanes via kmask; planes is validated 1..=16 by
+                    // PiPNNConfig.
+                    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
+                    unsafe {
+                        let dst_v = _mm512_maskz_loadu_ps(kmask, dst_sketch.as_ptr());
+                        let src_v = _mm512_maskz_loadu_ps(kmask, src_sketch.as_ptr());
+                        let diff = _mm512_sub_ps(dst_v, src_v);
+                        let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
+                        hash = mask & kmask;
                     }
+                }
+                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                {
+                    let mut h: u16 = 0;
+                    for j in 0..m {
+                        // Branch-free: sign bit is 0 when diff >= 0 (incl +0).
+                        let diff = dst_sketch[j] - src_sketch[j];
+                        let bit = ((!diff.is_sign_negative()) as u16) << j;
+                        h |= bit;
+                    }
+                    hash = h;
                 }
                 reservoir.insert(hash, global_dst, dist);
             }
