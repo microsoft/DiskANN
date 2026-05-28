@@ -293,7 +293,7 @@ thread_local! {
 /// `align_of::<T>() == 2` — matches `half::f16`'s `repr(transparent) u16`
 /// layout. Falls back to the generic trait for other `T`.
 #[inline]
-fn gather_f16_to_f32_simd<T: VectorRepr>(
+pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
     src: &[T], gi: usize, ndims: usize, dst: &mut [f32],
 ) {
     debug_assert!(dst.len() >= ndims);
@@ -334,6 +334,40 @@ fn gather_f16_to_f32_simd<T: VectorRepr>(
 /// `Vec<f32>` of length `np`. Replaces process_row's per-call
 /// `p_row.iter().map(|v| v*v).sum()` which showed up at 10% of partition
 /// cycles in the c4-48 PMU profile (perf attributed it as `Map::next`).
+pub(crate) fn compute_p_norm_sq_batch_into(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
+    debug_assert!(out.len() >= np);
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        use std::arch::x86_64::*;
+        let chunks = ndims / 16;
+        let tail = ndims - chunks * 16;
+        unsafe {
+            for i in 0..np {
+                let p = p_data.as_ptr().add(i * ndims);
+                let mut acc = _mm512_setzero_ps();
+                for c in 0..chunks {
+                    let v = _mm512_loadu_ps(p.add(c * 16));
+                    acc = _mm512_fmadd_ps(v, v, acc);
+                }
+                if tail > 0 {
+                    let kmask: u16 = (1u16 << tail) - 1;
+                    let v = _mm512_maskz_loadu_ps(kmask, p.add(chunks * 16));
+                    acc = _mm512_fmadd_ps(v, v, acc);
+                }
+                *out.get_unchecked_mut(i) = _mm512_reduce_add_ps(acc);
+            }
+        }
+        return;
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+    {
+        for i in 0..np {
+            let row = &p_data[i * ndims..(i + 1) * ndims];
+            out[i] = row.iter().map(|v| v * v).sum();
+        }
+    }
+}
+
 fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; np];
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]

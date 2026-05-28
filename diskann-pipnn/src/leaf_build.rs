@@ -341,21 +341,14 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     {
         let local_data = &mut bufs.local_data[..n * ndims];
         for (i, &idx) in indices.iter().enumerate() {
-            let idx = idx as usize;
-            let src = &data[idx * ndims..(idx + 1) * ndims];
-            let dst = &mut local_data[i * ndims..(i + 1) * ndims];
-            T::as_f32_into(src, dst).expect("f32 conversion");
+            crate::partition::gather_f16_to_f32_simd(
+                data, idx as usize, ndims,
+                &mut local_data[i * ndims..(i + 1) * ndims],
+            );
         }
         if needs_norms {
             let norms_sq = &mut bufs.norms_sq[..n];
-            for i in 0..n {
-                let row = &local_data[i * ndims..(i + 1) * ndims];
-                let mut s = 0.0f32;
-                for &v in row.iter() {
-                    s += v * v;
-                }
-                norms_sq[i] = s;
-            }
+            crate::partition::compute_p_norm_sq_batch_into(local_data, n, ndims, norms_sq);
         }
     }
 
