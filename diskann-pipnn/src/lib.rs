@@ -15,6 +15,7 @@ pub mod builder;
 pub mod hash_prune;
 pub mod leaf_build;
 pub mod partition;
+pub(crate) mod partition_inner;
 pub(crate) mod rayon_util;
 
 use std::num::NonZeroUsize;
