@@ -131,7 +131,7 @@ where
 
             // SAFETY:
             // * `ptr` is valid for `kept` elements.
-            // * Each API must not read beyond `keep_first` elements.
+            // * Each API must not write beyond `keep_first` elements.
             unsafe { v.store_simd_first(ptr, keep_first) };
             check(&output, expected, offset, &label("store_simd_first"));
 

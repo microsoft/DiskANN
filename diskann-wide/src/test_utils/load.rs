@@ -79,7 +79,7 @@ where
                 sub
             );
 
-            // SAFETY: Same a `V::load_simd_first`.
+            // SAFETY: Same as `V::load_simd_first`.
             let v = unsafe {
                 V::load_simd_masked_logical(arch, ptr, V::Mask::keep_first(arch, keep_first))
             };
@@ -91,7 +91,7 @@ where
                 sub
             );
 
-            // SAFETY: Same a `V::load_simd_first`.
+            // SAFETY: Same as `V::load_simd_first`.
             let v = unsafe {
                 V::load_simd_masked(
                     arch,
