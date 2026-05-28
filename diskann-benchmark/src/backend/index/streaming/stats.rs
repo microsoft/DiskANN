@@ -108,6 +108,22 @@ impl GenericStats {
             latencies: percentiles::compute_percentiles(&mut latencies)?,
         })
     }
+
+    /// Construct an empty stats entry (e.g., when maintenance is skipped).
+    #[cfg(feature = "bftree")]
+    pub(crate) fn empty(kind: Cow<'static, str>) -> Self {
+        let zero = MicroSeconds::from(std::time::Duration::ZERO);
+        // Use a single zero-duration entry to satisfy percentiles computation.
+        let latencies =
+            percentiles::compute_percentiles(&mut [zero]).expect("single element cannot be empty");
+        Self {
+            kind,
+            total_time: zero,
+            vectors: 0,
+            batches: 0,
+            latencies,
+        }
+    }
 }
 
 impl std::fmt::Display for GenericStats {

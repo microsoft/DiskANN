@@ -6,6 +6,7 @@
 //! Bf-Tree neighbor list provider.
 
 use std::marker::PhantomData;
+use std::sync::Mutex;
 
 use crate::AsKey;
 use bf_tree::{BfTree, Config};
@@ -23,6 +24,8 @@ use crate::TestCallCount;
 pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
+    /// Reusable scratch buffer for neighbor serialization, sized to `dim * size_of::<I>()`.
+    buf: Mutex<Vec<u8>>,
     #[allow(dead_code)]
     pub(crate) num_get_calls: TestCallCount,
     _phantom: PhantomData<I>,
@@ -37,16 +40,19 @@ impl<I: VectorId> NeighborProvider<I> {
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
-        Ok(Self::new(max_degree, adj_list_index))
+        Self::new(max_degree, adj_list_index)
     }
 
-    fn new(max_degree: u32, adjacency_list_index: BfTree) -> Self {
-        Self {
+    fn new(max_degree: u32, adjacency_list_index: BfTree) -> ANNResult<Self> {
+        let dim = 1 + max_degree.into_usize();
+
+        Ok(Self {
             adjacency_list_index,
-            dim: 1 + max_degree.into_usize(),
+            dim,
+            buf: Mutex::new(vec![0u8; dim * std::mem::size_of::<I>()]),
             num_get_calls: TestCallCount::default(),
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Access the BfTree config
@@ -67,7 +73,10 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)
     ///
-    pub(crate) fn new_from_bftree(max_degree: u32, adjacency_list_index: BfTree) -> Self {
+    pub(crate) fn new_from_bftree(
+        max_degree: u32,
+        adjacency_list_index: BfTree,
+    ) -> ANNResult<Self> {
         Self::new(max_degree, adjacency_list_index)
     }
 
@@ -153,8 +162,6 @@ impl<I: VectorId> NeighborProvider<I> {
     /// V: |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
     /// Where list length is the full list length and 'Invalid' indicates unfilled empty slots in the list
     /// Note: assuming all neighbors in the input list, 'neighbors', are valid
-    /// Two data copies are involved: 1) Copy from the immutable `neighbors` to the proper byte array with neighbor length
-    /// 2) Copy from the byte array to bf-tree
     #[allow(clippy::expect_used)]
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I]) -> ANNResult<()> {
         #[cfg(test)]
@@ -170,21 +177,23 @@ impl<I: VectorId> NeighborProvider<I> {
         let i = vector_id.into_usize();
         let key = i.as_key();
 
-        // Serialize the value, neighbor list, into a byte string, &u[8]
+        // Serialize the value into the reusable buffer.
+        // Format: |VectorId|...|VectorId|VectorId (list length)|
         let neighbor_list_edges_in_byte = cast_slice::<I, u8>(neighbors);
-
-        let neighbor_list_len = neighbors
+        let neighbor_list_len: I = neighbors
             .len()
             .try_into_vector_id()
             .expect("Fail to convert #neighbors as neighbor vec Id");
         let neighbor_list_len_in_byte = bytes_of::<I>(&neighbor_list_len);
 
-        // Format
-        // |VectorId|...|VectorId|VectorId (list length)|
-        let value: &[u8] = &[neighbor_list_edges_in_byte, neighbor_list_len_in_byte].concat();
+        let total_len = neighbor_list_edges_in_byte.len() + neighbor_list_len_in_byte.len();
 
-        // Insert the assembled (K, V) pair into bf-tree
-        self.adjacency_list_index.insert(key, value);
+        let mut buf = self.buf.lock().unwrap();
+        buf[..neighbor_list_edges_in_byte.len()].copy_from_slice(neighbor_list_edges_in_byte);
+        buf[neighbor_list_edges_in_byte.len()..total_len]
+            .copy_from_slice(neighbor_list_len_in_byte);
+
+        self.adjacency_list_index.insert(key, &buf[..total_len]);
 
         Ok(())
     }
@@ -192,7 +201,6 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Append unique vectors into a neighbor list
     /// The newly appended neighbor list will always be extended to 'dim' long to avoid frequent mem copy in bf-tree
     /// Note: assuming all neighbors in the input list, 'new_neighbor_ids', are valid
-    /// Three data copies: 1) get_neighbors 2) copy new neighbors to the neighbor list 3) copy the new neighbor list to bf-tree
     #[allow(clippy::expect_used)]
     pub fn append_vector(&self, vector_id: I, new_neighbor_ids: &[I]) -> ANNResult<()> {
         // Retrieve existing neighborlist
@@ -208,21 +216,32 @@ impl<I: VectorId> NeighborProvider<I> {
             new_neighbor_added |= neighbor_list.push(*new_neighbor_id);
         }
 
-        // If unique new neighbors are appended, then upsert the new neighbor list back into the tree
+        // If unique new neighbors are appended, write back using the reusable buffer
         if new_neighbor_added {
             let nbr_count = neighbor_list.len();
-            let mut neighbor_list: Vec<_> = neighbor_list.into();
-            neighbor_list.resize(self.dim, I::default());
-            neighbor_list[self.dim - 1] =
-                I::from_usize(nbr_count).expect("Fails to cast usize as VectorId");
-
-            // Given that we already have a full sized neighbor list ready to be directly saved in bf-tree
-            // We avoid one data copy by directly writing to bf-tree instead of invoking set_neighbor()
-            // Also avoid a bunch of unnecssary checks
             let i = vector_id.into_usize();
             let key = i.as_key();
-            let value = cast_slice::<I, u8>(&neighbor_list);
-            self.adjacency_list_index.insert(key, value);
+
+            // Build the value into the scratch buffer:
+            // |neighbor_0|...|neighbor_n|padding(Invalid)|...|nbr_count|
+            // Total size is always self.dim elements to avoid bf-tree page fragmentation.
+            let id_size = std::mem::size_of::<I>();
+            let total_len = self.dim * id_size;
+
+            let mut buf = self.buf.lock().unwrap();
+            buf[..total_len].fill(0);
+
+            // Copy existing neighbors into the buffer
+            let neighbors_bytes = cast_slice::<I, u8>(&neighbor_list);
+            buf[..neighbors_bytes.len()].copy_from_slice(neighbors_bytes);
+
+            // Write the count at the last position
+            let count_id: I = I::from_usize(nbr_count).expect("Fails to cast usize as VectorId");
+            let count_bytes = bytes_of::<I>(&count_id);
+            let count_offset = (self.dim - 1) * id_size;
+            buf[count_offset..count_offset + id_size].copy_from_slice(count_bytes);
+
+            self.adjacency_list_index.insert(key, &buf[..total_len]);
         }
 
         Ok(())
@@ -397,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_from_bftree() {
         let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
-        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree).unwrap();
 
         assert_eq!(neighbor_provider.max_degree(), 10);
 

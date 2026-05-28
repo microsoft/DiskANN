@@ -62,9 +62,11 @@ diskann-providers = { path = "diskann-providers", default-features = false, vers
 diskann-disk = { path = "diskann-disk", version = "0.53.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.53.0" }
 # Infra
+# Infra
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.53.0" }
 diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.53.0" }
 diskann-tools = { path = "diskann-tools", version = "0.53.0" }
+diskann-bftree = {path = "diskann-bftree", version = "0.53.0" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"

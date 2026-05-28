@@ -505,3 +505,61 @@ error reporting in the event of a dispatch fail much easier for the user to unde
 
 Refer to implementations within the benchmarking framework for what some of this may look like.
 
+### Adding a Storage Provider
+
+When adding an entirely new storage provider (e.g., a new `DiskANNIndex<DP>` backend), use the
+bf_tree implementation (`src/backend/index/bftree/`) as a reference.
+
+#### Files to Create
+
+| File | Purpose |
+|------|---------|
+| `src/inputs/<provider>.rs` | Input structs (JSON schema), `Display`, `Checker`, `Example` impls |
+| `src/backend/index/<provider>/mod.rs` | Module root, `register_benchmarks()`, shared helpers |
+| `src/backend/index/<provider>/*.rs` | One file per benchmark variant |
+| `example/graph-index-<provider>*.json` | Example configs for each variant |
+
+#### Files to Modify
+
+| File | Change |
+|------|--------|
+| `Cargo.toml` | Add optional dependency on your provider crate |
+| `src/inputs/mod.rs` | Feature-gated `pub(crate) mod <provider>` |
+| `src/backend/index/mod.rs` | Feature-gated `mod <provider>` + call `register_benchmarks()` |
+
+#### Checklist
+
+**Input structs:**
+- Define input structs with all fields your provider needs
+- Consider reusing shared types from `graph_index` where they fit — but only include fields your provider actually uses
+- Create separate structs for static vs streaming variants
+- Streaming struct includes `DynamicRunbookParams`
+- Implement `validate()` for path resolution and sanity checks
+
+**Static benchmark:**
+- Implement `Benchmark` trait (see above for the full trait walkthrough)
+- `try_match` should reject unsupported configurations early
+- Implement `QueryType` for your provider type (associates the vector element type)
+
+**Streaming benchmark:**
+- Implement `ManagedStream<T>` on a stream struct:
+  - `search` — run KNN with ground truth comparison
+  - `insert` / `replace` — insert vectors at given slots
+  - `delete` — delete vectors at given slots
+  - `maintain` — provider-specific maintenance (cache clearing, consolidation, etc.)
+- Wrap in `Managed<T, StreamStats>` (handles slot management, GT translation, maintenance scheduling)
+- Implement the `Benchmark` trait for the streaming entry point
+
+**Registration:**
+- Choose descriptive tag strings (e.g., `graph-index-<provider>-full-precision-f32`)
+- Feature-gate with `#[cfg(feature = "...")]`
+
+#### Notes
+
+- `Managed` triggers `maintain()` based on the BigANN runbook's explicit consolidate operations
+- `StreamStats` has variants for each operation type
+- Matching on literals to dispatch const-generic parameters (e.g., `num_bits`) is fine — it
+  effectively dispatches to const generics while keeping the `Benchmark` impl monomorphic
+- Check IR growth with `cargo llvm-lines --package diskann-benchmark --all-features --release`;
+  each new `DiskANNIndex<DP>` instantiation adds ~150-300K IR lines
+

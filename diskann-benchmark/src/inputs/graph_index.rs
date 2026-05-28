@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{self, as_input, save_and_load, Example},
+    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
 
@@ -297,16 +297,6 @@ impl Example for MultiInsert {
     }
 }
 
-// This constant is used to ensure that summaries of graph-index related jobs properly have
-// their field descriptions aligned.
-const PRINT_WIDTH: usize = 18;
-
-macro_rules! write_field {
-    ($f:ident, $field:tt, $($expr:tt)*) => {
-        writeln!($f, "{:>PRINT_WIDTH$}: {}", $field, $($expr)*)
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
@@ -539,19 +529,19 @@ pub enum StartPointStrategyRef {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexBuild {
-    pub(crate) data_type: DataType,
-    pub(crate) data: InputFile,
-    pub(crate) distance: SimilarityMeasure,
-    pub(crate) max_degree: usize,
-    pub(crate) l_build: usize,
-    pub(crate) insert_retry: Option<InsertRetry>,
+    data_type: DataType,
+    data: InputFile,
+    distance: SimilarityMeasure,
+    max_degree: usize,
+    l_build: usize,
+    insert_retry: Option<InsertRetry>,
     #[serde(with = "StartPointStrategyRef")]
-    pub(crate) start_point_strategy: StartPointStrategy,
-    pub(crate) alpha: f32,
-    pub(crate) backedge_ratio: f32,
-    pub(crate) num_threads: usize,
-    pub(crate) multi_insert: Option<MultiInsert>,
-    pub(crate) save_path: Option<String>,
+    start_point_strategy: StartPointStrategy,
+    alpha: f32,
+    backedge_ratio: f32,
+    num_threads: usize,
+    multi_insert: Option<MultiInsert>,
+    save_path: Option<String>,
 }
 
 impl IndexBuild {
@@ -559,7 +549,7 @@ impl IndexBuild {
         "graph-index-builder"
     }
 
-    fn exact_max_degree(&self) -> usize {
+    pub(crate) fn exact_max_degree(&self) -> usize {
         (self.max_degree as f32 * 1.3) as usize
     }
 
@@ -618,7 +608,7 @@ impl IndexBuild {
         }
     }
 
-    fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub(crate) fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "file", self.data.display())?;
         write_field!(f, "data_type", self.data_type)?;
         write_field!(f, "max degree", self.max_degree)?;
@@ -661,6 +651,39 @@ impl IndexBuild {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn data_type(&self) -> DataType {
+        self.data_type
+    }
+
+    pub(crate) fn l_build(&self) -> usize {
+        self.l_build
+    }
+
+    pub(crate) fn num_threads(&self) -> usize {
+        self.num_threads
+    }
+
+    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    pub(crate) fn distance(&self) -> SimilarityMeasure {
+        self.distance
+    }
+
+    pub(crate) fn data(&self) -> &InputFile {
+        &self.data
+    }
+
+    pub(crate) fn start_point_strategy(&self) -> &StartPointStrategy {
+        &self.start_point_strategy
+    }
+
+    pub(crate) fn multi_insert(&self) -> Option<&MultiInsert> {
+        self.multi_insert.as_ref()
+    }
+
+    pub(crate) fn save_path(&self) -> Option<&str> {
+        self.save_path.as_deref()
     }
 }
 
