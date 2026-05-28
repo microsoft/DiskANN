@@ -282,6 +282,45 @@ thread_local! {
     static STRIPE_BUFS: RefCell<StripeBuffers> = RefCell::new(StripeBuffers::new());
 }
 
+/// SIMD batch compute of ||p_i||² for `np` rows of length `ndims`. Returns a
+/// `Vec<f32>` of length `np`. Replaces process_row's per-call
+/// `p_row.iter().map(|v| v*v).sum()` which showed up at 10% of partition
+/// cycles in the c4-48 PMU profile (perf attributed it as `Map::next`).
+fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; np];
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        use std::arch::x86_64::*;
+        let chunks = ndims / 16;
+        let tail = ndims - chunks * 16;
+        unsafe {
+            for i in 0..np {
+                let p = p_data.as_ptr().add(i * ndims);
+                let mut acc = _mm512_setzero_ps();
+                for c in 0..chunks {
+                    let v = _mm512_loadu_ps(p.add(c * 16));
+                    acc = _mm512_fmadd_ps(v, v, acc);
+                }
+                if tail > 0 {
+                    let kmask: u16 = (1u16 << tail) - 1;
+                    let v = _mm512_maskz_loadu_ps(kmask, p.add(chunks * 16));
+                    acc = _mm512_fmadd_ps(v, v, acc);
+                }
+                *out.get_unchecked_mut(i) = _mm512_reduce_add_ps(acc);
+            }
+        }
+        return out;
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+    {
+        for i in 0..np {
+            let row = &p_data[i * ndims..(i + 1) * ndims];
+            out[i] = row.iter().map(|v| v * v).sum();
+        }
+        out
+    }
+}
+
 // ─── Assignment ──────────────────────────────────────────────────────────────
 
 /// Assign each point to its `fanout` nearest leaders using native SIMD distance.
@@ -352,12 +391,16 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     .expect("f32 conversion");
             }
             diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice);
+            // Batch-precompute ||p||² for all rows in one tight SIMD loop.
+            // Previously process_row computed this per call via
+            //   `p_row.iter().map(|v| v*v).sum()` which showed up as 10% of
+            // partition cycles in the c4-48 PMU profile (Map::next).
+            let p_norm_sq = compute_p_norm_sq_batch(p_slice, np, ndims);
             for i in 0..np {
                 let dot_row = &dots_slice[i * nl..(i + 1) * nl];
-                let p_row = &p_slice[i * ndims..(i + 1) * ndims];
                 let out = &mut assignments[i * num_assign..(i + 1) * num_assign];
                 crate::partition_inner::process_row(
-                    dot_row, p_row, &l_norms, metric, num_assign, out,
+                    dot_row, p_norm_sq[i], &l_norms, metric, num_assign, out,
                 );
             }
         });
@@ -389,12 +432,12 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                             .expect("f32 conversion");
                     }
                     diskann_linalg::sgemm_abt(p_slice, chunk_rows, ndims, &l_data, nl, dots_slice);
+                    let p_norm_sq = compute_p_norm_sq_batch(p_slice, chunk_rows, ndims);
                     for i in 0..chunk_rows {
                         let dot_row = &dots_slice[i * nl..(i + 1) * nl];
-                        let p_row = &p_slice[i * ndims..(i + 1) * ndims];
                         let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
                         crate::partition_inner::process_row(
-                            dot_row, p_row, &l_norms, metric, num_assign, out,
+                            dot_row, p_norm_sq[i], &l_norms, metric, num_assign, out,
                         );
                     }
                 });

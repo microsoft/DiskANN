@@ -103,24 +103,41 @@ impl HashPruneReservoir {
                 // is `#[repr(C)]` with size 8 = sizeof(u64), so the u64 cast aliases bytes
                 // legally. `ptr.add(base)` stays within `entries` since `base + 8 ≤ n`.
                 // Trailing `get_unchecked(i)` has `i < n`.
+                //
+                // Branch-free: scan ALL chunks unconditionally, OR the per-chunk
+                // 8-bit cmpeq masks into a single 64-bit "found" mask (8 bits per
+                // chunk × up to 8 chunks for l_max=64). Then trailing_zeros() of
+                // the 64-bit value gives the absolute lane index.
+                //
+                // Eliminates the data-dependent `if cmp != 0 { return }` per chunk —
+                // that branch was the dominant source of HP's 19% bad-spec slots
+                // (per c4-48 PMU profile). Cost: scan all chunks even when an early
+                // chunk matches; benefit: zero misprediction.
                 unsafe {
                     let ptr = self.entries.as_ptr() as *const u64;
                     let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
                     let mask = _mm512_set1_epi64(0x0000FFFF00000000u64 as i64);
                     let chunks = n / 8;
+                    let mut found: u64 = 0;
                     for chunk in 0..chunks {
                         let base = chunk * 8;
                         let data = _mm512_loadu_si512(ptr.add(base) as *const __m512i);
                         let masked = _mm512_and_si512(data, mask);
                         let cmp = _mm512_cmpeq_epi64_mask(masked, target);
-                        if cmp != 0 {
-                            return Some(base + cmp.trailing_zeros() as usize);
-                        }
+                        found |= (cmp as u64) << (chunk * 8);
                     }
-                    for i in (chunks * 8)..n {
-                        if self.entries.get_unchecked(i).hash == hash {
-                            return Some(i);
-                        }
+                    // Tail (n % 8 entries): use a final masked load to fold into `found`.
+                    let tail = n - chunks * 8;
+                    if tail > 0 {
+                        let kmask: u8 = (1u8 << tail) - 1;
+                        let base = chunks * 8;
+                        let data = _mm512_maskz_loadu_epi64(kmask, ptr.add(base) as *const i64);
+                        let masked = _mm512_and_si512(data, mask);
+                        let cmp = _mm512_cmpeq_epi64_mask(masked, target) & kmask;
+                        found |= (cmp as u64) << base;
+                    }
+                    if found != 0 {
+                        return Some(found.trailing_zeros() as usize);
                     }
                 }
                 return None;

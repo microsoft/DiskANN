@@ -27,12 +27,16 @@ pub(crate) const MAX_FANOUT_INNER: usize = 16;
 #[inline]
 pub(crate) fn process_row(
     dot_row: &[f32],
-    p_row: &[f32],
+    p_norm_sq: f32,
     l_norms: &[f32],
     metric: Metric,
     num_assign: usize,
     out: &mut [u32],
 ) {
+    // p_norm_sq = ||p||² (precomputed by caller, batched SIMD reduce). Used as
+    // `pi` for L2 distance and as `sqrt(pi)` for Cosine. CosineNormalized and
+    // InnerProduct ignore it.
+    let _ = p_norm_sq;
     let nl = dot_row.len();
     debug_assert!(num_assign <= MAX_FANOUT_INNER);
     debug_assert!(out.len() >= num_assign);
@@ -148,7 +152,7 @@ pub(crate) fn process_row(
             }
         }
         Metric::Cosine => {
-            let pi_sqrt: f32 = p_row.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let pi_sqrt: f32 = p_norm_sq.sqrt();
             #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
             {
                 use std::arch::x86_64::*;
@@ -237,7 +241,7 @@ pub(crate) fn process_row(
             }
         }
         Metric::L2 => {
-            let pi: f32 = p_row.iter().map(|v| v * v).sum();
+            let pi: f32 = p_norm_sq;
             #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
             {
                 use std::arch::x86_64::*;
