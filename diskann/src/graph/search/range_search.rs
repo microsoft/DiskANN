@@ -227,6 +227,12 @@ where
                 )
                 .await?;
 
+                // The second round of range search can find better results and thus the
+                // contents of `scratch.in_range` are no longer necessarily sorted.
+                //
+                // This fixes that.
+                scratch.in_range.sort_unstable();
+
                 InternalSearchStats {
                     cmps: initial_stats.cmps,
                     hops: initial_stats.hops + range_stats.hops,
