@@ -6,7 +6,7 @@
 use std::fmt::Debug;
 
 use diskann_vector::{
-    DistanceFunction, PreprocessedDistanceFunction,
+    AsUnaligned, DistanceFunction, PreprocessedDistanceFunction, UnalignedSlice,
     conversion::CastFromSlice,
     distance::{DistanceProvider, Metric},
 };
@@ -235,6 +235,13 @@ impl<T, U> PreprocessedDistanceFunction<&[T]> for BufferedDistance<T, U> {
     #[inline(always)]
     fn evaluate_similarity(&self, x: &[T]) -> f32 {
         self.f.call(&self.query, x)
+    }
+}
+
+impl<T, U> PreprocessedDistanceFunction<UnalignedSlice<'_, T>> for BufferedDistance<T, U> {
+    #[inline(always)]
+    fn evaluate_similarity(&self, x: UnalignedSlice<'_, T>) -> f32 {
+        self.f.call_unaligned((&*self.query).as_unaligned(), x)
     }
 }
 
