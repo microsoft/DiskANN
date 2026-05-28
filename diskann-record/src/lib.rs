@@ -515,7 +515,7 @@ mod tests {
             // path-shape check as the thing rejecting the load.
             "files": [handle_target],
             "value": {
-                "$version": { "major": 0, "minor": 0, "patch": 0 },
+                "$version": "0.0.0",
                 "blob": { "$handle": handle_target },
             },
         });

@@ -5,116 +5,64 @@
   ],
   "value": {
     "config": {
+      "l_build": 20,
+      "max_minibatch_par": 1,
+      "max_occlusion_size": 750,
+      "max_degree": 20,
+      "alpha": 1.2000000476837158,
+      "max_backedges": 16,
       "pruned_degree": 16,
+      "experimental_insert_retry": null,
+      "saturate_after_prune": false,
       "prune_kind": {
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        },
-        "$variant": "TriangleInequality"
+        "TriangleInequality": null,
+        "$version": "0.0.0"
       },
       "intra_batch_candidates": {
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        },
-        "$variant": "All"
+        "All": null,
+        "$version": "0.0.0"
       },
-      "max_occlusion_size": 750,
-      "alpha": 1.2000000476837158,
-      "max_minibatch_par": 1,
-      "l_build": 20,
-      "max_degree": 20,
-      "max_backedges": 16,
-      "saturate_after_prune": false,
-      "experimental_insert_retry": null,
-      "$version": {
-        "major": 0,
-        "minor": 0,
-        "patch": 0
-      }
+      "$version": "0.0.0"
     },
     "data_provider": {
-      "neighbor_provider": {
-        "graph": {
-          "$handle": "graph.bin"
-        },
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
-      },
-      "metric": {
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        },
-        "$variant": "L2"
-      },
-      "aux_vectors": {
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
-      },
-      "start_points": {
-        "end": 33,
-        "start": 32,
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
-      },
-      "deleted": {
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
-      },
       "base_vectors": {
-        "metric": {
-          "$version": {
-            "major": 0,
-            "minor": 0,
-            "patch": 0
-          },
-          "$variant": "L2"
-        },
         "prefetch_lookahead": 8,
         "prefetch_cache_line_level": {
-          "$version": {
-            "major": 0,
-            "minor": 0,
-            "patch": 0
-          },
-          "$variant": "CacheLine16"
+          "CacheLine16": null,
+          "$version": "0.0.0"
         },
         "vectors": {
           "$handle": "vectors.bin"
         },
-        "$version": {
-          "major": 0,
-          "minor": 0,
-          "patch": 0
-        }
+        "metric": {
+          "L2": null,
+          "$version": "0.0.0"
+        },
+        "$version": "0.0.0"
       },
-      "$version": {
-        "major": 0,
-        "minor": 0,
-        "patch": 0
-      }
+      "aux_vectors": {
+        "$version": "0.0.0"
+      },
+      "deleted": {
+        "$version": "0.0.0"
+      },
+      "start_points": {
+        "start": 32,
+        "end": 33,
+        "$version": "0.0.0"
+      },
+      "metric": {
+        "L2": null,
+        "$version": "0.0.0"
+      },
+      "neighbor_provider": {
+        "graph": {
+          "$handle": "graph.bin"
+        },
+        "$version": "0.0.0"
+      },
+      "$version": "0.0.0"
     },
-    "$version": {
-      "major": 0,
-      "minor": 0,
-      "patch": 0
-    }
+    "$version": "0.0.0"
   }
 }
