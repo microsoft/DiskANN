@@ -227,10 +227,8 @@ where
                 )
                 .await?;
 
-                // The second round of range search can find better results and thus the
-                // contents of `scratch.in_range` are no longer necessarily sorted.
-                //
-                // This fixes that.
+                // The second round of range search does not ensure items are added to
+                // `in_range` in sorted order. This restores that order.
                 scratch.in_range.sort_unstable();
 
                 InternalSearchStats {
