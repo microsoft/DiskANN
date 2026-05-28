@@ -77,12 +77,19 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkAdaptiveLFilter),
+            .search(plugins::TopkAdaptiveLFilter)
+            .search(plugins::TopkInlineFilter),
     )?;
 
     registry.register(
         "graph-index-full-precision-f16",
-        FullPrecision::<f16>::new().search(plugins::Topk),
+        FullPrecision::<f16>::new()
+            .search(plugins::Topk)
+            .search(plugins::Range)
+            .search(plugins::TopkBetaFilter)
+            .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkAdaptiveLFilter)
+            .search(plugins::TopkInlineFilter),
     )?;
     registry.register(
         "graph-index-full-precision-u8",
@@ -91,7 +98,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkAdaptiveLFilter),
+            .search(plugins::TopkAdaptiveLFilter)
+            .search(plugins::TopkInlineFilter),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -733,7 +741,7 @@ where
 
         let bit_maps = generate_bitmaps(&inline_filter.query_predicates, &inline_filter.data_labels)?;
 
-        let inline_filter = benchmark_core::search::graph::AdaptiveLGreedySearch::new(
+        let inline_filter = benchmark_core::search::graph::InlineFilterSearch::new(
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
