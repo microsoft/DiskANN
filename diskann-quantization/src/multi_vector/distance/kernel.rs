@@ -28,14 +28,13 @@ pub trait MaxSimKernel<T: Copy>: Send + Sync + std::fmt::Debug {
 /// `Box<dyn MaxSimKernel<T>>` via [`BoxErase`], a chamfer-only closure, a
 /// batched evaluator, …).
 pub trait Erase<T: Copy> {
-    /// What the visitor produces.
     type Output;
     /// `K` is generic so the body sees its concrete type and the compiler
     /// can inline it.
     fn erase<K: MaxSimKernel<T> + 'static>(self, kernel: K) -> Self::Output;
 }
 
-/// Default [`Erase`] impl that boxes the kernel as `Box<dyn MaxSimKernel<T>>`.
+/// Default boxing [`Erase`] impl.
 #[derive(Debug, Clone, Copy)]
 pub struct BoxErase;
 

@@ -3,12 +3,8 @@
 
 //! Distance computation for multi-vector representations.
 //!
-//! Provides asymmetric distance primitives (MaxSim, Chamfer) plus the
-//! factory entry point [`build_max_sim`] that returns ISA-selected
-//! [`MaxSimKernel`] implementations.
-//!
 //! The fallback path uses a double-loop kernel over
-//! [`InnerProduct`](diskann_vector::distance::InnerProduct). The factory
+//! [`InnerProduct`](diskann_vector::distance::InnerProduct); the factory
 //! returns cache-tiled SIMD kernels selected by [`MaxSimIsa`].
 //!
 //! # Example

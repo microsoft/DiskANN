@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! Factory + concrete `MaxSimKernel<T>` implementations for the multi-vector
-//! distance API. See [`build_max_sim`] for the BYOTE entry point and
-//! [`MaxSimElement`] for the sealed trait that gates accepted element types.
+//! Factory + concrete `MaxSimKernel<T>` impls for the multi-vector distance
+//! API. BYOTE entry point — see [`build_max_sim`].
 
 use diskann_utils::Reborrow;
 use diskann_vector::distance::InnerProduct;
@@ -275,12 +274,11 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Scalar element types accepted by the multi-vector MaxSim factory.
+/// Scalar element types accepted by [`build_max_sim`].
 ///
-/// Sealed: external crates cannot add impls. The library ships impls for
-/// `f32` and `half::f16`. Quantized representations (PQ, SQ, packed sub-byte)
-/// do not fit this trait — they carry per-vector codebook/scale state and
-/// will get dedicated factory functions when they are added.
+/// Sealed: external crates cannot add impls. Quantized representations
+/// (PQ, SQ, packed sub-byte) are intentionally excluded — they need
+/// codebook/scale state that [`MatRef<'_, Standard<Self>>`] can't carry.
 pub trait MaxSimElement: sealed::Sealed + Sized + Copy + Send + Sync + 'static {
     /// Build the concrete kernel for this element type and hand it to
     /// `erase.erase(...)`.
@@ -407,9 +405,8 @@ impl MaxSimElement for half::f16 {
 
 /// Build a multi-vector MaxSim kernel for any [`MaxSimElement`] type.
 ///
-/// Thin wrapper over [`MaxSimElement::build`] so generic callers can write
-/// `build_max_sim::<T, _>(isa, query, erase)` without naming the trait at
-/// the call site.
+/// Thin wrapper over [`MaxSimElement::build`] so callers don't have to name
+/// the trait at the call site.
 ///
 /// # Errors
 ///

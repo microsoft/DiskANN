@@ -94,13 +94,21 @@ where
 // Timing harness   //
 //////////////////////
 
-fn run_loops(run: &Run, body: &mut dyn FnMut()) -> RunResult {
+pub(super) fn run_with_kernel<T: Copy>(
+    run: &Run,
+    doc: MatRef<'_, Standard<T>>,
+    kernel: &dyn MaxSimKernel<T>,
+) -> RunResult {
+    let mut scores = vec![0.0f32; run.num_query_vectors.get()];
     let mut latencies = Vec::with_capacity(run.num_measurements.get());
 
     for _ in 0..run.num_measurements.get() {
         let start = std::time::Instant::now();
         for _ in 0..run.loops_per_measurement.get() {
-            body();
+            kernel
+                .compute_max_sim(doc, &mut scores)
+                .expect("scores.len() == kernel.nrows() by construction");
+            std::hint::black_box(&mut scores);
         }
         latencies.push(start.elapsed().into());
     }
@@ -111,20 +119,6 @@ fn run_loops(run: &Run, body: &mut dyn FnMut()) -> RunResult {
         latencies,
         percentiles,
     }
-}
-
-pub(super) fn run_with_kernel<T: Copy>(
-    run: &Run,
-    doc: MatRef<'_, Standard<T>>,
-    kernel: &dyn MaxSimKernel<T>,
-) -> RunResult {
-    let mut scores = vec![0.0f32; run.num_query_vectors.get()];
-    run_loops(run, &mut || {
-        kernel
-            .compute_max_sim(doc, &mut scores)
-            .expect("scores.len() == kernel.nrows() by construction");
-        std::hint::black_box(&mut scores);
-    })
 }
 
 //////////////////////

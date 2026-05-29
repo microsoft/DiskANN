@@ -32,10 +32,8 @@ pub enum MaxSimIsa {
 
 impl MaxSimIsa {
     /// Whether a kernel for this ISA can be built on the current host.
-    /// Variants that depend on CPU features (`X86_64_V3`, `X86_64_V4`,
-    /// `Neon`) may return `false` even when the crate is compiled for the
-    /// matching target architecture. `Auto`, `Scalar`, and `Reference` are
-    /// always available.
+    /// Feature-gated variants may return `false` even when compiled for
+    /// the matching target architecture.
     pub fn is_available(self) -> bool {
         match self {
             Self::Auto | Self::Scalar | Self::Reference => true,

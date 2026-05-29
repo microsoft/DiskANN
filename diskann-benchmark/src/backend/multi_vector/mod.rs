@@ -5,40 +5,19 @@
 
 //! Multi-vector MaxSim distance benchmarks with regression detection.
 //!
-//! Registers one `Benchmark` entry per element type accepted by the sealed
-//! [`MaxSimElement`] trait. The JSON `isa` field selects the kernel at run
-//! time via the library's [`build_max_sim`] factory.
+//! One `Benchmark` is registered per element type supported by
+//! [`MaxSimElement`]; the JSON `isa` field picks the kernel at run time.
 //!
-//! # Adding a new in-tree experimental kernel
+//! # Why two ISA enums?
 //!
-//! 1. Library (`diskann-quantization::multi_vector::distance`): add a
-//!    variant to [`MaxSimIsa`], implement [`MaxSimKernel<T>`] for the new
-//!    kernel struct, and add a matching arm to [`MaxSimElement::build`].
-//! 2. Benchmark ([`crate::inputs::multi_vector::BenchIsa`]): mirror the
-//!    variant and extend `From<BenchIsa> for MaxSimIsa`.
-//! 3. Set `"isa": "your-variant"` in the JSON job. The existing
-//!    `Kernel<T>` registrations cover the rest.
+//! [`MaxSimIsa`] (library) and [`BenchIsa`] (this crate) are intentionally
+//! separate so the library doesn't pin its public API on a serde version
+//! or JSON shape. The benchmark owns its kebab-case JSON layout; the
+//! library stays serde-agnostic.
 //!
-//! # Why two enums?
-//!
-//! [`MaxSimIsa`] (library) and [`BenchIsa`] are kept separate so the library
-//! doesn't pin its public API on a serde version or JSON shape. The
-//! benchmark owns its kebab-case JSON layout; the library is serde-agnostic.
-//!
-//! The factory follows the BYOTE ("Bring your own type erasure") pattern
-//! described in [RFC #1068]. Callers that want a different output shape
-//! (chamfer-only closure, batched evaluator, etc.) implement their own
-//! [`Erase<T>`] in place of [`BoxErase`].
-//!
-//! [`build_max_sim`]: diskann_quantization::multi_vector::build_max_sim
 //! [`MaxSimIsa`]: diskann_quantization::multi_vector::MaxSimIsa
 //! [`MaxSimElement`]: diskann_quantization::multi_vector::MaxSimElement
-//! [`MaxSimElement::build`]: diskann_quantization::multi_vector::MaxSimElement::build
-//! [`MaxSimKernel<T>`]: diskann_quantization::multi_vector::MaxSimKernel
-//! [`Erase<T>`]: diskann_quantization::multi_vector::Erase
-//! [`BoxErase`]: diskann_quantization::multi_vector::BoxErase
 //! [`BenchIsa`]: crate::inputs::multi_vector::BenchIsa
-//! [RFC #1068]: https://github.com/microsoft/DiskANN/pull/1068
 
 use diskann_benchmark_runner::Registry;
 
