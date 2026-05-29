@@ -143,34 +143,38 @@ impl HashPruneReservoir {
                 return None;
             }
         }
-        // AVX2 fallback: 4 entries per comparison (256-bit / 64-bit).
-        #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+        // AVX2 fallback: 4 entries per comparison (256-bit / 64-bit). Same
+        // branch-free OR-pattern as the AVX-512 path — `_mm256_movemask_pd`
+        // collapses a 256-bit qword-mask into 4 bits per chunk.
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")))]
         {
             use std::arch::x86_64::*;
             if n >= 4 {
-                // SAFETY: AVX2 intrinsics — `target_arch = "x86_64"` guarantees the
-                // ISA on a v3 baseline (.cargo/config.toml). ReservoirEntry is `#[repr(C)]`
-                // sized 8 bytes; `ptr.add(base)` stays in bounds because `base + 4 ≤ n`.
-                // `get_unchecked(i)` has `i < n`.
+                // SAFETY: AVX2 cfg-gated; ReservoirEntry is `#[repr(C)]` size 8,
+                // so the u64 cast aliases legally. `ptr.add(base)` stays in
+                // bounds by `base + 4 ≤ n`. Tail `get_unchecked(i)` has `i < n`.
                 unsafe {
                     let ptr = self.entries.as_ptr() as *const u64;
                     let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
                     let mask = _mm256_set1_epi64x(0x0000FFFF00000000u64 as i64);
                     let chunks = n / 4;
+                    let mut found: u64 = 0;
                     for chunk in 0..chunks {
                         let base = chunk * 4;
                         let data = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
                         let masked = _mm256_and_si256(data, mask);
                         let cmp = _mm256_cmpeq_epi64(masked, target);
-                        let bits = _mm256_movemask_epi8(cmp);
-                        if bits != 0 {
-                            return Some(base + (bits.trailing_zeros() as usize / 8));
-                        }
+                        // movemask_pd: 4 bits, one per 64-bit lane.
+                        let bits = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64;
+                        found |= bits << (chunk * 4);
                     }
                     for i in (chunks * 4)..n {
                         if self.entries.get_unchecked(i).hash == hash {
-                            return Some(i);
+                            found |= 1u64 << i;
                         }
+                    }
+                    if found != 0 {
+                        return Some(found.trailing_zeros() as usize);
                     }
                 }
                 return None;
@@ -513,7 +517,51 @@ impl HashPrune {
                         hash = mask & kmask;
                     }
                 }
-                #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                // AVX2 path: 8-lane SIMD via `_mm256_maskload_ps` (which
+                // suppresses out-of-bounds loads) + `_mm256_movemask_ps` for
+                // a 1-bit-per-lane mask. Splits up-to-16 planes into low-8
+                // and optional high-(m-8) halves.
+                #[cfg(all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")))]
+                {
+                    use std::arch::x86_64::*;
+                    // SAFETY: AVX2 cfg-gated; maskload returns 0 for masked-off
+                    // lanes so reading past the end is safe.
+                    unsafe {
+                        let make_mask = |start: usize, count: usize| -> __m256i {
+                            // -1 for active lanes, 0 for inactive.
+                            let m_arr: [i32; 8] = std::array::from_fn(|k| {
+                                if k < count { -1 } else { 0 }
+                            });
+                            let _ = start;
+                            _mm256_loadu_si256(m_arr.as_ptr() as *const __m256i)
+                        };
+                        let lo_count = m.min(8);
+                        let mask_lo = make_mask(0, lo_count);
+                        let dst_lo = _mm256_maskload_ps(dst_sketch.as_ptr(), mask_lo);
+                        let src_lo = _mm256_maskload_ps(src_sketch.as_ptr(), mask_lo);
+                        let diff_lo = _mm256_sub_ps(dst_lo, src_lo);
+                        let cmp_lo = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_lo, _mm256_setzero_ps());
+                        let bits_lo = _mm256_movemask_ps(cmp_lo) as u16;
+                        let lo_kmask: u16 = (1u16 << lo_count) - 1;
+                        let mut h = bits_lo & lo_kmask;
+                        if m > 8 {
+                            let hi_count = m - 8;
+                            let mask_hi = make_mask(0, hi_count);
+                            let dst_hi = _mm256_maskload_ps(dst_sketch.as_ptr().add(8), mask_hi);
+                            let src_hi = _mm256_maskload_ps(src_sketch.as_ptr().add(8), mask_hi);
+                            let diff_hi = _mm256_sub_ps(dst_hi, src_hi);
+                            let cmp_hi = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_hi, _mm256_setzero_ps());
+                            let bits_hi = _mm256_movemask_ps(cmp_hi) as u16;
+                            let hi_kmask: u16 = (1u16 << hi_count) - 1;
+                            h |= (bits_hi & hi_kmask) << 8;
+                        }
+                        hash = h;
+                    }
+                }
+                #[cfg(not(any(
+                    all(target_arch = "x86_64", target_feature = "avx512f"),
+                    all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")),
+                )))]
                 {
                     let mut h: u16 = 0;
                     for j in 0..m {

@@ -326,6 +326,52 @@ pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
             return;
         }
     }
+    // AVX2 + F16C: 8 lanes per vcvtph2ps. F16C is independent of AVX-512 and
+    // ships with every Ivy Bridge+ / AMD Bulldozer+ CPU, so v3 baseline is safe.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        target_feature = "f16c",
+        not(target_feature = "avx512f")
+    ))]
+    {
+        if std::mem::size_of::<T>() == 2 && std::mem::align_of::<T>() == 2 {
+            use std::arch::x86_64::*;
+            let src_ptr = src.as_ptr() as *const u16;
+            // SAFETY: see AVX-512 branch above; same alias + bounds invariants.
+            let row_ptr = unsafe { src_ptr.add(gi * ndims) };
+            let dst_ptr = dst.as_mut_ptr();
+            let chunks = ndims / 8;
+            let tail = ndims - chunks * 8;
+            unsafe {
+                for c in 0..chunks {
+                    let h = _mm_loadu_si128(row_ptr.add(c * 8) as *const __m128i);
+                    let f = _mm256_cvtph_ps(h);
+                    _mm256_storeu_ps(dst_ptr.add(c * 8), f);
+                }
+                if tail > 0 {
+                    // AVX2 has no masked 16-bit load; copy tail through a tiny
+                    // stack buffer (zero-padded) so the SIMD convert is safe.
+                    let mut hbuf = [0u16; 8];
+                    std::ptr::copy_nonoverlapping(
+                        row_ptr.add(chunks * 8),
+                        hbuf.as_mut_ptr(),
+                        tail,
+                    );
+                    let h = _mm_loadu_si128(hbuf.as_ptr() as *const __m128i);
+                    let f = _mm256_cvtph_ps(h);
+                    let mut fbuf = [0f32; 8];
+                    _mm256_storeu_ps(fbuf.as_mut_ptr(), f);
+                    std::ptr::copy_nonoverlapping(
+                        fbuf.as_ptr(),
+                        dst_ptr.add(chunks * 8),
+                        tail,
+                    );
+                }
+            }
+            return;
+        }
+    }
     let src_row = &src[gi * ndims..(gi + 1) * ndims];
     T::as_f32_into(src_row, &mut dst[..ndims]).expect("f32 conversion");
 }
@@ -336,11 +382,26 @@ pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
 /// cycles in the c4-48 PMU profile (perf attributed it as `Map::next`).
 pub(crate) fn compute_p_norm_sq_batch_into(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
     debug_assert!(out.len() >= np);
+    compute_p_norm_sq_into_impl(p_data, np, ndims, out);
+}
+
+fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; np];
+    compute_p_norm_sq_into_impl(p_data, np, ndims, &mut out);
+    out
+}
+
+/// Inner kernel shared by the `_into` and owning forms. Three arch paths:
+/// AVX-512 (16-wide FMA), AVX2 (8-wide FMA), scalar fallback.
+#[inline(always)]
+fn compute_p_norm_sq_into_impl(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     {
         use std::arch::x86_64::*;
         let chunks = ndims / 16;
         let tail = ndims - chunks * 16;
+        // SAFETY: AVX-512 cfg-gated; pointer arithmetic stays in p_data's
+        // allocation since i < np and `p_data.len() >= np * ndims` (caller).
         unsafe {
             for i in 0..np {
                 let p = p_data.as_ptr().add(i * ndims);
@@ -359,47 +420,66 @@ pub(crate) fn compute_p_norm_sq_batch_into(p_data: &[f32], np: usize, ndims: usi
         }
         return;
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-    {
-        for i in 0..np {
-            let row = &p_data[i * ndims..(i + 1) * ndims];
-            out[i] = row.iter().map(|v| v * v).sum();
-        }
-    }
-}
-
-fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; np];
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        target_feature = "fma",
+        not(target_feature = "avx512f")
+    ))]
     {
         use std::arch::x86_64::*;
-        let chunks = ndims / 16;
-        let tail = ndims - chunks * 16;
+        let chunks = ndims / 8;
+        let tail = ndims - chunks * 8;
+        // SAFETY: AVX2+FMA cfg-gated; same bounds as AVX-512 branch.
         unsafe {
             for i in 0..np {
                 let p = p_data.as_ptr().add(i * ndims);
-                let mut acc = _mm512_setzero_ps();
-                for c in 0..chunks {
-                    let v = _mm512_loadu_ps(p.add(c * 16));
-                    acc = _mm512_fmadd_ps(v, v, acc);
+                // Two independent accumulators to feed both FMA units.
+                let mut acc0 = _mm256_setzero_ps();
+                let mut acc1 = _mm256_setzero_ps();
+                let pair_chunks = chunks / 2;
+                for c in 0..pair_chunks {
+                    let v0 = _mm256_loadu_ps(p.add(c * 16));
+                    let v1 = _mm256_loadu_ps(p.add(c * 16 + 8));
+                    acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+                    acc1 = _mm256_fmadd_ps(v1, v1, acc1);
                 }
+                let mut leftover_chunk = pair_chunks * 2;
+                if leftover_chunk < chunks {
+                    let v = _mm256_loadu_ps(p.add(leftover_chunk * 8));
+                    acc0 = _mm256_fmadd_ps(v, v, acc0);
+                    leftover_chunk += 1;
+                }
+                let _ = leftover_chunk;
+                let acc = _mm256_add_ps(acc0, acc1);
+                // Horizontal reduce: 8 → 4 → 2 → 1.
+                let lo = _mm256_castps256_ps128(acc);
+                let hi = _mm256_extractf128_ps(acc, 1);
+                let s4 = _mm_add_ps(lo, hi);
+                let s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+                let s1 = _mm_add_ss(s2, _mm_shuffle_ps(s2, s2, 0b01));
+                let mut tail_sum = _mm_cvtss_f32(s1);
                 if tail > 0 {
-                    let kmask: u16 = (1u16 << tail) - 1;
-                    let v = _mm512_maskz_loadu_ps(kmask, p.add(chunks * 16));
-                    acc = _mm512_fmadd_ps(v, v, acc);
+                    let base = chunks * 8;
+                    for j in 0..tail {
+                        let v = *p.add(base + j);
+                        tail_sum += v * v;
+                    }
                 }
-                *out.get_unchecked_mut(i) = _mm512_reduce_add_ps(acc);
+                *out.get_unchecked_mut(i) = tail_sum;
             }
         }
-        return out;
+        return;
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
     {
+        // Pure-Rust fallback. LLVM will auto-vectorize on AVX2-only targets
+        // (the AVX2+FMA explicit path above is preferred when both features
+        // are statically available).
         for i in 0..np {
             let row = &p_data[i * ndims..(i + 1) * ndims];
             out[i] = row.iter().map(|v| v * v).sum();
         }
-        out
     }
 }
 
