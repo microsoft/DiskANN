@@ -281,4 +281,28 @@ mod tests {
         // assert!(implements_vector_element::<u32>());
         // assert!(implements_vector_element::<u64>());
     }
+
+    // This test works by copying a `f32` vector with known values into various unaligned
+    // offsets within a `Vec<u8>` to ensure that `BufferedDistance` correctly accepts
+    // `UnalignedSlices`.
+    #[test]
+    fn test_unaligned_buffered() {
+        let f = BufferedDistance::new(Box::new([1.0f32, 2.0, 3.0]), Metric::L2);
+
+        let x = [2.0f32, 3.0, 4.0];
+        let bytes = bytemuck::must_cast_slice::<f32, u8>(&x);
+        let size_of_x = std::mem::size_of_val(&x);
+        let mut buffer = vec![0u8; size_of_x + std::mem::size_of::<f32>()];
+        for offset in 0..std::mem::size_of::<f32>() {
+            buffer[offset..offset + size_of_x].copy_from_slice(bytes);
+            // Safety: The memory `buffer[offset..offset + size_of_x]` is valid - otherwise
+            // the previous indexing would have panicket. This is exactly the slice we
+            // pass to `UnalignedSlice::new`.
+            let unaligned =
+                unsafe { UnalignedSlice::new(buffer.as_ptr().add(offset).cast::<f32>(), x.len()) };
+
+            let distance = f.evaluate_similarity(unaligned);
+            assert_eq!(distance, 3.0);
+        }
+    }
 }
