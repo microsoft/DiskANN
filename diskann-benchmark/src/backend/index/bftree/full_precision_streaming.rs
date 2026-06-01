@@ -248,7 +248,11 @@ where
     };
 
     let num_start_points = input.build().start_point_strategy().count();
-    let managed = Managed::new(max_points + num_start_points, consolidate_threshold, managed_stream);
+    let managed = Managed::new(
+        max_points + num_start_points,
+        consolidate_threshold,
+        managed_stream,
+    );
 
     let max_k = topk.max_k();
     let layered = bigann::WithData::new(managed, data, queries, move |path| {
