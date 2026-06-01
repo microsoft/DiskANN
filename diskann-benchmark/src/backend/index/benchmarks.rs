@@ -691,16 +691,7 @@ where
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
     // compute the maximum value of k used in any search
-<<<<<<< HEAD
-    let max_k = topk
-        .runs
-        .iter()
-        .map(|run| run.recall_k)
-        .max()
-        .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
-=======
     let max_k = topk.max_k();
->>>>>>> 5f63807b13ec52b03a4415da03a4fa40a7e162b5
 
     let layered = bigann::WithData::new(managed, data, queries, move |path| {
         Ok(Box::new(datafiles::load_groundtruth(

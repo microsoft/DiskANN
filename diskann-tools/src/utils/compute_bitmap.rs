@@ -187,6 +187,7 @@ impl QueryAccelerator for BTreeAccelerator {
                     iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
                 ))
             }
+            _ => Err(anyhow::anyhow!("Unsupported comparison operation")),
         }
     }
 }
