@@ -10,23 +10,23 @@ use diskann::{
     ANNError, ANNResult,
     error::Infallible,
     graph::{
-        SearchOutputBuffer,
+        AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            SearchStrategy,
         },
         workingset,
     },
     neighbor::Neighbor,
     provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,
-        ExecutionContext, HasId,
+        BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext, HasElementRef,
+        HasId,
     },
     utils::{IntoUsize, VectorRepr},
 };
 
 use diskann_utils::future::AsyncFriendly;
-use diskann_vector::{DistanceFunction, distance::Metric};
+use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
     FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
@@ -102,6 +102,101 @@ where
     }
 }
 
+///////////////////
+// PruneAccessor //
+///////////////////
+
+#[derive(Clone, Copy)]
+pub struct PruneAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    metric: Metric,
+    store: &'a FastMemoryVectorProviderAsync<T>,
+    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+}
+
+impl<T> HasId for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+}
+
+impl<T> HasElementRef for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = &'a [T];
+}
+
+impl<'a, T> DelegateNeighbor<'a> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+
+    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        self.neighbors
+    }
+}
+
+impl<T> BuildDistanceComputer for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type DistanceComputerError = Panics;
+    type DistanceComputer = T::Distance;
+
+    fn build_distance_computer(
+        &self,
+    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
+        Ok(T::distance(self.metric, Some(self.store.dim())))
+    }
+}
+
+impl<T> workingset::Fill<PassThrough> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Error = Infallible;
+
+    type View<'a>
+        = PruneAccessor<'a, T>
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(*self)
+    }
+}
+
+// Pass-through view.
+impl<T> workingset::View<u32> for PruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = &'a [T];
+    type Element<'a>
+        = &'a [T]
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<&[T]> {
+        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
+        // this invariant is not enforced. See `get_vector_sync` for details
+        Some(unsafe { self.store.get_vector_sync(id.into_usize()) })
+    }
+}
+
 //////////////////
 // FullAccessor //
 //////////////////
@@ -120,11 +215,30 @@ where
     /// The host provider.
     provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
 
+    /// The distance computer.
+    computer: T::QueryDistance,
+
     /// A buffer for resolving iterators given during bulk operations.
     ///
     /// The accessor reuses this allocation to amortize allocation cost over multiple bulk
     /// operations.
-    id_buffer: Vec<u32>,
+    id_buffer: AdjacencyList<u32>,
+}
+
+impl<'a, T, Q, D, Ctx> FullAccessor<'a, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>, query: &[T]) -> Self {
+        Self {
+            provider,
+            computer: T::query_distance(query, provider.metric),
+            id_buffer: AdjacencyList::new(),
+        }
+    }
 }
 
 impl<T, Q, D, Ctx> GetFullPrecision for FullAccessor<'_, T, Q, D, Ctx>
@@ -144,7 +258,7 @@ where
     type Id = u32;
 }
 
-impl<T, Q, D, Ctx> SearchExt for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> glue::SearchAccessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -154,166 +268,83 @@ where
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
     }
-}
 
-impl<'a, T, Q, D, Ctx> FullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    pub fn new(provider: &'a FullPrecisionProvider<T, Q, D, Ctx>) -> Self {
-        Self {
-            provider,
-            id_buffer: Vec::new(),
-        }
+    fn num_starting_points(&self) -> impl Future<Output = ANNResult<usize>> {
+        std::future::ready(Ok(self.provider.num_start_points()))
     }
-}
 
-impl<'a, T, Q, D, Ctx> DelegateNeighbor<'a> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T, Q, D, Ctx> Accessor for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    /// This accessor returns raw slices. There *is* a chance of racing when the fast
-    /// providers are used. We just have to live with it.
-    type Element<'a>
-        = &'a [T]
-    where
-        Self: 'a;
-
-    /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'a> = &'a [T];
-
-    /// Choose to panic on an out-of-bounds access rather than propagate an error.
-    type GetError = Panics;
-
-    /// Return the full-precision vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    #[inline(always)]
-    fn get_element(
+    fn start_point_distances<F>(
         &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        // SAFETY: We've decided to live with UB (undefined behavior) that can result from
-        // potentially mixing unsynchronized reads and writes on the underlying memory.
-        std::future::ready(Ok(unsafe {
-            self.provider.base_vectors.get_vector_sync(id.into_usize())
-        }))
-    }
-
-    /// Perform a bulk operation.
-    ///
-    /// This implementation uses prefetching.
-    fn on_elements_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
         mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'b> FnMut(Self::ElementRef<'b>, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        // Reuse the internal buffer to collect the results and give us random access
-        // capabilities.
-        let id_buffer = &mut self.id_buffer;
-        id_buffer.clear();
-        id_buffer.extend(itr);
+        let mut f = move || -> ANNResult<()> {
+            for i in self.provider.starting_points()? {
+                // SAFETY: We're accepting the consequences of potential unsynchronized,
+                // concurrent mutation.
+                let distance = self.computer.evaluate_similarity(unsafe {
+                    self.provider.base_vectors.get_vector_sync(i.into_usize())
+                });
 
-        let len = id_buffer.len();
-        let lookahead = self.provider.base_vectors.prefetch_lookahead();
-
-        // Prefetch the first few vectors.
-        for id in id_buffer.iter().take(lookahead) {
-            self.provider.base_vectors.prefetch_hint(id.into_usize());
-        }
-
-        for (i, id) in id_buffer.iter().enumerate() {
-            // Prefetch `lookahead` iterations ahead as long as it is safe.
-            if lookahead > 0 && i + lookahead < len {
-                self.provider
-                    .base_vectors
-                    .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                f(i, distance);
             }
+            Ok(())
+        };
 
-            // Invoke the passed closure on the full-precision vector.
-            //
-            // SAFETY: We're accepting the consequences of potential unsynchronized,
-            // concurrent mutation.
-            f(
-                unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) },
-                *id,
-            )
-        }
-
-        std::future::ready(Ok(()))
+        std::future::ready(f())
     }
-}
 
-impl<T, Q, D, Ctx> BuildDistanceComputer for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type DistanceComputerError = Panics;
-    type DistanceComputer = T::Distance;
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let f = move || -> ANNResult<()> {
+            let id_buffer = &mut self.id_buffer;
+            for n in ids {
+                self.provider
+                    .neighbor_provider
+                    .get_neighbors_sync(n.into_usize(), id_buffer)?;
 
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(
-            self.provider.metric,
-            Some(self.provider.base_vectors.dim()),
-        ))
+                id_buffer.retain(|i| pred.eval_mut(i));
+                let len = id_buffer.len();
+                let lookahead = self.provider.base_vectors.prefetch_lookahead();
+
+                // Prefetch the first few vectors.
+                for id in id_buffer.iter().take(lookahead) {
+                    self.provider.base_vectors.prefetch_hint(id.into_usize());
+                }
+
+                for (i, id) in id_buffer.iter().enumerate() {
+                    // Prefetch `lookahead` iterations ahead as long as it is safe.
+                    if lookahead > 0 && i + lookahead < len {
+                        self.provider
+                            .base_vectors
+                            .prefetch_hint(id_buffer[i + lookahead].into_usize());
+                    }
+
+                    // Invoke the passed closure on the full-precision vector.
+                    //
+                    // SAFETY: We're accepting the consequences of potential unsynchronized,
+                    // concurrent mutation.
+                    let v = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
+                    let distance = self.computer.evaluate_similarity(v);
+                    on_neighbors(*id, distance);
+                }
+            }
+            Ok(())
+        };
+
+        std::future::ready(f())
     }
-}
-
-impl<T, Q, D, Ctx> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type QueryComputerError = Panics;
-    type QueryComputer = T::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(from, self.provider.metric))
-    }
-}
-
-impl<T, Q, D, Ctx> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
 }
 
 //-------------------//
@@ -353,7 +384,7 @@ pub struct Rerank;
 impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<&'a [T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: HasId<Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 
@@ -361,7 +392,6 @@ where
         &self,
         accessor: &mut A,
         query: &'a [T],
-        _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -403,27 +433,29 @@ where
 ////////////////
 
 /// Perform a search entirely in the full-precision space.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> SearchStrategy<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessor = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        Ok(FullAccessor::new(provider, query))
     }
 }
 
-impl<T, Q, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> DefaultPostProcessor<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -442,7 +474,7 @@ where
     Ctx: ExecutionContext,
 {
     type DistanceComputer<'a> = T::Distance;
-    type PruneAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type PruneAccessor<'a> = PruneAccessor<'a, T>;
     type PruneAccessorError = diskann::error::Infallible;
     type WorkingSet = PassThrough;
 
@@ -451,7 +483,12 @@ where
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(FullAccessor::new(provider))
+        let accessor = PruneAccessor {
+            metric: provider.metric,
+            store: &provider.base_vectors,
+            neighbors: provider.neighbors(),
+        };
+        Ok(accessor)
     }
 
     fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
@@ -459,56 +496,8 @@ where
     }
 }
 
-// All this does is return a `&Self` - which directly accesses the underlying provider.
-impl<T, Q, D, Ctx> workingset::Fill<PassThrough> for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Error = Infallible;
-
-    type View<'a>
-        = &'a Self
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(self)
-    }
-}
-
-// Pass-through view.
-impl<T, Q, D, Ctx> workingset::View<u32> for &FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type ElementRef<'a> = &'a [T];
-    type Element<'a>
-        = &'a [T]
-    where
-        Self: 'a;
-
-    fn get(&self, id: u32) -> Option<&[T]> {
-        // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
-        // this invariant is not enforced. See `get_vector_sync` for details
-        Some(unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) })
-    }
-}
-
-impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
+impl<'a, T, Q, D, Ctx> InsertStrategy<'a, FullPrecisionProvider<T, Q, D, Ctx>, &'a [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -530,6 +519,7 @@ where
     Ctx: ExecutionContext,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+            'a,
             FullPrecisionProvider<T, Q, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,

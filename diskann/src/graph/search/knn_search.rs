@@ -15,12 +15,12 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
 };
 
 /// Error type for [`Knn`] parameter validation.
@@ -142,11 +142,11 @@ impl Knn {
     }
 }
 
-impl<DP, S, T> Search<DP, S, T> for Knn
+impl<'a, DP, S, T> Search<'a, DP, S, T> for Knn
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
-    T: Copy + Send + Sync,
+    S: SearchStrategy<'a, DP, T>,
+    T: Copy + Send + Sync + 'a,
 {
     type Output = SearchStats;
 
@@ -177,41 +177,37 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.l_value.get(), num_start_ids);
 
             let stats = index
                 .search_internal(
                     Some(self.beam_width.get()),
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
                 )
                 .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
+                .post_process(&mut accessor, query, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 
@@ -242,52 +238,48 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, SR> Search<DP, S, T> for RecordedKnn<'r, SR>
+impl<'a, DP, S, T, SR> Search<'a, DP, S, T> for RecordedKnn<'a, SR>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
-    T: Copy + Send + Sync,
+    S: SearchStrategy<'a, DP, T>,
+    T: Copy + Send + Sync + 'a,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.inner.l_value.get(), num_start_ids);
 
             let stats = index
                 .search_internal(
                     Some(self.inner.beam_width.get()),
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     self.recorder,
                 )
                 .await?;
 
             let result_count = processor
-                .post_process(&mut accessor, query, &computer, scratch.best.iter(), output)
+                .post_process(&mut accessor, query, scratch.best.iter(), output)
                 .await
                 .into_ann_result()?;
 

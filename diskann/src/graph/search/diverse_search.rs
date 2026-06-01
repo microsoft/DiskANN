@@ -14,12 +14,12 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
 };
 
 /// Parameters for diversity-aware search.
@@ -92,45 +92,40 @@ where
     }
 }
 
-impl<DP, S, T, P> Search<DP, S, T> for Diverse<P>
+impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
-    T: Copy + Send + Sync,
-    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync + 'a,
+    S: SearchStrategy<'a, DP, T>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
 
             let mut diverse_scratch = self.create_scratch(index);
 
             let stats = index
                 .search_internal(
                     Some(self.inner.beam_width().get()),
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut diverse_scratch,
                     &mut NoopSearchRecord::new(),
                 )
@@ -143,7 +138,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     diverse_scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
