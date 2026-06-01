@@ -11,8 +11,9 @@ use std::collections::VecDeque;
 
 use crate::{
     neighbor::{Neighbor, NeighborPriorityQueue},
-    utils::{VectorId, object_pool::AsPooled},
+    utils::VectorId,
 };
+use diskann_utils::object_pool::AsPooled;
 use hashbrown::HashSet;
 
 /// In-mem index related limits
@@ -157,6 +158,7 @@ where
     }
 
     /// Return the currently configured `search_l`: the number of best candidates to track.
+    #[cfg(test)]
     pub fn search_l(&self) -> usize {
         self.best.search_l()
     }

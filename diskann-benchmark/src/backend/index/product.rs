@@ -3,23 +3,41 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
-crate::utils::stub_impl!("product-quantization", inputs::async_::IndexPQOperation);
+crate::utils::stub_impl!(
+    "product-quantization",
+    inputs::graph_index::IndexPQOperation
+);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     {
+        use crate::backend::index::search::plugins;
         use half::f16;
 
-        benchmarks.register::<imp::ProductQuantized<'static, f32>>("async-pq-f32");
-        benchmarks.register::<imp::ProductQuantized<'static, f16>>("async-pq-f16");
+        // NOTE: Try to balance search plugins with the needed functionality.
+        //
+        // Feel free to add search plugins, but be mindful of the monomorphization cost.
+
+        registry.register(
+            "graph-index-pq-f32",
+            imp::ProductQuantized::<f32>::new()
+                .search(plugins::Topk)
+                .search(plugins::Range),
+        )?;
+        registry.register(
+            "graph-index-pq-f16",
+            imp::ProductQuantized::<f16>::new().search(plugins::Topk),
+        )?;
     }
 
     // Stub implementation
     #[cfg(not(feature = "product-quantization"))]
-    imp::register("async-pq", benchmarks);
+    imp::register("graph-index-pq", registry)?;
+
+    Ok(())
 }
 
 #[cfg(feature = "product-quantization")]
@@ -29,96 +47,152 @@ mod imp {
     use diskann::utils::VectorRepr;
     use diskann_providers::{
         index::diskann_async::{self},
-        model::{graph::provider::async_::common, IndexConfiguration},
+        model::{
+            graph::provider::async_::{common, inmem},
+            IndexConfiguration,
+        },
     };
     use diskann_utils::views::{Matrix, MatrixView};
 
     use diskann_benchmark_runner::{
-        dispatcher::{DispatchRule, FailureScore, MatchScore},
-        utils::{datatype, MicroSeconds},
+        benchmark::{FailureScore, MatchScore},
+        utils::{datatype::AsDataType, MicroSeconds},
         Benchmark, Checkpoint, Output,
     };
     use rand::{rngs::StdRng, SeedableRng};
 
     use crate::{
         backend::index::{
-            benchmarks::{run_build, run_search_outer, BuildAndSearch, FullPrecision},
+            benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-            result::QuantBuildResult,
+            result::{BuildResult, QuantBuildResult},
+            search::plugins,
         },
-        inputs::async_::{IndexPQOperation, IndexSource},
+        inputs::graph_index::{IndexPQOperation, IndexSource, SearchPhase},
         utils::{self, datafiles},
     };
 
-    pub(super) struct ProductQuantized<'a, T> {
-        input: &'a IndexPQOperation,
-        _type: std::marker::PhantomData<T>,
+    type PQProvider<T> = inmem::DefaultProvider<
+        inmem::FullPrecisionStore<T>,
+        inmem::DefaultQuant,
+        common::NoDeletes,
+        diskann::provider::DefaultContext,
+    >;
+
+    impl<T> QueryType for PQProvider<T>
+    where
+        T: VectorRepr,
+    {
+        type Element = T;
     }
 
-    impl<'a, T> ProductQuantized<'a, T> {
-        fn new(input: &'a IndexPQOperation) -> Self {
+    /// A [`Benchmark`] for product-quantized searches containing a dynamic list of search
+    /// types.
+    ///
+    /// The kinds of quantized and full-precision searches are kept in-sync.
+    pub(super) struct ProductQuantized<T>
+    where
+        T: VectorRepr,
+    {
+        quant_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>,
+        full_search: plugins::Plugins<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>,
+    }
+
+    impl<T> ProductQuantized<T>
+    where
+        T: VectorRepr,
+    {
+        pub(super) fn new() -> Self {
             Self {
-                input,
-                _type: std::marker::PhantomData,
+                quant_search: plugins::Plugins::new(),
+                full_search: plugins::Plugins::new(),
             }
+        }
+
+        pub(super) fn search<P>(mut self, plugin: P) -> Self
+        where
+            P: plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::Hybrid>>
+                + plugins::Plugin<PQProvider<T>, SearchPhase, Strategy<common::FullPrecision>>
+                + Clone
+                + 'static,
+        {
+            self.quant_search.register(plugin.clone());
+            self.full_search.register(plugin);
+            self
         }
     }
 
-    impl<T> Benchmark for ProductQuantized<'static, T>
+    impl<T> Benchmark for ProductQuantized<T>
     where
         T: VectorRepr
             + diskann_utils::sampling::WithApproximateNorm
-            + diskann::graph::SampleableForStart,
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
+            + diskann::graph::SampleableForStart
+            + AsDataType,
     {
         type Input = IndexPQOperation;
         type Output = QuantBuildResult;
 
-        fn try_match(input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            <FullPrecision<'static, T> as Benchmark>::try_match(&input.index_operation)
+        fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
+            let score = utils::match_data_type::<T>(*input.index_operation.source.data_type());
+            if self
+                .quant_search
+                .is_match(&input.index_operation.search_phase)
+            {
+                score
+            } else {
+                match score {
+                    Ok(_) => Err(FailureScore(0)),
+                    Err(score) => Err(score),
+                }
+            }
         }
 
         fn description(
+            &self,
             f: &mut std::fmt::Formatter<'_>,
             input: Option<&IndexPQOperation>,
         ) -> std::fmt::Result {
-            <FullPrecision<'static, T> as Benchmark>::description(
-                f,
-                input.map(|f| &f.index_operation),
-            )
+            match input {
+                Some(arg) => {
+                    let desc = T::describe(*arg.index_operation.source.data_type());
+                    if !desc.is_match() {
+                        writeln!(f, "Data/Query Type: {}", desc,)?;
+                    }
+
+                    if !self
+                        .quant_search
+                        .is_match(&arg.index_operation.search_phase)
+                    {
+                        writeln!(
+                            f,
+                            "Unsupported search phase: \"{}\" - expected one of {}",
+                            arg.index_operation.search_phase.kind(),
+                            self.quant_search.format_kinds(),
+                        )?;
+                    }
+                    Ok(())
+                }
+                None => {
+                    writeln!(f, "Data/Query Type: {}", T::DATA_TYPE,)?;
+
+                    writeln!(f, "Search Kinds: {}", self.quant_search.format_kinds())
+                }
+            }
         }
 
         fn run(
+            &self,
             input: &IndexPQOperation,
             checkpoint: Checkpoint<'_>,
-            output: &mut dyn Output,
-        ) -> anyhow::Result<QuantBuildResult> {
-            let pq = ProductQuantized::<T>::new(input);
-            BuildAndSearch::run(pq, checkpoint, output)
-        }
-    }
-
-    impl<'a, T> BuildAndSearch<'a> for ProductQuantized<'a, T>
-    where
-        T: VectorRepr
-            + diskann_utils::sampling::WithApproximateNorm
-            + diskann::graph::SampleableForStart,
-        datatype::Type<T>: DispatchRule<datatype::DataType>,
-    {
-        type Data = QuantBuildResult;
-        fn run(
-            self,
-            checkpoint: Checkpoint<'_>,
             mut output: &mut dyn Output,
-        ) -> Result<Self::Data, anyhow::Error> {
-            writeln!(output, "{}", self.input)?;
+        ) -> anyhow::Result<QuantBuildResult> {
+            writeln!(output, "{}", input)?;
 
-            let hybrid = common::Hybrid::new(self.input.max_fp_vecs_per_prune);
+            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
 
-            let (index, build_stats, quant_training_time) = match &self.input.index_operation.source
-            {
+            let (index, build_stats, quant_training_time) = match &input.index_operation.source {
                 IndexSource::Load(load) => {
-                    let index_config: &IndexConfiguration = &self.input.to_config()?;
+                    let index_config: &IndexConfiguration = &input.to_config()?;
 
                     let index =
                         { utils::tokio::block_on(load_index::<_>(&load.load_path, index_config))? };
@@ -139,17 +213,17 @@ mod imp {
 
                         diskann_async::train_pq(
                             train_data.as_view(),
-                            self.input.num_pq_chunks,
-                            &mut StdRng::seed_from_u64(self.input.seed),
-                            build.num_threads,
+                            input.num_pq_chunks,
+                            &mut StdRng::seed_from_u64(input.seed),
+                            diskann_providers::utils::create_thread_pool(build.num_threads)?
+                                .as_ref(),
                         )?
                     };
 
                     let create_index = |data_view: MatrixView<T>| {
                         let index = diskann_async::new_quant_index::<T, _, _>(
-                            self.input.try_as_config()?.build()?,
-                            self.input
-                                .inmem_parameters(data_view.nrows(), data_view.ncols())?,
+                            input.try_as_config()?.build()?,
+                            input.inmem_parameters(data_view.nrows(), data_view.ncols())?,
                             table,
                             common::NoDeletes,
                         )?;
@@ -180,27 +254,21 @@ mod imp {
                 }
             };
 
-            let build = if self.input.use_fp_for_search {
-                run_search_outer(
-                    &self.input.index_operation.search_phase,
-                    common::FullPrecision,
-                    index,
-                    build_stats,
-                    checkpoint,
-                )?
+            // Save construction stats before running queries.
+            checkpoint.checkpoint(&build_stats)?;
+
+            let search_phase = &input.index_operation.search_phase;
+            let search = if input.use_fp_for_search {
+                self.full_search
+                    .run(index, search_phase, &Strategy::new(common::FullPrecision))?
             } else {
-                run_search_outer(
-                    &self.input.index_operation.search_phase,
-                    hybrid,
-                    index,
-                    build_stats,
-                    checkpoint,
-                )?
+                self.quant_search
+                    .run(index, search_phase, &Strategy::new(hybrid))?
             };
 
             let result = QuantBuildResult {
                 quant_training_time,
-                build,
+                build: BuildResult::new(build_stats, search),
             };
 
             writeln!(output, "\n\n{}", result)?;

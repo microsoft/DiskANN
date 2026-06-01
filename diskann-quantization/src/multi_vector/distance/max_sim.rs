@@ -10,9 +10,7 @@ use thiserror::Error;
 pub enum MaxSimError {
     #[error("Trying to access score in index {0} for output of size {1}")]
     IndexOutOfBounds(usize, usize),
-    #[error("Scores buffer length cannot be 0")]
-    BufferLengthIsZero,
-    #[error("Invalid buffer length {0} for query size {0}")]
+    #[error("Invalid buffer length {0} for query size {1}")]
     InvalidBufferLength(usize, usize),
 }
 
@@ -22,8 +20,8 @@ pub enum MaxSimError {
 
 /// Computes per-query-vector maximum similarities to document vectors.
 ///
-/// For each query vector `qᵢ`, finds the maximum similarity (minimum negated
-/// inner product) to any document vector:
+/// For each query vector `qᵢ`, computes the negated maximum inner product
+/// to any document vector:
 ///
 /// ```text
 /// scores[i] = minⱼ -IP(qᵢ, dⱼ)
@@ -42,15 +40,9 @@ pub struct MaxSim<'a> {
 }
 
 impl<'a> MaxSim<'a> {
-    /// Creates a new [`MaxSim`] with the provided scores buffer.
-    ///
-    /// # Errors
-    /// Returns an error if `scores` is empty.
-    pub fn new(scores: &'a mut [f32]) -> Result<Self, MaxSimError> {
-        if scores.is_empty() {
-            return Err(MaxSimError::BufferLengthIsZero);
-        }
-        Ok(Self { scores })
+    /// Creates a new [`MaxSim`] wrapping the provided scores buffer.
+    pub fn new(scores: &'a mut [f32]) -> Self {
+        Self { scores }
     }
 
     /// Returns the number of score slots in the buffer.
@@ -130,7 +122,7 @@ mod tests {
             }
         }
 
-        fn max_sim(&mut self) -> Result<MaxSim<'_>, MaxSimError> {
+        fn max_sim(&mut self) -> MaxSim<'_> {
             MaxSim::new(&mut self.buffer)
         }
     }
@@ -139,18 +131,11 @@ mod tests {
         use super::*;
 
         #[test]
-        fn fails_with_empty_buffer() {
-            let mut buffer: Vec<f32> = vec![];
-            let result = MaxSim::new(&mut buffer);
-            assert!(matches!(result, Err(MaxSimError::BufferLengthIsZero)));
-        }
-
-        #[test]
         fn returns_correct_size() {
             let sizes = [1, 2, 5, 100, 1000];
             for size in sizes {
                 let mut fixture = TestFixture::new(size);
-                let mut max_sim = fixture.max_sim().unwrap();
+                let mut max_sim = fixture.max_sim();
                 assert_eq!(max_sim.size(), size, "size mismatch for buffer of {}", size);
 
                 let scores = max_sim.scores_mut();
@@ -165,7 +150,7 @@ mod tests {
         #[test]
         fn returns_value_at_valid_index() {
             let mut fixture = TestFixture::with_values(&[1.0, 2.0, 3.0]);
-            let max_sim = fixture.max_sim().unwrap();
+            let max_sim = fixture.max_sim();
 
             assert_eq!(max_sim.get(0).unwrap(), 1.0);
             assert_eq!(max_sim.get(1).unwrap(), 2.0);
@@ -175,7 +160,7 @@ mod tests {
         #[test]
         fn fails_at_out_of_bounds_index() {
             let mut fixture = TestFixture::new(3);
-            let max_sim = fixture.max_sim().unwrap();
+            let max_sim = fixture.max_sim();
 
             let result = max_sim.get(3);
             assert!(matches!(result, Err(MaxSimError::IndexOutOfBounds(3, 3))));
@@ -191,7 +176,7 @@ mod tests {
         #[test]
         fn sets_value_at_valid_index() {
             let mut fixture = TestFixture::new(3);
-            let mut max_sim = fixture.max_sim().unwrap();
+            let mut max_sim = fixture.max_sim();
 
             max_sim.set(0, 10.0).unwrap();
             max_sim.set(1, 20.0).unwrap();
@@ -205,7 +190,7 @@ mod tests {
         #[test]
         fn fails_at_out_of_bounds_index() {
             let mut fixture = TestFixture::new(3);
-            let mut max_sim = fixture.max_sim().unwrap();
+            let mut max_sim = fixture.max_sim();
 
             let result = max_sim.set(3, 999.0);
             assert!(matches!(result, Err(MaxSimError::IndexOutOfBounds(3, 3))));
@@ -214,7 +199,7 @@ mod tests {
         #[test]
         fn overwrites_existing_value() {
             let mut fixture = TestFixture::with_values(&[1.0, 2.0, 3.0]);
-            let mut max_sim = fixture.max_sim().unwrap();
+            let mut max_sim = fixture.max_sim();
 
             max_sim.set(1, 99.0).unwrap();
 
@@ -226,7 +211,7 @@ mod tests {
         #[test]
         fn handles_special_float_values() {
             let mut fixture = TestFixture::new(4);
-            let mut max_sim = fixture.max_sim().unwrap();
+            let mut max_sim = fixture.max_sim();
 
             max_sim.set(0, f32::INFINITY).unwrap();
             max_sim.set(1, f32::NEG_INFINITY).unwrap();
@@ -243,7 +228,7 @@ mod tests {
         fn writes_through_to_underlying_buffer() {
             let mut buffer = vec![0.0f32; 3];
             {
-                let mut max_sim = MaxSim::new(&mut buffer).unwrap();
+                let mut max_sim = MaxSim::new(&mut buffer);
                 max_sim.set(0, 1.0).unwrap();
                 max_sim.set(1, 2.0).unwrap();
             }

@@ -4,6 +4,5 @@
  */
 
 pub mod compute_pq_iai;
-pub mod copy_aligned_data_bench_iai;
 pub mod diskann_iai;
 pub mod neighbor_bench_iai;

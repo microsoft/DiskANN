@@ -20,6 +20,7 @@ use crate::graph::AdjacencyList;
 #[derive(Debug, Clone, Copy)]
 pub enum Grid {
     One,
+    Two,
     Three,
     Four,
 }
@@ -112,6 +113,21 @@ impl Grid {
                 });
                 Matrix::new(init, size, 1)
             }
+            Self::Two => {
+                let mut v = [0; 2];
+                let mut i = 0;
+                let init = Init(|| {
+                    let value = f(v[i]);
+                    i += 1;
+                    if i == 2 {
+                        i = 0;
+                        increment(&mut v, size);
+                    }
+                    value
+                });
+
+                Matrix::new(init, size.pow(self.dim().into()), 2)
+            }
             Self::Three => {
                 // The whole we do with the array here is to avoid a `Default` bound on `R`
                 // by constructing the grid as we initialize the matrix.
@@ -177,6 +193,27 @@ impl Grid {
                         list.push(i + 1);
                     }
                     lists.push(list);
+                }
+            }
+            Self::Two => {
+                let map = |i, j| (i * size) + j;
+                for i in 0..size {
+                    for j in 0..size {
+                        let mut list = AdjacencyList::new();
+                        if i > 0 {
+                            list.push(map(i - 1, j));
+                        }
+                        if i < size - 1 {
+                            list.push(map(i + 1, j));
+                        }
+                        if j > 0 {
+                            list.push(map(i, j - 1));
+                        }
+                        if j < size - 1 {
+                            list.push(map(i, j + 1));
+                        }
+                        lists.push(list);
+                    }
                 }
             }
             Self::Three => {
@@ -273,8 +310,21 @@ impl Grid {
     pub fn dim(self) -> u8 {
         match self {
             Self::One => 1,
+            Self::Two => 2,
             Self::Three => 3,
             Self::Four => 4,
+        }
+    }
+
+    /// Construct a `Grid` from a dimension count, if supported.
+    ///
+    /// Returns `None` if `dim` is not a supported dimension (1, 3, or 4).
+    pub fn from_dim(dim: usize) -> Option<Self> {
+        match dim {
+            1 => Some(Self::One),
+            3 => Some(Self::Three),
+            4 => Some(Self::Four),
+            _ => None,
         }
     }
 
@@ -426,5 +476,21 @@ mod tests {
 
         increment(&mut v, 2);
         assert_eq!(v, [0, 0, 0]);
+    }
+
+    #[test]
+    fn test_from_dim_roundtrip() {
+        for grid in [Grid::One, Grid::Three, Grid::Four] {
+            assert_eq!(
+                Grid::from_dim(grid.dim() as usize).unwrap().dim(),
+                grid.dim()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_dim_unsupported() {
+        assert!(Grid::from_dim(2).is_none());
+        assert!(Grid::from_dim(5).is_none());
     }
 }

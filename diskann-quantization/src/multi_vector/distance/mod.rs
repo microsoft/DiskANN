@@ -3,13 +3,9 @@
 
 //! Distance computation for multi-vector representations.
 //!
-//! Provides asymmetric distance primitives for multi-vector search:
-//!
-//! - [`MaxSim`]: Per-query-vector maximum similarities.
-//! - [`Chamfer`]: Sum of MaxSim scores (asymmetric Chamfer distance).
-//!
-//! Both are currently implemented using a simple double-loop kernel over
-//! [`InnerProduct`](diskann_vector::distance::InnerProduct).
+//! The fallback path uses a double-loop kernel over
+//! [`InnerProduct`](diskann_vector::distance::InnerProduct); the factory
+//! returns cache-tiled SIMD kernels selected by [`MaxSimIsa`].
 //!
 //! # Example
 //!
@@ -39,14 +35,21 @@
 //!
 //! // MaxSim (per-query-vector scores)
 //! let mut scores = vec![0.0f32; 2];
-//! let mut max_sim = MaxSim::new(&mut scores).unwrap();
+//! let mut max_sim = MaxSim::new(&mut scores);
 //! max_sim.evaluate(query, doc);
-//! // scores[0] = -1.0 (query[0] matches doc[0])
-//! // scores[1] =  0.0 (query[1] has no good match)
+//! // scores[0] = -1.0 (query[0] matches doc[0]: negated max inner product)
+//! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
 //! ```
 
+mod factory;
+mod fallback;
+mod isa;
+mod kernel;
+mod kernels;
 mod max_sim;
-mod simple;
 
+pub use factory::{MaxSimElement, build_max_sim};
+pub use fallback::QueryMatRef;
+pub use isa::{MaxSimIsa, NotSupported};
+pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
-pub use simple::QueryMatRef;

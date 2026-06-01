@@ -8,7 +8,7 @@ pub use generator::{GeneratorContext, QuantDataGenerator};
 
 pub(crate) mod pq;
 pub use pq::pq_generation::{PQGeneration, PQGenerationContext};
-pub use pq::{PQData, PQTable};
+pub use pq::PQData;
 
 mod compressor;
 pub use compressor::{CompressionStage, QuantCompressor};

@@ -267,9 +267,9 @@ mod tests {
         let savepath = path.join("output.json");
 
         let inputs = [
-            TypeInput::new(DataType::Float32, 1, false),
-            TypeInput::new(DataType::Float16, 2, false),
-            TypeInput::new(DataType::Float64, 3, false),
+            TypeInput::new(DataType::Float32, 1),
+            TypeInput::new(DataType::Float16, 2),
+            TypeInput::new(DataType::Float64, 3),
         ];
 
         let serialized: Vec<_> = inputs

@@ -5,17 +5,14 @@
 
 use crate::data_model::GraphDataType;
 use diskann::{graph::AdjacencyList, ANNError, ANNResult};
-use diskann_providers::common::AlignedBoxWithSlice;
 use hashbrown::{hash_map::Entry::Occupied, HashMap};
-
-use super::FP_VECTOR_MEM_ALIGN;
 
 pub struct Cache<Data: GraphDataType<VectorIdType = u32>> {
     // Maintains the mapping of vector_id to index in the global cached nodes list.
     mapping: HashMap<Data::VectorIdType, usize>,
 
-    // Aligned buffer to store the vectors of cached nodes.
-    vectors: AlignedBoxWithSlice<Data::VectorDataType>,
+    // Flat buffer holding `capacity * dimension` vector elements, laid out row-major.
+    vectors: Vec<Data::VectorDataType>,
 
     // The cached adjacency lists.
     adjacency_lists: Vec<AdjacencyList<Data::VectorIdType>>,
@@ -38,7 +35,7 @@ where
     pub fn new(dimension: usize, capacity: usize) -> ANNResult<Self> {
         Ok(Self {
             mapping: HashMap::new(),
-            vectors: AlignedBoxWithSlice::new(capacity * dimension, FP_VECTOR_MEM_ALIGN)?,
+            vectors: vec![Data::VectorDataType::default(); capacity * dimension],
             adjacency_lists: Vec::with_capacity(capacity),
             associated_data: Vec::with_capacity(capacity),
             dimension,

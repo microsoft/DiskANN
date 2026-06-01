@@ -66,6 +66,9 @@ minmax-quantization = []
 # Enable Document Index benchmarks
 document-index = []
 
+# Enable multi-vector MaxSim distance benchmarks
+multi-vector = []
+
 # Enable Disk Index benchmarks
 disk-index = [
     "diskann-disk/perf_test",

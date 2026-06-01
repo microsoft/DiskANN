@@ -20,13 +20,11 @@ use diskann::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
         Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
-    utils::{
-        VectorRepr,
-        object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
-    },
+    utils::VectorRepr,
 };
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_utils::Reborrow;
+use diskann_utils::object_pool::{AsPooled, ObjectPool, PooledRef, Undef};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
     future, mem,
@@ -241,6 +239,33 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
     pub fn max_internal_id(&self) -> u32 {
         self.fsm.max_id()
+    }
+
+    pub(crate) fn get_vector(
+        &self,
+        context: &Context,
+        iid: u32,
+    ) -> Result<Vec<T>, GarnetProviderError> {
+        let mut v = vec![T::default(); self.dim];
+
+        if iid == 0 {
+            let guard = if let Some(r) = self.start_point_cache.get(&iid) {
+                r
+            } else {
+                return Err(GarnetError::Read.into());
+            };
+            v.copy_from_slice(&guard);
+            return Ok(v);
+        }
+
+        if !self
+            .callbacks
+            .read_single_iid(context.term(Term::Vector), iid, &mut v)
+        {
+            return Err(GarnetError::Read.into());
+        }
+
+        Ok(v)
     }
 }
 
@@ -533,27 +558,7 @@ impl<T: VectorRepr> Accessor for FullAccessor<'_, T> {
         &mut self,
         id: Self::Id,
     ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        let mut v = vec![T::default(); self.provider.dim];
-
-        if id == 0 {
-            let guard = if let Some(r) = self.provider.start_point_cache.get(&id) {
-                r
-            } else {
-                return future::ready(Err(GarnetError::Read.into()));
-            };
-            v.copy_from_slice(&guard);
-            return future::ready(Ok(v));
-        }
-
-        if !self
-            .provider
-            .callbacks
-            .read_single_iid(self.context.term(Term::Vector), id, &mut v)
-        {
-            return future::ready(Err(GarnetError::Read.into()));
-        }
-
-        future::ready(Ok(v))
+        std::future::ready(self.provider.get_vector(self.context, id))
     }
 }
 
@@ -810,7 +815,7 @@ impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, &[T], GarnetId> for 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     type PruneAccessor<'a> = FullAccessor<'a, T>;
     type PruneAccessorError = GarnetProviderError;
-    type DistanceComputer = T::Distance;
+    type DistanceComputer<'a> = T::Distance;
     type WorkingSet = WorkingSet<T>;
 
     fn prune_accessor<'a>(

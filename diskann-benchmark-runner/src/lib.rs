@@ -11,21 +11,19 @@ mod internal;
 mod jobs;
 mod result;
 
-pub mod any;
 pub mod app;
-pub mod dispatcher;
 pub mod files;
 pub mod input;
 pub mod output;
 pub mod registry;
 pub mod utils;
 
-pub use any::Any;
 pub use app::App;
 pub use benchmark::Benchmark;
-pub use checker::{CheckDeserialization, Checker};
+pub use checker::Checker;
 pub use input::Input;
 pub use output::Output;
+pub use registry::{Registry, RegistryError};
 pub use result::Checkpoint;
 
 #[cfg(any(test, feature = "test-app"))]
