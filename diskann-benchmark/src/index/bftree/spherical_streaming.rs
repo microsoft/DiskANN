@@ -44,7 +44,7 @@ use crate::{
             InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
         },
     },
-    utils::{self, datafiles},
+    utils,
 };
 
 type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
@@ -236,67 +236,56 @@ fn bftree_sq_streaming_impl(
     };
 
     let consolidate_threshold: f32 = input.runbook_params().consolidate_threshold;
-    let data = datafiles::load_dataset::<f32>(datafiles::BinFile(input.build().data()))?;
-    let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
-        &topk.queries,
-    ))?);
-
-    // Train the spherical quantizer.
-    let m: diskann_vector::distance::Metric = input.build().distance().into();
-    let pre_scale = match input.pre_scale() {
-        Some(&v) => v.try_into()?,
-        None => diskann_quantization::spherical::PreScale::None,
-    };
-
-    let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
-        data.as_view(),
-        (input.transform_kind()).into(),
-        m.try_into()?,
-        pre_scale,
-        &mut rand::rngs::StdRng::seed_from_u64(input.seed()),
-        GlobalAllocator,
-    )?;
-
-    let quantizer_poly = match input.num_bits().get() {
-        1 => new_quantizer::<1>(quantizer)?,
-        2 => new_quantizer::<2>(quantizer)?,
-        4 => new_quantizer::<4>(quantizer)?,
-        _ => unreachable!("try_match handles bit validation"),
-    };
-
-    let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
-    let start_points = input
-        .build()
-        .start_point_strategy()
-        .compute(data.as_view())?;
-    let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
-    let index = Arc::new(DiskANNIndex::new(config, provider, None));
-
-    let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-    let managed_stream = BfTreeSQStream {
-        index,
-        search: topk.clone(),
-        runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-        ntasks: num_threads_and_tasks,
-        inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
-        inplace_delete_method: input.runbook_params().ip_delete_method.into(),
-    };
-
     let num_start_points = input.build().start_point_strategy().count();
-    let managed = Managed::new(
-        max_points + num_start_points,
+    let capacity = max_points + num_start_points;
+
+    crate::index::streaming::build_streamer(
+        input.build().data(),
+        topk,
         consolidate_threshold,
-        managed_stream,
-    );
+        capacity,
+        |data, capacity| {
+            // Train the spherical quantizer.
+            let m: diskann_vector::distance::Metric = input.build().distance().into();
+            let pre_scale = match input.pre_scale() {
+                Some(&v) => v.try_into()?,
+                None => diskann_quantization::spherical::PreScale::None,
+            };
 
-    let max_k = topk.max_k();
-    let layered = bigann::WithData::new(managed, data, queries, move |path| {
-        Ok(Box::new(datafiles::load_groundtruth(
-            datafiles::BinFile(path),
-            Some(max_k),
-        )?))
-    });
+            let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
+                data.as_view(),
+                (input.transform_kind()).into(),
+                m.try_into()?,
+                pre_scale,
+                &mut rand::rngs::StdRng::seed_from_u64(input.seed()),
+                GlobalAllocator,
+            )?;
 
-    Ok(layered)
+            let quantizer_poly = match input.num_bits().get() {
+                1 => new_quantizer::<1>(quantizer)?,
+                2 => new_quantizer::<2>(quantizer)?,
+                4 => new_quantizer::<4>(quantizer)?,
+                _ => unreachable!("try_match handles bit validation"),
+            };
+
+            let config = input.try_as_config()?.build()?;
+            let params = input.bftree_parameters(capacity, data.ncols());
+            let start_points = input
+                .build()
+                .start_point_strategy()
+                .compute(data.as_view())?;
+            let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
+            let index = Arc::new(DiskANNIndex::new(config, provider, None));
+
+            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
+            Ok(BfTreeSQStream {
+                index,
+                search: topk.clone(),
+                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                ntasks: num_threads_and_tasks,
+                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
+                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
+            })
+        },
+    )
 }

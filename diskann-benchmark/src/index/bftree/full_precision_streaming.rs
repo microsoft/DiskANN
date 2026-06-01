@@ -38,7 +38,7 @@ use crate::{
             InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
         },
     },
-    utils::{self, datafiles},
+    utils,
 };
 
 ////////////////////////
@@ -238,44 +238,33 @@ where
     };
 
     let consolidate_threshold: f32 = input.runbook_params().consolidate_threshold;
-    let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build().data()))?;
-    let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
-        &topk.queries,
-    ))?);
-
-    let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
-    let start_points = input
-        .build()
-        .start_point_strategy()
-        .compute(data.as_view())?;
-    let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
-    let index = Arc::new(DiskANNIndex::new(config, provider, None));
-
-    let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-    let managed_stream = BfTreeStream {
-        index,
-        search: topk.clone(),
-        runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-        ntasks: num_threads_and_tasks,
-        inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
-        inplace_delete_method: input.runbook_params().ip_delete_method.into(),
-    };
-
     let num_start_points = input.build().start_point_strategy().count();
-    let managed = Managed::new(
-        max_points + num_start_points,
+    let capacity = max_points + num_start_points;
+
+    crate::index::streaming::build_streamer(
+        input.build().data(),
+        topk,
         consolidate_threshold,
-        managed_stream,
-    );
+        capacity,
+        |data, capacity| {
+            let config = input.try_as_config()?.build()?;
+            let params = input.bftree_parameters(capacity, data.ncols());
+            let start_points = input
+                .build()
+                .start_point_strategy()
+                .compute(data.as_view())?;
+            let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
+            let index = Arc::new(DiskANNIndex::new(config, provider, None));
 
-    let max_k = topk.max_k();
-    let layered = bigann::WithData::new(managed, data, queries, move |path| {
-        Ok(Box::new(datafiles::load_groundtruth(
-            datafiles::BinFile(path),
-            Some(max_k),
-        )?))
-    });
-
-    Ok(layered)
+            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
+            Ok(BfTreeStream {
+                index,
+                search: topk.clone(),
+                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                ntasks: num_threads_and_tasks,
+                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
+                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
+            })
+        },
+    )
 }

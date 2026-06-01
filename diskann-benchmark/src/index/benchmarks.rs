@@ -608,48 +608,35 @@ where
     let topk = input.search_phase.as_topk()?;
 
     let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
+    let capacity = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
-    let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build.data()))?;
-    let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
-        &topk.queries,
-    ))?);
+    streaming::build_streamer(
+        input.build.data(),
+        topk,
+        consolidate_threshold,
+        capacity,
+        |data, capacity| {
+            let index = diskann_async::new_index::<T, _>(
+                input.try_as_config(input.build.l_build())?.build()?,
+                input.inmem_parameters(capacity, data.ncols()),
+                common::TableBasedDeletes,
+            )?;
 
-    // Create a little extra headroom to handle deferred maintenance.
-    let max_points = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
+            build::set_start_points(
+                index.provider(),
+                data.as_view(),
+                *input.build.start_point_strategy(),
+            )?;
 
-    let index = diskann_async::new_index::<T, _>(
-        input.try_as_config(input.build.l_build())?.build()?,
-        input.inmem_parameters(max_points, data.ncols()),
-        common::TableBasedDeletes,
-    )?;
-
-    build::set_start_points(
-        index.provider(),
-        data.as_view(),
-        *input.build.start_point_strategy(),
-    )?;
-
-    let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();
-    let managed_stream = FullPrecisionStream {
-        index,
-        search: topk.clone(),
-        runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-        ntasks: num_threads_and_tasks,
-        inplace_delete_num_to_replace: input.runbook_params.ip_delete_num_to_replace,
-        inplace_delete_method: input.runbook_params.ip_delete_method.into(),
-    };
-
-    let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
-
-    // compute the maximum value of k used in any search
-    let max_k = topk.max_k();
-
-    let layered = bigann::WithData::new(managed, data, queries, move |path| {
-        Ok(Box::new(datafiles::load_groundtruth(
-            datafiles::BinFile(path),
-            Some(max_k),
-        )?))
-    });
-
-    Ok(layered)
+            let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();
+            Ok(FullPrecisionStream {
+                index,
+                search: topk.clone(),
+                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                ntasks: num_threads_and_tasks,
+                inplace_delete_num_to_replace: input.runbook_params.ip_delete_num_to_replace,
+                inplace_delete_method: input.runbook_params.ip_delete_method.into(),
+            })
+        },
+    )
 }

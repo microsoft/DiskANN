@@ -3,10 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::io::Write;
+use std::{io::Write, sync::Arc};
 
+use diskann::utils::VectorRepr;
 use diskann_benchmark_core::streaming::{executors::bigann, Executor};
 use diskann_benchmark_runner::output::Output;
+use diskann_utils::views::Matrix;
 
 pub(crate) mod full_precision;
 pub(crate) mod managed;
@@ -15,7 +17,48 @@ pub(crate) mod stats;
 pub(crate) use full_precision::FullPrecisionStream;
 pub(crate) use managed::{Managed, ManagedStream};
 
-use crate::inputs::graph_index::DynamicRunbookParams;
+use crate::{
+    inputs::graph_index::{DynamicRunbookParams, TopkSearchPhase},
+    utils::datafiles,
+};
+
+/// Construct the streaming stack: load data/queries, create the managed stream via the
+/// closure, then wrap in [`Managed`] and [`bigann::WithData`].
+///
+/// `capacity` is the pre-computed slot count passed to [`Managed::new`]. Each backend
+/// computes this differently (inmem applies headroom, bf_tree adds start points).
+///
+/// The closure receives `(&data, capacity)` so it can use `data.ncols()` for provider params.
+pub(crate) fn build_streamer<T, M, F>(
+    data_path: &diskann_benchmark_runner::files::InputFile,
+    topk: &TopkSearchPhase,
+    consolidate_threshold: f32,
+    capacity: usize,
+    make_stream: F,
+) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, stats::StreamStats>>>
+where
+    T: bytemuck::Pod + VectorRepr + 'static,
+    M: ManagedStream<T, Output = stats::StreamStats> + 'static,
+    F: FnOnce(&Matrix<T>, usize) -> anyhow::Result<M>,
+{
+    let data = datafiles::load_dataset::<T>(datafiles::BinFile(data_path))?;
+    let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
+        &topk.queries,
+    ))?);
+
+    let managed_stream = make_stream(&data, capacity)?;
+    let managed = Managed::new(capacity, consolidate_threshold, managed_stream);
+
+    let max_k = topk.max_k();
+    let layered = bigann::WithData::new(managed, data, queries, move |path| {
+        Ok(Box::new(datafiles::load_groundtruth(
+            datafiles::BinFile(path),
+            Some(max_k),
+        )?))
+    });
+
+    Ok(layered)
+}
 
 /// Run a streaming benchmark using the given runbook parameters.
 ///
