@@ -133,10 +133,10 @@ mod imp {
         type Output = QuantBuildResult;
 
         fn try_match(&self, input: &IndexPQOperation) -> Result<MatchScore, FailureScore> {
-            let score = utils::match_data_type::<T>(*input.index_operation.source.data_type());
+            let score = utils::match_data_type::<T>(*input.index_operation().source().data_type());
             if self
                 .quant_search
-                .is_match(&input.index_operation.search_phase)
+                .is_match(input.index_operation().search_phase())
             {
                 score
             } else {
@@ -154,19 +154,19 @@ mod imp {
         ) -> std::fmt::Result {
             match input {
                 Some(arg) => {
-                    let desc = T::describe(*arg.index_operation.source.data_type());
+                    let desc = T::describe(*arg.index_operation().source().data_type());
                     if !desc.is_match() {
                         writeln!(f, "Data/Query Type: {}", desc,)?;
                     }
 
                     if !self
                         .quant_search
-                        .is_match(&arg.index_operation.search_phase)
+                        .is_match(arg.index_operation().search_phase())
                     {
                         writeln!(
                             f,
                             "Unsupported search phase: \"{}\" - expected one of {}",
-                            arg.index_operation.search_phase.kind(),
+                            arg.index_operation().search_phase().kind(),
                             self.quant_search.format_kinds(),
                         )?;
                     }
@@ -188,9 +188,9 @@ mod imp {
         ) -> anyhow::Result<QuantBuildResult> {
             writeln!(output, "{}", input)?;
 
-            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune);
+            let hybrid = common::Hybrid::new(input.max_fp_vecs_per_prune());
 
-            let (index, build_stats, quant_training_time) = match &input.index_operation.source {
+            let (index, build_stats, quant_training_time) = match input.index_operation().source() {
                 IndexSource::Load(load) => {
                     let index_config: &IndexConfiguration = &input.to_config()?;
 
@@ -213,8 +213,8 @@ mod imp {
 
                         diskann_async::train_pq(
                             train_data.as_view(),
-                            input.num_pq_chunks,
-                            &mut StdRng::seed_from_u64(input.seed),
+                            input.num_pq_chunks(),
+                            &mut StdRng::seed_from_u64(input.seed()),
                             diskann_providers::utils::create_thread_pool(build.num_threads())?
                                 .as_ref(),
                         )?
@@ -257,8 +257,8 @@ mod imp {
             // Save construction stats before running queries.
             checkpoint.checkpoint(&build_stats)?;
 
-            let search_phase = &input.index_operation.search_phase;
-            let search = if input.use_fp_for_search {
+            let search_phase = input.index_operation().search_phase();
+            let search = if input.use_fp_for_search() {
                 self.full_search
                     .run(index, search_phase, &Strategy::new(common::FullPrecision))?
             } else {

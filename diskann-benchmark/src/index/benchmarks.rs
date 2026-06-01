@@ -174,8 +174,8 @@ where
     type Output = BuildResult;
 
     fn try_match(&self, input: &IndexOperation) -> Result<MatchScore, FailureScore> {
-        let score = utils::match_data_type::<T>(*input.source.data_type());
-        if self.plugins.is_match(&input.search_phase) {
+        let score = utils::match_data_type::<T>(*input.source().data_type());
+        if self.plugins.is_match(input.search_phase()) {
             score
         } else {
             match score {
@@ -192,16 +192,16 @@ where
     ) -> std::fmt::Result {
         match input {
             Some(arg) => {
-                let desc = T::describe(*arg.source.data_type());
+                let desc = T::describe(*arg.source().data_type());
                 if !desc.is_match() {
                     writeln!(f, "Data/Query Type: {}", desc)?;
                 }
 
-                if !self.plugins.is_match(&arg.search_phase) {
+                if !self.plugins.is_match(arg.search_phase()) {
                     writeln!(
                         f,
                         "Unsupported search phase: \"{}\" - expected one of {}",
-                        arg.search_phase.kind(),
+                        arg.search_phase().kind(),
                         self.plugins.format_kinds(),
                     )?;
                 }
@@ -221,7 +221,7 @@ where
         mut output: &mut dyn Output,
     ) -> anyhow::Result<BuildResult> {
         writeln!(output, "{}", input)?;
-        let (index, build_stats) = match &input.source {
+        let (index, build_stats) = match input.source() {
             IndexSource::Build(build) => {
                 let (index, build_stats) = run_build(
                     build,
@@ -266,7 +266,7 @@ where
 
         let search_results = self.plugins.run(
             index,
-            &input.search_phase,
+            input.search_phase(),
             &Strategy::new(common::FullPrecision),
         )?;
 
@@ -301,7 +301,7 @@ where
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        utils::match_data_type::<T>(input.build.data_type())
+        utils::match_data_type::<T>(input.build().data_type())
     }
 
     fn description(
@@ -310,7 +310,7 @@ where
         input: Option<&DynamicIndexRun>,
     ) -> std::fmt::Result {
         match input {
-            Some(i) => write!(f, "{}", T::describe(i.build.data_type())),
+            Some(i) => write!(f, "{}", T::describe(i.build().data_type())),
             None => write!(f, "{}", T::DATA_TYPE),
         }
     }
@@ -324,7 +324,7 @@ where
         writeln!(output, "{}", input)?;
 
         streaming::run_streaming::<T, _>(
-            &input.runbook_params,
+            input.runbook_params(),
             |max_points| full_precision_streaming::<T>(input, max_points),
             output,
         )
@@ -605,19 +605,19 @@ fn full_precision_streaming<T>(
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
-    let topk = input.search_phase.as_topk()?;
+    let topk = input.search_phase().as_topk()?;
 
-    let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
+    let consolidate_threshold: f32 = input.runbook_params().consolidate_threshold;
     let capacity = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
     streaming::build_streamer(
-        input.build.data(),
+        input.build().data(),
         topk,
         consolidate_threshold,
         capacity,
         |data, capacity| {
             let index = diskann_async::new_index::<T, _>(
-                input.try_as_config(input.build.l_build())?.build()?,
+                input.try_as_config(input.build().l_build())?.build()?,
                 input.inmem_parameters(capacity, data.ncols()),
                 common::TableBasedDeletes,
             )?;
@@ -625,17 +625,17 @@ where
             build::set_start_points(
                 index.provider(),
                 data.as_view(),
-                *input.build.start_point_strategy(),
+                *input.build().start_point_strategy(),
             )?;
 
-            let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();
+            let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
             Ok(FullPrecisionStream {
                 index,
                 search: topk.clone(),
                 runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
                 ntasks: num_threads_and_tasks,
-                inplace_delete_num_to_replace: input.runbook_params.ip_delete_num_to_replace,
-                inplace_delete_method: input.runbook_params.ip_delete_method.into(),
+                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
+                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
             })
         },
     )
