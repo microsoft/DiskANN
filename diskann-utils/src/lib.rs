@@ -18,6 +18,8 @@ pub mod io;
 pub mod object_pool;
 pub mod sampling;
 
+pub mod arbiter;
+
 // Views
 pub mod strided;
 pub mod views;
