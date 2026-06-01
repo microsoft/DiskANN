@@ -1,0 +1,276 @@
+{
+  "file": "diskann/src/flat/test/cases/flat_knn_search.rs",
+  "test": "flat/test/cases/flat_knn_search/search_3_4",
+  "payload": [
+    {
+      "comparisons": 64,
+      "description": "All -1: nearest is the all-zeros corner; result_count = min(k, len).",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          0,
+          3.0
+        ]
+      ],
+      "k": 1,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "result_count": 1,
+      "top_k_distances": [
+        3.0
+      ]
+    },
+    {
+      "comparisons": 64,
+      "description": "All -1: nearest is the all-zeros corner; result_count = min(k, len).",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          0,
+          3.0
+        ],
+        [
+          1,
+          6.0
+        ],
+        [
+          4,
+          6.0
+        ],
+        [
+          16,
+          6.0
+        ]
+      ],
+      "k": 4,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "result_count": 4,
+      "top_k_distances": [
+        3.0,
+        6.0,
+        6.0,
+        6.0
+      ]
+    },
+    {
+      "comparisons": 64,
+      "description": "All -1: nearest is the all-zeros corner; result_count = min(k, len).",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          0,
+          3.0
+        ],
+        [
+          1,
+          6.0
+        ],
+        [
+          4,
+          6.0
+        ],
+        [
+          16,
+          6.0
+        ],
+        [
+          5,
+          9.0
+        ],
+        [
+          17,
+          9.0
+        ],
+        [
+          20,
+          9.0
+        ],
+        [
+          2,
+          11.0
+        ],
+        [
+          8,
+          11.0
+        ],
+        [
+          32,
+          11.0
+        ]
+      ],
+      "k": 10,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "result_count": 10,
+      "top_k_distances": [
+        3.0,
+        6.0,
+        6.0,
+        6.0,
+        9.0,
+        9.0,
+        9.0,
+        11.0,
+        11.0,
+        11.0
+      ]
+    },
+    {
+      "comparisons": 64,
+      "description": "All `size-1`: query coincides with the last grid corner.",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          63,
+          0.0
+        ]
+      ],
+      "k": 1,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "result_count": 1,
+      "top_k_distances": [
+        0.0
+      ]
+    },
+    {
+      "comparisons": 64,
+      "description": "All `size-1`: query coincides with the last grid corner.",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          63,
+          0.0
+        ],
+        [
+          47,
+          1.0
+        ],
+        [
+          59,
+          1.0
+        ],
+        [
+          62,
+          1.0
+        ]
+      ],
+      "k": 4,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "result_count": 4,
+      "top_k_distances": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "comparisons": 64,
+      "description": "All `size-1`: query coincides with the last grid corner.",
+      "grid_dims": 3,
+      "grid_size": 4,
+      "ground_truth": [
+        [
+          63,
+          0.0
+        ],
+        [
+          47,
+          1.0
+        ],
+        [
+          59,
+          1.0
+        ],
+        [
+          62,
+          1.0
+        ],
+        [
+          43,
+          2.0
+        ],
+        [
+          46,
+          2.0
+        ],
+        [
+          58,
+          2.0
+        ],
+        [
+          42,
+          3.0
+        ],
+        [
+          31,
+          4.0
+        ],
+        [
+          55,
+          4.0
+        ]
+      ],
+      "k": 10,
+      "metrics": {
+        "count": 64
+      },
+      "query": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "result_count": 10,
+      "top_k_distances": [
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        3.0,
+        4.0,
+        4.0
+      ]
+    }
+  ]
+}

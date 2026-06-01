@@ -32,10 +32,6 @@ use thiserror::Error;
 ///
 /// * `max_k_means_reps` - The maximum number of iterations for the k-means clustering algorithm.
 ///   Increasing this value can improve clustering quality at the cost of additional computation time.
-///
-/// * `translate_to_center` - A boolean flag indicating whether the data should be translated
-///   (centered) to the origin before clustering. Centering can improve clustering performance by
-///   reducing variance caused by the global offset of the data.
 #[derive(Debug, Clone)]
 pub struct GeneratePivotArguments {
     num_train: usize,
@@ -43,7 +39,6 @@ pub struct GeneratePivotArguments {
     num_centers: usize,
     num_pq_chunks: usize,
     max_k_means_reps: usize,
-    translate_to_center: bool,
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -79,7 +74,6 @@ impl GeneratePivotArguments {
         num_centers: usize,
         num_pq_chunks: usize,
         max_k_means_reps: usize,
-        translate_to_center: bool,
     ) -> Result<Self, GeneratePivotArgumentsError> {
         if num_pq_chunks > dim {
             return Err(GeneratePivotArgumentsError::NumChunksMoreThanDim { num_pq_chunks, dim });
@@ -107,7 +101,6 @@ impl GeneratePivotArguments {
             num_centers,
             num_pq_chunks,
             max_k_means_reps,
-            translate_to_center,
         })
     }
 
@@ -135,11 +128,6 @@ impl GeneratePivotArguments {
     pub fn max_k_means_reps(&self) -> usize {
         self.max_k_means_reps
     }
-
-    /// Get whether to translate to center
-    pub fn translate_to_center(&self) -> bool {
-        self.translate_to_center
-    }
 }
 
 #[cfg(test)]
@@ -162,7 +150,6 @@ mod arguments_test {
             num_centers,
             num_pq_chunks,
             max_k_means_reps,
-            true,
         );
 
         assert!(result.is_err());
@@ -186,7 +173,6 @@ mod arguments_test {
             num_centers,
             num_pq_chunks,
             max_k_means_reps,
-            true,
         );
 
         assert!(result.is_err());
@@ -210,7 +196,6 @@ mod arguments_test {
             num_centers,
             num_pq_chunks,
             max_k_means_reps,
-            true,
         );
 
         assert!(result.is_err());
@@ -234,7 +219,6 @@ mod arguments_test {
             num_centers,
             num_pq_chunks,
             max_k_means_reps,
-            true,
         );
 
         assert!(result.is_err());

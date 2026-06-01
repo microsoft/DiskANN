@@ -7,7 +7,6 @@ use std::{
     collections::HashMap,
     future::Future,
     num::NonZeroUsize,
-    ops::Range,
     sync::{
         atomic::{AtomicU64, AtomicUsize},
         Arc,
@@ -21,13 +20,12 @@ use diskann::{
     graph::{
         self,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
-            SearchStrategy,
+            self, DefaultPostProcessor, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy,
         },
         search::Knn,
         search_output_buffer, AdjacencyList, DiskANNIndex,
     },
-    neighbor::Neighbor,
+    neighbor::{Neighbor, NeighborPriorityQueue},
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
         NeighborAccessor, NoopGuard,
@@ -715,16 +713,6 @@ where
     }
 }
 
-impl<Data, VP> IdIterator<Range<u32>> for DiskAccessor<'_, Data, VP>
-where
-    Data: GraphDataType<VectorIdType = u32>,
-    VP: VertexProvider<Data>,
-{
-    async fn id_iterator(&mut self) -> Result<Range<u32>, ANNError> {
-        Ok(0..self.provider.num_points as u32)
-    }
-}
-
 impl<'a, 'b, Data, VP> DelegateNeighbor<'a> for DiskAccessor<'b, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -916,6 +904,76 @@ where
         }
     }
 
+    /// Perform a brute-force linear scan of all points in the index, returning the
+    /// nearest neighbors that pass `vector_filter`.
+    ///
+    /// The top `neighbors_before_reranking` candidates from the quantized scan will be
+    /// provided to full-precision reranking.
+    async fn flat_search<OB>(
+        &self,
+        strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
+        query: &[Data::VectorDataType],
+        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
+        neighbors_before_reranking: usize,
+        output: &mut OB,
+    ) -> ANNResult<graph::index::SearchStats>
+    where
+        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+    {
+        let provider = self.index.provider();
+        let mut accessor = strategy
+            .search_accessor(provider, &DefaultContext)
+            .into_ann_result()?;
+
+        // Derive the batch size from the scratch data structure. Providing too many vectors
+        // will panic.
+        let batch_size = accessor.scratch.pq_scratch.max_vectors();
+
+        // This check should always hold since `graph_degree` comes from
+        // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
+        // against misconfiguration.
+        if batch_size == 0 {
+            return Err(ANNError::message(
+                diskann::ANNErrorKind::IndexError,
+                "pq scratch must support at least one vector",
+            ));
+        }
+
+        let mut id_buffer = Vec::with_capacity(batch_size);
+
+        let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
+        let mut cmps = 0u32;
+
+        let mut iter = (0..provider.num_points as u32).filter(vector_filter);
+        loop {
+            id_buffer.clear();
+            id_buffer.extend(iter.by_ref().take(batch_size));
+
+            if id_buffer.is_empty() {
+                break;
+            }
+
+            accessor.pq_distances(&id_buffer, |dist, id| best.insert(Neighbor::new(id, dist)))?;
+            cmps += id_buffer.len() as u32;
+        }
+
+        // FIXME: This is a temporary bridge. We don't really need the query computer, but
+        // we do need to satisfy the trait definition until PR 1067 lands.
+        let computer = accessor.build_query_computer(query).into_ann_result()?;
+        let result_count = strategy
+            .default_post_processor()
+            .post_process(&mut accessor, query, &computer, best.iter(), output)
+            .await
+            .into_ann_result()?;
+
+        Ok(graph::index::SearchStats {
+            cmps,
+            hops: 0,
+            result_count: result_count as u32,
+            range_search_second_round: false,
+        })
+    }
+
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
     pub fn search(
@@ -993,12 +1051,11 @@ where
         let k = k_value;
         let l = search_list_size as usize;
         let stats = if is_flat_search {
-            self.runtime.block_on(self.index.flat_search(
+            self.runtime.block_on(self.flat_search(
                 &strategy,
-                &DefaultContext,
-                strategy.query,
+                query,
                 vector_filter,
-                &Knn::new(k, l, beam_width)?,
+                l,
                 &mut result_output_buffer,
             ))?
         } else {

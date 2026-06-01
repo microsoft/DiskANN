@@ -8,22 +8,6 @@
 //! Row-major matrix abstractions for multi-vector representations, where each
 //! entity is encoded as multiple embedding vectors (e.g., per-token embeddings).
 //!
-//! # Core Types
-//!
-//! | Type | Description |
-//! |------|-------------|
-//! | [`Mat`] | Owning matrix that manages its own memory |
-//! | [`MatRef`] | Immutable borrowed view  |
-//! | [`MatMut`] | Mutable borrowed view |
-//! | [`Repr`] | Trait defining row layout (e.g., [`Standard`]) |
-//! | [`BlockTransposed`] | Owning block-transposed matrix |
-//! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
-//! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
-//! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
-//! | [`QueryComputer`] | Architecture-dispatched SIMD query computer |
-//! | [`MaxSim`] | Per-query-vector max similarity computation |
-//! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
-//!
 //! # Example
 //!
 //! ```
@@ -61,7 +45,7 @@
 //!
 //! // MaxSim (per-query-vector scores)
 //! let mut scores = vec![0.0f32; 2];
-//! let mut max_sim = MaxSim::new(&mut scores).unwrap();
+//! let mut max_sim = MaxSim::new(&mut scores);
 //! max_sim.evaluate(query, doc);
 //! assert_eq!(scores[0], -1.0);
 //! assert_eq!(scores[1], -1.0);
@@ -72,7 +56,10 @@ pub mod distance;
 pub(crate) mod matrix;
 
 pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
-pub use distance::{Chamfer, MaxSim, MaxSimError, QueryComputer, QueryMatRef};
+pub use distance::{
+    BoxErase, Chamfer, Erase, MaxSim, MaxSimElement, MaxSimError, MaxSimIsa, MaxSimKernel,
+    NotSupported, QueryMatRef, build_max_sim,
+};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,

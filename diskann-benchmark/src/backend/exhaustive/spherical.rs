@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 const NAME: &str = "spherical-exhaustive-search";
 
@@ -11,17 +11,19 @@ crate::utils::stub_impl!("spherical-quantization", inputs::exhaustive::Spherical
 
 // Spherical - requires feature "spherical-quantization"
 #[cfg(feature = "spherical-quantization")]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register(NAME, imp::SphericalQ::<1>);
-    benchmarks.register(NAME, imp::SphericalQ::<2>);
-    benchmarks.register(NAME, imp::SphericalQ::<4>);
-    benchmarks.register(NAME, imp::SphericalQ::<8>);
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register(NAME, imp::SphericalQ::<1>)?;
+    registry.register(NAME, imp::SphericalQ::<2>)?;
+    registry.register(NAME, imp::SphericalQ::<4>)?;
+    registry.register(NAME, imp::SphericalQ::<8>)?;
+
+    Ok(())
 }
 
 // Stub implementation
 #[cfg(not(feature = "spherical-quantization"))]
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    imp::register(NAME, benchmarks)
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    imp::register(NAME, registry)
 }
 
 ////////////////
@@ -131,7 +133,7 @@ mod imp {
                 f32::converting_load(datafiles::BinFile(&input.search.queries), input.data_type)?;
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
+                datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth), None)?;
 
             let search_progress = make_progress_bar(
                 "running search",

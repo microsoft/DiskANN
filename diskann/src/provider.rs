@@ -508,8 +508,7 @@ pub trait BuildQueryComputer<T>: Accessor {
     /// elements yielded by the [`Accessor`].
     type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
         + Send
-        + Sync
-        + 'static;
+        + Sync;
 
     /// Build the query computer for this accessor.
     ///

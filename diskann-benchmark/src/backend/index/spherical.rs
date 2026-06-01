@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_benchmark_runner::registry::Benchmarks;
+use diskann_benchmark_runner::Registry;
 
 // Create a stub-module if the "spherical-quantization" feature is disabled.
 crate::utils::stub_impl!(
@@ -11,7 +11,7 @@ crate::utils::stub_impl!(
     inputs::graph_index::SphericalQuantBuild
 );
 
-pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
     #[cfg(feature = "spherical-quantization")]
@@ -21,37 +21,39 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
         // NOTE: Since the spherical provider is not generic on the number of bits, the
         // implementations of the search-plugins are shared by all bit-widths. Registering
         // all plugins for all bit widths does not meaningfully increase compilation time.
-        benchmarks.register(
+        registry.register(
             NAME,
             imp::SphericalQ::<1>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter),
-        );
+        )?;
 
-        benchmarks.register(
+        registry.register(
             NAME,
             imp::SphericalQ::<2>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter),
-        );
+        )?;
 
-        benchmarks.register(
+        registry.register(
             NAME,
             imp::SphericalQ::<4>::new()
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
                 .search(plugins::TopkMultihopFilter),
-        );
+        )?;
     }
 
     // Stub implementation
     #[cfg(not(feature = "spherical-quantization"))]
-    imp::register(NAME, benchmarks)
+    imp::register(NAME, registry)?;
+
+    Ok(())
 }
 
 ////////////////
@@ -376,10 +378,14 @@ mod imp {
         ) -> anyhow::Result<AggregatedSearchResults> {
             let topk = phase.as_topk()?;
 
+            // compute the maximum value of k used in any search
+            let max_k = topk.max_k();
+
             let queries: Arc<Matrix<f32>> =
                 Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-            let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+            let groundtruth =
+                datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
             let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
 
@@ -516,7 +522,7 @@ mod imp {
             ))?);
 
             let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
+                datafiles::load_range_groundtruth(datafiles::BinFile(&multihop.groundtruth))?;
 
             let steps =
                 search::knn::SearchSteps::new(multihop.reps, &multihop.num_threads, &multihop.runs);

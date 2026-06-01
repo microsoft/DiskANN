@@ -120,14 +120,13 @@ macro_rules! stub_impl {
             use diskann_benchmark_runner::{
                 benchmark::{FailureScore, MatchScore},
                 output::Output,
-                registry::Benchmarks,
-                Benchmark, Checkpoint,
+                Benchmark, Checkpoint, Registry,
             };
 
             use crate::inputs;
 
-            pub(super) fn register(name: &str, registry: &mut Benchmarks) {
-                registry.register(name, Stub);
+            pub(super) fn register(name: &str, registry: &mut Registry) -> anyhow::Result<()> {
+                Ok(registry.register(name, Stub)?)
             }
 
             /// An empty placeholder to provide a hint for the necessary feature.

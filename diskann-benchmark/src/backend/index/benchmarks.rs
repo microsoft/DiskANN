@@ -19,7 +19,7 @@ use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
     utils::datatype::AsDataType,
-    Benchmark, Checkpoint,
+    Benchmark, Checkpoint, Registry,
 };
 use diskann_providers::{
     index::diskann_async,
@@ -57,7 +57,7 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
-pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
+pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     // Notes on registration:
     //
     // We register all supported search types for `f32`, but intentionally limit the number
@@ -70,49 +70,50 @@ pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::reg
     // care.
 
     // Full Precision
-    benchmarks.register(
+    registry.register(
         "graph-index-full-precision-f32",
         FullPrecision::<f32>::new()
             .search(plugins::Topk)
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter),
-    );
+    )?;
 
-    benchmarks.register(
+    registry.register(
         "graph-index-full-precision-f16",
         FullPrecision::<f16>::new().search(plugins::Topk),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-full-precision-u8",
         FullPrecision::<u8>::new().search(plugins::Topk),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-full-precision-i8",
         FullPrecision::<i8>::new().search(plugins::Topk),
-    );
+    )?;
 
     // Dynamic Full Precision
-    benchmarks.register(
+    registry.register(
         "graph-index-dynamic-full-precision-f32",
         DynamicFullPrecision::<f32>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-f16",
         DynamicFullPrecision::<f16>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-u8",
         DynamicFullPrecision::<u8>::new(),
-    );
-    benchmarks.register(
+    )?;
+    registry.register(
         "graph-index-dynamic-full-precision-i8",
         DynamicFullPrecision::<i8>::new(),
-    );
+    )?;
 
-    product::register_benchmarks(benchmarks);
-    scalar::register_benchmarks(benchmarks);
-    spherical::register_benchmarks(benchmarks);
+    product::register_benchmarks(registry)?;
+    scalar::register_benchmarks(registry)?;
+    spherical::register_benchmarks(registry)?;
+    Ok(())
 }
 
 type FullPrecisionProvider<T> = inmem::DefaultProvider<
@@ -464,12 +465,7 @@ where
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
         // compute the maximum value of k used in any search
-        let max_k = topk
-            .runs
-            .iter()
-            .map(|run| run.recall_k)
-            .max()
-            .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+        let max_k = topk.max_k();
 
         let groundtruth =
             datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
@@ -658,10 +654,8 @@ fn full_precision_streaming<T>(
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
-    let topk = match &input.search_phase {
-        SearchPhase::Topk(topk) => topk,
-        _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
-    };
+    let topk = input.search_phase.as_topk()?;
+
     let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(&input.build.data))?;
@@ -697,12 +691,16 @@ where
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
     // compute the maximum value of k used in any search
+<<<<<<< HEAD
     let max_k = topk
         .runs
         .iter()
         .map(|run| run.recall_k)
         .max()
         .ok_or_else(|| anyhow::anyhow!("No runs provided in Topk phase"))?;
+=======
+    let max_k = topk.max_k();
+>>>>>>> 5f63807b13ec52b03a4415da03a4fa40a7e162b5
 
     let layered = bigann::WithData::new(managed, data, queries, move |path| {
         Ok(Box::new(datafiles::load_groundtruth(

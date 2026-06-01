@@ -712,6 +712,13 @@ impl<T: NewCloned> Clone for Mat<T> {
 }
 
 impl<T: Copy> Mat<Standard<T>> {
+    /// Construct a [`Mat`] by calling `f` once per element in row-major order.
+    pub fn from_fn<F: FnMut() -> T>(repr: Standard<T>, mut f: F) -> Self {
+        let b: Box<[T]> = (0..repr.num_elements()).map(|_| f()).collect();
+        // SAFETY: `b` has length `repr.num_elements()` by construction.
+        unsafe { repr.box_to_mat(b) }
+    }
+
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
@@ -1762,6 +1769,31 @@ mod tests {
                 for r in rows_iter {
                     assert_eq!(r.len(), ncols);
                     assert!(r.iter().all(|i| *i == 1usize));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mat_from_fn() {
+        let rows = [0, 1, 2, 5];
+        let cols = [0, 1, 3, 7];
+
+        for nrows in rows {
+            for ncols in cols {
+                let mut counter = 0u32;
+                let m = Mat::from_fn(Standard::new(nrows, ncols).unwrap(), || {
+                    let v = counter;
+                    counter += 1;
+                    v
+                });
+
+                assert_eq!(counter as usize, nrows * ncols);
+                for (i, row) in m.rows().enumerate() {
+                    assert_eq!(row.len(), ncols);
+                    for (j, &v) in row.iter().enumerate() {
+                        assert_eq!(v, (i * ncols + j) as u32);
+                    }
                 }
             }
         }

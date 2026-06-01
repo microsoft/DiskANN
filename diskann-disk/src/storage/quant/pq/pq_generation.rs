@@ -100,8 +100,8 @@ where
                     context.num_centers,
                     context.num_chunks,
                     context.max_kmeans_reps,
-                    context.metric == Metric::L2,
                 )?,
+                context.metric == Metric::L2,
                 &mut train_data,
                 &context.pq_storage,
                 context.storage_provider,
@@ -260,15 +260,9 @@ mod pq_generation_tests {
 
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
-            GeneratePivotArguments::new(
-                ndata,
-                dim,
-                num_centers,
-                num_chunks,
-                max_k_means_reps,
-                true,
-            )
-            .unwrap(),
+            GeneratePivotArguments::new(ndata, dim, num_centers, num_chunks, max_k_means_reps)
+                .unwrap(),
+            true,
             &mut train_data,
             &pq_storage,
             &storage_provider,
