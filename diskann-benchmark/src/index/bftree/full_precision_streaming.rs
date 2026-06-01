@@ -23,7 +23,7 @@ use diskann_utils::{
 };
 
 use crate::{
-    backend::index::{
+    index::{
         build::{BuildKind, BuildStats},
         search::knn,
         streaming::{

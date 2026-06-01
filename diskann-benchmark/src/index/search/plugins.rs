@@ -37,9 +37,7 @@ use std::sync::Arc;
 use diskann::{graph::DiskANNIndex, provider::DataProvider};
 use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
 
-use crate::{
-    backend::index::result::AggregatedSearchResults, inputs::graph_index::SearchPhaseKind,
-};
+use crate::{index::result::AggregatedSearchResults, inputs::graph_index::SearchPhaseKind};
 
 /// A dyn-compatible search plugin for `DP`.
 ///

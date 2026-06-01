@@ -27,7 +27,7 @@ use super::{
     ManagedStream,
 };
 use crate::{
-    backend::index::{
+    index::{
         build::{BuildKind, BuildStats},
         search::knn,
     },

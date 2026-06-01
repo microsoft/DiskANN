@@ -14,7 +14,7 @@ crate::utils::stub_impl!(
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     {
-        use crate::backend::index::search::plugins;
+        use crate::index::search::plugins;
         use half::f16;
 
         // NOTE: Try to balance search plugins with the needed functionality.
@@ -62,7 +62,7 @@ mod imp {
     use rand::{rngs::StdRng, SeedableRng};
 
     use crate::{
-        backend::index::{
+        index::{
             benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
             result::{BuildResult, QuantBuildResult},

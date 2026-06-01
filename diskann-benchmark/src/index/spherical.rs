@@ -16,7 +16,7 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
     #[cfg(feature = "spherical-quantization")]
     {
-        use crate::backend::index::search::plugins;
+        use crate::index::search::plugins;
 
         // NOTE: Since the spherical provider is not generic on the number of bits, the
         // implementations of the search-plugins are shared by all bit-widths. Registering
@@ -80,7 +80,7 @@ mod imp {
     use std::{io::Write, sync::Arc};
 
     use crate::{
-        backend::index::{
+        index::{
             benchmarks::QueryType,
             build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,

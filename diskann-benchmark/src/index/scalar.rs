@@ -11,7 +11,7 @@ crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOper
 pub(super) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
-        use crate::backend::index::search::plugins::Topk;
+        use crate::index::search::plugins::Topk;
 
         // NOTE: This benchmark is heavily monomorphized. Each `(NBITS, T)` pair
         // generates a full `Benchmark` impl/build path for
@@ -72,7 +72,7 @@ mod imp {
     use diskann_utils::views::{Matrix, MatrixView};
 
     use crate::{
-        backend::index::{
+        index::{
             benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
             result::{BuildResult, QuantBuildResult},

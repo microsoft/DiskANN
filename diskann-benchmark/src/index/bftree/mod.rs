@@ -93,7 +93,7 @@ where
     writeln!(
         output,
         "{}",
-        crate::backend::index::streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
+        crate::index::streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
     )?;
 
     Ok(results)

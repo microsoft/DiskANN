@@ -40,7 +40,7 @@ use super::{
     product, scalar, search, spherical,
 };
 use crate::{
-    backend::index::{
+    index::{
         result::{AggregatedSearchResults, BuildResult},
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},

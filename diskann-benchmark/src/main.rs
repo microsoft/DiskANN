@@ -4,6 +4,7 @@
  */
 
 mod backend;
+mod index;
 mod inputs;
 mod utils;
 
@@ -45,6 +46,7 @@ impl Cli {
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
         backend::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
