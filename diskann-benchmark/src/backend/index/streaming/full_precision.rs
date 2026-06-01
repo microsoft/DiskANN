@@ -159,8 +159,11 @@ where
         )?;
 
         Ok(StreamStats::Maintain {
-            drop_deleted: GenericStats::new(Cow::Borrowed("Drop Deleted"), drop_deleted)?,
-            release: GenericStats::new(Cow::Borrowed("Release"), release)?,
+            drop_deleted: Some(GenericStats::new(
+                Cow::Borrowed("Drop Deleted"),
+                drop_deleted,
+            )?),
+            release: Some(GenericStats::new(Cow::Borrowed("Release"), release)?),
         })
     }
 }

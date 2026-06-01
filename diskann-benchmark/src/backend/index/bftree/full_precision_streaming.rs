@@ -137,11 +137,11 @@ where
         // bf_tree doesn't have a separate release/consolidation step like inmem's
         // TableDeleteProviderAsync. Deletes are handled in-place.
         // Clear delete caches to prevent unbounded memory growth.
-        self.index.provider().clear_delete_caches();
+        self.index.provider().flush_deletes();
 
         Ok(StreamStats::Maintain {
-            drop_deleted: GenericStats::empty(Cow::Borrowed("Drop Deleted")),
-            release: GenericStats::empty(Cow::Borrowed("Release")),
+            drop_deleted: None,
+            release: None,
         })
     }
 }

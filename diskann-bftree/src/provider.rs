@@ -4,7 +4,6 @@
  */
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     future::Future,
     io::{Read, Write},
@@ -199,12 +198,8 @@ where
     //
     pub(crate) graph_params: Option<GraphParams>,
 
-    // During `inplace_delete`, the algorithm first removes vectors from storage via
-    // `Delete::delete`, then prunes the neighbors of the deleted node which requires
-    // reading the deleted vector back through the accessor. We cache vectors here
-    // before deletion so the accessor can fall back to the cache on a `Transient` error.
-    delete_cache: Mutex<HashMap<u32, Box<[T]>>>,
-    quant_delete_cache: Mutex<HashMap<u32, Box<[u8]>>>,
+    // Nodes marked for deletion. Vector data is removed in `flush_deletes()`.
+    pending_deletes: Mutex<Vec<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,8 +268,7 @@ where
             )?,
             metric: params.metric,
             graph_params: params.graph_params,
-            delete_cache: Mutex::new(HashMap::new()),
-            quant_delete_cache: Mutex::new(HashMap::new()),
+            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 
@@ -369,13 +363,6 @@ where
     pub fn max_degree(&self) -> u32 {
         self.neighbor_provider.max_degree()
     }
-
-    /// Clear the delete caches. Call after an `inplace_delete` batch completes to
-    /// prevent unbounded memory growth in long-running streaming workloads.
-    pub fn clear_delete_caches(&self) {
-        self.delete_cache.lock().unwrap().clear();
-        self.quant_delete_cache.lock().unwrap().clear();
-    }
 }
 
 impl<T> BfTreeProvider<T, QuantVectorProvider>
@@ -390,6 +377,16 @@ where
             self.quant_vectors.num_get_calls.get(),
         )
     }
+
+    /// Flush deferred deletes. Removes vector data from bf-tree for all nodes
+    /// marked deleted since the last flush. Call after an `inplace_delete` batch.
+    pub fn flush_deletes(&self) {
+        let ids: Vec<u32> = self.pending_deletes.lock().unwrap().drain(..).collect();
+        for id in ids {
+            self.full_vectors.delete_vector(id as usize);
+            self.quant_vectors.delete_vector(id as usize);
+        }
+    }
 }
 
 impl<T> BfTreeProvider<T, NoStore>
@@ -401,19 +398,27 @@ where
     pub fn counts_for_get_vector(&self) -> (usize, usize) {
         (self.full_vectors.num_get_calls.get(), 0)
     }
+
+    /// Flush deferred deletes. Removes vector data from bf-tree for all nodes
+    /// marked deleted since the last flush. Call after an `inplace_delete` batch.
+    pub fn flush_deletes(&self) {
+        let ids: Vec<u32> = self.pending_deletes.lock().unwrap().drain(..).collect();
+        for id in ids {
+            self.full_vectors.delete_vector(id as usize);
+        }
+    }
 }
 
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
-    Q: AsyncFriendly + QuantDelete,
+    Q: AsyncFriendly,
 {
     fn release(
         &self,
         _context: &Self::Context,
         _id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        // no-op: hard delete removes the data
         std::future::ready(Ok(()))
     }
 
@@ -424,22 +429,9 @@ where
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
 
-        if let Ok(vec) = self.full_vectors.get_vector_sync(id as usize) {
-            self.delete_cache
-                .lock()
-                .unwrap()
-                .insert(id, vec.into_boxed_slice());
-        }
-
-        if let Some(qvec) = self.quant_vectors.cache_vector(id as usize) {
-            self.quant_delete_cache.lock().unwrap().insert(id, qvec);
-        }
-
-        // we purposely do not clear the neighbors during delete as the inplace_delete reads them
-        // and then calls drop_adj_list to clear them after the graph repair is completed
-
-        self.full_vectors.delete_vector(id as usize);
-        self.quant_vectors.delete_vector(id as usize);
+        // Don't delete yet as pruning still needs to read the vector.
+        // Recording the id to be handled in flush_deletes
+        self.pending_deletes.lock().unwrap().push(id);
 
         std::future::ready(Ok(()))
     }
@@ -459,6 +451,11 @@ where
         id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send
     {
+        // Check pending deletes first — these haven't been flushed yet.
+        if self.pending_deletes.lock().unwrap().contains(&id) {
+            return std::future::ready(Ok(ElementStatus::Deleted));
+        }
+
         let status = match self.full_vectors.get_vector_sync(id.into_usize()) {
             Ok(_) => Ok(ElementStatus::Valid),
             Err(RankedError::Transient(_)) => Ok(ElementStatus::Deleted),
@@ -510,29 +507,6 @@ impl CreateQuantProvider for Poly<dyn Quantizer> {
     type Target = QuantVectorProvider;
     fn create(self, bf_tree_config: Config) -> ANNResult<Self::Target> {
         QuantVectorProvider::new_with_config(self, bf_tree_config)
-    }
-}
-
-pub(crate) trait QuantDelete {
-    fn delete_vector(&self, id: usize);
-    fn cache_vector(&self, id: usize) -> Option<Box<[u8]>>;
-}
-
-impl QuantDelete for NoStore {
-    fn delete_vector(&self, _id: usize) {
-        //no-op
-    }
-    fn cache_vector(&self, _id: usize) -> Option<Box<[u8]>> {
-        None
-    }
-}
-
-impl QuantDelete for QuantVectorProvider {
-    fn delete_vector(&self, id: usize) {
-        self.delete_vector(id);
-    }
-    fn cache_vector(&self, id: usize) -> Option<Box<[u8]>> {
-        self.get_vector_sync(id).ok().map(|v| v.into_boxed_slice())
     }
 }
 
@@ -900,28 +874,11 @@ where
             .full_vectors
             .get_vector_into(id.into_usize(), &mut self.element);
 
-        let v = match result {
-            Ok(()) => Ok(&*self.element),
-            Err(RankedError::Transient(_)) => {
-                // Check delete_cache for recently-deleted vectors still needed for pruning.
-                let cache = self.provider.delete_cache.lock().unwrap();
-                if let Some(cached) = cache.get(&id) {
-                    self.element.copy_from_slice(cached);
-                    Ok(&*self.element)
-                } else {
-                    Err(result.unwrap_err())
-                }
-            }
-            Err(e) => Err(e),
-        };
-
-        std::future::ready(v)
+        std::future::ready(result.map(|()| &*self.element))
     }
 
     /// Perform a bulk operation, silently skipping entries that cannot be read
     /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    /// Falls back to the delete_cache for vectors deleted in the current batch.
     ///
     fn on_elements_unordered<Itr, F>(
         &mut self,
@@ -943,13 +900,7 @@ where
                     f(&self.element, i);
                 }
                 Err(RankedError::Transient(_)) => {
-                    // Check delete_cache for recently-deleted vectors still needed for pruning.
-                    let cache = self.provider.delete_cache.lock().unwrap();
-                    if let Some(cached) = cache.get(&i) {
-                        self.element.copy_from_slice(cached);
-                        f(&self.element, i);
-                    }
-                    // Otherwise skip — truly gone.
+                    // Skip — node deleted but edges not yet cleaned up
                 }
                 Err(e @ RankedError::Error(_)) => {
                     return std::future::ready(Err(e));
@@ -1091,27 +1042,11 @@ where
             .quant_vectors
             .get_vector_into(id.into_usize(), &mut self.element);
 
-        let v = match result {
-            Ok(()) => Ok(Opaque::new(&self.element)),
-            Err(RankedError::Transient(_)) => {
-                let cache = self.provider.quant_delete_cache.lock().unwrap();
-                if let Some(cached) = cache.get(&id) {
-                    self.element.copy_from_slice(cached);
-                    Ok(Opaque::new(&self.element))
-                } else {
-                    Err(result.unwrap_err())
-                }
-            }
-            Err(e) => Err(e),
-        };
-
-        std::future::ready(v)
+        std::future::ready(result.map(|()| Opaque::new(&self.element)))
     }
 
     /// Perform a bulk operation, silently skipping entries that cannot be read
     /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    /// Falls back to the quant_delete_cache for vectors deleted in the current batch.
     ///
     fn on_elements_unordered<Itr, F>(
         &mut self,
@@ -1133,12 +1068,7 @@ where
                     f(Opaque::new(&self.element), i);
                 }
                 Err(RankedError::Transient(_)) => {
-                    let cache = self.provider.quant_delete_cache.lock().unwrap();
-                    if let Some(cached) = cache.get(&i) {
-                        self.element.copy_from_slice(cached);
-                        f(Opaque::new(&self.element), i);
-                    }
-                    // Otherwise skip — truly gone.
+                    // Skip — node deleted but edges not yet cleaned up
                 }
                 Err(e @ RankedError::Error(_)) => {
                     return std::future::ready(Err(e));
@@ -1343,11 +1273,6 @@ where
         _context: &'a DefaultContext,
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        // try fetching the deleted element from the cache first
-        if let Some(cached) = provider.delete_cache.lock().unwrap().get(&id).cloned() {
-            return Ok(cached);
-        }
-
         use diskann::error::ErrorExt;
         let elt = provider
             .full_vectors
@@ -1463,11 +1388,6 @@ where
         _context: &'a DefaultContext,
         id: u32,
     ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
-        // try fetching the deleted element from the cache first
-        if let Some(cached) = provider.delete_cache.lock().unwrap().get(&id).cloned() {
-            return Ok(cached);
-        }
-
         use diskann::error::ErrorExt;
         provider
             .full_vectors
@@ -1857,8 +1777,7 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
-            delete_cache: Mutex::new(HashMap::new()),
-            quant_delete_cache: Mutex::new(HashMap::new()),
+            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 }
@@ -2021,8 +1940,7 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
-            delete_cache: Mutex::new(HashMap::new()),
-            quant_delete_cache: Mutex::new(HashMap::new()),
+            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 }
@@ -2860,6 +2778,7 @@ mod tests {
         // Delete a couple of vectors
         provider.delete(ctx, &3u32).await.unwrap();
         provider.delete(ctx, &7u32).await.unwrap();
+        provider.flush_deletes();
 
         // Save to disk from in-memory
         let save_dir = tempdir().unwrap();
@@ -2968,6 +2887,7 @@ mod tests {
         }
 
         provider.delete(ctx, &2u32).await.unwrap();
+        provider.flush_deletes();
 
         // Save to disk from in-memory
         let save_dir = tempdir().unwrap();

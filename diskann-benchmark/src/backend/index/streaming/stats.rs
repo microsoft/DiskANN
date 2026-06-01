@@ -20,8 +20,10 @@ pub(crate) enum StreamStats {
     Replace(BuildStats),
     Delete(GenericStats),
     Maintain {
-        drop_deleted: GenericStats,
-        release: GenericStats,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        drop_deleted: Option<GenericStats>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        release: Option<GenericStats>,
     },
 }
 
@@ -66,7 +68,13 @@ impl std::fmt::Display for StreamStats {
                 drop_deleted,
                 release,
             } => {
-                write!(f, "{}\n\n{}", drop_deleted, release)
+                if let Some(d) = drop_deleted {
+                    write!(f, "{}", d)?;
+                }
+                if let Some(r) = release {
+                    write!(f, "{}", r)?;
+                }
+                Ok(())
             }
         }
     }
@@ -107,22 +115,6 @@ impl GenericStats {
             batches,
             latencies: percentiles::compute_percentiles(&mut latencies)?,
         })
-    }
-
-    /// Construct an empty stats entry (e.g., when maintenance is skipped).
-    #[cfg(feature = "bftree")]
-    pub(crate) fn empty(kind: Cow<'static, str>) -> Self {
-        let zero = MicroSeconds::from(std::time::Duration::ZERO);
-        // Use a single zero-duration entry to satisfy percentiles computation.
-        let latencies =
-            percentiles::compute_percentiles(&mut [zero]).expect("single element cannot be empty");
-        Self {
-            kind,
-            total_time: zero,
-            vectors: 0,
-            batches: 0,
-            latencies,
-        }
     }
 }
 
@@ -200,7 +192,7 @@ where
                     }
                     StreamStats::Delete(stats)
                     | StreamStats::Maintain {
-                        drop_deleted: stats,
+                        drop_deleted: Some(stats),
                         ..
                     } => {
                         let mut r = table.row(row);
@@ -219,6 +211,11 @@ where
                         if !s.is_maintain() {
                             stage += 1;
                         }
+                    }
+                    StreamStats::Maintain {
+                        drop_deleted: None, ..
+                    } => {
+                        // No maintain stats to display
                     }
                 }
             }
