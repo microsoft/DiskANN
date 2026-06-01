@@ -7,17 +7,14 @@
 
 use std::num::NonZeroUsize;
 
-use anyhow::Context;
 use diskann::graph::{
     config::{Builder, ConfigError, MaxDegree, PruneKind},
     Config,
 };
-use diskann_benchmark_runner::{
-    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
-};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 use serde::{Deserialize, Serialize};
 
-use super::async_::GraphSearch;
+use super::graph_index::GraphSearch;
 use crate::inputs::{as_input, Example};
 
 //////////////
@@ -25,13 +22,6 @@ use crate::inputs::{as_input, Example};
 //////////////
 
 as_input!(DocumentIndexBuild);
-
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<DocumentIndexBuild>()?;
-    Ok(())
-}
 
 /// Build parameters for document index construction.
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,12 +50,10 @@ impl DocumentBuildParams {
         let config = config_builder.build()?;
         Ok(config)
     }
-}
 
-impl CheckDeserialization for DocumentBuildParams {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        self.data.check_deserialization(checker)?;
-        self.data_labels.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.data.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
         self.build_config()?;
         Ok(())
     }
@@ -82,30 +70,20 @@ pub(crate) struct DocumentSearchParams {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
+impl DocumentSearchParams {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        Ok(())
+    }
+}
+
 fn default_reps() -> NonZeroUsize {
     NonZeroUsize::new(5).unwrap()
 }
 fn default_thread_counts() -> Vec<NonZeroUsize> {
     vec![NonZeroUsize::new(1).unwrap()]
-}
-
-impl CheckDeserialization for DocumentSearchParams {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        self.queries.check_deserialization(checker)?;
-        self.query_predicates.check_deserialization(checker)?;
-        self.groundtruth.check_deserialization(checker)?;
-        if self.beta <= 0.0 || self.beta > 1.0 {
-            return Err(anyhow::anyhow!(
-                "beta must be in range (0, 1], got: {}",
-                self.beta
-            ));
-        }
-        for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
-                .with_context(|| format!("search run {}", i))?;
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,12 +96,10 @@ impl DocumentIndexBuild {
     pub(crate) const fn tag() -> &'static str {
         "document-index-build"
     }
-}
 
-impl CheckDeserialization for DocumentIndexBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        self.build.check_deserialization(checker)?;
-        self.search.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.build.validate(checker)?;
+        self.search.validate(checker)?;
         Ok(())
     }
 }

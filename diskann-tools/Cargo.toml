@@ -35,7 +35,6 @@ bit-set.workspace = true
 anyhow.workspace = true
 itertools.workspace = true
 diskann-label-filter.workspace = true
-serde_json.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

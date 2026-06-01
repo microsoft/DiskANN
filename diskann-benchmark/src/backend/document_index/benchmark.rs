@@ -28,10 +28,10 @@ use diskann_benchmark_core::{
     recall, search as search_api, tokio,
 };
 use diskann_benchmark_runner::{
-    dispatcher::{DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore},
     output::Output,
-    registry::Benchmarks,
-    utils::{datatype, fmt, percentiles, MicroSeconds},
+    registry::Registry,
+    utils::{datatype::AsDataType, fmt, percentiles, MicroSeconds},
     Benchmark,
 };
 use diskann_label_filter::{
@@ -66,63 +66,68 @@ use crate::{
     backend::index::build::ProgressMeter,
     inputs::document_index::DocumentIndexBuild,
     utils::{
+        self,
         datafiles::{self, BinFile},
         recall::RecallMetrics,
     },
 };
 
 /// Register the document index benchmarks.
-pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<DocumentIndexJob<'static, f32>>("document-index-build-f32");
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+    registry.register::<DocumentIndexJob<f32>>(
+        "document-index-build-f32",
+        DocumentIndexJob::<f32>::new(),
+    )?;
+    Ok(())
 }
 
 /// Document index benchmark job.
-pub(super) struct DocumentIndexJob<'a, T> {
-    input: &'a DocumentIndexBuild,
+pub(super) struct DocumentIndexJob<T> {
     _type: std::marker::PhantomData<T>,
 }
 
-impl<'a, T> DocumentIndexJob<'a, T> {
-    fn new(input: &'a DocumentIndexBuild) -> Self {
+impl<T> DocumentIndexJob<T> {
+    pub(crate) fn new() -> Self {
         Self {
-            input,
             _type: std::marker::PhantomData,
         }
     }
 }
 
-impl<T> Benchmark for DocumentIndexJob<'static, T>
+impl<T> Benchmark for DocumentIndexJob<T>
 where
     T: VectorRepr
         + diskann::graph::SampleableForStart
         + diskann_utils::sampling::WithApproximateNorm
+        + AsDataType
         + 'static,
-    datatype::Type<T>: DispatchRule<datatype::DataType>,
     for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>,
 {
     type Input = DocumentIndexBuild;
     type Output = DocumentIndexStats;
 
-    fn try_match(input: &Self::Input) -> std::result::Result<MatchScore, FailureScore> {
-        datatype::Type::<T>::try_match(&input.build.data_type)
+    fn try_match(&self, input: &Self::Input) -> std::result::Result<MatchScore, FailureScore> {
+        utils::match_data_type::<T>(input.build.data_type)
     }
 
     fn description(
+        &self,
         f: &mut std::fmt::Formatter<'_>,
         input: Option<&Self::Input>,
     ) -> std::fmt::Result {
         match input {
-            Some(arg) => datatype::Type::<T>::description(f, Some(&arg.build.data_type)),
-            None => datatype::Type::<T>::description(f, None::<&datatype::DataType>),
+            Some(arg) => write!(f, "{}", T::describe(arg.build.data_type)),
+            None => write!(f, "{}", T::DATA_TYPE),
         }
     }
 
     fn run(
+        &self,
         input: &Self::Input,
         _checkpoint: diskann_benchmark_runner::Checkpoint<'_>,
         output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        DocumentIndexJob::<T>::new(input).run(output)
+        DocumentIndexJob::<T>::run(input, output)
     }
 }
 
@@ -173,8 +178,11 @@ where
         .ok_or_else(|| anyhow::anyhow!("Failed to find medoid index: no closest row found"))
 }
 
-impl<'a, T> DocumentIndexJob<'a, T> {
-    fn run(self, mut output: &mut dyn Output) -> Result<DocumentIndexStats, anyhow::Error>
+impl<T> DocumentIndexJob<T> {
+    fn run(
+        input: &DocumentIndexBuild,
+        mut output: &mut dyn Output,
+    ) -> Result<DocumentIndexStats, anyhow::Error>
     where
         T: diskann::utils::VectorRepr
             + diskann::graph::SampleableForStart
@@ -182,7 +190,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             + 'static,
         for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>,
     {
-        let build = &self.input.build;
+        let build = &input.build;
 
         // 1. Load vectors from data file in the original data type
         writeln!(output, "Loading vectors ({})...", build.data_type)?;
@@ -304,7 +312,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         // =====================
         // Search Phase
         // =====================
-        let search_input = &self.input.search;
+        let search_input = &input.search;
 
         // Load query vectors (same type as data for compatible distance computation)
         writeln!(output, "\nLoading query vectors...")?;
@@ -516,7 +524,7 @@ impl search_api::Aggregate<Knn, u32, FilteredSearchOutput> for FilteredSearchAgg
                 first.ids().as_rows(),
                 self.recall_k,
                 search_n,
-                true,
+                recall::GroundTruthMode::Flexible,
             )?)
                 .into(),
             None => anyhow::bail!("no search results"),

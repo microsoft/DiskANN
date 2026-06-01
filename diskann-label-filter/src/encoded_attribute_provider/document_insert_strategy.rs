@@ -209,7 +209,7 @@ where
     DP: DataProvider,
     Inner: PruneStrategy<DP>,
 {
-    type DistanceComputer = Inner::DistanceComputer;
+    type DistanceComputer<'a> = Inner::DistanceComputer<'a>;
     type PruneAccessor<'a> = Inner::PruneAccessor<'a>;
     type PruneAccessorError = Inner::PruneAccessorError;
     type WorkingSet = Inner::WorkingSet;
