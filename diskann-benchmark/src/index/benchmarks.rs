@@ -11,10 +11,7 @@ use diskann::{
     provider::{self, DataProvider, DefaultContext},
     utils::VectorRepr,
 };
-use diskann_benchmark_core::{
-    self as benchmark_core,
-    streaming::{executors::bigann, Executor},
-};
+use diskann_benchmark_core::{self as benchmark_core, streaming::executors::bigann};
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
@@ -326,57 +323,11 @@ where
     ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
         writeln!(output, "{}", input)?;
 
-        let groundtruth_directory = input
-            .runbook_params
-            .resolved_gt_directory
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Ground truth directory path was not resolved during validation")
-            })?;
-
-        let mut runbook = bigann::RunBook::load(
-            &input.runbook_params.runbook_path,
-            &input.runbook_params.dataset_name,
-            &mut bigann::ScanDirectory::new(groundtruth_directory)?,
-        )?;
-
-        let mut streamer = full_precision_streaming::<T>(input, runbook.max_points())?;
-
-        let mut results = Vec::new();
-        let stages = runbook.len();
-        let mut i = 1;
-
-        runbook.run_with(
-            &mut streamer,
-            |o: managed::Stats<StreamStats>| -> anyhow::Result<()> {
-                if o.inner().is_maintain() {
-                    let message = format!("Ran maintenance before stage {}", i);
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                } else {
-                    let message =
-                        format!("Finished stage {} of {}: {}", i, stages, o.inner().kind());
-                    write!(output, "{}", crate::utils::SmallBanner(&message))?;
-                    i += 1;
-                }
-                writeln!(output, "{}", o)?;
-                results.push(o);
-                Ok(())
-            },
-        )?;
-
-        write!(
+        streaming::run_streaming::<T, _>(
+            &input.runbook_params,
+            |max_points| full_precision_streaming::<T>(input, max_points),
             output,
-            "{}",
-            crate::utils::SmallBanner("End of Run Summary")
-        )?;
-
-        writeln!(
-            output,
-            "{}",
-            streaming::stats::Summary::new(results.iter().map(|r| r.inner()))
-        )?;
-
-        Ok(results)
+        )
     }
 }
 

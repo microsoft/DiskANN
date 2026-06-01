@@ -217,7 +217,7 @@ where
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::run_streaming::<T, _>(
+        crate::index::streaming::run_streaming::<T, _>(
             input.runbook_params(),
             |max_points| bftree_streaming::<T>(input, max_points),
             output,

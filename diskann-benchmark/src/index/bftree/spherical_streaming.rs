@@ -218,7 +218,7 @@ impl Benchmark for StreamingSpherical {
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::run_streaming::<f32, _>(
+        crate::index::streaming::run_streaming::<f32, _>(
             input.runbook_params(),
             |max_points| bftree_sq_streaming_impl(input, max_points),
             output,
