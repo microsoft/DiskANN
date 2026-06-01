@@ -228,9 +228,6 @@ where
         &topk.queries,
     ))?);
 
-    // Create extra headroom to handle deferred maintenance.
-    let max_points = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
-
     let config = input.try_as_config()?.build()?;
     let params = input.bftree_parameters(max_points, data.ncols());
     let start_points = input

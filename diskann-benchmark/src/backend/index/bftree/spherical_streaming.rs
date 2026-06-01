@@ -217,7 +217,7 @@ impl Benchmark for StreamingSpherical {
 
 fn bftree_sq_streaming_impl(
     input: &BfTreeSphericalDynamicRun,
-    max_points_arg: usize,
+    max_points: usize,
 ) -> anyhow::Result<bigann::WithData<f32, u32, Managed<f32, StreamStats>>> {
     let topk = match input.search_phase() {
         SearchPhase::Topk(topk) => topk,
@@ -229,9 +229,6 @@ fn bftree_sq_streaming_impl(
     let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
         &topk.queries,
     ))?);
-
-    let max_points =
-        ((max_points_arg as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
     // Train the spherical quantizer.
     let m: diskann_vector::distance::Metric = input.build().distance().into();
