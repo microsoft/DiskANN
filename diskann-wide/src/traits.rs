@@ -278,8 +278,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// Load `<Self as SIMDVector>::LANES` number of elements starting at the provided
     /// pointer.
     ///
-    /// The alignment of `ptr` must be the same as `<Self as SIMDVector>::Scalar`, but does
-    /// not need to be stricter.
+    /// There are no alignment requirements on `ptr`.
     ///
     /// # Safety
     ///
@@ -289,8 +288,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// Load `<Self as SIMDVector>::LANES` number of elements starting at the provided
     /// pointer.
     ///
-    /// The alignment of `ptr` must be the same as `<Self as SIMDVector>::Scalar`, but does
-    /// not need to be stricter.
+    /// There are no alignment requirements on `ptr`.
     ///
     /// Entries in the mask that evaluate to `false` will not be accessed.
     /// This makes it safe to use this function with lanes masked out that would otherwise
@@ -307,6 +305,8 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     ) -> Self;
 
     /// The same as `load_simd_masked_logical` but taking a BitMask instead.
+    ///
+    /// There are no alignment requirements on `ptr`.
     ///
     /// No load attempt will be made to lanes that are masked out.
     ///
@@ -354,8 +354,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// Store `<Self as SIMDVector>::LANES` number of elements contiguously starting at the
     /// provided pointer.
     ///
-    /// The alignment of `ptr` must be the same as `<Self as SIMDVector>::Scalar`, but does
-    /// not need to be stricter.
+    /// There are no alignment requirements on `ptr`.
     ///
     /// # Safety
     ///
@@ -367,8 +366,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// Store `<Self as SIMDVector>::LANES` number of elements starting at the provided
     /// pointer.
     ///
-    /// The alignment of `ptr` must be the same as `<Self as SIMDVector>::Scalar`, but does
-    /// not need to be stricter.
+    /// There are no alignment requirements on `ptr`.
     ///
     /// Entries in the mask that evaluate to `false` will not be accessed.
     /// This makes it safe to use this function with lanes masked out that would otherwise
@@ -387,6 +385,8 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     );
 
     /// The same as `store_simd_masked_logical` but taking a BitMask instead.
+    ///
+    /// There are no alignment requirements on `ptr`.
     ///
     /// No store attempt will be made to lanes that are masked out.
     ///
@@ -415,6 +415,8 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     ///
     /// If `first` is greater than or equal to the number of lanes, then all lanes will be
     /// written.
+    ///
+    /// There are no alignment requirements on `ptr`.
     ///
     /// # Safety
     ///

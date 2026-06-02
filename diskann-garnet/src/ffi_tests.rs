@@ -9,8 +9,8 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use crate::{
-        VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
-        garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
+        VectorQuantType, card, check_external_id_valid, create_index, drop_index, garnet::Context,
+        insert, remove, search_vector, set_attribute, test_utils::Store,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
@@ -30,7 +30,7 @@ mod tests {
         store.clear();
 
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
 
         let dim: u32 = 2;
         let reduce_dim = 0;
@@ -40,7 +40,7 @@ mod tests {
 
         let index_ptr = unsafe {
             create_index(
-                ctx.0,
+                ctx.get(),
                 dim,
                 reduce_dim,
                 quant_type,
@@ -64,7 +64,7 @@ mod tests {
         assert!(!index_ptr.is_null());
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -105,7 +105,7 @@ mod tests {
                 valid_metric
             );
             unsafe {
-                drop_index(ctx.0, index_ptr);
+                drop_index(ctx.get(), index_ptr);
             }
         }
     }
@@ -126,13 +126,12 @@ mod tests {
         let attributes_bytes = b"wololo";
         let attributes_len = attributes_bytes.len();
 
-        let result: bool = unsafe {
+        let result = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
@@ -140,25 +139,26 @@ mod tests {
             )
         };
 
-        assert!(result);
+        assert!(result > 0);
 
         // Confirm vector exists using FFI function
-        let exists =
-            unsafe { check_external_id_valid(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        let exists = unsafe {
+            check_external_id_valid(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len())
+        };
         assert!(exists);
 
-        let mut cardinality = unsafe { card(ctx.0, index_ptr) };
+        let mut cardinality = unsafe { card(ctx.get(), index_ptr) };
         assert_eq!(cardinality, 1);
 
-        let removed = unsafe { remove(ctx.0, index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
+        let removed = unsafe { remove(ctx.get(), index_ptr, id_bytes.as_ptr(), id_bytes.len()) };
         assert!(removed);
 
         // Currently we're not tracking deletions for cardinality, so it should still be 1
-        cardinality = unsafe { card(ctx.0, index_ptr) };
+        cardinality = unsafe { card(ctx.get(), index_ptr) };
         assert_eq!(cardinality, 1);
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -175,7 +175,7 @@ mod tests {
         let attributes1 = b"wololo";
         let set_attribute_result1 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -188,26 +188,25 @@ mod tests {
         let vector: [f32; 2] = [1.0, 2.0];
         let vector_bytes = bytemuck::cast_slice(&vector);
 
-        let result: bool = unsafe {
+        let result = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_bytes.len() / 4,
                 attributes1.as_ptr(),
                 attributes1.len(),
             )
         };
-        assert!(result);
+        assert!(result > 0);
 
         // Set attributes after insertion
         let attributes2 = b"new_attributes";
         let set_attribute_result2 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -220,7 +219,7 @@ mod tests {
         // Set attributes to empty using null ptr
         let set_attribute_result3 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -233,7 +232,7 @@ mod tests {
         let empty_attribute = b"";
         let set_attribute_result4 = unsafe {
             set_attribute(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
@@ -244,7 +243,7 @@ mod tests {
         assert!(set_attribute_result4);
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -269,72 +268,71 @@ mod tests {
 
         // Check external_id exists with EID 1 (should not exist initially)
         let exists1 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists1, "EID 1 should not exist initially");
 
         // Add vector with EID 1
         let insert_result1 = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 eid1_bytes.as_ptr(),
                 eid1_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
                 attributes_bytes.len(),
             )
         };
-        assert!(insert_result1, "Insert with EID 1 should succeed");
+        assert!(insert_result1 > 0, "Insert with EID 1 should succeed");
 
         // Check external_id exists with EID 1 (should exist after insert)
         let exists2 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(exists2, "EID 1 should exist after insert");
 
         // Remove vector with EID 1
-        let removed = unsafe { remove(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len()) };
+        let removed =
+            unsafe { remove(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len()) };
         assert!(removed, "Remove with EID 1 should succeed");
 
         // Check external_id exists with EID 1 (should not exist after removal)
         let exists3 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists3, "EID 1 should not exist after removal");
 
         // Add vector with EID 2
         let insert_result2 = unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 eid2_bytes.as_ptr(),
                 eid2_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector_len,
                 attributes_bytes.as_ptr(),
                 attributes_bytes.len(),
             )
         };
-        assert!(insert_result2, "Insert with EID 2 should succeed");
+        assert!(insert_result2 > 0, "Insert with EID 2 should succeed");
 
         // Check external_id exists with EID 2 (should exist after insert)
         let exists4 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid2_bytes.as_ptr(), eid2_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid2_bytes.as_ptr(), eid2_bytes.len())
         };
         assert!(exists4, "EID 2 should exist after insert");
 
         // Check external_id exists with EID 1 (should still not exist)
         let exists5 = unsafe {
-            check_external_id_valid(ctx.0, index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
+            check_external_id_valid(ctx.get(), index_ptr, eid1_bytes.as_ptr(), eid1_bytes.len())
         };
         assert!(!exists5, "EID 1 should still not exist");
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -345,51 +343,52 @@ mod tests {
         let (index_ptr, ctx) = create_test_index(&store);
 
         let id1 = 1234u64;
-        let v1 = &[1u8, 0u8];
+        let v1 = &[1.0f32, 0.0];
         let id2 = 5678u64;
-        let v2 = &[0u8, 1u8];
+        let v2 = &[0.0f32, 1.0];
 
         let id1_bytes = bytemuck::bytes_of(&id1);
         let id2_bytes = bytemuck::bytes_of(&id2);
 
-        assert!(unsafe {
-            insert(
-                ctx.0,
-                index_ptr,
-                id1_bytes.as_ptr(),
-                id1_bytes.len(),
-                VectorValueType::XB8,
-                v1.as_ptr(),
-                v1.len(),
-                b"".as_ptr(),
-                0,
-            )
-        });
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id1_bytes.as_ptr(),
+                    id1_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v1).as_ptr(),
+                    v1.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
 
-        assert!(unsafe {
-            insert(
-                ctx.0,
-                index_ptr,
-                id2_bytes.as_ptr(),
-                id2_bytes.len(),
-                VectorValueType::XB8,
-                v2.as_ptr(),
-                v2.len(),
-                b"".as_ptr(),
-                0,
-            )
-        });
+        assert!(
+            unsafe {
+                insert(
+                    ctx.get(),
+                    index_ptr,
+                    id2_bytes.as_ptr(),
+                    id2_bytes.len(),
+                    bytemuck::cast_slice::<f32, u8>(v2).as_ptr(),
+                    v2.len(),
+                    b"".as_ptr(),
+                    0,
+                )
+            } > 0
+        );
 
-        let qv = &[0u8, 0u8];
+        let qv = &[0.0f32, 0.0];
         let mut output_id_buffer = vec![0u8; 2 * (mem::size_of::<u64>() + mem::size_of::<u32>())];
         let mut output_dists = vec![0f32; 2];
 
         let count = unsafe {
             search_vector(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
-                VectorValueType::XB8,
-                qv.as_ptr(),
+                bytemuck::cast_slice::<f32, u8>(qv).as_ptr(),
                 qv.len(),
                 2.0,
                 10,
@@ -442,7 +441,7 @@ mod tests {
         }
 
         unsafe {
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -457,16 +456,15 @@ mod tests {
         let vector_bytes = bytemuck::cast_slice(vector);
         unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
                 0,
-            )
+            ) > 0
         }
     }
 
@@ -489,9 +487,8 @@ mod tests {
 
         let count = unsafe {
             search_vector(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
-                VectorValueType::FP32,
                 query_bytes.as_ptr(),
                 query.len(),
                 0.0,
@@ -543,7 +540,7 @@ mod tests {
             // Closest to [1,0] should be id=10 (exact match)
             assert_eq!(ids[0], 10);
 
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -566,7 +563,7 @@ mod tests {
             assert!(ids.len() >= 2, "should return at least 2 matching vectors");
             assert_eq!(ids[0], 10, "closest should still be id=10");
 
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -595,7 +592,7 @@ mod tests {
                 "filtered vector EID 20 should be in results"
             );
 
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 
@@ -617,7 +614,7 @@ mod tests {
             assert_eq!(ids_null, ids_empty);
             assert_eq!(dists_null, dists_empty);
 
-            drop_index(ctx.0, index_ptr);
+            drop_index(ctx.get(), index_ptr);
         }
     }
 }
