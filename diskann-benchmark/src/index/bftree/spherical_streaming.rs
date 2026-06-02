@@ -33,7 +33,7 @@ use crate::{
         BfTreeMaintainer, StreamRunner,
     },
     inputs::{
-        bftree::BfTreeSphericalDynamicRun,
+        bftree::BfTreeSphericalStreamingRun,
         graph_index::{
             InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
         },
@@ -63,7 +63,7 @@ impl StreamingSpherical {
 }
 
 impl Benchmark for StreamingSpherical {
-    type Input = BfTreeSphericalDynamicRun;
+    type Input = BfTreeSphericalStreamingRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
@@ -132,7 +132,7 @@ impl Benchmark for StreamingSpherical {
 }
 
 fn bftree_sq_streaming_impl(
-    input: &BfTreeSphericalDynamicRun,
+    input: &BfTreeSphericalStreamingRun,
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<f32, u32, Managed<f32, StreamStats>>> {
     let topk = match input.search_phase() {

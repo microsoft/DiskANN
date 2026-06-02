@@ -22,7 +22,7 @@ pub(crate) use runner::StreamRunner;
 pub(crate) use runner::BfTreeMaintainer;
 
 use crate::{
-    inputs::graph_index::{DynamicRunbookParams, TopkSearchPhase},
+    inputs::graph_index::{StreamingRunbookParams, TopkSearchPhase},
     utils::datafiles,
 };
 
@@ -70,7 +70,7 @@ where
 /// constructed streamer. This is shared across all streaming benchmarks (inmem, bftree)
 /// to avoid duplicating the runbook load → run_with → stage banner → summary logic.
 pub(crate) fn run_streaming<T, F>(
-    runbook_params: &DynamicRunbookParams,
+    runbook_params: &StreamingRunbookParams,
     make_streamer: F,
     mut output: &mut dyn Output,
 ) -> anyhow::Result<Vec<managed::Stats<stats::StreamStats>>>

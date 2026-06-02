@@ -27,7 +27,7 @@ use crate::{
         StreamRunner,
     },
     inputs::{
-        bftree::BfTreeDynamicRun,
+        bftree::BfTreeStreamingRun,
         graph_index::{
             InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
         },
@@ -39,7 +39,7 @@ use crate::{
 // Streaming BfTree  //
 ////////////////////////
 
-/// The dynamic/streaming benchmark for bf_tree full precision.
+/// The streaming benchmark for bf_tree full precision.
 pub(super) struct StreamingFullPrecision<T> {
     _type: std::marker::PhantomData<T>,
 }
@@ -56,7 +56,7 @@ impl<T> Benchmark for StreamingFullPrecision<T>
 where
     T: VectorRepr + WithApproximateNorm + SampleableForStart + AsDataType + bytemuck::Pod,
 {
-    type Input = BfTreeDynamicRun;
+    type Input = BfTreeStreamingRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
@@ -120,7 +120,7 @@ where
 }
 
 fn bftree_streaming<T>(
-    input: &BfTreeDynamicRun,
+    input: &BfTreeStreamingRun,
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
 where

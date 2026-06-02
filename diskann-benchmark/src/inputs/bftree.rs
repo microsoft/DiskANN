@@ -6,7 +6,7 @@ use std::num::{NonZero, NonZeroUsize};
 
 use crate::inputs::{
     as_input, exhaustive,
-    graph_index::{DynamicRunbookParams, IndexBuild, SearchPhase, TopkSearchPhase},
+    graph_index::{StreamingRunbookParams, IndexBuild, SearchPhase, TopkSearchPhase},
     write_field, Example, PRINT_WIDTH,
 };
 use diskann::graph::config;
@@ -304,20 +304,20 @@ impl std::fmt::Display for BfTreeFullPrecisionBuild {
     }
 }
 
-as_input!(BfTreeDynamicRun);
+as_input!(BfTreeStreamingRun);
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BfTreeDynamicRun {
+pub(crate) struct BfTreeStreamingRun {
     build: IndexBuild,
     search_phase: SearchPhase,
-    runbook_params: DynamicRunbookParams,
+    runbook_params: StreamingRunbookParams,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     vector_store_config: Option<BfTreeStoreConfig>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     neighbor_store_config: Option<BfTreeStoreConfig>,
 }
 
-impl BfTreeDynamicRun {
+impl BfTreeStreamingRun {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-stream-bftree-full-precision"
     }
@@ -340,7 +340,7 @@ impl BfTreeDynamicRun {
         &self.build
     }
 
-    pub(crate) fn runbook_params(&self) -> &DynamicRunbookParams {
+    pub(crate) fn runbook_params(&self) -> &StreamingRunbookParams {
         &self.runbook_params
     }
 
@@ -374,21 +374,21 @@ impl BfTreeDynamicRun {
     }
 }
 
-impl Example for BfTreeDynamicRun {
+impl Example for BfTreeStreamingRun {
     fn example() -> Self {
         let build = IndexBuild::example();
 
         Self {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: DynamicRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example(),
             vector_store_config: None,
             neighbor_store_config: None,
         }
     }
 }
 
-impl std::fmt::Display for BfTreeDynamicRun {
+impl std::fmt::Display for BfTreeStreamingRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Graph Index Bf_Tree Full-Precision Streaming")?;
         if cfg!(not(feature = "bftree")) {
@@ -558,13 +558,13 @@ impl std::fmt::Display for BfTreeSphericalBuild {
 
 // ─── Spherical Streaming ──────────────────────────────────────────────────────
 
-as_input!(BfTreeSphericalDynamicRun);
+as_input!(BfTreeSphericalStreamingRun);
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BfTreeSphericalDynamicRun {
+pub(crate) struct BfTreeSphericalStreamingRun {
     build: IndexBuild,
     search_phase: SearchPhase,
-    runbook_params: DynamicRunbookParams,
+    runbook_params: StreamingRunbookParams,
     seed: u64,
     transform_kind: exhaustive::TransformKind,
     num_bits: NonZeroUsize,
@@ -577,7 +577,7 @@ pub(crate) struct BfTreeSphericalDynamicRun {
     quant_store_config: Option<BfTreeStoreConfig>,
 }
 
-impl BfTreeSphericalDynamicRun {
+impl BfTreeSphericalStreamingRun {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-stream-bftree-spherical-quantization"
     }
@@ -598,7 +598,7 @@ impl BfTreeSphericalDynamicRun {
         &self.build
     }
 
-    pub(crate) fn runbook_params(&self) -> &DynamicRunbookParams {
+    pub(crate) fn runbook_params(&self) -> &StreamingRunbookParams {
         &self.runbook_params
     }
 
@@ -659,12 +659,12 @@ impl BfTreeSphericalDynamicRun {
     }
 }
 
-impl Example for BfTreeSphericalDynamicRun {
+impl Example for BfTreeSphericalStreamingRun {
     fn example() -> Self {
         Self {
             build: IndexBuild::example(),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: DynamicRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example(),
             seed: 42,
             transform_kind: exhaustive::TransformKind::Null,
             num_bits: NonZeroUsize::new(1).unwrap(),
@@ -676,7 +676,7 @@ impl Example for BfTreeSphericalDynamicRun {
     }
 }
 
-impl std::fmt::Display for BfTreeSphericalDynamicRun {
+impl std::fmt::Display for BfTreeSphericalStreamingRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Graph Index Bf_Tree Spherical Quantization Streaming")?;
         if cfg!(not(feature = "bftree")) {

@@ -42,7 +42,7 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, InmemMaintainer, Managed, StreamRunner},
     },
-    inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{StreamingIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
         self,
         datafiles::{self},
@@ -89,22 +89,22 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         FullPrecision::<i8>::new().search(plugins::Topk),
     )?;
 
-    // Dynamic Full Precision
+    // Streaming Full Precision
     registry.register(
-        "graph-index-dynamic-full-precision-f32",
-        DynamicFullPrecision::<f32>::new(),
+        "graph-index-stream-full-precision-f32",
+        StreamingFullPrecision::<f32>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-f16",
-        DynamicFullPrecision::<f16>::new(),
+        "graph-index-stream-full-precision-f16",
+        StreamingFullPrecision::<f16>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-u8",
-        DynamicFullPrecision::<u8>::new(),
+        "graph-index-stream-full-precision-u8",
+        StreamingFullPrecision::<u8>::new(),
     )?;
     registry.register(
-        "graph-index-dynamic-full-precision-i8",
-        DynamicFullPrecision::<i8>::new(),
+        "graph-index-stream-full-precision-i8",
+        StreamingFullPrecision::<i8>::new(),
     )?;
 
     product::register_benchmarks(registry)?;
@@ -277,12 +277,12 @@ where
     }
 }
 
-// Graph Index Dynamic Run
-pub(super) struct DynamicFullPrecision<T> {
+// Graph Index Streaming Run
+pub(super) struct StreamingFullPrecision<T> {
     _type: std::marker::PhantomData<T>,
 }
 
-impl<T> DynamicFullPrecision<T> {
+impl<T> StreamingFullPrecision<T> {
     fn new() -> Self {
         Self {
             _type: std::marker::PhantomData,
@@ -290,24 +290,24 @@ impl<T> DynamicFullPrecision<T> {
     }
 }
 
-impl<T> Benchmark for DynamicFullPrecision<T>
+impl<T> Benchmark for StreamingFullPrecision<T>
 where
     T: VectorRepr
         + diskann_utils::sampling::WithApproximateNorm
         + diskann::graph::SampleableForStart
         + AsDataType,
 {
-    type Input = DynamicIndexRun;
+    type Input = StreamingIndexRun;
     type Output = Vec<managed::Stats<StreamStats>>;
 
-    fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
+    fn try_match(&self, input: &StreamingIndexRun) -> Result<MatchScore, FailureScore> {
         utils::match_data_type::<T>(input.build().data_type())
     }
 
     fn description(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&DynamicIndexRun>,
+        input: Option<&StreamingIndexRun>,
     ) -> std::fmt::Result {
         match input {
             Some(i) => write!(f, "{}", T::describe(i.build().data_type())),
@@ -317,7 +317,7 @@ where
 
     fn run(
         &self,
-        input: &DynamicIndexRun,
+        input: &StreamingIndexRun,
         _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Vec<managed::Stats<StreamStats>>> {
@@ -599,7 +599,7 @@ where
 ///
 /// This function constructs the entire stack.
 fn full_precision_streaming<T>(
-    input: &DynamicIndexRun,
+    input: &StreamingIndexRun,
     max_points: usize,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, StreamStats>>>
 where

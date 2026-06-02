@@ -36,7 +36,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
 
     registry.register(
-        "graph-index-bftree-spherical-quantization",
+        "graph-index-build-bftree-spherical-quantization",
         spherical::BfTreeSpherical::new().search(Topk),
     )?;
 

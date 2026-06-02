@@ -4,7 +4,7 @@
   ],
   "jobs": [
     {
-      "type": "graph-index-dynamic-run",
+      "type": "graph-index-stream-run",
       "content": {
         "build": {
           "data_type": "float32",

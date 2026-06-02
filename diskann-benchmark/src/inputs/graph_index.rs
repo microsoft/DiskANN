@@ -35,7 +35,7 @@ as_input!(IndexOperation);
 as_input!(IndexPQOperation);
 as_input!(IndexSQOperation);
 as_input!(SphericalQuantBuild);
-as_input!(DynamicIndexRun);
+as_input!(StreamingIndexRun);
 
 ////////////
 // Search //
@@ -1167,7 +1167,7 @@ impl std::fmt::Display for SphericalQuantBuild {
 }
 
 ////////////////////////////
-// Dynamic Runbook Params //
+// Streaming Runbook Params //
 ////////////////////////////
 
 #[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1195,7 +1195,7 @@ impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
 
 /// Runbook loading and phase type definitions are in utils.datafiles
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DynamicRunbookParams {
+pub(crate) struct StreamingRunbookParams {
     pub(crate) runbook_path: InputFile,
     pub(crate) dataset_name: String,
     pub(crate) gt_directory: String,
@@ -1210,7 +1210,7 @@ pub(crate) struct DynamicRunbookParams {
 // 1. The runbook file can be parsed
 // 2. The dataset_name exists in the runbook
 // 3. All required ground truth files exist in gt_directory
-impl DynamicRunbookParams {
+impl StreamingRunbookParams {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.runbook_path.resolve(checker)?;
 
@@ -1275,7 +1275,7 @@ impl DynamicRunbookParams {
     }
 }
 
-impl Example for DynamicRunbookParams {
+impl Example for StreamingRunbookParams {
     fn example() -> Self {
         Self {
             runbook_path: InputFile::new("path/to/runbook"),
@@ -1292,9 +1292,9 @@ impl Example for DynamicRunbookParams {
     }
 }
 
-impl std::fmt::Display for DynamicRunbookParams {
+impl std::fmt::Display for StreamingRunbookParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Dynamic Runbook Parameters")?;
+        writeln!(f, "Streaming Runbook Parameters")?;
         write_field!(f, "Runbook Path", self.runbook_path.display())?;
         write_field!(f, "Dataset Name", self.dataset_name)?;
 
@@ -1326,19 +1326,19 @@ impl std::fmt::Display for DynamicRunbookParams {
 }
 
 ///////////////////////////
-// Graph Index Dynamic //
+// Graph Index Streaming //
 ///////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DynamicIndexRun {
+pub(crate) struct StreamingIndexRun {
     build: IndexBuild,
     search_phase: SearchPhase,
-    runbook_params: DynamicRunbookParams,
+    runbook_params: StreamingRunbookParams,
 }
 
-impl DynamicIndexRun {
+impl StreamingIndexRun {
     pub(crate) const fn tag() -> &'static str {
-        "graph-index-dynamic-run"
+        "graph-index-stream-run"
     }
 
     pub(crate) fn build(&self) -> &IndexBuild {
@@ -1349,7 +1349,7 @@ impl DynamicIndexRun {
         &self.search_phase
     }
 
-    pub(crate) fn runbook_params(&self) -> &DynamicRunbookParams {
+    pub(crate) fn runbook_params(&self) -> &StreamingRunbookParams {
         &self.runbook_params
     }
 
@@ -1375,21 +1375,21 @@ impl DynamicIndexRun {
     }
 }
 
-impl Example for DynamicIndexRun {
+impl Example for StreamingIndexRun {
     fn example() -> Self {
         let build = IndexBuild::example();
 
         Self {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: DynamicRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example(),
         }
     }
 }
 
-impl std::fmt::Display for DynamicIndexRun {
+impl std::fmt::Display for StreamingIndexRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Dynamic Run")?;
+        writeln!(f, "Graph Index Streaming Run")?;
         write_field!(f, "tag", Self::tag())?;
         writeln!(f, "Runbook Parameters:")?;
         write!(f, "{}", self.runbook_params)?;
