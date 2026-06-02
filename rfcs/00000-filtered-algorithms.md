@@ -54,7 +54,7 @@ The goal is to align on at most two filtered search algorithms to remain in the 
 
 This proposal is motivated by the following benchmark results on two open-source datasets.
 
-For each dataset, the graph is built once and then all search algorithms are executed on that graph. The best β parameter for beta search for each query set was selected from the range of .5-.8.
+For each dataset, the graph is built once and then all search algorithms are executed on that graph. The best $\beta$ parameter for beta search for each query set was selected from the range of 0.5–0.8.
 
 ### Caselaw
 
