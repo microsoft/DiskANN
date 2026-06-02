@@ -514,6 +514,39 @@ where
     }
 }
 
+impl search::knn::Knn<u32> for Arc<DeterminantDiversityKnn>
+where
+    common::FullPrecision: for<'a, 'b> glue::SearchStrategy<
+        FullPrecisionProvider<f32>,
+        &'a [f32],
+        SearchAccessor<'b>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
+    >,
+{
+    fn search_all(
+        &self,
+        parameters: Vec<benchmark_core::search::Run<diskann::graph::search::Knn>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<u32>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<crate::backend::index::result::SearchResults>> {
+        let results = benchmark_core::search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            benchmark_core::search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                benchmark_core::recall::GroundTruthMode::Fixed,
+            ),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(crate::backend::index::result::SearchResults::new)
+            .collect())
+    }
+}
+
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DeterminantDiversity
 where
@@ -542,7 +575,8 @@ where
         let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
             &topk.queries,
         ))?);
-        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(topk.max_k()))?;
 
         let knn = DeterminantDiversityKnn::new(
             index,
@@ -582,7 +616,11 @@ where
         let queries: Arc<Matrix<DP::Element>> =
             Arc::new(datafiles::load_dataset(datafiles::BinFile(&topk.queries))?);
 
-        let groundtruth = datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth))?;
+        // compute the maximum value of k used in any search
+        let max_k = topk.max_k();
+
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(max_k))?;
 
         let knn = benchmark_core::search::graph::KNN::new(
             index.clone(),
@@ -768,10 +806,8 @@ fn full_precision_streaming<T>(
 where
     T: bytemuck::Pod + VectorRepr + WithApproximateNorm + SampleableForStart,
 {
-    let topk = match &input.search_phase {
-        SearchPhase::Topk(topk) => topk,
-        _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
-    };
+    let topk = input.search_phase.as_topk()?;
+
     let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
 
     let data = datafiles::load_dataset::<T>(datafiles::BinFile(&input.build.data))?;
@@ -806,10 +842,14 @@ where
 
     let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
 
-    let layered = bigann::WithData::new(managed, data, queries, |path| {
-        Ok(Box::new(datafiles::load_groundtruth(datafiles::BinFile(
-            path,
-        ))?))
+    // compute the maximum value of k used in any search
+    let max_k = topk.max_k();
+
+    let layered = bigann::WithData::new(managed, data, queries, move |path| {
+        Ok(Box::new(datafiles::load_groundtruth(
+            datafiles::BinFile(path),
+            Some(max_k),
+        )?))
     });
 
     Ok(layered)

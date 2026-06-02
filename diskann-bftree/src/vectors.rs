@@ -7,16 +7,18 @@
 
 use std::marker::PhantomData;
 
+use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
-use bytemuck::{bytes_of, cast_slice};
+use bytemuck::cast_slice;
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    error::RankedError,
     utils::{ErrorToVectorId, TryIntoVectorId, VectorId, VectorRepr},
+    ANNError, ANNErrorKind, ANNResult,
 };
 use thiserror::Error;
 
-use super::super::common::TestCallCount;
 use super::ConfigError;
+use crate::TestCallCount;
 
 pub struct VectorProvider<T: VectorRepr, I: VectorId = u32> {
     dim: usize,
@@ -126,7 +128,7 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         }
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = bytes_of::<usize>(&i);
+        let key = i.as_key();
         let value = cast_slice::<T, u8>(v);
 
         self.vector_index.insert(key, value);
@@ -134,49 +136,49 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         Ok(())
     }
 
-    pub(crate) fn get_vector_into(&self, i: usize, buffer: &mut [T]) -> ANNResult<()> {
+    pub(crate) fn get_vector_into(&self, i: usize, buffer: &mut [T]) -> Result<(), AccessError> {
         if buffer.len() != self.dim {
             #[derive(Debug, Error)]
             #[error("expected a buffer with dim {0}, instead got {1}")]
             struct WrongDim(usize, usize);
 
-            return Err(ANNError::new(
+            return Err(RankedError::Error(ANNError::new(
                 ANNErrorKind::IndexError,
                 WrongDim(self.dim(), buffer.len()),
-            ));
+            )));
         }
 
         self.num_get_calls.increment();
         match self
             .vector_index
-            .read(bytes_of(&i), bytemuck::must_cast_slice_mut::<_, u8>(buffer))
+            .read(i.as_key(), bytemuck::must_cast_slice_mut::<_, u8>(buffer))
         {
             bf_tree::LeafReadResult::Found(read_size) => {
                 let vector_size = std::mem::size_of::<T>() * self.dim;
                 if read_size as usize != vector_size {
-                    return Err(ANNError::log_index_error(format!(
+                    return Err(RankedError::Error(ANNError::log_index_error(format!(
                         "The bf-tree entry for vector id {} is marked as found but has size {} instead of the expected size {}",
                         i, read_size, vector_size,
-                    )));
+                    ))));
                 }
             }
             bf_tree::LeafReadResult::Deleted => {
-                return Err(ANNError::log_index_error(format!(
-                    "The bf-tree entry for vector id {} is marked as deleted",
-                    i
-                )));
+                return Err(RankedError::Transient(VectorUnavailable {
+                    id: i,
+                    err: VectorError::Deleted,
+                }));
             }
             bf_tree::LeafReadResult::InvalidKey => {
-                return Err(ANNError::log_index_error(format!(
+                return Err(RankedError::Error(ANNError::log_index_error(format!(
                     "The bf-tree entry for vector id {} is marked as invalid",
                     i
-                )));
+                ))));
             }
             bf_tree::LeafReadResult::NotFound => {
-                return Err(ANNError::log_index_error(format!(
-                    "The bf-tree entry for vector id {} is marked as not found",
-                    i
-                )));
+                return Err(RankedError::Transient(VectorUnavailable {
+                    id: i,
+                    err: VectorError::NotFound,
+                }));
             }
         };
 
@@ -185,11 +187,16 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
 
     /// Return the vector at index `i`
     #[inline(always)]
-    pub(crate) fn get_vector_sync(&self, i: usize) -> ANNResult<Vec<T>> {
+    pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<T>, AccessError> {
         // Search for the corresponding vector
         let mut vector = vec![T::default(); self.dim];
         self.get_vector_into(i, &mut vector)?;
         Ok(vector)
+    }
+
+    pub(crate) fn delete_vector(&self, i: usize) {
+        let key = i.as_key();
+        self.vector_index.delete(key);
     }
 }
 
@@ -241,7 +248,9 @@ mod tests {
                 .unwrap();
             assert_eq!(&vector, &vec![(i as f32), (i + 1) as f32, (i + 2) as f32]);
         }
-        assert_eq!(vector_provider.num_get_calls.get(), num_points);
+        if TestCallCount::enabled() {
+            assert_eq!(vector_provider.num_get_calls.get(), num_points);
+        }
     }
 
     /// Test other methods and edge cases of the vector provider and sycrhnoization mechanism of Bf-Tree

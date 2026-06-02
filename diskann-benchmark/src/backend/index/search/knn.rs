@@ -5,6 +5,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use diskann_benchmark_core::recall::GroundTruthMode;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
 use crate::{backend::index::result::SearchResults, inputs::graph_index::GraphSearch};
@@ -78,26 +79,62 @@ pub(crate) trait Knn<I> {
 // Impls //
 ///////////
 
-impl<I, R> Knn<I> for Arc<R>
+impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::KNN<DP, T, S>>
 where
-    I: benchmark_core::recall::RecallCompatible,
-    R: core_search::Search<
-            Id = I,
-            Parameters = diskann::graph::search::Knn,
-            Output = core_search::graph::knn::Metrics,
-        > + 'static,
+    DP: diskann::provider::DataProvider,
+    core_search::graph::KNN<DP, T, S>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = diskann::graph::search::Knn,
+        Output = core_search::graph::knn::Metrics,
+    >,
 {
     fn search_all(
         &self,
         parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
-        groundtruth: &dyn benchmark_core::recall::Rows<I>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
     ) -> anyhow::Result<Vec<SearchResults>> {
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
-            core_search::graph::knn::Aggregator::new(groundtruth, recall_k, recall_n),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Fixed,
+            ),
+        )?;
+
+        Ok(results.into_iter().map(SearchResults::new).collect())
+    }
+}
+
+impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::MultiHop<DP, T, S>>
+where
+    DP: diskann::provider::DataProvider,
+    core_search::graph::MultiHop<DP, T, S>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = diskann::graph::search::Knn,
+        Output = core_search::graph::knn::Metrics,
+    >,
+{
+    fn search_all(
+        &self,
+        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::knn::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Flexible,
+            ),
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())

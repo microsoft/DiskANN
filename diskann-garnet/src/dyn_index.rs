@@ -7,12 +7,12 @@ use crate::{
     SearchResults,
     garnet::{Context, GarnetId},
     labels::GarnetQueryLabelProvider,
-    provider::{self, GarnetProvider},
+    provider::GarnetProvider,
 };
 use diskann::{
-    ANNError, ANNResult,
-    graph::{InplaceDeleteMethod, glue::SearchStrategy, index::SearchStats, search},
-    provider::{Accessor, DataProvider},
+    ANNResult,
+    graph::{InplaceDeleteMethod, index::SearchStats, search},
+    provider::DataProvider,
     utils::VectorRepr,
 };
 use diskann_providers::{
@@ -102,19 +102,9 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         filter: Option<(&GarnetQueryLabelProvider, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .map_err(|e| ANNError::new(diskann::ANNErrorKind::Opaque, e))?;
-        let mut accessor: provider::FullAccessor<'_, T> =
-            <FullPrecision as SearchStrategy<_, _>>::search_accessor(
-                &FullPrecision,
-                self.inner.provider(),
-                context,
-            )?;
-
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
-        let data = rt.block_on(accessor.get_element(iid))?;
+        let data = self.inner.provider().get_vector(context, iid)?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
         self.search_vector(context, data_bytes, params, filter, output)
     }

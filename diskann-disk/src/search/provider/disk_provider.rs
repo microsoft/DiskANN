@@ -1069,21 +1069,42 @@ where
         let mut accessor = strategy
             .search_accessor(provider, &DefaultContext)
             .into_ann_result()?;
-        let computer = accessor.build_query_computer(query).into_ann_result()?;
+
+        // Derive the batch size from the scratch data structure. Providing too many vectors
+        // will panic.
+        let batch_size = accessor.scratch.pq_scratch.max_vectors();
+
+        // This check should always hold since `graph_degree` comes from
+        // `diskann::graph::Config` and is forced to be non-zero. But this is defensive
+        // against misconfiguration.
+        if batch_size == 0 {
+            return Err(ANNError::message(
+                diskann::ANNErrorKind::IndexError,
+                "pq scratch must support at least one vector",
+            ));
+        }
+
+        let mut id_buffer = Vec::with_capacity(batch_size);
 
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
         let mut cmps = 0u32;
 
-        let num_points = provider.num_points as u32;
-        for id in 0..num_points {
-            if vector_filter(&id) {
-                let element = accessor.get_element(id).await.into_ann_result()?;
-                let dist = computer.evaluate_similarity(element);
-                best.insert(Neighbor::new(id, dist));
-                cmps += 1;
+        let mut iter = (0..provider.num_points as u32).filter(vector_filter);
+        loop {
+            id_buffer.clear();
+            id_buffer.extend(iter.by_ref().take(batch_size));
+
+            if id_buffer.is_empty() {
+                break;
             }
+
+            accessor.pq_distances(&id_buffer, |dist, id| best.insert(Neighbor::new(id, dist)))?;
+            cmps += id_buffer.len() as u32;
         }
 
+        // FIXME: This is a temporary bridge. We don't really need the query computer, but
+        // we do need to satisfy the trait definition until PR 1067 lands.
+        let computer = accessor.build_query_computer(query).into_ann_result()?;
         let result_count = strategy
             .default_post_processor()
             .post_process(&mut accessor, query, &computer, best.iter(), output)

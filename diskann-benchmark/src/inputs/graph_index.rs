@@ -11,9 +11,7 @@ use diskann::{
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
-use diskann_benchmark_runner::{
-    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
-};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
@@ -50,8 +48,8 @@ pub(crate) struct GraphSearch {
     pub(crate) recall_k: usize,
 }
 
-impl CheckDeserialization for GraphSearch {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl GraphSearch {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         for (i, l) in self.search_l.iter().enumerate() {
             if *l < self.search_n {
                 return Err(anyhow!(
@@ -97,9 +95,8 @@ impl GraphRangeSearch {
     }
 }
 
-impl CheckDeserialization for GraphRangeSearch {
-    // all necessary checks are carried out when Range is initialized
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl GraphRangeSearch {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.construct_params()
             .context("invalid range search params")?;
 
@@ -118,20 +115,22 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
-impl CheckDeserialization for TopkSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
+impl TopkSearchPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
 
-        self.groundtruth.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
         if let Some(post_processor) = self.post_processor.as_mut() {
             post_processor
-                .check_deserialization(checker)
+                .validate(checker)
                 .context("invalid topk post processor")?;
         }
 
@@ -177,14 +176,12 @@ pub(crate) struct RangeSearchPhase {
     pub(crate) runs: Vec<GraphRangeSearch>,
 }
 
-impl CheckDeserialization for RangeSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.groundtruth.check_deserialization(checker)?;
+impl RangeSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -205,13 +202,11 @@ pub(crate) struct BetaSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl CheckDeserialization for BetaSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.query_predicates.check_deserialization(checker)?;
-        self.data_labels.check_deserialization(checker)?;
+impl BetaSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
 
         if self.beta <= 0.0 || self.beta > 1.0 {
             return Err(anyhow::anyhow!(
@@ -220,9 +215,9 @@ impl CheckDeserialization for BetaSearchPhase {
             ));
         }
 
-        self.groundtruth.check_deserialization(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -242,17 +237,14 @@ pub(crate) struct MultiHopSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl CheckDeserialization for MultiHopSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.query_predicates.check_deserialization(checker)?;
-        self.data_labels.check_deserialization(checker)?;
-
-        self.groundtruth.check_deserialization(checker)?;
+impl MultiHopSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -402,13 +394,13 @@ impl SearchPhase {
     }
 }
 
-impl CheckDeserialization for SearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl SearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
-            SearchPhase::Topk(phase) => phase.check_deserialization(checker),
-            SearchPhase::Range(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::Topk(phase) => phase.validate(checker),
+            SearchPhase::Range(phase) => phase.validate(checker),
+            SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
         }
     }
 }
@@ -498,10 +490,8 @@ impl IndexLoad {
         write_field!(f, "Load Path", self.load_path)?;
         Ok(())
     }
-}
 
-impl CheckDeserialization for IndexLoad {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         // Check if the file exists (allowing for relative paths with respect to the current
         // directory.
         //
@@ -668,12 +658,9 @@ impl IndexBuild {
         }
         Ok(())
     }
-}
 
-impl CheckDeserialization for IndexBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.data.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.data.resolve(checker)?;
 
         // We allow overwriting of already existing save paths, since users like to do this
         // The save path must either (1) be an absolute path, in which case we check that its parent directory exists
@@ -736,18 +723,14 @@ impl IndexSource {
             IndexSource::Build(build) => &build.data_type,
         }
     }
-}
 
-impl CheckDeserialization for IndexSource {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
-            IndexSource::Load(load) => load.check_deserialization(checker),
-            IndexSource::Build(build) => build.check_deserialization(checker),
+            IndexSource::Load(load) => load.validate(checker),
+            IndexSource::Build(build) => build.validate(checker),
         }
     }
-}
 
-impl IndexSource {
     fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IndexSource::Load(load) => load.summarize_fields(f),
@@ -766,13 +749,10 @@ impl IndexOperation {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build"
     }
-}
 
-impl CheckDeserialization for IndexOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.source.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.source.validate(checker)?;
+        self.search_phase.validate(checker)?;
 
         if has_topk_determinant_diversity(&self.search_phase)
             && *self.source.data_type() != DataType::Float32
@@ -856,11 +836,9 @@ impl IndexPQOperation {
             IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
         }
     }
-}
 
-impl CheckDeserialization for IndexPQOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.index_operation.validate(checker)?;
 
         if has_topk_determinant_diversity(&self.index_operation.search_phase) {
             anyhow::bail!(
@@ -943,10 +921,8 @@ impl IndexSQOperation {
             IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
         }
     }
-}
 
-impl CheckDeserialization for IndexSQOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         if self.standard_deviations <= 0.0 {
             return Err(anyhow::anyhow!(
                 "scalar quantization standard deviations ({}) must be strictly positive",
@@ -954,7 +930,7 @@ impl CheckDeserialization for IndexSQOperation {
             ));
         }
 
-        self.index_operation.check_deserialization(checker)?;
+        self.index_operation.validate(checker)?;
 
         if has_topk_determinant_diversity(&self.index_operation.search_phase) {
             anyhow::bail!(
@@ -1034,12 +1010,10 @@ impl SphericalQuantBuild {
     ) -> DefaultProviderParameters {
         self.build.inmem_parameters(num_points, dim)
     }
-}
 
-impl CheckDeserialization for SphericalQuantBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.build.validate(checker)?;
+        self.search_phase.validate(checker)?;
 
         if has_topk_determinant_diversity(&self.search_phase) {
             anyhow::bail!(
@@ -1067,7 +1041,7 @@ impl CheckDeserialization for SphericalQuantBuild {
         }
 
         if let Some(pre_scale) = &mut self.pre_scale {
-            pre_scale.check_deserialization(checker)?;
+            pre_scale.validate(checker)?;
         }
 
         Ok(())
@@ -1171,9 +1145,9 @@ pub(crate) struct DynamicRunbookParams {
 // 1. The runbook file can be parsed
 // 2. The dataset_name exists in the runbook
 // 3. All required ground truth files exist in gt_directory
-impl CheckDeserialization for DynamicRunbookParams {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.runbook_path.check_deserialization(checker)?;
+impl DynamicRunbookParams {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.runbook_path.resolve(checker)?;
 
         // Validate consolidate_threshold is greater than 0
         if self.consolidate_threshold <= 0.0 {
@@ -1302,6 +1276,20 @@ impl DynamicIndexRun {
         "graph-index-dynamic-run"
     }
 
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.build.validate(checker)?;
+        self.runbook_params.validate(checker)?;
+        self.search_phase.validate(checker)?;
+
+        if has_topk_determinant_diversity(&self.search_phase) {
+            anyhow::bail!(
+                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
+            );
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
         let mut builder = self.build.try_as_config()?;
         builder.l_build(insert_l);
@@ -1314,22 +1302,6 @@ impl DynamicIndexRun {
         dim: usize,
     ) -> DefaultProviderParameters {
         self.build.inmem_parameters(num_points, dim)
-    }
-}
-
-impl CheckDeserialization for DynamicIndexRun {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.check_deserialization(checker)?;
-        self.runbook_params.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
-
-        if has_topk_determinant_diversity(&self.search_phase) {
-            anyhow::bail!(
-                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
-            );
-        }
-
-        Ok(())
     }
 }
 

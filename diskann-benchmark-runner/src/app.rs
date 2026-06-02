@@ -293,12 +293,12 @@ impl App {
                 let serialized = jobs
                     .iter()
                     .map(|job| {
-                        serde_json::to_value(jobs::Unprocessed::new(
+                        Ok(serde_json::to_value(jobs::Unprocessed::new(
                             job.tag().into(),
                             job.serialize()?,
-                        ))
+                        ))?)
                     })
-                    .collect::<Result<Vec<_>, serde_json::Error>>()?;
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 for (i, job) in jobs.iter().enumerate() {
                     let prefix: &str = if i != 0 { "\n\n" } else { "" };
                     writeln!(

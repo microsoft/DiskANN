@@ -9,6 +9,20 @@ use half::f16;
 
 use crate::{BitMask, Const, SIMDMask, SupportedLaneCount, arch, reference::ReferenceCast};
 
+pub(super) fn bytes<T>(x: &[T]) -> &[u8]
+where
+    T: bytemuck::Pod,
+{
+    bytemuck::must_cast_slice(x)
+}
+
+pub(super) fn bytes_mut<T>(x: &mut [T]) -> &mut [u8]
+where
+    T: bytemuck::Pod,
+{
+    bytemuck::must_cast_slice_mut(x)
+}
+
 // Helper trait to enable setting of values from unsigned 64-bit integers.
 pub(crate) trait USizeConvertTo<T> {
     fn test_convert(self) -> T;
