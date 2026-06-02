@@ -313,7 +313,7 @@ mod tests {
             .expand_beam(
                 [0, 5, 10, 15].into_iter(),
                 NotIn(&mut visited),
-                |distance, id| buf.push((distance, id)),
+                |id, distance| buf.push((id, distance)),
             )
             .await
             .unwrap();

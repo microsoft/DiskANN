@@ -5,13 +5,13 @@
 
 //! # Search
 //!
-//! The [`SearchAccessor`] is the primary trait for integrating graph search algorithms.
+//! The [`SearchAccessor`] is the primary trait for implementing graph search algorithms.
 //! Graph search begins at [`starting_points`](SearchAccessor::starting_points) and performs
 //! several rounds of "beam expansion" via [`expand_beam`](SearchAccessor::expand_beam).
 //!
 //! The [`SearchAccessor`] has several duties. It must be able to retrieve adjacency list
-//! information from its underlying [`DataProvider`] can compute distances between a fixed
-//! query and all elements in adjacency lists. See the documentation of
+//! information from its underlying [`DataProvider`] and can compute distances between a
+//! fixed query and all elements in adjacency lists. See the documentation of
 //! [`expand_beam`](SearchAccessor::expand_beam) for a more detailed description of the
 //! required algorithm.
 //!
@@ -63,10 +63,10 @@
 //!   Most of the [`InsertStrategy`] is dedicated to the initial graph search, delegating
 //!   pruning to an associated [`PruneStrategy`].
 //!
-//!   The graph search portion works by constructing the `InsertAccessor` with the value
+//!   The graph search portion works by constructing a [`SearchAccessor`] with the value
 //!   that was just inserted.
 //!
-//!   This accessor/computer pair is then used for search, followed by pruning.
+//!   This accessor is then used for search, followed by pruning.
 //!
 //! * [`PruneStrategy`]: The pruning strategy is largely straightforward, consisting of
 //!   an accessor and a random access [`DistanceFunction`] for performing distance
@@ -103,13 +103,23 @@ use crate::{
     provider::{AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef, HasId},
 };
 
-/// A trait to override search constraints such as early termination based on constraints
-/// by implementer.
+/// The main extension point for graph search.
+///
+/// Search is a best-first graph traversal beginning at a collection of start points.
+/// Neighbors with lower distances are prioritized over those with higher distances.
+///
+/// [`Self::expand_beam`] is the mechanism by which the graph is explored, expanding several
+/// vertices at a time for efficiency.
+///
+/// **Start Point Coherence**: The various methods regarding start points are expected to
+/// be coherent with one another. This means they agree on the number and IDs of the start
+/// points.
 pub trait SearchAccessor: HasId + Send + Sync {
-    /// Return a `Vec` containing the starting points.
+    /// Return the starting points for this search.
     fn starting_points(&self)
     -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
 
+    /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,
         f: F,
@@ -136,27 +146,22 @@ pub trait SearchAccessor: HasId + Send + Sync {
     ///
     /// ## Implementation Notes
     ///
-    /// Restriction in the implementation are as follows:
+    /// Implementations must observe the following:
     ///
     /// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` should be
-    ///   invoked for that item.
+    ///   invoked for that item. Algorithms **may** choose to skip invoking `on_neighbors`
+    ///   in exceptional circumstances (e.g. a transient access error occurs), though doing
+    ///   this too often will degrade search quality.
     ///
     ///   If an item `i` is already passed to `on_neighbors`, the implementation is not
-    ///   obligated to provided it again, though it **may** do so if `pred.eval_mut()`
+    ///   obligated to provide it again, though it **may** do so if `pred.eval_mut()`
     ///   continues to return `true`.
     ///
     /// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
     ///   invoked for that item.
     ///
-    /// * `pred.eval()` may be invoked an arbitrary number of times. Proper predicate
-    ///   implementations  will ensure that
-    ///
-    ///   - `pred.eval() == true` implies `pred.eval_mut() == true` if `pred.eval_mut()` is
-    ///     invoked immediately after `pred.eval()`.
-    ///
-    ///   - `pred.eval() == false` implies `pred.eval_mut() == false` and vice-versa.
-    ///
-    /// * `pred.eval_mut()` may be invoked multiple times for the same item `i`.
+    /// * `pred.eval()` and `pred.eval_mut()` may be invoked multiple times for the same
+    ///   item `i`.
     ///
     /// ## Predicate Requirements
     ///
@@ -168,6 +173,13 @@ pub trait SearchAccessor: HasId + Send + Sync {
     /// callback requires unique items, the predicate must be structured such that `eval_mut`
     /// correctly filters out duplicates.
     ///
+    /// Calling `eval_mut` may change the predicate's state for an item `i`. The following
+    /// hold for any pair of calls on the same `i` with no intervening predicate operations:
+    ///
+    /// * `eval(i) == true` implies a subsequent `eval_mut(i) == true`.
+    /// * `eval(i) == false` implies a subsequent `eval_mut(i) == false`.
+    /// * `eval_mut(i) == false` implies a subsequent `eval(i) == false`.
+    ///
     /// # Pseudo Code
     ///
     /// ```ignore
@@ -177,9 +189,9 @@ pub trait SearchAccessor: HasId + Send + Sync {
     ///
     ///     // Loop over the adjacency list IDs, skipping IDs according to `pred`.
     ///     //
-    ///     // Using `eval_mut` records that we've not handled this ID and will (potentially)
+    ///     // Using `eval_mut` allows the predicate to record this visit and potentially
     ///     // exclude it from future calls.
-    ///     for neighbor in neighbors.filter(|i| pre.eval_mut(i)) {
+    ///     for neighbor in neighbors.filter(|i| pred.eval_mut(i)) {
     ///         // Accessors are provided the query upon construction and are responsible
     ///         // for computing distances.
     ///         let distance = self.compute_distance_to(neighbor);
@@ -202,25 +214,27 @@ pub trait SearchAccessor: HasId + Send + Sync {
     // Provided methods //
     //////////////////////
 
-    /// Default is to never terminate early.
+    /// Indicate that search should terminate as soon as possible.
+    ///
+    /// The provided implementation always returns `false`.
     fn terminate_early(&mut self) -> bool {
         false
     }
 
-    /// Return a `'static` closure that returns `true` if a provided `id` is not a start
-    /// point - otherwise returning `false`.
+    /// Return a closure to evaluate whether or not an ID is associated with a start point.
     ///
-    /// The provided implementation using `self.starting_points()` to obtain the collection
-    /// of start points. Implementations may choose to specialize this if they have a more
-    /// efficient means of providing the filter.
+    /// The closure returned by the provided implementation has complexity `O(1)` and takes
+    /// `O(num_starting_points)` time to construct.
     fn is_not_start_point(
         &self,
     ) -> impl std::future::Future<
         Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
     > + Send {
         async move {
-            let starting_points = self.starting_points().await?;
-            Ok(move |id| !starting_points.contains(&id))
+            let set: std::collections::HashSet<_> =
+                self.starting_points().await?.into_iter().collect();
+
+            Ok(move |id| !set.contains(&id))
         }
     }
 

@@ -390,7 +390,7 @@ where
     ///
     /// # Implementing [`Fill`](super::Fill) with `Map::fill`
     ///
-    /// The [`Fill`](super::Fill) trait requires implementors to populate a working set
+    /// The [`Fill`](super::Fill) trait requires implementers to populate a working set
     /// from an accessor. `Map::fill` is designed to make this straightforward:
     ///
     /// ```ignore
