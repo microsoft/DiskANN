@@ -7,7 +7,7 @@ use crate::{
     SearchResults,
     garnet::{Context, GarnetId},
     labels::GarnetQueryLabelProvider,
-    provider::GarnetProvider,
+    provider::{DynamicQuantization, GarnetProvider},
 };
 use diskann::{
     ANNResult,
@@ -16,14 +16,13 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_providers::{
-    index::wrapped_async::DiskANNIndex,
-    model::graph::provider::{async_::common::FullPrecision, layers::BetaFilter},
+    index::wrapped_async::DiskANNIndex, model::graph::provider::layers::BetaFilter,
 };
 use std::sync::Arc;
 
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
-pub trait DynIndex: Send + Sync {
+pub(crate) trait DynIndex: Send + Sync {
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
 
     fn set_attributes(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()>;
@@ -55,6 +54,10 @@ pub trait DynIndex: Send + Sync {
     fn internal_id_exists(&self, context: &Context, id: u32) -> bool;
 
     fn external_id_exists(&self, context: &Context, id: &GarnetId) -> bool;
+
+    fn train_quantizer(&self, context: &Context) -> bool;
+
+    fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize);
 }
 
 impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
@@ -63,7 +66,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     /// The data slice here must be aligned to `T` or this will panic.
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
         self.insert(
-            FullPrecision,
+            DynamicQuantization,
             context,
             id,
             bytemuck::cast_slice::<u8, T>(data),
@@ -87,10 +90,10 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     ) -> ANNResult<SearchStats> {
         let query = bytemuck::cast_slice::<u8, T>(data);
         if let Some((labels, beta)) = filter {
-            let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), beta);
+            let beta_filter = BetaFilter::new(DynamicQuantization, Arc::new(labels.clone()), beta);
             self.search(*params, &beta_filter, context, query, output)
         } else {
-            self.search(*params, &FullPrecision, context, query, output)
+            self.search(*params, &DynamicQuantization, context, query, output)
         }
     }
 
@@ -104,14 +107,14 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     ) -> ANNResult<SearchStats> {
         // Look up internal ID
         let iid = self.inner.provider().to_internal_id(context, id)?;
-        let data = self.inner.provider().get_vector(context, iid)?;
+        let data = self.inner.provider().get_full_vector(context, iid)?;
         let data_bytes = bytemuck::cast_slice::<T, u8>(&data);
         self.search_vector(context, data_bytes, params, filter, output)
     }
 
     fn remove(&self, context: &Context, id: &GarnetId) -> ANNResult<()> {
         self.inplace_delete(
-            FullPrecision,
+            DynamicQuantization,
             context,
             id,
             3,
@@ -136,5 +139,15 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
 
     fn external_id_exists(&self, context: &Context, id: &GarnetId) -> bool {
         self.inner.provider().vector_id_exists(context, id)
+    }
+
+    fn train_quantizer(&self, context: &Context) -> bool {
+        self.inner.provider().train_quantizer(context)
+    }
+
+    fn backfill_quant_vectors(&self, context: &Context, task_idx: usize, task_count: usize) {
+        self.inner
+            .provider()
+            .backfill_quant_vectors(context, task_idx, task_count);
     }
 }

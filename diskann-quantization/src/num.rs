@@ -49,7 +49,7 @@ where
 }
 
 // SAFETY: 1.0 is positive.
-pub(crate) const POSITIVE_ONE_F32: Positive<f32> = unsafe { Positive::new_unchecked(1.0) };
+pub const POSITIVE_ONE_F32: Positive<f32> = unsafe { Positive::new_unchecked(1.0) };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
