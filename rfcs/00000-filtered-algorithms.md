@@ -40,7 +40,7 @@ Two-queue search maintains a queue of neighbors satisfying the filter predicate 
 
 The code for two-queue search is found in [this PR](https://github.com/microsoft/DiskANN/pull/929).
 
-##### Adaptive L Search (977)
+#### Adaptive L Search (PR #977)
 
 Adaptive L search runs a filtered search in the following way: for each query, it runs a standard search until the search has performed 1000 distance computations. Then, it computes what fraction of the points seen so far satisfy the filter predicate, and scales the L_search parameter up accordingly. See these lines for the exact scaling parameters. It only performs the adaptive scaling at one point during the search, so L_search is capped at 16 times the original value.
 
