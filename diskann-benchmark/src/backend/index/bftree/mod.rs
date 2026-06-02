@@ -106,13 +106,15 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
         full_precision_streaming::StreamingFullPrecision::<f32>::new(),
     )?;
 
-    const SQ_NAME: &str = "graph-index-build-bftree-spherical-quantization";
+    registry.register(
+        "graph-index-bftree-spherical-quantization",
+        spherical::BfTreeSpherical::new().search(Topk),
+    )?;
 
-    registry.register(SQ_NAME, spherical::BfTreeSpherical::new().search(Topk))?;
-
-    const SQ_STREAM: &str = "graph-index-stream-bftree-spherical-quantization";
-
-    registry.register(SQ_STREAM, spherical_streaming::StreamingSpherical::new())?;
+    registry.register(
+        "graph-index-stream-bftree-spherical-quantization",
+        spherical_streaming::StreamingSpherical::new(),
+    )?;
 
     Ok(())
 }

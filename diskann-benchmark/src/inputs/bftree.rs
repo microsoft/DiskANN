@@ -54,6 +54,20 @@ pub(crate) struct BfTreeStoreConfig {
 }
 
 impl BfTreeStoreConfig {
+    /// Minimum circular buffer size in bytes found in bf-tree's example configs.
+    /// bf-tree's default cb_size_byte is 32MB.
+    const MIN_CB_SIZE_BYTE: usize = 8192;
+
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.cb_size_byte >= Self::MIN_CB_SIZE_BYTE,
+            "cb_size_byte ({}) must be at least {} bytes",
+            self.cb_size_byte,
+            Self::MIN_CB_SIZE_BYTE,
+        );
+        Ok(())
+    }
+
     pub(crate) fn into_config(self) -> bf_tree::Config {
         let mut c = bf_tree::Config::default();
         c.cb_size_byte(self.cb_size_byte);
@@ -239,9 +253,11 @@ impl BfTreeFullPrecisionBuild {
         self.search_phase.validate(checker)?;
         if let Some(cfg) = &mut self.neighbor_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.vector_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         Ok(())
     }
@@ -344,9 +360,11 @@ impl BfTreeDynamicRun {
         self.runbook_params.validate(checker)?;
         if let Some(cfg) = &mut self.vector_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.neighbor_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         Ok(())
     }
@@ -467,12 +485,15 @@ impl BfTreeSphericalBuild {
         self.search_phase.validate(checker)?;
         if let Some(cfg) = &mut self.vector_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.neighbor_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.quant_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
 
         match self.num_bits.get() {
@@ -614,12 +635,15 @@ impl BfTreeSphericalDynamicRun {
         self.runbook_params.validate(checker)?;
         if let Some(cfg) = &mut self.vector_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.neighbor_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
         if let Some(cfg) = &mut self.quant_store_config {
             cfg.fill_defaults();
+            cfg.validate()?;
         }
 
         match self.num_bits.get() {
