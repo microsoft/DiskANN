@@ -153,7 +153,7 @@ pub(super) struct IvfSearchResult {
     pub(super) recall: f32,
 }
 
-/// Squared L2 distance.
+/// Squared L2 distance (lower = more similar).
 fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     a.iter()
@@ -165,16 +165,34 @@ fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+/// Negative inner product (lower = more similar, matching L2 sort order).
+fn neg_ip(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
+}
+
+/// Returns the distance function for the given metric.
+/// All returned functions follow the convention: lower = more similar.
+fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
+    match metric {
+        SimilarityMeasure::SquaredL2 => sq_l2,
+        SimilarityMeasure::InnerProduct
+        | SimilarityMeasure::Cosine
+        | SimilarityMeasure::CosineNormalized => neg_ip,
+    }
+}
+
 /// Search a single query: rank centroids (RAM), then read `nprobe` cluster files from disk.
 fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<u32>, QueryStats) {
     let start = Instant::now();
     let ndims = index.ndims;
+    let dist_fn = distance_fn(index._metric);
 
     // 1) Rank centroids (in RAM)
     let mut centroid_dists: Vec<(usize, f32)> = (0..index.nlist)
         .map(|c| {
             let centroid = &index.centroids[c * ndims..(c + 1) * ndims];
-            (c, sq_l2(query, centroid))
+            (c, dist_fn(query, centroid))
         })
         .collect();
     centroid_dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -201,7 +219,7 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
         for (local_i, &vid) in ids.iter().enumerate() {
             let vec_start = local_i * ndims;
             let vec_slice = &vecs[vec_start..vec_start + ndims];
-            let dist = sq_l2(query, vec_slice);
+            let dist = dist_fn(query, vec_slice);
             total_comparisons += 1;
 
             if best.len() < k {

@@ -90,7 +90,7 @@ impl fmt::Display for IvfBuildStats {
     }
 }
 
-/// Squared L2 distance between two f32 slices.
+/// Squared L2 distance (lower = more similar).
 fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     a.iter()
@@ -102,10 +102,34 @@ fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+/// Negative inner product (lower = more similar, matching L2 sort order).
+fn neg_ip(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
+}
+
+/// Returns the distance function for the given metric.
+/// All returned functions follow the convention: lower = more similar.
+fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
+    match metric {
+        SimilarityMeasure::SquaredL2 => sq_l2,
+        SimilarityMeasure::InnerProduct
+        | SimilarityMeasure::Cosine
+        | SimilarityMeasure::CosineNormalized => neg_ip,
+    }
+}
+
 /// Run Lloyd's k-means to compute centroids.
-fn kmeans(data: &Matrix<f32>, k: usize, max_iters: u32, num_threads: usize) -> Vec<f32> {
+fn kmeans(
+    data: &Matrix<f32>,
+    k: usize,
+    max_iters: u32,
+    num_threads: usize,
+    metric: SimilarityMeasure,
+) -> Vec<f32> {
     let n = data.nrows();
     let d = data.ncols();
+    let dist_fn = distance_fn(metric);
 
     // Initialize centroids with k-means++ seeding
     let mut centroids = vec![0.0f32; k * d];
@@ -121,7 +145,7 @@ fn kmeans(data: &Matrix<f32>, k: usize, max_iters: u32, num_threads: usize) -> V
         // Update min_dists with the last added centroid
         let last_centroid = &centroids[(c_idx - 1) * d..c_idx * d];
         for (md, i) in min_dists.iter_mut().zip(0..n) {
-            let dist = sq_l2(data.row(i), last_centroid);
+            let dist = dist_fn(data.row(i), last_centroid);
             if dist < *md {
                 *md = dist;
             }
@@ -164,7 +188,7 @@ fn kmeans(data: &Matrix<f32>, k: usize, max_iters: u32, num_threads: usize) -> V
                 let mut best_c = 0u32;
                 for c in 0..k {
                     let centroid = &centroids[c * d..(c + 1) * d];
-                    let dist = sq_l2(point, centroid);
+                    let dist = dist_fn(point, centroid);
                     if dist < best_dist {
                         best_dist = dist;
                         best_c = c as u32;
@@ -211,9 +235,16 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
     anyhow::ensure!(nlist <= npoints, "nlist ({nlist}) > npoints ({npoints})");
 
     // Run k-means
-    let centroids = kmeans(&data, nlist, params.kmeans_iterations, params.num_threads);
+    let centroids = kmeans(
+        &data,
+        nlist,
+        params.kmeans_iterations,
+        params.num_threads,
+        params.distance,
+    );
 
     // Assign each vector to its nearest centroid
+    let dist_fn = distance_fn(params.distance);
     let mut assignments = vec![0u32; npoints];
     for (assign, i) in assignments.iter_mut().zip(0..npoints) {
         let point = data.row(i);
@@ -221,7 +252,7 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
         let mut best_c = 0u32;
         for c in 0..nlist {
             let centroid = &centroids[c * ndims..(c + 1) * ndims];
-            let dist = sq_l2(point, centroid);
+            let dist = dist_fn(point, centroid);
             if dist < best_dist {
                 best_dist = dist;
                 best_c = c as u32;
