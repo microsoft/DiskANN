@@ -1,0 +1,398 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+//! IVF (Inverted File) search phase.
+//!
+//! Loads a pre-built IVF index from disk and runs queries by scanning the `nprobe` closest
+//! clusters. Produces per-nprobe statistics comparable to `DiskSearchResult`.
+
+use std::{
+    fmt,
+    fs::File,
+    io::{BufReader, Read},
+    path::Path,
+    time::Instant,
+};
+
+use diskann_benchmark_runner::utils::MicroSeconds;
+use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool};
+use diskann_tools::utils::{search_index_utils, KRecallAtN};
+use diskann_utils::views::Matrix;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    inputs::ivf::{IvfLoad, IvfSearchPhase},
+    utils::{datafiles, SimilarityMeasure},
+};
+
+use super::build::u32_to_metric;
+
+// ──────────────────────────────────────────────
+// In-memory representation of a loaded IVF index
+// ──────────────────────────────────────────────
+
+struct IvfIndex {
+    ndims: usize,
+    nlist: usize,
+    _npoints: usize,
+    _metric: SimilarityMeasure,
+    /// Row-major centroids: nlist × ndims
+    centroids: Vec<f32>,
+    /// Per-cluster vector IDs
+    cluster_ids: Vec<Vec<u32>>,
+    /// Per-cluster vectors (row-major within each cluster)
+    cluster_vecs: Vec<Vec<f32>>,
+}
+
+impl IvfIndex {
+    fn load(dir: &str) -> anyhow::Result<Self> {
+        let dir = Path::new(dir);
+
+        // 1) Meta
+        let (ndims, nlist, npoints, metric) = {
+            let mut f = BufReader::new(File::open(dir.join("ivf_meta.bin"))?);
+            let mut buf = [0u8; 16]; // 4 × u32
+            f.read_exact(&mut buf)?;
+            let ndims = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+            let nlist = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
+            let npoints = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
+            let metric_u32 = u32::from_le_bytes(buf[12..16].try_into().unwrap());
+            (ndims, nlist, npoints, u32_to_metric(metric_u32)?)
+        };
+
+        // 2) Centroids
+        let centroids = {
+            let mut f = BufReader::new(File::open(dir.join("ivf_centroids.bin"))?);
+            let mut buf = vec![0u8; nlist * ndims * 4];
+            f.read_exact(&mut buf)?;
+            bytemuck::cast_slice::<u8, f32>(&buf).to_vec()
+        };
+
+        // 3) Inverted lists
+        let mut cluster_ids = Vec::with_capacity(nlist);
+        let mut cluster_vecs = Vec::with_capacity(nlist);
+        {
+            let mut f = BufReader::new(File::open(dir.join("ivf_invlists.bin"))?);
+            for _ in 0..nlist {
+                // Read count
+                let mut count_buf = [0u8; 4];
+                f.read_exact(&mut count_buf)?;
+                let count = u32::from_le_bytes(count_buf) as usize;
+
+                // Read IDs
+                let mut ids_buf = vec![0u8; count * 4];
+                f.read_exact(&mut ids_buf)?;
+                let ids: Vec<u32> = bytemuck::cast_slice::<u8, u32>(&ids_buf).to_vec();
+
+                // Read vectors
+                let mut vecs_buf = vec![0u8; count * ndims * 4];
+                f.read_exact(&mut vecs_buf)?;
+                let vecs: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&vecs_buf).to_vec();
+
+                cluster_ids.push(ids);
+                cluster_vecs.push(vecs);
+            }
+        }
+
+        Ok(IvfIndex {
+            ndims,
+            nlist,
+            _npoints: npoints,
+            _metric: metric,
+            centroids,
+            cluster_ids,
+            cluster_vecs,
+        })
+    }
+}
+
+// ──────────────────────────────────
+// Per-query statistics (lightweight)
+// ──────────────────────────────────
+
+struct QueryStats {
+    latency_us: f64,
+    io_count: f64,
+    io_time_us: f64,
+    cpu_time_us: f64,
+    comparisons: u64,
+}
+
+// ──────────────────────────
+// Public search result types
+// ──────────────────────────
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(super) struct IvfSearchStats {
+    pub(super) num_threads: usize,
+    pub(super) recall_at: u32,
+    pub(super) distance: SimilarityMeasure,
+    pub(super) search_results_per_nprobe: Vec<IvfSearchResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(super) struct IvfSearchResult {
+    pub(super) search_l: u32,
+    pub(super) qps: f32,
+    pub(super) mean_latency: f64,
+    pub(super) p95_latency: MicroSeconds,
+    pub(super) p999_latency: MicroSeconds,
+    pub(super) mean_ios: f64,
+    pub(super) mean_io_time: f64,
+    pub(super) mean_cpu_time: f64,
+    pub(super) mean_comparisons: f64,
+    pub(super) recall: f32,
+}
+
+/// Squared L2 distance.
+fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| {
+            let d = x - y;
+            d * d
+        })
+        .sum()
+}
+
+/// Search a single query against the IVF index. Returns (top-k IDs, QueryStats).
+fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<u32>, QueryStats) {
+    let start = Instant::now();
+
+    let ndims = index.ndims;
+
+    // 1) Find the nprobe closest centroids
+    let mut centroid_dists: Vec<(usize, f32)> = (0..index.nlist)
+        .map(|c| {
+            let centroid = &index.centroids[c * ndims..(c + 1) * ndims];
+            (c, sq_l2(query, centroid))
+        })
+        .collect();
+    centroid_dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+    let probe_count = nprobe.min(index.nlist);
+
+    // 2) Scan the closest clusters and maintain a max-heap of k nearest
+    let mut best: Vec<(f32, u32)> = Vec::with_capacity(k + 1);
+    let mut total_comparisons: u64 = 0;
+    let mut io_count: u64 = 0;
+
+    let io_start = Instant::now();
+
+    for &(c_idx, _) in centroid_dists.iter().take(probe_count) {
+        let ids = &index.cluster_ids[c_idx];
+        let vecs = &index.cluster_vecs[c_idx];
+        io_count += 1; // one "IO" per cluster read
+
+        for (local_i, &vid) in ids.iter().enumerate() {
+            let vec_start = local_i * ndims;
+            let vec_slice = &vecs[vec_start..vec_start + ndims];
+            let dist = sq_l2(query, vec_slice);
+            total_comparisons += 1;
+
+            if best.len() < k {
+                best.push((dist, vid));
+                if best.len() == k {
+                    // Heapify: sort descending so worst is at position 0
+                    best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                }
+            } else if dist < best[0].0 {
+                best[0] = (dist, vid);
+                // Re-sort to maintain max at position 0
+                best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            }
+        }
+    }
+
+    let io_elapsed = io_start.elapsed();
+
+    // Sort results by distance ascending for recall computation
+    best.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    let result_ids: Vec<u32> = best.iter().map(|(_, id)| *id).collect();
+
+    let elapsed = start.elapsed();
+    let stats = QueryStats {
+        latency_us: elapsed.as_secs_f64() * 1e6,
+        io_count: io_count as f64,
+        io_time_us: io_elapsed.as_secs_f64() * 1e6,
+        cpu_time_us: elapsed.as_secs_f64() * 1e6,
+        comparisons: total_comparisons,
+    };
+
+    (result_ids, stats)
+}
+
+pub(super) fn search_ivf_index(
+    index_load: &IvfLoad,
+    search_params: &IvfSearchPhase,
+) -> anyhow::Result<IvfSearchStats> {
+    // Load the index
+    let index = IvfIndex::load(&index_load.load_path)?;
+
+    // Load queries
+    let queries: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
+    let num_queries = queries.nrows();
+    let recall_at = search_params.recall_at as usize;
+
+    // Load ground truth
+    let gt = datafiles::load_groundtruth(
+        datafiles::BinFile(&search_params.groundtruth),
+        Some(recall_at),
+    )?;
+
+    // Build thread pool
+    let pool = create_thread_pool(search_params.num_threads)?;
+
+    let mut search_results_per_nprobe = Vec::with_capacity(search_params.nprobe_list.len());
+
+    for &nprobe in &search_params.nprobe_list {
+        let start = Instant::now();
+
+        // Run all queries in parallel
+        let results: Vec<(Vec<u32>, QueryStats)> = (0..num_queries)
+            .into_par_iter()
+            .map(|qi| {
+                let query = queries.row(qi);
+                search_one(&index, query, nprobe as usize, recall_at)
+            })
+            .collect_in_pool(pool.as_ref());
+
+        let total_time = start.elapsed();
+
+        // Gather result IDs into flat array for recall computation
+        let mut result_ids = vec![0u32; num_queries * recall_at];
+        for (qi, (ids, _)) in results.iter().enumerate() {
+            let offset = qi * recall_at;
+            let count = ids.len().min(recall_at);
+            result_ids[offset..offset + count].copy_from_slice(&ids[..count]);
+        }
+
+        // Compute recall
+        let recall = search_index_utils::calculate_recall(
+            num_queries,
+            gt.as_slice(),
+            None,
+            gt.ncols(),
+            &result_ids,
+            search_params.recall_at,
+            KRecallAtN::new(search_params.recall_at, search_params.recall_at)?,
+        )? as f32;
+
+        // Compute statistics
+        let stats_vec: Vec<&QueryStats> = results.iter().map(|(_, s)| s).collect();
+        let n = num_queries as f64;
+
+        let mean_latency: f64 = stats_vec.iter().map(|s| s.latency_us).sum::<f64>() / n;
+        let mean_ios: f64 = stats_vec.iter().map(|s| s.io_count).sum::<f64>() / n;
+        let mean_io_time: f64 = stats_vec.iter().map(|s| s.io_time_us).sum::<f64>() / n;
+        let mean_cpu_time: f64 = stats_vec.iter().map(|s| s.cpu_time_us).sum::<f64>() / n;
+        let mean_comparisons: f64 = stats_vec.iter().map(|s| s.comparisons as f64).sum::<f64>() / n;
+
+        // P95 / P999 latency
+        let mut latencies: Vec<f64> = stats_vec.iter().map(|s| s.latency_us).collect();
+        latencies.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p95_idx = ((num_queries as f64) * 0.95).ceil() as usize;
+        let p999_idx = ((num_queries as f64) * 0.999).ceil() as usize;
+        let p95 = latencies[p95_idx.min(num_queries - 1)];
+        let p999 = latencies[p999_idx.min(num_queries - 1)];
+
+        let qps = if total_time.as_secs_f32() > 0.0 {
+            num_queries as f32 / total_time.as_secs_f32()
+        } else {
+            0.0
+        };
+
+        search_results_per_nprobe.push(IvfSearchResult {
+            search_l: nprobe,
+            qps,
+            mean_latency,
+            p95_latency: MicroSeconds::new(p95 as u64),
+            p999_latency: MicroSeconds::new(p999 as u64),
+            mean_ios,
+            mean_io_time,
+            mean_cpu_time,
+            mean_comparisons,
+            recall,
+        });
+    }
+
+    Ok(IvfSearchStats {
+        num_threads: search_params.num_threads,
+        recall_at: search_params.recall_at,
+        distance: search_params.distance,
+        search_results_per_nprobe,
+    })
+}
+
+// ─────────
+// Display
+// ─────────
+
+impl fmt::Display for IvfSearchStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fmt_us = |v: f64| -> String { format!("{:.1}us", v) };
+
+        let cols: [(&str, usize); 10] = [
+            ("Nprobe", 7),
+            ("KNN", 3),
+            ("QPS", 8),
+            ("Mean Latency", 13),
+            ("95% Latency", 13),
+            ("99.9 Latency", 13),
+            ("IOs", 6),
+            ("IO (us)", 10),
+            ("Mean Comps", 11),
+            ("Recall", 7),
+        ];
+
+        let mut header = String::new();
+        for (i, (name, w)) in cols.iter().enumerate() {
+            if i > 0 {
+                header.push(' ');
+            }
+            header.push_str(&format!("{:>width$}", *name, width = *w));
+        }
+        let rule = "=".repeat(header.len());
+
+        writeln!(f, "IVF Search Stats")?;
+        writeln!(f, "Threads,          : {}", self.num_threads)?;
+        writeln!(f, "Recall at,        : {}", self.recall_at)?;
+        writeln!(f, "Distance,         : {}", self.distance)?;
+
+        writeln!(f, "{rule}")?;
+        writeln!(f, "{header}")?;
+        writeln!(f, "{rule}")?;
+
+        for r in &self.search_results_per_nprobe {
+            let vals: [String; 10] = [
+                format!("{}", r.search_l),
+                format!("{}", self.recall_at),
+                format!("{:.1}", r.qps),
+                fmt_us(r.mean_latency),
+                format!("{}", r.p95_latency),
+                format!("{}", r.p999_latency),
+                format!("{:.1}", r.mean_ios),
+                fmt_us(r.mean_io_time),
+                format!("{:.1}", r.mean_comparisons),
+                format!("{:.3}", r.recall),
+            ];
+
+            let mut line = String::new();
+            for ((_, w), v) in cols.iter().zip(vals.iter()) {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(&format!("{:>width$}", v, width = *w));
+            }
+            writeln!(f, "{line}")?;
+        }
+
+        Ok(())
+    }
+}

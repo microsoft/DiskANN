@@ -1,0 +1,48 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "ivf",
+      "content": {
+        "source": {
+          "ivf-source": "Build",
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "nlist": 16,
+          "num_threads": 1,
+          "kmeans_iterations": 20,
+          "save_path": "test_data/disk_index_search/ivf_siftsmall_index"
+        },
+        "search_phase": {
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "nprobe_list": [1, 4, 8, 16],
+          "recall_at": 10,
+          "num_threads": 1,
+          "distance": "squared_l2"
+        }
+      }
+    },
+    {
+      "type": "ivf",
+      "content": {
+        "source": {
+          "ivf-source": "Load",
+          "data_type": "float32",
+          "load_path": "test_data/disk_index_search/ivf_siftsmall_index"
+        },
+        "search_phase": {
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "nprobe_list": [1, 4, 8, 16],
+          "recall_at": 10,
+          "num_threads": 1,
+          "distance": "squared_l2"
+        }
+      }
+    }
+  ]
+}
