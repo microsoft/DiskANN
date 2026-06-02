@@ -24,7 +24,7 @@ The branch implementing inline filtered search is [here](https://github.com/micr
 
 #### Beta Search
 
-Beta search is conceptually very simple. It sets a value $\beta \in (0,1]$, and for a point $p$ encountered during a graph search that satisfies the query filter, the raw distance between the query and $p$ is multiplied by β. Thus the search is biased towards points which satisfy the filter.
+Beta search is conceptually very simple. It sets a value $\beta \in (0,1]$, and for a point $p$ encountered during a graph search that satisfies the query filter, the raw distance between the query and $p$ is multiplied by $\beta$. Thus the search is biased towards points which satisfy the filter.
 
 The code for beta search is found [here](https://github.com/microsoft/DiskANN/blob/main/diskann-providers/src/model/graph/provider/layers/betafilter.rs).
 
