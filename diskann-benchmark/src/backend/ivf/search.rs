@@ -197,23 +197,22 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
         .collect();
     centroid_dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-    let cpu_after_centroid = start.elapsed();
-
     let probe_count = nprobe.min(index.nlist);
 
     // 2) Read cluster files from disk and scan
     let mut best: Vec<(f32, u32)> = Vec::with_capacity(k + 1);
     let mut total_comparisons: u64 = 0;
     let mut io_count: u64 = 0;
-
-    let io_start = Instant::now();
+    let mut io_time = std::time::Duration::ZERO;
 
     for &(c_idx, _) in centroid_dists.iter().take(probe_count) {
         // Real disk I/O: read the cluster file
+        let io_start = Instant::now();
         let (ids, vecs) = match index.read_cluster(c_idx) {
             Ok(data) => data,
             Err(_) => continue, // skip empty/missing clusters
         };
+        io_time += io_start.elapsed();
         io_count += 1;
 
         for (local_i, &vid) in ids.iter().enumerate() {
@@ -234,19 +233,17 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
         }
     }
 
-    let io_elapsed = io_start.elapsed();
-
     // Sort results by distance ascending for recall computation
     best.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     let result_ids: Vec<u32> = best.iter().map(|(_, id)| *id).collect();
 
     let elapsed = start.elapsed();
-    let cpu_time = cpu_after_centroid + (elapsed - io_start.elapsed().max(io_elapsed));
+    let cpu_time = elapsed.saturating_sub(io_time);
 
     let stats = QueryStats {
         latency_us: elapsed.as_secs_f64() * 1e6,
         io_count: io_count as f64,
-        io_time_us: io_elapsed.as_secs_f64() * 1e6,
+        io_time_us: io_time.as_secs_f64() * 1e6,
         cpu_time_us: cpu_time.as_secs_f64() * 1e6,
         comparisons: total_comparisons,
     };
