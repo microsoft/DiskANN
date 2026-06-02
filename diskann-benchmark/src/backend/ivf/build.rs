@@ -6,12 +6,31 @@
 //! IVF (Inverted File) index build phase.
 //!
 //! Builds a flat IVF index using Lloyd's k-means for centroid training, then assigns each
-//! vector to its nearest centroid and writes the index to disk in a simple three-file layout:
+//! vector to its nearest centroid and writes the index to disk.
 //!
-//! - `ivf_meta.bin`      – header (ndims, nlist, npoints, metric enum)
-//! - `ivf_centroids.bin` – row-major `f32` centroids (nlist × ndims)
-//! - `ivf_invlists.bin`  – per-cluster: `u32` count, then `count` vector IDs (`u32`),
-//!   then `count` vectors (each `ndims` × `f32`)
+//! ## On-disk layout
+//!
+//! ```text
+//! <index_dir>/
+//!   ivf_meta.bin       — 16-byte header (ndims, nlist, npoints, metric)
+//!   ivf_centroids.bin  — row-major f32 centroids (nlist × ndims)
+//!   clusters/
+//!     cluster_0000.bin — records for cluster 0
+//!     cluster_0001.bin — records for cluster 1
+//!     …
+//! ```
+//!
+//! Each cluster file uses an append-friendly record layout:
+//!
+//! ```text
+//! [count: u32]                        ← number of vectors in this cluster
+//! [id₀: u32][vec₀: ndims × f32]      ← record 0
+//! [id₁: u32][vec₁: ndims × f32]      ← record 1
+//! …
+//! ```
+//!
+//! To append a new vector: seek to end, write `[id][vec]`, then update the count
+//! at offset 0.
 
 use std::{fmt, fs, io::Write, path::Path, time::Instant};
 
@@ -237,24 +256,23 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
         f.write_all(bytes)?;
     }
 
-    // 3) Inverted lists file
-    //    For each cluster: u32 count, then count × u32 IDs, then count × ndims × f32 vectors
-    {
-        let mut f = fs::File::create(save_dir.join("ivf_invlists.bin"))?;
-        for cluster_ids in &clusters {
-            let count = cluster_ids.len() as u32;
-            f.write_all(&count.to_le_bytes())?;
+    // 3) One file per cluster (append-friendly record layout)
+    //    Each file: [count: u32] then count × [id: u32][vec: ndims × f32]
+    let clusters_dir = save_dir.join("clusters");
+    fs::create_dir_all(&clusters_dir)?;
 
-            // Write vector IDs
-            let id_bytes: &[u8] = bytemuck::cast_slice(cluster_ids);
-            f.write_all(id_bytes)?;
+    for (c_idx, cluster_ids) in clusters.iter().enumerate() {
+        let filename = format!("cluster_{:04}.bin", c_idx);
+        let mut f = fs::File::create(clusters_dir.join(filename))?;
 
-            // Write vectors
-            for &vid in cluster_ids {
-                let row = data.row(vid as usize);
-                let row_bytes: &[u8] = bytemuck::cast_slice(row);
-                f.write_all(row_bytes)?;
-            }
+        let count = cluster_ids.len() as u32;
+        f.write_all(&count.to_le_bytes())?;
+
+        for &vid in cluster_ids {
+            f.write_all(&vid.to_le_bytes())?;
+            let row = data.row(vid as usize);
+            let row_bytes: &[u8] = bytemuck::cast_slice(row);
+            f.write_all(row_bytes)?;
         }
     }
 

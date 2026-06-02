@@ -88,19 +88,26 @@ impl IvfOperation {
 
 impl IvfLoad {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        let meta_path = format!("{}/ivf_meta.bin", self.load_path);
-        let centroids_path = format!("{}/ivf_centroids.bin", self.load_path);
-        let invlists_path = format!("{}/ivf_invlists.bin", self.load_path);
+        let dir = Path::new(&self.load_path);
 
-        for (path_str, label) in [
-            (&meta_path, "IVF meta file"),
-            (&centroids_path, "IVF centroids file"),
-            (&invlists_path, "IVF inverted lists file"),
+        let meta_path = dir.join("ivf_meta.bin");
+        let centroids_path = dir.join("ivf_centroids.bin");
+        let clusters_dir = dir.join("clusters");
+
+        for (path, label) in [
+            (meta_path.as_path(), "IVF meta file"),
+            (centroids_path.as_path(), "IVF centroids file"),
         ] {
-            let path = Path::new(path_str);
             if !path.is_file() {
                 anyhow::bail!("{} {} does not exist", label, path.display());
             }
+        }
+
+        if !clusters_dir.is_dir() {
+            anyhow::bail!(
+                "IVF clusters directory {} does not exist",
+                clusters_dir.display()
+            );
         }
 
         Ok(())

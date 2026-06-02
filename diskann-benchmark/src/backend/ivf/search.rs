@@ -5,14 +5,14 @@
 
 //! IVF (Inverted File) search phase.
 //!
-//! Loads a pre-built IVF index from disk and runs queries by scanning the `nprobe` closest
-//! clusters. Produces per-nprobe statistics comparable to `DiskSearchResult`.
+//! Loads only the centroids into RAM. Each query reads the `nprobe` closest cluster files
+//! from disk, producing real I/O metrics comparable to `DiskSearchResult`.
 
 use std::{
     fmt,
     fs::File,
     io::{BufReader, Read},
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -30,21 +30,20 @@ use crate::{
 
 use super::build::u32_to_metric;
 
-// ──────────────────────────────────────────────
-// In-memory representation of a loaded IVF index
-// ──────────────────────────────────────────────
+// ─────────────────────────────────────────
+// Lightweight handle — only centroids in RAM
+// ─────────────────────────────────────────
 
 struct IvfIndex {
     ndims: usize,
     nlist: usize,
-    _npoints: usize,
     _metric: SimilarityMeasure,
-    /// Row-major centroids: nlist × ndims
+    /// Row-major centroids kept in RAM: nlist × ndims
     centroids: Vec<f32>,
-    /// Per-cluster vector IDs
-    cluster_ids: Vec<Vec<u32>>,
-    /// Per-cluster vectors (row-major within each cluster)
-    cluster_vecs: Vec<Vec<f32>>,
+    /// Directory containing per-cluster files
+    clusters_dir: PathBuf,
+    /// Bytes per record: sizeof(u32) + ndims * sizeof(f32)
+    record_bytes: usize,
 }
 
 impl IvfIndex {
@@ -52,9 +51,9 @@ impl IvfIndex {
         let dir = Path::new(dir);
 
         // 1) Meta
-        let (ndims, nlist, npoints, metric) = {
+        let (ndims, nlist, _npoints, metric) = {
             let mut f = BufReader::new(File::open(dir.join("ivf_meta.bin"))?);
-            let mut buf = [0u8; 16]; // 4 × u32
+            let mut buf = [0u8; 16];
             f.read_exact(&mut buf)?;
             let ndims = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
             let nlist = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
@@ -63,7 +62,7 @@ impl IvfIndex {
             (ndims, nlist, npoints, u32_to_metric(metric_u32)?)
         };
 
-        // 2) Centroids
+        // 2) Centroids — the only data kept in RAM
         let centroids = {
             let mut f = BufReader::new(File::open(dir.join("ivf_centroids.bin"))?);
             let mut buf = vec![0u8; nlist * ndims * 4];
@@ -71,46 +70,53 @@ impl IvfIndex {
             bytemuck::cast_slice::<u8, f32>(&buf).to_vec()
         };
 
-        // 3) Inverted lists
-        let mut cluster_ids = Vec::with_capacity(nlist);
-        let mut cluster_vecs = Vec::with_capacity(nlist);
-        {
-            let mut f = BufReader::new(File::open(dir.join("ivf_invlists.bin"))?);
-            for _ in 0..nlist {
-                // Read count
-                let mut count_buf = [0u8; 4];
-                f.read_exact(&mut count_buf)?;
-                let count = u32::from_le_bytes(count_buf) as usize;
-
-                // Read IDs
-                let mut ids_buf = vec![0u8; count * 4];
-                f.read_exact(&mut ids_buf)?;
-                let ids: Vec<u32> = bytemuck::cast_slice::<u8, u32>(&ids_buf).to_vec();
-
-                // Read vectors
-                let mut vecs_buf = vec![0u8; count * ndims * 4];
-                f.read_exact(&mut vecs_buf)?;
-                let vecs: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&vecs_buf).to_vec();
-
-                cluster_ids.push(ids);
-                cluster_vecs.push(vecs);
-            }
-        }
+        let record_bytes = 4 + ndims * 4; // u32 id + ndims × f32
 
         Ok(IvfIndex {
             ndims,
             nlist,
-            _npoints: npoints,
             _metric: metric,
             centroids,
-            cluster_ids,
-            cluster_vecs,
+            clusters_dir: dir.join("clusters"),
+            record_bytes,
         })
+    }
+
+    /// Read a single cluster file from disk. Returns (vector IDs, flat vector data).
+    fn read_cluster(&self, cluster_idx: usize) -> anyhow::Result<(Vec<u32>, Vec<f32>)> {
+        let path = self
+            .clusters_dir
+            .join(format!("cluster_{:04}.bin", cluster_idx));
+        let mut f = BufReader::new(File::open(&path)?);
+
+        // Read count
+        let mut count_buf = [0u8; 4];
+        f.read_exact(&mut count_buf)?;
+        let count = u32::from_le_bytes(count_buf) as usize;
+
+        // Read interleaved records: [id: u32][vec: ndims × f32] per record
+        let mut record_buf = vec![0u8; count * self.record_bytes];
+        f.read_exact(&mut record_buf)?;
+
+        let mut ids = Vec::with_capacity(count);
+        let mut vecs = Vec::with_capacity(count * self.ndims);
+
+        for i in 0..count {
+            let offset = i * self.record_bytes;
+            let id = u32::from_le_bytes(record_buf[offset..offset + 4].try_into().unwrap());
+            ids.push(id);
+
+            let vec_bytes = &record_buf[offset + 4..offset + self.record_bytes];
+            let vec_slice = bytemuck::cast_slice::<u8, f32>(vec_bytes);
+            vecs.extend_from_slice(vec_slice);
+        }
+
+        Ok((ids, vecs))
     }
 }
 
 // ──────────────────────────────────
-// Per-query statistics (lightweight)
+// Per-query statistics
 // ──────────────────────────────────
 
 struct QueryStats {
@@ -159,13 +165,12 @@ fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
-/// Search a single query against the IVF index. Returns (top-k IDs, QueryStats).
+/// Search a single query: rank centroids (RAM), then read `nprobe` cluster files from disk.
 fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<u32>, QueryStats) {
     let start = Instant::now();
-
     let ndims = index.ndims;
 
-    // 1) Find the nprobe closest centroids
+    // 1) Rank centroids (in RAM)
     let mut centroid_dists: Vec<(usize, f32)> = (0..index.nlist)
         .map(|c| {
             let centroid = &index.centroids[c * ndims..(c + 1) * ndims];
@@ -174,9 +179,11 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
         .collect();
     centroid_dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
+    let cpu_after_centroid = start.elapsed();
+
     let probe_count = nprobe.min(index.nlist);
 
-    // 2) Scan the closest clusters and maintain a max-heap of k nearest
+    // 2) Read cluster files from disk and scan
     let mut best: Vec<(f32, u32)> = Vec::with_capacity(k + 1);
     let mut total_comparisons: u64 = 0;
     let mut io_count: u64 = 0;
@@ -184,9 +191,12 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
     let io_start = Instant::now();
 
     for &(c_idx, _) in centroid_dists.iter().take(probe_count) {
-        let ids = &index.cluster_ids[c_idx];
-        let vecs = &index.cluster_vecs[c_idx];
-        io_count += 1; // one "IO" per cluster read
+        // Real disk I/O: read the cluster file
+        let (ids, vecs) = match index.read_cluster(c_idx) {
+            Ok(data) => data,
+            Err(_) => continue, // skip empty/missing clusters
+        };
+        io_count += 1;
 
         for (local_i, &vid) in ids.iter().enumerate() {
             let vec_start = local_i * ndims;
@@ -197,12 +207,10 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
             if best.len() < k {
                 best.push((dist, vid));
                 if best.len() == k {
-                    // Heapify: sort descending so worst is at position 0
                     best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
                 }
             } else if dist < best[0].0 {
                 best[0] = (dist, vid);
-                // Re-sort to maintain max at position 0
                 best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
             }
         }
@@ -212,15 +220,16 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
 
     // Sort results by distance ascending for recall computation
     best.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-
     let result_ids: Vec<u32> = best.iter().map(|(_, id)| *id).collect();
 
     let elapsed = start.elapsed();
+    let cpu_time = cpu_after_centroid + (elapsed - io_start.elapsed().max(io_elapsed));
+
     let stats = QueryStats {
         latency_us: elapsed.as_secs_f64() * 1e6,
         io_count: io_count as f64,
         io_time_us: io_elapsed.as_secs_f64() * 1e6,
-        cpu_time_us: elapsed.as_secs_f64() * 1e6,
+        cpu_time_us: cpu_time.as_secs_f64() * 1e6,
         comparisons: total_comparisons,
     };
 
@@ -231,7 +240,7 @@ pub(super) fn search_ivf_index(
     index_load: &IvfLoad,
     search_params: &IvfSearchPhase,
 ) -> anyhow::Result<IvfSearchStats> {
-    // Load the index
+    // Load centroids only — cluster data stays on disk
     let index = IvfIndex::load(&index_load.load_path)?;
 
     // Load queries
@@ -253,7 +262,7 @@ pub(super) fn search_ivf_index(
     for &nprobe in &search_params.nprobe_list {
         let start = Instant::now();
 
-        // Run all queries in parallel
+        // Run all queries in parallel — each thread does its own disk reads
         let results: Vec<(Vec<u32>, QueryStats)> = (0..num_queries)
             .into_par_iter()
             .map(|qi| {
