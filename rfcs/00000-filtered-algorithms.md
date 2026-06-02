@@ -28,11 +28,11 @@ Beta search is conceptually very simple. It sets a value $\beta \in (0,1]$, and 
 
 The code for beta search is found [here](https://github.com/microsoft/DiskANN/blob/main/diskann-providers/src/model/graph/provider/layers/betafilter.rs).
 
-##### Multihop Search
+#### Multi-hop Search
 
 Multi-hop search augments the regular beam search with a step to gather additional candidates satisfying the filter at each visit, and it only inserts nodes satisfying the filter into the queue. During a visit, the nodes satisfying the predicate are added to the queue. The nodes that do not satisfy the predicate are expanded again, and if their neighbors satisfy the predicate, those neighbors have their distance to the query computed and are added to the exploration queue. Multi-hop differs from the other search algorithms in that it computes more label checks than distance comparisons.
 
-The code for multihop search is found [here](https://github.com/microsoft/DiskANN/blob/main/diskann/src/graph/search/multihop_search.rs).
+The code for multi-hop search is found [here](https://github.com/microsoft/DiskANN/blob/main/diskann/src/graph/search/multihop_search.rs).
 
 ##### Two-Queue Search (929)
 
