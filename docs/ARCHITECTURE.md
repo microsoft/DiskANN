@@ -54,3 +54,28 @@ types themselves.
 5. **Switching formats should be a localized change.** If serialization logic
    is spread across domain types, changing the format becomes a codebase-wide
    migration. Centralizing it in an adapter layer keeps the blast radius small.
+
+Notes:
+- Keep code simple
+- Separation of concerns
+  - New requirement for domain-level inner circle - support Save() and destroy, so later the state can be restored
+  - How to persist that information, versioning, etc. - is not responsibility of the component.
+
+Guiding questions:
+- Should Deserialization() bypass safety checks? For example,  Config::load bypasses checks in Builder
+- Yes - it's ok to have separate ::load() function
+- No - then we essentially having two constructors accepting same parameters in different forms (struct vs BinaryReader)
+ - Alternative option is chaining - it makes the contract between DTO and public API explicit
+   - The component is reponsible for meeting the requirements - it provides api to create a component, and API to get all parameter values required to recreate the component.
+   - A separate component is responsible for persisting the values (incl. versioning, etc.) and controlling mapping between DTO object and the parameters.
+
+Formats like protobuf help reduce probability of breaking changes.
+- Adding optional values is not a breaking change
+- Adding required values is a breaking change - very infrequent.
+
+Example:
+Checkpoint manager - restoration is a
+.save() -> offset
+.create(config, offset)
+
+.save() calls internal components - they call .save() but mainly they also choose serialization format. We want to make them format agonstic - the whole save function should be format agnostic.
