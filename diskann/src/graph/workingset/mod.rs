@@ -95,6 +95,9 @@ pub use map::Map;
 ///   in the input batch to [`multi_insert`](crate::graph::DiskANNIndex::multi_insert) to be
 ///   directly accessible by the `WorkingSet`/[`View`] types.
 ///
+/// For many simple use cases, [`Map::fill`] should be sufficient to provide a good
+/// implementation of [`Fill::fill`].
+///
 /// See Also: [`View`], [`AsWorkingSet`], [`Map`].
 pub trait Fill<WorkingSet>: Accessor {
     /// Any critical error that occurs during [`fill`](Self::fill).

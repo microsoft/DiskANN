@@ -1103,21 +1103,8 @@ impl<T: VectorRepr> BuildQueryComputer<&[T]> for DynamicAccessor<'_, T> {
     }
 }
 
-/// An escape hatch for the blanket implementation of [`workingset::Fill`].
-///
-/// Without an `&[T]: Into<Escape<T>>`, the blanket implementation for `workingset::Map`
-/// is not applicable, allowing customization of `Fill`.
-pub(crate) struct Escape<T>(Box<[T]>);
-
-impl<'a, T> Reborrow<'a> for Escape<T> {
-    type Target = &'a [T];
-    fn reborrow(&'a self) -> Self::Target {
-        &self.0
-    }
-}
-
 pub(crate) struct WorkingSet {
-    map: workingset::Map<u32, Escape<u8>>,
+    map: workingset::Map<u32, Box<[u8]>>,
     contains_unquantized: bool,
 }
 
@@ -1130,21 +1117,7 @@ impl WorkingSet {
     }
 }
 
-impl Deref for WorkingSet {
-    type Target = workingset::Map<u32, Escape<u8>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.map
-    }
-}
-
-impl DerefMut for WorkingSet {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.map
-    }
-}
-
-type WorkingSetView<'a> = workingset::map::View<'a, u32, Escape<u8>>;
+type WorkingSetView<'a> = workingset::map::View<'a, u32, Box<[u8]>>;
 
 impl<T: VectorRepr> workingset::Fill<WorkingSet> for DynamicAccessor<'_, T> {
     type Error = GarnetProviderError;
@@ -1168,34 +1141,34 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet> for DynamicAccessor<'_, T> {
             set.contains_unquantized = true;
         } else if set.contains_unquantized {
             // Working set is polluted by full vectors, it must be cleared
-            set.clear();
+            set.map.clear();
             set.contains_unquantized = false;
         }
 
         // Evict items from the working set to make room if needed.
-        set.prepare(itr.clone());
+        set.map.prepare(itr.clone());
 
         self.filtered_ids.clear();
         for id in itr {
             if id == 0 {
                 if self.quantized
-                    && let Entry::Vacant(e) = set.entry(id)
+                    && let Entry::Vacant(e) = set.map.entry(id)
                 {
                     if let Some(guard) = self.provider.start_point_quant_cache.get(&id) {
-                        e.insert(Escape((&**guard).into()));
+                        e.insert((&**guard).into());
                     } else {
                         return Err(GarnetProviderError::StartPoint);
                     }
-                } else if let Entry::Vacant(e) = set.entry(id) {
+                } else if let Entry::Vacant(e) = set.map.entry(id) {
                     if let Some(guard) = self.provider.start_point_cache.get(&id) {
-                        e.insert(Escape((&**guard).into()));
+                        e.insert((&**guard).into());
                     } else {
                         return Err(GarnetProviderError::StartPoint);
                     }
                 } else {
                     continue;
                 };
-            } else if !set.contains_key(&id) {
+            } else if !set.map.contains_key(&id) {
                 self.filtered_ids.push(4);
                 self.filtered_ids.push(id);
             }
@@ -1211,11 +1184,12 @@ impl<T: VectorRepr> workingset::Fill<WorkingSet> for DynamicAccessor<'_, T> {
             self.provider
                 .callbacks
                 .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
-                    set.insert(self.filtered_ids[id as usize * 2 + 1], Escape(v.into()));
+                    set.map
+                        .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
                 });
         }
 
-        Ok(set.view())
+        Ok(set.map.view())
     }
 }
 
