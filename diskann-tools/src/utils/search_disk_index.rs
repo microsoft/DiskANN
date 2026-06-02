@@ -8,8 +8,12 @@ use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        filter_parameter::{GraphMode, SearchPlan},
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -53,6 +57,9 @@ pub struct SearchDiskIndexParameters<'a> {
     pub l_vec: &'a [u32],
     pub fail_if_recall_below: f32,
     pub num_nodes_to_cache: usize,
+    /// Selects between graph traversal and brute-force linear scan. Combined
+    /// with `vector_filters_file`, drives `SearchPlan` construction at the
+    /// boundary in `search_disk_index`.
     pub is_flat_search: bool,
 }
 
@@ -246,20 +253,26 @@ where
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,
             )| {
-                let vector_filter_function: Box<dyn Fn(&u32) -> bool + Send + Sync> =
-                    if parameters.vector_filters_file.is_none() {
-                        Box::new(|_: &u32| true)
-                    } else {
-                        Box::new(move |vector_id: &u32| vector_filter.contains(vector_id))
-                    };
+                // Build a `SearchPlan` at the boundary from
+                // `(is_flat_search, vector_filters_file)`.
+                let has_filter = parameters.vector_filters_file.is_some();
+                let plan = match (parameters.is_flat_search, has_filter) {
+                    (false, false) => SearchPlan::graph(),
+                    (false, true) => SearchPlan::graph_with(GraphMode::post_filter(
+                        move |vid| vector_filter.contains(&vid),
+                    )),
+                    (true, false) => SearchPlan::flat(),
+                    (true, true) => {
+                        SearchPlan::flat_filtered(move |vid| vector_filter.contains(&vid))
+                    }
+                };
 
                 let result = searcher.search(
                     query,
                     parameters.recall_at,
                     l,
                     Some(parameters.beam_width as usize),
-                    Some(vector_filter_function),
-                    parameters.is_flat_search,
+                    plan,
                 );
 
                 match result {

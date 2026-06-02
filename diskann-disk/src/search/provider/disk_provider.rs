@@ -48,8 +48,8 @@ use tracing::debug;
 
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
-    filter_parameter::{default_vector_filter, VectorFilter},
     search::{
+        filter_parameter::{FilterMode, GraphMode, SearchPlan},
         provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
         traits::{VertexProvider, VertexProviderFactory},
     },
@@ -220,7 +220,10 @@ where
 {
     // This needs to be Arc instead of Rc because DiskSearchStrategy has "Send" trait bound, though this is not expected to be shared across threads.
     io_tracker: IOTracker,
-    vector_filter: &'a (dyn Fn(&u32) -> bool + Send + Sync), // Fn param is u32 as we validate "VectorIdType = u32" everywhere in this provider in trait bounds.
+    /// Projected from `SearchPlan` once in `search_strategy()`. Every downstream
+    /// consumer (`DiskAccessor::pq_distances`, `RerankAndFilter`) dispatches on
+    /// this enum directly — no further `GraphMode` introspection anywhere.
+    filter: FilterMode<'a>,
     query: &'a [Data::VectorDataType],
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
@@ -269,11 +272,11 @@ impl IOTracker {
 
 #[derive(Clone, Copy)]
 pub struct RerankAndFilter<'a> {
-    filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    filter: FilterMode<'a>,
 }
 
 impl<'a> RerankAndFilter<'a> {
-    fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync)) -> Self {
+    fn new(filter: FilterMode<'a>) -> Self {
         Self { filter }
     }
 }
@@ -308,10 +311,14 @@ where
     {
         let provider = accessor.provider;
 
+        // Project the hard post-filter from FilterMode. None means "accept all";
+        // both Filter and BetaFilter contribute the same post-filter predicate.
+        let post_filter = self.filter.post_filter();
+
         let mut uncached_ids = Vec::new();
         let mut reranked = candidates
             .map(|n| n.id)
-            .filter(|id| (self.filter)(id))
+            .filter(|id| post_filter.map_or(true, |f| f(*id)))
             .filter_map(|n| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
@@ -360,6 +367,7 @@ where
             self.query,
             self.vertex_provider_factory,
             self.scratch_pool,
+            self.filter,
         )
     }
 }
@@ -380,7 +388,7 @@ where
     type Processor = RerankAndFilter<'this>;
 
     fn default_post_processor(&self) -> Self::Processor {
-        RerankAndFilter::new(self.vector_filter)
+        RerankAndFilter::new(self.filter)
     }
 }
 
@@ -554,6 +562,9 @@ where
     io_tracker: &'a IOTracker,
     scratch: PoolOption<DiskSearchScratch<Data, VP>>,
     query: &'a [Data::VectorDataType],
+    /// Projected from the search plan; consulted in `pq_distances` to apply
+    /// the per-`FilterMode` traversal-time effect (today: beta biasing).
+    filter: FilterMode<'a>,
 }
 
 impl<Data, VP> DiskAccessor<'_, Data, VP>
@@ -578,7 +589,12 @@ where
         )?;
 
         for (i, id) in ids.iter().enumerate() {
-            let distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
+            let mut distance = self.scratch.pq_scratch.aligned_dist_scratch[i];
+            if let FilterMode::BetaFilter { predicate, beta } = self.filter {
+                if predicate(*id) {
+                    distance *= beta;
+                }
+            }
             f(distance, *id);
         }
 
@@ -588,7 +604,7 @@ where
 
 impl<Data, VP> SearchExt for DiskAccessor<'_, Data, VP>
 where
-    Data: GraphDataType<VectorIdType = u32>,
+    Data: GraphDataType<VectorIdType = u32>, 
     VP: VertexProvider<Data>,
 {
     async fn starting_points(&self) -> ANNResult<Vec<u32>> {
@@ -612,6 +628,7 @@ where
         query: &'a [Data::VectorDataType],
         vertex_provider_factory: &'a VPF,
         scratch_pool: &'a Arc<ObjectPool<DiskSearchScratch<Data, VP>>>,
+        filter: FilterMode<'a>,
     ) -> ANNResult<Self>
     where
         VPF: VertexProviderFactory<Data, VertexProviderType = VP>,
@@ -650,6 +667,7 @@ where
             io_tracker,
             scratch,
             query,
+            filter,
         })
     }
 
@@ -889,15 +907,31 @@ where
         })
     }
 
-    /// Helper method to create a DiskSearchStrategy with common parameters
+    /// Helper method to create a `DiskSearchStrategy` with common parameters.
+    ///
+    /// This is the single site that introspects `GraphMode`'s variants — the
+    /// match below produces a `FilterMode` value that the strategy stores in
+    /// one field. Every downstream consumer dispatches on `strategy.filter`;
+    /// adding a new `GraphMode` variant only requires updating this match.
     fn search_strategy<'a>(
         &'a self,
         query: &'a [Data::VectorDataType],
-        vector_filter: &'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
+        plan: &'a SearchPlan<'a>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
+        let filter = match plan {
+            SearchPlan::FlatScan { filter: None } | SearchPlan::Graph(GraphMode::Unfiltered) => {
+                FilterMode::None
+            }
+            SearchPlan::FlatScan { filter: Some(p) }
+            | SearchPlan::Graph(GraphMode::PostFilter(p)) => FilterMode::Filter(p.as_ref()),
+            SearchPlan::Graph(GraphMode::BetaFilter { predicate, beta }) => FilterMode::BetaFilter {
+                predicate: predicate.as_ref(),
+                beta: *beta,
+            },
+        };
         DiskSearchStrategy {
             io_tracker: IOTracker::default(),
-            vector_filter,
+            filter,
             query,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
@@ -905,15 +939,17 @@ where
     }
 
     /// Perform a brute-force linear scan of all points in the index, returning the
-    /// nearest neighbors that pass `vector_filter`.
+    /// nearest neighbors that pass the strategy's filter.
     ///
     /// The top `neighbors_before_reranking` candidates from the quantized scan will be
-    /// provided to full-precision reranking.
+    /// provided to full-precision reranking. The hard filter comes from
+    /// `strategy.filter` — `FilterMode::None` accepts every vector;
+    /// `FilterMode::Filter`/`FilterMode::BetaFilter` apply the projected predicate.
+    /// (Beta does not affect flat scan; only the predicate is consulted here.)
     async fn flat_search<OB>(
         &self,
         strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
-        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
         neighbors_before_reranking: usize,
         output: &mut OB,
     ) -> ANNResult<graph::index::SearchStats>
@@ -921,6 +957,7 @@ where
         OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
     {
         let provider = self.index.provider();
+        let predicate = strategy.filter.post_filter();
         let mut accessor = strategy
             .search_accessor(provider, &DefaultContext)
             .into_ann_result()?;
@@ -944,7 +981,8 @@ where
         let mut best = NeighborPriorityQueue::new(neighbors_before_reranking);
         let mut cmps = 0u32;
 
-        let mut iter = (0..provider.num_points as u32).filter(vector_filter);
+        let mut iter =
+            (0..provider.num_points as u32).filter(|id| predicate.map_or(true, |f| f(*id)));
         loop {
             id_buffer.clear();
             id_buffer.extend(iter.by_ref().take(batch_size));
@@ -982,8 +1020,7 @@ where
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        vector_filter: Option<VectorFilter<Data>>,
-        is_flat_search: bool,
+        plan: SearchPlan<'_>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; return_list_size as usize];
@@ -1000,8 +1037,7 @@ where
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &vector_filter.unwrap_or(default_vector_filter::<Data>()),
-            is_flat_search,
+            &plan,
         )?;
 
         let mut search_result = SearchResult {
@@ -1037,8 +1073,7 @@ where
         indices: &mut [u32],
         distances: &mut [f32],
         associated_data: &mut [Data::AssociatedDataType],
-        vector_filter: &(dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
-        is_flat_search: bool,
+        plan: &SearchPlan<'_>,
     ) -> ANNResult<SearchResultStats> {
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
@@ -1046,27 +1081,27 @@ where
             &mut associated_data[..k_value],
         );
 
-        let strategy = self.search_strategy(query, vector_filter);
+        let strategy = self.search_strategy(query, plan);
         let timer = Instant::now();
         let k = k_value;
         let l = search_list_size as usize;
-        let stats = if is_flat_search {
-            self.runtime.block_on(self.flat_search(
+        let stats = match plan {
+            SearchPlan::FlatScan { .. } => self.runtime.block_on(self.flat_search(
                 &strategy,
                 query,
-                vector_filter,
                 l,
                 &mut result_output_buffer,
-            ))?
-        } else {
-            let knn_search = Knn::new(k, l, beam_width)?;
-            self.runtime.block_on(self.index.search(
-                knn_search,
-                &strategy,
-                &DefaultContext,
-                strategy.query,
-                &mut result_output_buffer,
-            ))?
+            ))?,
+            SearchPlan::Graph(_) => {
+                let knn_search = Knn::new(k, l, beam_width)?;
+                self.runtime.block_on(self.index.search(
+                    knn_search,
+                    &strategy,
+                    &DefaultContext,
+                    strategy.query,
+                    &mut result_output_buffer,
+                ))?
+            }
         };
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;
@@ -1458,8 +1493,7 @@ mod disk_provider_tests {
                     &mut indices,
                     &mut distances,
                     &mut associated_data,
-                    &(|_| true),
-                    false,
+                    &SearchPlan::graph(),
                 );
 
                 // Calculate the range of the truth_result for this query
@@ -1506,7 +1540,13 @@ mod disk_provider_tests {
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, None, false)
+                    .search(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        beam_width,
+                        SearchPlan::graph(),
+                    )
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1616,8 +1656,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &|_| true,
-            false,
+            &SearchPlan::graph(),
         );
 
         assert!(result.is_err());
@@ -1650,7 +1689,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let plan = SearchPlan::graph();
+        let strategy = search_engine.search_strategy(&query_vector, &plan);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let recorded_search =
@@ -1685,8 +1725,7 @@ mod disk_provider_tests {
             return_list_size,
             search_list_size,
             Some(4),
-            None,
-            false,
+            SearchPlan::graph(),
         );
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
@@ -1772,7 +1811,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let plan = SearchPlan::graph();
+        let strategy = search_engine.search_strategy(&query_vector, &plan);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -2015,6 +2055,15 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; 10];
         let mut associated_data = vec![(); 10];
 
+        // Build the same SearchPlan twice; `vector_filter` is a `fn` pointer (Copy).
+        let make_plan = || -> SearchPlan<'static> {
+            if is_flat_search {
+                SearchPlan::flat_filtered(move |id| vector_filter(&id))
+            } else {
+                SearchPlan::graph_with(GraphMode::post_filter(move |id| vector_filter(&id)))
+            }
+        };
+
         let result = search_engine.search_internal(
             &query,
             10,
@@ -2024,8 +2073,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &vector_filter,
-            is_flat_search,
+            &make_plan(),
         );
 
         assert!(result.is_ok(), "Expected search to succeed");
@@ -2040,14 +2088,7 @@ mod disk_provider_tests {
             "Expected distances to match"
         );
 
-        let result_with_filter = search_engine.search(
-            &query,
-            10,
-            10,
-            None, // beam_width
-            Some(Box::new(vector_filter)),
-            is_flat_search,
-        );
+        let result_with_filter = search_engine.search(&query, 10, 10, None, make_plan());
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
         let result_with_filter_unwrapped = result_with_filter.unwrap();
@@ -2073,6 +2114,164 @@ mod disk_provider_tests {
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
         );
+    }
+
+    // ===========================================================================
+    // BetaFilter behavioral tests — RFC §10
+    // ===========================================================================
+    //
+    // Two tests below (the β=1.0 identity guard and the Case 5 regression) are
+    // defined later in this file (`test_beta_filter_one_equals_post_filter`,
+    // `test_beta_filter_finds_matches_post_filter_misses`). The two tests in
+    // this block complete the §10 coverage:
+    //
+    // * `test_beta_filter_sweep_preserves_reachable_matches` — recall sweep
+    //   across β ∈ {1.0, 0.7, 0.5, 0.3, 0.1}; the existing fixture has no
+    //   filter-selective groundtruth so it asserts invariants rather than true
+    //   recall@k. A future fixture should upgrade this to recall measurements.
+    //
+    // * `test_post_filter_invokes_predicate_no_filter_path_skips_it` —
+    //   no-filter zero-cost counter assertion. Pairs with the structural
+    //   `filter_parameter::tests::filter_mode_none_post_filter_is_none`.
+
+    // -----------------------------------------------------------------------
+    // RFC §10 Gap 2: Recall sweep across β values
+    // -----------------------------------------------------------------------
+    //
+    // Doc requires: case 4 vs case 5 across several β values on a
+    // filter-selective workload. The existing SIFT fixture lacks ground truth
+    // for filter-selective queries (`TEST_TRUTH_RESULT_10PTS_128DIM` is the
+    // *unfiltered* groundtruth), so we can't compute true recall here.
+    //
+    // The scaffolding below sweeps β and verifies (a) every β value in (0, 1]
+    // produces a valid result with the expected matching-ID count, and
+    // (b) result sets across β values may differ but always preserve the
+    // reachable matching set. A future PR that introduces filter-selective
+    // groundtruth fixtures should extend this with `recall@k` comparisons.
+    #[test]
+    fn test_beta_filter_sweep_preserves_reachable_matches() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query = vec![0.1f32; 128];
+        // Reachable matching IDs from `case_4` unfiltered top-10.
+        let pred = |id: u32| id == 72 || id == 87 || id == 170;
+        let expected_matches = [72u32, 87, 170];
+
+        for &beta in &[1.0_f32, 0.7, 0.5, 0.3, 0.1] {
+            let result = search_engine
+                .search(
+                    &query,
+                    10,
+                    10,
+                    None,
+                    SearchPlan::graph_with(GraphMode::beta_filter(pred, beta).unwrap()),
+                )
+                .unwrap_or_else(|_| panic!("BetaFilter β={beta} must succeed"));
+
+            assert_eq!(
+                result.stats.result_count,
+                expected_matches.len() as u32,
+                "β={beta}: expected {} matching IDs, got {}",
+                expected_matches.len(),
+                result.stats.result_count
+            );
+
+            let ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
+            for expected in expected_matches {
+                assert!(
+                    ids.contains(&expected),
+                    "β={beta}: missing expected reachable ID {expected}, got {ids:?}"
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // RFC §10 Gap 3: No-filter zero-cost counter assertion
+    // -----------------------------------------------------------------------
+    //
+    // The structural half of this guarantee is verified in
+    // `filter_parameter::tests::filter_mode_none_post_filter_is_none`:
+    // `FilterMode::None` exposes `post_filter() == None`, so `RerankAndFilter`'s
+    // `map_or(true, |f| f(*id))` short-circuits and `pq_distances`' `if let
+    // BetaFilter { .. }` gate never matches. No closure can be invoked because
+    // none is constructed.
+    //
+    // This test is the behavioral half: it instruments PostFilter with an
+    // atomic counter (positive control — counter must increment), then runs
+    // `SearchPlan::graph()` (no filter — same fixture, same query, no counter
+    // is constructed). The two runs side-by-side prove the gate semantics work.
+    #[test]
+    fn test_post_filter_invokes_predicate_no_filter_path_skips_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query = vec![0.1f32; 128];
+
+        // Positive control: PostFilter must invoke the predicate during
+        // `RerankAndFilter::post_process`. The counter wraps an
+        // `Arc<AtomicUsize>` captured by the closure.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_ref = Arc::clone(&counter);
+        let counting_pred = move |id: u32| {
+            counter_ref.fetch_add(1, Ordering::Relaxed);
+            // accept-all so we don't skew result counts
+            let _ = id;
+            true
+        };
+        let _post = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None,
+                SearchPlan::graph_with(GraphMode::post_filter(counting_pred)),
+            )
+            .expect("post-filter search should succeed");
+        let post_filter_calls = counter.load(Ordering::Relaxed);
+        assert!(
+            post_filter_calls > 0,
+            "PostFilter must invoke the predicate at least once \
+             (RerankAndFilter::post_process); got 0"
+        );
+
+        // No-filter path: SearchPlan::graph() carries no predicate. No closure
+        // is constructed, so structurally there's no closure to invoke. We
+        // verify the search still completes and produces the expected
+        // unfiltered top-10 (per case_1).
+        let no_filter = search_engine
+            .search(&query, 10, 10, None, SearchPlan::graph())
+            .expect("no-filter graph search should succeed");
+        assert_eq!(
+            no_filter.stats.result_count, 10,
+            "SearchPlan::graph() must return the requested top-K with no filter applied"
+        );
+
+        // The structural guarantee (FilterMode::None exposes no post_filter)
+        // is verified in filter_parameter::tests::filter_mode_none_post_filter_is_none.
     }
 
     #[test]
@@ -2103,7 +2302,8 @@ mod disk_provider_tests {
             &mut associated_data,
         );
 
-        let strategy = search_engine.search_strategy(&query_vector, &|_| true);
+        let plan = SearchPlan::graph();
+        let strategy = search_engine.search_strategy(&query_vector, &plan);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
@@ -2152,5 +2352,156 @@ mod disk_provider_tests {
         //Verify the recall is above 60%. The threshold her eis arbitrary, just to make sure when
         // search hits io_limit that it doesn't break and the recall degrades gracefully
         assert!(recall >= 60.0, "Match percentage is below 60%: {}", recall);
+    }
+
+    // ===========================================================================
+    // Beta filter behavioral tests (RFC §10 case-5 regression + β=1.0 equivalence)
+    // ===========================================================================
+    //
+    // These prove that the new `GraphMode::BetaFilter` code path actually
+    // changes search behavior in the documented ways:
+    //
+    // 1. β biases the beam toward matching vectors — so for a selective
+    //    predicate that PostFilter (no β) can't find via plain graph traversal,
+    //    BetaFilter (β < 1) pulls matching IDs into the result set.
+    // 2. β = 1.0 is the identity multiplier on PQ distances — so BetaFilter
+    //    with β = 1.0 must produce identical results to PostFilter for the
+    //    same predicate.
+
+    /// Case-5 regression: the predicate selects IDs {0, 1} which are not in
+    /// the unfiltered top-10 for this query+index (proven by the existing
+    /// `test_search_with_vector_filter::case_2`, where PostFilter returns 0
+    /// matches). With β = 0.5, the beam expansion biases toward IDs 0 and 1
+    /// during PQ scoring, pulling at least one of them into the final
+    /// candidate set.
+    ///
+    /// Assertion: `BetaFilter` must return strictly more matches than
+    /// `PostFilter` for this selective predicate on this fixture. A weaker
+    /// `>=` form would silently pass even if β were entirely no-op.
+    #[test]
+    fn test_beta_filter_finds_matches_post_filter_misses() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 5,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+        let predicate = |id: u32| id == 0 || id == 1;
+
+        let post_filter_count = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                SearchPlan::graph_with(GraphMode::post_filter(predicate)),
+            )
+            .expect("PostFilter search succeeds")
+            .stats
+            .result_count;
+
+        let beta_filter_count = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                SearchPlan::graph_with(
+                    GraphMode::beta_filter(predicate, 0.5).expect("β=0.5 in (0, 1]"),
+                ),
+            )
+            .expect("BetaFilter search succeeds")
+            .stats
+            .result_count;
+
+        assert!(
+            beta_filter_count > post_filter_count,
+            "RFC §10 case-5 regression: β=0.5 should pull matching IDs into the result \
+             set that plain PostFilter misses. PostFilter found {} matches; BetaFilter \
+             found {}. β-biased traversal did not improve over post-filter for this \
+             selective predicate.",
+            post_filter_count,
+            beta_filter_count,
+        );
+    }
+
+    /// β = 1.0 is the identity multiplier on PQ distances in `pq_distances`,
+    /// so the beam-expansion ordering is identical to the plain graph search.
+    /// `BetaFilter` with β = 1.0 must therefore return the same result set as
+    /// `PostFilter` with the same predicate.
+    ///
+    /// This is the boundary-condition test for the β multiplication: it proves
+    /// the β code path is well-behaved at the no-op boundary.
+    #[test]
+    fn test_beta_filter_one_equals_post_filter() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 5,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+        // Predicate from `test_search_with_vector_filter::case_4` — three IDs
+        // that PostFilter is known to find (in the unfiltered top-10).
+        let predicate = |id: u32| id == 72 || id == 87 || id == 170;
+
+        let post_result = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                SearchPlan::graph_with(GraphMode::post_filter(predicate)),
+            )
+            .expect("PostFilter search succeeds");
+
+        let beta_result = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None, // beam_width
+                SearchPlan::graph_with(
+                    GraphMode::beta_filter(predicate, 1.0).expect("β=1.0 in (0, 1]"),
+                ),
+            )
+            .expect("BetaFilter search succeeds");
+
+        assert_eq!(
+            post_result.stats.result_count, beta_result.stats.result_count,
+            "β=1.0 is identity on PQ distances — match counts must agree"
+        );
+
+        let post_ids: Vec<u32> = post_result.results.iter().map(|r| r.vertex_id).collect();
+        let beta_ids: Vec<u32> = beta_result.results.iter().map(|r| r.vertex_id).collect();
+        assert_eq!(
+            post_ids, beta_ids,
+            "β=1.0 is identity on PQ distances — result IDs must be identical"
+        );
+
+        let post_dists: Vec<f32> = post_result.results.iter().map(|r| r.distance).collect();
+        let beta_dists: Vec<f32> = beta_result.results.iter().map(|r| r.distance).collect();
+        // Distances reported are full-precision (post-rerank), not the
+        // PQ-scaled values that traversal saw. They must be exactly equal.
+        for (i, (p, b)) in post_dists.iter().zip(beta_dists.iter()).enumerate() {
+            assert_eq!(
+                p, b,
+                "β=1.0 distance mismatch at position {}: PostFilter={} vs BetaFilter={}",
+                i, p, b
+            );
+        }
     }
 }

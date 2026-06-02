@@ -29,7 +29,7 @@
                     "beam_width": 4,
                     "recall_at": 100,
                     "num_threads": 4,
-                    "is_flat_search": false,
+                    "search_mode": "graph",
                     "distance": "squared_l2",
                     "vector_filters_file": null
                 }

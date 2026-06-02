@@ -13,8 +13,12 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        filter_parameter::{GraphMode, SearchPlan},
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -32,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     backend::disk_index::json_spancollector::JsonSpanCollector,
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase, SearchMode},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -41,7 +45,7 @@ pub(super) struct DiskSearchStats {
     pub(super) num_threads: usize,
     pub(super) beam_width: usize,
     pub(super) recall_at: u32,
-    pub(crate) is_flat_search: bool,
+    pub(crate) search_mode: SearchMode,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
@@ -264,11 +268,18 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                let vector_filter = if search_params.vector_filters_file.is_none() {
-                    None
-                } else {
-                    Some(Box::new(move |vid: &u32| vf.contains(vid))
-                        as Box<dyn Fn(&u32) -> bool + Send + Sync>)
+                // Build a `SearchPlan` at the boundary from the JSON-driven
+                // `(search_mode, vector_filters_file)` combination.
+                let has_filter = search_params.vector_filters_file.is_some();
+                let plan = match (search_params.search_mode, has_filter) {
+                    (SearchMode::Graph, false) => SearchPlan::graph(),
+                    (SearchMode::Graph, true) => SearchPlan::graph_with(
+                        GraphMode::post_filter(move |id| vf.contains(&id)),
+                    ),
+                    (SearchMode::Flat, false) => SearchPlan::flat(),
+                    (SearchMode::Flat, true) => {
+                        SearchPlan::flat_filtered(move |id| vf.contains(&id))
+                    }
                 };
 
                 match searcher.search(
@@ -276,8 +287,7 @@ where
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
-                    vector_filter,
-                    search_params.is_flat_search,
+                    plan,
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
@@ -343,7 +353,7 @@ where
         num_threads: search_params.num_threads,
         beam_width: search_params.beam_width,
         recall_at: search_params.recall_at,
-        is_flat_search: search_params.is_flat_search,
+        search_mode: search_params.search_mode,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
@@ -427,7 +437,14 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Threads,          : {}", self.num_threads)?;
         writeln!(f, "Beam width,       : {}", self.beam_width)?;
         writeln!(f, "Recall at,        : {}", self.recall_at)?;
-        writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
+        writeln!(
+            f,
+            "Search mode,      : {}",
+            match self.search_mode {
+                SearchMode::Graph => "graph",
+                SearchMode::Flat => "flat",
+            }
+        )?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
         writeln!(

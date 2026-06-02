@@ -62,6 +62,22 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) save_path: String,
 }
 
+/// Search-mode selector for the disk-index benchmark.
+///
+/// Maps directly onto `diskann_disk::search::filter_parameter::SearchPlan`'s
+/// top-level variant; combined with `vector_filters_file`, it determines the
+/// final `SearchPlan` constructed at the boundary.
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SearchMode {
+    /// Graph traversal. Optional post-filter from `vector_filters_file`.
+    /// Beta filtering is not yet expressible via JSON config.
+    #[default]
+    Graph,
+    /// Brute-force linear scan. Optional inline filter from `vector_filters_file`.
+    Flat,
+}
+
 /// Search phase configuration
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct DiskSearchPhase {
@@ -71,7 +87,8 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) beam_width: usize,
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
-    pub(crate) is_flat_search: bool,
+    #[serde(default)]
+    pub(crate) search_mode: SearchMode,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
@@ -243,7 +260,7 @@ impl Example for DiskIndexOperation {
             beam_width: 16,
             recall_at: 10,
             num_threads: 8,
-            is_flat_search: false,
+            search_mode: SearchMode::Graph,
             distance: SimilarityMeasure::SquaredL2,
             vector_filters_file: None,
             num_nodes_to_cache: None,
@@ -359,7 +376,14 @@ impl DiskSearchPhase {
         write_field!(f, "Beam Width", self.beam_width)?;
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
-        write_field!(f, "Flat Search", self.is_flat_search)?;
+        write_field!(
+            f,
+            "Search Mode",
+            match self.search_mode {
+                SearchMode::Graph => "graph",
+                SearchMode::Flat => "flat",
+            }
+        )?;
         write_field!(f, "Distance", self.distance)?;
         match &self.vector_filters_file {
             Some(vf) => write_field!(f, "Vector Filters File", vf.display())?,

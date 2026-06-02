@@ -12,9 +12,7 @@
 pub(crate) mod test_utils;
 
 pub mod build;
-pub use build::{
-    disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,
-};
+pub use build::{disk_index_build_parameter, DiskIndexBuildParameters, QuantizationType};
 
 pub mod data_model;
 pub mod search;
