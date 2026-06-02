@@ -16,6 +16,15 @@
 //! by iteratively choosing points that maximize the determinant of the distance matrix.
 //! This creates a diverse set that is both relevant to the query and geometrically spread out.
 //!
+//! Concretely, each candidate vector v_i is scaled by a relevance weight
+//! alpha_i = similarity(d_i)^power / sqrt(eta) derived from its distance d_i
+//! to the query (see `distance_to_similarity`). Letting X be the matrix of
+//! scaled rows x_i = alpha_i * v_i, we approximately maximize
+//! det(X_S * X_S^T + eta * I) over subsets S of size k via greedy pivoted
+//! Gram-Schmidt: at each step we pick the row with the largest residual norm
+//! and deflate the rest against it. See [`greedy_orthogonal_select`] for the
+//! full derivation.
+//!
 //! # Parameters
 //!
 //! - **power**: Relevance weighting exponent (must be > 0.0). Controls the emphasis on
@@ -46,6 +55,7 @@
 //! The algorithm is based on diversity-promoting ranking methods for nearest neighbor search,
 //! as used in approximate nearest neighbor indices like DiskANN.
 
+use diskann_quantization::num::Positive;
 use diskann_utils::views::Matrix;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
@@ -60,7 +70,7 @@ pub fn determinant_diversity_post_process<Id: Copy>(
     query: &[f32],
     k: usize,
     determinant_diversity_eta: f32,
-    determinant_diversity_power: f32,
+    determinant_diversity_power: Positive<f32>,
 ) -> Vec<(Id, f32)> {
     if candidates.is_empty() || query.is_empty() {
         return Vec::new();
@@ -108,7 +118,7 @@ pub fn determinant_diversity_post_process<Id: Copy>(
     greedy_orthogonal_select(
         candidates,
         k,
-        determinant_diversity_power,
+        determinant_diversity_power.into_inner(),
         inv_sqrt_eta,
         distance_range,
     )
@@ -116,12 +126,71 @@ pub fn determinant_diversity_post_process<Id: Copy>(
 
 /// Core greedy selection algorithm for Determinant-Diversity.
 ///
-/// Iteratively selects the candidate with the largest residual norm after projecting
-/// out previously selected candidates. The `inv_sqrt_eta` parameter controls the
-/// ridge-regularization scaling:
+/// # Mathematical formulation
 ///
-/// - `inv_sqrt_eta = 1.0`: exact greedy orthogonalization (eta=0 case)
-/// - `inv_sqrt_eta = 1/sqrt(eta)`: ridge-regularized variant for numerical stability
+/// Let the input candidate set be { (id_i, d_i, v_i) } for i = 1..n, where
+/// d_i is the candidate's distance to the query and v_i is its full-precision
+/// vector in R^dim. Define the per-candidate scale
+///
+///     alpha_i = similarity(d_i)^power * (1 / sqrt(eta))
+///
+/// where similarity(.) in [0, 1] is the normalized "lower-distance-is-better"
+/// score from `distance_to_similarity`, and `1 / sqrt(eta)` is `inv_sqrt_eta`
+/// (it equals 1 in the unregularized eta == 0 branch -- see the caller). The
+/// scaled vectors are
+///
+///     x_i = alpha_i * v_i.
+///
+/// Define the (regularized) Gram matrix of any subset S = { i_1, ..., i_m } as
+///
+///     G_S = X_S * X_S^T + eta * I,
+///
+/// where X_S stacks the rows x_i for i in S. The goal is to pick S of size k
+/// that approximately maximizes det(G_S), i.e. selects vectors whose scaled
+/// rows span the largest volume -- geometrically diverse, while alpha_i keeps
+/// relevance. We solve this greedily, which is equivalent to *column-pivoted
+/// modified Gram-Schmidt / QR* on the rows x_i.
+///
+/// # Algorithm (pivoted QR view)
+///
+/// Maintain a residual vector r_i for each candidate. Initially r_i = x_i and
+/// ||r_i||^2 = <x_i, x_i>. At each step:
+///
+/// 1. **Pivot.** Pick the available candidate i* with the largest residual
+///    norm: i* = argmax over available i of ||r_i||^2. This is the direction
+///    that contributes the most to the running volume / determinant expansion
+///    (since det(G_S) = product of ||r_{i_j*}||^2 along the selection path).
+///
+/// 2. **Project & deflate.** For every remaining candidate i, project r_i
+///    onto the chosen pivot direction r* = r_{i*} and remove that component:
+///
+///        pi_i = <r_i, r*> / ||r*||^2
+///        r_i  := r_i - pi_i * r*
+///
+/// 3. **Norm update (Pythagoras).** Because the new r_i is orthogonal to r*
+///    by construction,
+///
+///        ||r_i_new||^2 = ||r_i||^2 - pi_i^2 * ||r*||^2.
+///
+///    We update the cached squared norm in place using this identity (clamped
+///    at 0 for numerical safety) instead of recomputing the dot product.
+///
+/// Repeat until k pivots are selected. The returned order is the order in
+/// which pivots were chosen, which is the diversity-promoting reranking.
+///
+/// # Parameters
+///
+/// - `inv_sqrt_eta`: scalar 1 / sqrt(eta) baked into the residuals so that
+///   the residual norms reflect the regularized Gram matrix X X^T + eta * I.
+///   Use 1.0 for the unregularized (eta == 0) variant.
+/// - `power`: relevance exponent applied to the per-candidate similarity.
+/// - `distance_range`: min/max distances among the candidates, used to
+///   normalize distances into similarities in [0, 1].
+///
+/// # Complexity
+///
+/// O(n * k * dim) -- for each of k pivots we touch all n residual rows of
+/// length `dim`. Memory is O(n * dim) for the contiguous residual matrix.
 fn greedy_orthogonal_select<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
     k: usize,
@@ -137,12 +206,18 @@ fn greedy_orthogonal_select<Id: Copy>(
 
     let dim = candidates[0].2.len();
 
-    // Use a contiguous Matrix allocation for residuals instead of Vec<Vec<f32>>.
-    // This reduces the number of heap allocations from O(n) to O(1) and improves
-    // cache locality when accessing residuals sequentially during orthogonalization.
+    // Residual matrix R has one row per candidate. Row i starts as the scaled
+    // vector x_i = alpha_i * v_i and is progressively deflated against each
+    // selected pivot direction. A contiguous Matrix is used (instead of
+    // Vec<Vec<f32>>) to keep allocations O(1) and improve cache locality
+    // during the per-pivot sweep over rows.
     let mut residuals = Matrix::new(0.0f32, n, dim);
+    // Cached squared norms ||r_i||^2 for each row. Updated in place via the
+    // Pythagorean identity in step 3 above.
     let mut norms_sq = Vec::with_capacity(n);
 
+    // Step 0: initialize residuals r_i = alpha_i * v_i and their squared norms.
+    // alpha_i = similarity(d_i)^power * inv_sqrt_eta.
     for (i, (_, distance_to_query, v)) in candidates.iter().enumerate() {
         let scale =
             distance_to_similarity(*distance_to_query, distance_range).powf(power) * inv_sqrt_eta;
@@ -156,9 +231,15 @@ fn greedy_orthogonal_select<Id: Copy>(
 
     let mut available = vec![true; n];
     let mut selected = Vec::with_capacity(k);
+    // Scratch buffer: projection coefficient pi_i for each row against the
+    // current pivot. Sized n once and overwritten each iteration.
     let mut projections = vec![0.0f32; n];
 
     for _ in 0..k {
+        // --- Step 1: Pivot ---
+        // Pick the available candidate with the largest residual norm.
+        // partial_cmp can return None for NaN; treat NaN as Equal so the
+        // iterator's max picks the first non-NaN candidate it has seen.
         let best_idx = available
             .iter()
             .enumerate()
@@ -177,19 +258,26 @@ fn greedy_orthogonal_select<Id: Copy>(
         selected.push(selected_index);
         available[selected_index] = false;
 
+        // No more deflation needed once the last pivot has been chosen.
         if selected.len() == k {
             break;
         }
 
         let best_norm_sq = norms_sq[selected_index];
+        // If the pivot has zero (or numerically negative) residual norm, the
+        // remaining rows already lie in the span of previously selected
+        // pivots; skip deflation to avoid dividing by zero.
         if best_norm_sq <= 0.0 {
             continue;
         }
 
+        // 1 / ||r*||^2, factored out of the projection formula below.
         let inv_norm_sq = 1.0 / best_norm_sq;
-        // Clone selected row before mutable iteration over remaining rows.
+        // Snapshot the pivot row r* before mutably iterating over the other
+        // rows of `residuals` (they share the same backing storage).
         let r_star_copy: Vec<f32> = residuals.row(selected_index).to_vec();
 
+        // --- Step 2a: Compute projection coefficients pi_i = <r_i, r*> / ||r*||^2.
         for i in 0..n {
             if !available[i] {
                 projections[i] = 0.0;
@@ -198,6 +286,8 @@ fn greedy_orthogonal_select<Id: Copy>(
             }
         }
 
+        // --- Step 2b: Deflate r_i <- r_i - pi_i * r*, and
+        // --- Step 3:  update ||r_i||^2 <- ||r_i||^2 - pi_i^2 * ||r*||^2.
         for i in 0..n {
             if !available[i] {
                 continue;
@@ -208,6 +298,7 @@ fn greedy_orthogonal_select<Id: Copy>(
                 *residual -= projection * star;
             }
 
+            // Pythagorean update; clamp at 0 to absorb floating-point drift.
             norms_sq[i] = (norms_sq[i] - projection * projection * best_norm_sq).max(0.0);
         }
     }
@@ -221,6 +312,22 @@ fn greedy_orthogonal_select<Id: Copy>(
         .collect()
 }
 
+/// Maps a raw distance into a similarity score in `(0, 1]` using the candidate
+/// set's distance range.
+///
+/// DiskANN distance semantics are *lower is better*, so we invert and rescale
+/// against the observed [min, max] range:
+///
+///     similarity(d) = max((d_max - d) / (d_max - d_min), 0) + EPSILON.
+///
+/// - The numerator flips the order so that the *closest* candidate gets the
+///   highest similarity (~1) and the *farthest* gets ~0.
+/// - The denominator is clamped to `f32::EPSILON` so a degenerate range
+///   (d_max == d_min) produces a finite, equal score for all candidates
+///   instead of a divide-by-zero.
+/// - The trailing `+ EPSILON` ensures the result is strictly positive, so
+///   that `similarity(d).powf(power)` never produces a hard zero scale (which
+///   would erase a candidate from the QR pivoting and bias selection).
 fn distance_to_similarity(distance: f32, distance_range: DistanceRange) -> f32 {
     let span = (distance_range.max - distance_range.min).max(f32::EPSILON);
 
@@ -238,17 +345,22 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 mod tests {
     use super::*;
 
+    /// Test helper: wrap a positive f32 power value.
+    fn p(value: f32) -> Positive<f32> {
+        Positive::new(value).unwrap()
+    }
+
     #[test]
     fn test_empty_candidates() {
         let result =
-            determinant_diversity_post_process::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, 1.0);
+            determinant_diversity_post_process::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_empty_query() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
-        let result = determinant_diversity_post_process(candidates, &[], 5, 0.5, 1.0);
+        let result = determinant_diversity_post_process(candidates, &[], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -260,14 +372,14 @@ mod tests {
             (1u32, 0.3, vec![1.0]), // Wrong dimension
         ];
         let query = &[1.0, 2.0, 3.0];
-        let _ = determinant_diversity_post_process(candidates, query, 5, 0.5, 1.0);
+        let _ = determinant_diversity_post_process(candidates, query, 5, 0.5, p(1.0));
     }
 
     #[test]
     fn test_single_candidate() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
         let query = &[1.0, 2.0];
-        let result = determinant_diversity_post_process(candidates, query, 5, 0.5, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 5, 0.5, p(1.0));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, 0);
     }
@@ -276,7 +388,7 @@ mod tests {
     fn test_k_larger_than_candidates() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 10, 0.5, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 10, 0.5, p(1.0));
         assert_eq!(result.len(), 2); // Should return min(k, candidates.len())
     }
 
@@ -288,7 +400,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 1.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 1.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on diversity metric with eta > 0
@@ -303,7 +415,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on greedy orthogonalization (eta == 0)
@@ -316,8 +428,8 @@ mod tests {
         let query = &[1.0, 1.0];
 
         // Test with different power values - should still work without panicking
-        let result1 = determinant_diversity_post_process(candidates.clone(), query, 2, 0.0, 1.0);
-        let result2 = determinant_diversity_post_process(candidates, query, 2, 0.0, 2.0);
+        let result1 = determinant_diversity_post_process(candidates.clone(), query, 2, 0.0, p(1.0));
+        let result2 = determinant_diversity_post_process(candidates, query, 2, 0.0, p(2.0));
 
         assert_eq!(result1.len(), 2);
         assert_eq!(result2.len(), 2);
@@ -327,7 +439,7 @@ mod tests {
     fn test_distances_preserved() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
 
         // Verify that distances are preserved from input
         assert!(result.iter().all(|(_, dist)| *dist == 0.5 || *dist == 0.3));
@@ -347,7 +459,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]), // nearly parallel to 0
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
 
         // Should select 2 candidates
         assert_eq!(result.len(), 2);
@@ -369,7 +481,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]),
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.5, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.5, p(1.0));
 
         assert_eq!(result.len(), 2);
         let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
@@ -391,7 +503,7 @@ mod tests {
         let query = &[1.0, 0.0];
 
         // With high power, relevance is heavily weighted so the closest candidate dominates
-        let result = determinant_diversity_post_process(candidates.clone(), query, 1, 0.0, 10.0);
+        let result = determinant_diversity_post_process(candidates.clone(), query, 1, 0.0, p(10.0));
         assert_eq!(result.len(), 1);
         // Closest candidate should be preferred due to high power weighting
         assert_eq!(
@@ -408,7 +520,7 @@ mod tests {
             (1u32, 0.5, vec![0.0, 1.0]), // same distance as 0
         ];
         let query = &[1.0, 0.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
 
         // Should still return candidates without panicking
         assert_eq!(result.len(), 2);
@@ -424,7 +536,7 @@ mod tests {
         ];
         let query = &[1.0, 1.0];
         // eta=0.0 must invoke greedy path, not ridge-regularized
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, 1.0);
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
     }
 }

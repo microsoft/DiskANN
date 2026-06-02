@@ -10,6 +10,7 @@ use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::Access
 use diskann_providers::model::graph::provider::async_::{
     determinant_diversity_post_process, inmem,
 };
+use diskann_quantization::num::Positive;
 use diskann_utils::future::AsyncFriendly;
 
 pub(crate) trait FullPrecisionVectorAccessor: Accessor + Send {
@@ -80,7 +81,7 @@ where
             query.as_ref(),
             candidates.len(),
             self.eta,
-            self.power,
+            Positive::new(self.power).expect("power must be > 0"),
         );
 
         Ok(output.extend(reranked))

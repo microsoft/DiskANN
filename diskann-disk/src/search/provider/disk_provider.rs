@@ -41,6 +41,7 @@ use diskann_providers::{
     },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
+use diskann_quantization::num::Positive;
 use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
@@ -429,7 +430,7 @@ where
             &query_f32,
             usize::MAX,
             self.eta,
-            self.power,
+            Positive::new(self.power).expect("power must be > 0"),
         );
 
         Ok(
