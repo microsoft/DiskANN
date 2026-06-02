@@ -253,17 +253,17 @@ where
     }
 
     /// Insert a vector into the index with the given `id` and `vector`.
-    pub fn insert<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    pub fn insert<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         id: &DP::ExternalId,
         vector: T,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        S: InsertStrategy<DP, T>,
+        S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
-        T: Copy + Send,
+        T: Copy + Send + 'a,
     {
         async move {
             let guard = self
@@ -401,6 +401,7 @@ where
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
         S: for<'a> InsertStrategy<
+                'a,
                 DP,
                 B::Element<'a>,
                 PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
@@ -613,6 +614,7 @@ where
     where
         B: Batch,
         S: for<'a> InsertStrategy<
+                'a,
                 DP,
                 B::Element<'a>,
                 PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
@@ -1408,7 +1410,7 @@ where
     where
         Self: 'static + Send + Sync,
         S: InplaceDeleteStrategy<DP>
-            + for<'a> SearchStrategy<DP, S::DeleteElement<'a>>
+            + for<'a> SearchStrategy<'a, DP, S::DeleteElement<'a>>
             + Send
             + Sync
             + Clone,
@@ -2078,40 +2080,42 @@ where
     /// let params = Range::new(100, 0.5)?;
     /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     /// ```
-    pub fn search<S, T, O, OB, P>(
-        &self,
+    pub fn search<'a, S, T, O, OB, P>(
+        &'a self,
         search_params: P,
-        strategy: &S,
-        context: &DP::Context,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T>,
-        S: glue::DefaultPostProcessor<DP, T, O>,
+        P: Search<'a, DP, S, T>,
+        S: glue::DefaultPostProcessor<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        T: 'a,
     {
         let processor = strategy.default_post_processor();
         self.search_with(search_params, strategy, processor, context, query, output)
     }
 
     /// Execute a search with an explicit post-processor parameter.
-    pub fn search_with<S, T, O, OB, P, PP>(
-        &self,
+    pub fn search_with<'a, S, T, O, OB, P, PP>(
+        &'a self,
         search_params: P,
-        strategy: &S,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T>,
-        S: glue::SearchStrategy<DP, T>,
-        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        P: Search<'a, DP, S, T>,
+        S: glue::SearchStrategy<'a, DP, T>,
+        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        T: 'a,
     {
         search_params.search(self, strategy, processor, context, query, output)
     }
@@ -2126,13 +2130,13 @@ where
     /// yields successive pages of nearest-neighbor results.
     pub fn paged_search<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
-        S: SearchStrategy<DP, T>,
+        S: SearchStrategy<'a, DP, T>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2147,14 +2151,14 @@ where
     /// provide custom starting points for the graph traversal.
     pub fn paged_search_with_init_ids<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
-        S: SearchStrategy<DP, T>,
+        S: SearchStrategy<'a, DP, T>,
         T: Copy + Send + 'a,
     {
         async move {

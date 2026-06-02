@@ -87,7 +87,7 @@ async fn test_sift_256_vectors_with_quant_vectors() {
 
     for (pos, (vector, _associated_data)) in dataset_iterator.enumerate() {
         index
-            .insert(FullPrecision, &DefaultContext, &(pos as u32), &vector)
+            .insert(&FullPrecision, &DefaultContext, &(pos as u32), &vector)
             .await
             .unwrap();
     }

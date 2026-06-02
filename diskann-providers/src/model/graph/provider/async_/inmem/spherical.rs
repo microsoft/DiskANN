@@ -545,7 +545,8 @@ impl Quantized {
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
 /// approximate search, so the post-processing step includes a [`Rerank`] stage.
-impl<D, Ctx, T> SearchStrategy<FullPrecisionProvider<T, SphericalStore, D, Ctx>, &[T]> for Quantized
+impl<'a, D, Ctx, T> SearchStrategy<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -553,19 +554,20 @@ where
 {
     type QueryComputer =
         UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
-    type SearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a FullPrecisionProvider<T, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, self.layout, self.is_search))
     }
 }
 
-impl<D, Ctx, T> DefaultPostProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, &[T]>
+impl<'a, D, Ctx, T>
+    DefaultPostProcessor<'a, FullPrecisionProvider<T, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
     T: VectorRepr,
@@ -578,7 +580,8 @@ where
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
 /// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
-impl<D, Ctx, T> SearchStrategy<DefaultProvider<NoStore, SphericalStore, D, Ctx>, &[T]> for Quantized
+impl<'a, D, Ctx, T> SearchStrategy<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -586,19 +589,20 @@ where
 {
     type QueryComputer =
         UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
-    type SearchAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
+    type SearchAccessor = QuantAccessor<'a, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a DefaultProvider<NoStore, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, self.layout, self.is_search))
     }
 }
 
-impl<D, Ctx, T> DefaultPostProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, &[T]>
+impl<'a, D, Ctx, T>
+    DefaultPostProcessor<'a, DefaultProvider<NoStore, SphericalStore, D, Ctx>, &'a [T]>
     for Quantized
 where
     T: VectorRepr,
@@ -678,12 +682,13 @@ where
     }
 }
 
-impl<V, D, Ctx, T> InsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, &[T]> for Quantized
+impl<'a, V, D, Ctx, T> InsertStrategy<'a, DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>
+    for Quantized
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
-    Quantized: for<'a> SearchStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<'a, DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -699,6 +704,7 @@ where
     Ctx: ExecutionContext,
     B: glue::Batch,
     Self: for<'a> InsertStrategy<
+            'a,
             DefaultProvider<V, SphericalStore, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,

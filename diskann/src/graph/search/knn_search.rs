@@ -142,11 +142,11 @@ impl Knn {
     }
 }
 
-impl<DP, S, T> Search<DP, S, T> for Knn
+impl<'a, DP, S, T> Search<'a, DP, S, T> for Knn
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
-    T: Copy + Send + Sync,
+    S: SearchStrategy<'a, DP, T>,
+    T: Copy + Send + Sync + 'a,
 {
     type Output = SearchStats;
 
@@ -177,16 +177,16 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -242,27 +242,27 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, SR> Search<DP, S, T> for RecordedKnn<'r, SR>
+impl<'a, DP, S, T, SR> Search<'a, DP, S, T> for RecordedKnn<'a, SR>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
-    T: Copy + Send + Sync,
+    S: SearchStrategy<'a, DP, T>,
+    T: Copy + Send + Sync + 'a,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {

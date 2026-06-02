@@ -238,16 +238,16 @@ impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     }
 }
 
-impl<'x> SearchStrategy<TestProvider, &'x [f32]> for Flaky {
-    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<&'x [f32]>>::QueryComputer;
-    type SearchAccessor<'a> = FlakyAccessor<'a>;
+impl<'a> SearchStrategy<'a, TestProvider, &'a [f32]> for Flaky {
+    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<&'a [f32]>>::QueryComputer;
+    type SearchAccessor = FlakyAccessor<'a>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a TestProvider,
         _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(FlakyAccessor::new(
             provider,
             self.fail_every,
@@ -256,7 +256,7 @@ impl<'x> SearchStrategy<TestProvider, &'x [f32]> for Flaky {
     }
 }
 
-impl DefaultPostProcessor<TestProvider, &[f32]> for Flaky {
+impl<'a> DefaultPostProcessor<'a, TestProvider, &'a [f32]> for Flaky {
     default_post_processor!(CopyIds);
 }
 
@@ -293,7 +293,7 @@ impl PruneStrategy<TestProvider> for Flaky {
     }
 }
 
-impl InsertStrategy<TestProvider, &[f32]> for Flaky {
+impl<'a> InsertStrategy<'a, TestProvider, &'a [f32]> for Flaky {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self {

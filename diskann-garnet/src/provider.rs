@@ -1435,22 +1435,22 @@ impl<'a, 'b, T: VectorRepr> SearchPostProcessStep<DynamicAccessor<'a, T>, &'b [T
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, &[T]> for DynamicQuantization {
-    type SearchAccessor<'a> = DynamicAccessor<'a, T>;
+impl<'a, T: VectorRepr> SearchStrategy<'a, GarnetProvider<T>, &'a [T]> for DynamicQuantization {
+    type SearchAccessor = DynamicAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = GarnetQueryComputer;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a GarnetProvider<T>,
         context: &'a <GarnetProvider<T> as DataProvider>::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let quantized = provider.is_quantized();
         Ok(DynamicAccessor::new(provider, context, quantized))
     }
 }
 
-impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, &[T], GarnetId>
+impl<'a, T: VectorRepr> DefaultPostProcessor<'a, GarnetProvider<T>, &'a [T], GarnetId>
     for DynamicQuantization
 {
     default_post_processor!(
@@ -1482,14 +1482,14 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for DynamicQuantization {
     }
 }
 
-impl<T: VectorRepr> InsertStrategy<GarnetProvider<T>, &[T]> for DynamicQuantization {
+impl<'a, T: VectorRepr> InsertStrategy<'a, GarnetProvider<T>, &'a [T]> for DynamicQuantization {
     type PruneStrategy = Self;
 
-    fn insert_search_accessor<'a>(
+    fn insert_search_accessor(
         &'a self,
         provider: &'a GarnetProvider<T>,
         context: &'a <GarnetProvider<T> as DataProvider>::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let quantized = provider.is_quantized();
         Ok(DynamicAccessor::new(provider, context, quantized))
     }

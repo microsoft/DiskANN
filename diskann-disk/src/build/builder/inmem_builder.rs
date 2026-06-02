@@ -119,7 +119,7 @@ where
         vector: &'a [T],
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
         Box::pin(async move {
-            self.insert(FullPrecision, &DefaultContext, &id, vector)
+            self.insert(&FullPrecision, &DefaultContext, &id, vector)
                 .await
         })
     }
@@ -205,7 +205,7 @@ impl<T, Q> InmemIndexBuilder<T> for QuantInMemBuilder<T, Q>
 where
     T: VectorRepr,
     Q: AsyncFriendly + VectorStore + SetElementHelper<T>,
-    Quantized: for<'a> InsertStrategy<DefaultProvider<NoStore, Q>, &'a [T]>
+    Quantized: for<'a> InsertStrategy<'a, DefaultProvider<NoStore, Q>, &'a [T]>
         + PruneStrategy<DefaultProvider<NoStore, Q>>,
     DefaultProvider<NoStore, Q>: SaveWith<(u32, AsyncIndexMetadata), Error = ANNError>,
 {
@@ -230,7 +230,7 @@ where
     ) -> Pin<Box<dyn SendFuture<ANNResult<()>> + 'a>> {
         Box::pin(async move {
             self.index()
-                .insert(Quantized, &DefaultContext, &id, vector)
+                .insert(&Quantized, &DefaultContext, &id, vector)
                 .await
         })
     }

@@ -339,21 +339,22 @@ where
     }
 }
 
-impl<'this, Data, ProviderFactory> SearchStrategy<DiskProvider<Data>, &[Data::VectorDataType]>
+impl<'this, Data, ProviderFactory>
+    SearchStrategy<'this, DiskProvider<Data>, &'this [Data::VectorDataType]>
     for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
     type QueryComputer = DiskQueryComputer;
-    type SearchAccessor<'a> = DiskAccessor<'a, Data, ProviderFactory::VertexProviderType>;
+    type SearchAccessor = DiskAccessor<'this, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a DiskProvider<Data>,
+    fn search_accessor(
+        &'this self,
+        provider: &'this DiskProvider<Data>,
         _context: &DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         DiskAccessor::new(
             provider,
             &self.io_tracker,
@@ -366,8 +367,9 @@ where
 
 impl<'this, Data, ProviderFactory>
     DefaultPostProcessor<
+        'this,
         DiskProvider<Data>,
-        &[Data::VectorDataType],
+        &'this [Data::VectorDataType],
         (
             <DiskProvider<Data> as DataProvider>::InternalId,
             Data::AssociatedDataType,
@@ -379,7 +381,7 @@ where
 {
     type Processor = RerankAndFilter<'this>;
 
-    fn default_post_processor(&self) -> Self::Processor {
+    fn default_post_processor(&'this self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }

@@ -243,14 +243,11 @@ mod tests {
     ) where
         DP: DataProvider<ExternalId = u32> + for<'a> SetElement<&'a [f32]>,
         DP::Context: Default,
-        S: for<'a> InsertStrategy<DP, &'a [f32]> + Clone,
+        S: for<'a> InsertStrategy<'a, DP, &'a [f32]> + Clone,
     {
         let ctx = &DP::Context::default();
         for (i, v) in data.row_iter().enumerate() {
-            index
-                .insert(strategy.clone(), ctx, &(i as u32), v)
-                .await
-                .unwrap();
+            index.insert(&strategy, ctx, &(i as u32), v).await.unwrap();
         }
     }
 

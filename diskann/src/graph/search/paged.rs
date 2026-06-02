@@ -25,14 +25,19 @@ use crate::{
 ///
 /// See also: [`DiskANNIndex::paged_search`], [`DiskANNIndex::paged_search_with_init_ids`].
 #[derive(Debug)]
-pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
+pub struct PagedSearch<'a, DP, S, T>
+where
+    DP: DataProvider,
+    S: SearchStrategy<'a, DP, T>,
+    T: 'a,
+{
     pub(in crate::graph) index: &'a DiskANNIndex<DP>,
     pub(in crate::graph) context: &'a DP::Context,
     pub(in crate::graph) scratch: SearchScratch<DP::InternalId>,
     pub(in crate::graph) computed_result: Vec<Neighbor<DP::InternalId>>,
     pub(in crate::graph) next_result_index: usize,
     pub(in crate::graph) search_param_l: usize,
-    pub(in crate::graph) strategy: S,
+    pub(in crate::graph) strategy: &'a S,
     pub(in crate::graph) computer: S::QueryComputer,
     // Note: The `fn` is so we derive `Send` and `Sync` more easily: `fn` is always Send/Sync.
     pub(in crate::graph) _query: std::marker::PhantomData<fn(T)>,
@@ -41,7 +46,8 @@ pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
 impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    S: SearchStrategy<'a, DP, T>,
+    T: 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///

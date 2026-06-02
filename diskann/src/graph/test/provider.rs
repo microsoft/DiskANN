@@ -1151,12 +1151,12 @@ impl Default for Strategy {
     }
 }
 
-impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
+impl<'a> glue::SearchStrategy<'a, Provider, &'a [f32]> for Strategy {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
     type SearchAccessorError = Infallible;
-    type SearchAccessor<'a> = Accessor<'a>;
+    type SearchAccessor = Accessor<'a>;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
@@ -1165,7 +1165,7 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
     }
 }
 
-impl glue::DefaultPostProcessor<Provider, &[f32]> for Strategy {
+impl<'a> glue::DefaultPostProcessor<'a, Provider, &'a [f32]> for Strategy {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>);
 }
 
@@ -1197,18 +1197,18 @@ impl glue::PruneStrategy<Provider> for Strategy {
     }
 }
 
-impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
+impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         self.clone()
     }
 
-    fn insert_search_accessor<'a>(
+    fn insert_search_accessor(
         &'a self,
         provider: &'a Provider,
         _context: &'a Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(Accessor::new(provider))
     }
 }
