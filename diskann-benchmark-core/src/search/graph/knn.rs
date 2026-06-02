@@ -118,6 +118,16 @@ where
     }
 }
 
+/// Marker trait for post-processors that are configured on [`KNN`] and should
+/// be applied through `index.search_with(...)` in the benchmark search pipeline.
+///
+/// Implement this for any [`glue::SearchPostProcess`] type that should be invoked
+/// via [`KNN::with_postprocessor`] / [`graph::DiskANNIndex::search_with`]. The
+/// marker is required to keep the two `Search` impls on [`KNN`] disjoint under
+/// Rust's coherence rules: a generic post-processor type parameter cannot
+/// otherwise be distinguished from the no-post-processing default `PP = ()`.
+pub trait ConfiguredPostProcessor {}
+
 /// Additional metrics collected during [`KNN`] search.
 ///
 /// # Note
@@ -178,6 +188,68 @@ where
                 buffer,
             )
             .await?;
+
+        Ok(Metrics {
+            comparisons: stats.cmps,
+            hops: stats.hops,
+        })
+    }
+}
+
+impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
+where
+    DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
+    S: for<'q> glue::SearchStrategy<DP, &'q [T]> + Clone + AsyncFriendly,
+    PP: ConfiguredPostProcessor
+        + for<'a, 'q> glue::SearchPostProcess<
+            <S as glue::SearchStrategy<DP, &'q [T]>>::SearchAccessor<'a>,
+            &'q [T],
+            DP::ExternalId,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+    T: AsyncFriendly + Clone,
+{
+    type Id = DP::ExternalId;
+    type Parameters = graph::search::Knn;
+    type Output = Metrics;
+
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
+        search::IdCount::Fixed(parameters.k_value())
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &Self::Parameters,
+        buffer: &mut O,
+        index: usize,
+    ) -> ANNResult<Self::Output>
+    where
+        O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
+    {
+        let context = DP::Context::default();
+        let knn_search = *parameters;
+        let processor = self
+            .post_processor
+            .as_ref()
+            .expect("configured post-processor is required for this KNN variant")
+            .clone();
+
+        let stats = graph::search::Search::search(
+            knn_search,
+            self.index.as_ref(),
+            self.strategy.get(index)?,
+            processor,
+            &context,
+            self.queries.row(index),
+            buffer,
+        )
+        .await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,

@@ -442,109 +442,9 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
-struct DeterminantDiversityKnn {
-    index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
-    queries: Arc<Matrix<f32>>,
-    strategy: benchmark_core::search::graph::Strategy<common::FullPrecision>,
-    post_processor: post_processor::DeterminantDiversity,
-}
-
-impl DeterminantDiversityKnn {
-    fn new(
-        index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
-        queries: Arc<Matrix<f32>>,
-        strategy: benchmark_core::search::graph::Strategy<common::FullPrecision>,
-        post_processor: post_processor::DeterminantDiversity,
-    ) -> anyhow::Result<Arc<Self>> {
-        strategy.length_compatible(queries.nrows())?;
-        Ok(Arc::new(Self {
-            index,
-            queries,
-            strategy,
-            post_processor,
-        }))
-    }
-}
-
-impl benchmark_core::search::Search for DeterminantDiversityKnn
-where
-    common::FullPrecision: for<'a, 'b> glue::SearchStrategy<
-        FullPrecisionProvider<f32>,
-        &'a [f32],
-        SearchAccessor<'b>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
-    >,
+impl benchmark_core::search::graph::knn::ConfiguredPostProcessor
+    for post_processor::DeterminantDiversity
 {
-    type Id = u32;
-    type Parameters = diskann::graph::search::Knn;
-    type Output = benchmark_core::search::graph::knn::Metrics;
-
-    fn num_queries(&self) -> usize {
-        self.queries.nrows()
-    }
-
-    fn id_count(&self, parameters: &Self::Parameters) -> benchmark_core::search::IdCount {
-        benchmark_core::search::IdCount::Fixed(parameters.k_value())
-    }
-
-    async fn search<O>(
-        &self,
-        parameters: &Self::Parameters,
-        buffer: &mut O,
-        index: usize,
-    ) -> diskann::ANNResult<Self::Output>
-    where
-        O: diskann::graph::SearchOutputBuffer<Self::Id> + Send,
-    {
-        let context = DefaultContext;
-        let stats = self
-            .index
-            .search_with(
-                *parameters,
-                self.strategy.get(index)?,
-                self.post_processor,
-                &context,
-                self.queries.row(index),
-                buffer,
-            )
-            .await?;
-
-        Ok(benchmark_core::search::graph::knn::Metrics::new(
-            stats.cmps, stats.hops,
-        ))
-    }
-}
-
-impl search::knn::Knn<u32> for Arc<DeterminantDiversityKnn>
-where
-    common::FullPrecision: for<'a, 'b> glue::SearchStrategy<
-        FullPrecisionProvider<f32>,
-        &'a [f32],
-        SearchAccessor<'b>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
-    >,
-{
-    fn search_all(
-        &self,
-        parameters: Vec<benchmark_core::search::Run<diskann::graph::search::Knn>>,
-        groundtruth: &dyn benchmark_core::recall::Rows<u32>,
-        recall_k: usize,
-        recall_n: usize,
-    ) -> anyhow::Result<Vec<crate::backend::index::result::SearchResults>> {
-        let results = benchmark_core::search::search_all(
-            self.clone(),
-            parameters.into_iter(),
-            benchmark_core::search::graph::knn::Aggregator::new(
-                groundtruth,
-                recall_k,
-                recall_n,
-                benchmark_core::recall::GroundTruthMode::Fixed,
-            ),
-        )?;
-
-        Ok(results
-            .into_iter()
-            .map(crate::backend::index::result::SearchResults::new)
-            .collect())
-    }
 }
 
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
@@ -578,7 +478,7 @@ where
         let groundtruth =
             datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(topk.max_k()))?;
 
-        let knn = DeterminantDiversityKnn::new(
+        let knn = benchmark_core::search::graph::KNN::with_postprocessor(
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
