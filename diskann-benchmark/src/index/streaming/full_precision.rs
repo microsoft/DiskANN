@@ -6,164 +6,26 @@
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, InplaceDeleteMethod},
+    graph::DiskANNIndex,
     provider::{self, Delete},
-    utils::{VectorRepr, ONE},
+    utils::ONE,
     ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_benchmark_core::recall::Rows;
+use diskann_benchmark_core::{
+    build::{self, ids::Range, Parallelism},
+    streaming::graph::DropDeleted,
+};
 use diskann_providers::model::graph::provider::async_::{
-    common,
-    inmem::{self, DefaultProvider},
+    inmem::DefaultProvider,
     TableDeleteProviderAsync,
 };
-use diskann_utils::{
-    future::AsyncFriendly,
-    views::{Matrix, MatrixView},
-};
+use diskann_utils::future::AsyncFriendly;
+use tokio::runtime::Runtime;
 
 use super::{
+    runner::Maintainer,
     stats::{GenericStats, StreamStats},
-    ManagedStream,
 };
-use crate::{
-    index::{
-        build::{BuildKind, BuildStats},
-        search::knn,
-    },
-    inputs::graph_index::TopkSearchPhase,
-};
-
-type FullPrecisionIndex<T> = Arc<
-    DiskANNIndex<
-        DefaultProvider<inmem::FullPrecisionStore<T>, common::NoStore, TableDeleteProviderAsync>,
-    >,
->;
-
-/// Full-Precision Streaming Index Implementation.
-///
-/// ## Behavior with Deletes
-///
-/// Deletes are processed by using `inplace_delete` to soft-delete data. Slots deleted this way
-/// are not reused until maintenance is run, which drops deleted neighbors and releases the
-/// deleted data points.
-pub(crate) struct FullPrecisionStream<T>
-where
-    T: VectorRepr,
-{
-    pub(crate) index: FullPrecisionIndex<T>,
-    pub(crate) search: TopkSearchPhase,
-    pub(crate) runtime: tokio::runtime::Runtime,
-    pub(crate) ntasks: NonZeroUsize,
-    pub(crate) inplace_delete_num_to_replace: usize,
-    pub(crate) inplace_delete_method: InplaceDeleteMethod,
-}
-
-impl<T> FullPrecisionStream<T>
-where
-    T: VectorRepr,
-{
-    // Common code-path for both inserts and replace.
-    fn insert_(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
-        let runner = diskann_benchmark_core::build::graph::SingleInsert::new(
-            self.index.clone(),
-            Arc::new(data.to_owned()),
-            common::FullPrecision,
-            diskann_benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = diskann_benchmark_core::build::build(
-            runner,
-            diskann_benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        BuildStats::new(BuildKind::SingleInsert, results)
-    }
-}
-
-impl<T> ManagedStream<T> for FullPrecisionStream<T>
-where
-    T: VectorRepr,
-{
-    type Output = StreamStats;
-
-    fn search(
-        &self,
-        queries: Arc<Matrix<T>>,
-        groundtruth: &dyn Rows<u32>,
-    ) -> anyhow::Result<Self::Output> {
-        let knn = diskann_benchmark_core::search::graph::KNN::new(
-            self.index.clone(),
-            queries,
-            diskann_benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
-        )?;
-
-        let steps = knn::SearchSteps::new(
-            self.search.reps,
-            &self.search.num_threads,
-            &self.search.runs,
-        );
-        let results = knn::run(&knn, groundtruth, steps)?;
-        Ok(StreamStats::Search(results))
-    }
-
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Insert(self.insert_(data, slots)?))
-    }
-
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Replace(self.insert_(data, slots)?))
-    }
-
-    fn delete(&self, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        let runner = diskann_benchmark_core::streaming::graph::InplaceDelete::new(
-            self.index.clone(),
-            common::FullPrecision,
-            self.inplace_delete_num_to_replace,
-            self.inplace_delete_method,
-            diskann_benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = diskann_benchmark_core::build::build(
-            runner,
-            diskann_benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        Ok(StreamStats::Delete(GenericStats::new(
-            Cow::Borrowed("Delete"),
-            results,
-        )?))
-    }
-
-    fn maintain(&self) -> anyhow::Result<Self::Output> {
-        let range = self.index.provider().iter();
-
-        let runner = diskann_benchmark_core::streaming::graph::DropDeleted::new(
-            self.index.clone(),
-            false,
-            diskann_benchmark_core::build::ids::Range::new(range),
-        );
-
-        let drop_deleted = diskann_benchmark_core::build::build(
-            runner,
-            diskann_benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        let release = diskann_benchmark_core::build::build(
-            Release::new(self.index.clone()),
-            diskann_benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        Ok(StreamStats::Maintain(vec![
-            GenericStats::new(Cow::Borrowed("Drop Deleted"), drop_deleted)?,
-            GenericStats::new(Cow::Borrowed("Release"), release)?,
-        ]))
-    }
-}
 
 /////////////
 // Helpers //
@@ -219,5 +81,51 @@ where
             }
         }
         Ok(())
+    }
+}
+
+//////////////////////
+// Inmem Maintainer //
+//////////////////////
+
+/// Inmem maintenance: runs `DropDeleted` to unlink deleted neighbors, then `Release`
+/// to free deleted slots for reuse.
+pub(crate) struct InmemMaintainer;
+
+impl<U, V> Maintainer<DefaultProvider<U, V, TableDeleteProviderAsync>> for InmemMaintainer
+where
+    U: AsyncFriendly,
+    V: AsyncFriendly,
+{
+    fn maintain(
+        &self,
+        index: &Arc<DiskANNIndex<DefaultProvider<U, V, TableDeleteProviderAsync>>>,
+        runtime: &Runtime,
+        ntasks: NonZeroUsize,
+    ) -> anyhow::Result<StreamStats> {
+        let range = index.provider().iter();
+
+        let runner = DropDeleted::new(
+            index.clone(),
+            false,
+            Range::new(range),
+        );
+
+        let drop_deleted = build::build(
+            runner,
+            Parallelism::fixed(Some(ONE), ntasks),
+            runtime,
+        )?;
+
+        let release = build::build(
+            Release::new(index.clone()),
+            Parallelism::fixed(Some(ONE), ntasks),
+            runtime,
+        )?;
+
+        Ok(StreamStats::Maintain(vec![
+            GenericStats::new(Cow::Borrowed("Drop Deleted"), drop_deleted)?,
+            GenericStats::new(Cow::Borrowed("Release"), release)?,
+        ]))
     }
 }

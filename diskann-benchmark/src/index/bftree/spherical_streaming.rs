@@ -6,49 +6,40 @@
 // Streaming BfTree SQ //
 ////////////////////////
 
-use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
-use diskann::graph::{DiskANNIndex, InplaceDeleteMethod};
-use diskann::utils::ONE;
+use diskann::graph::DiskANNIndex;
 use diskann_benchmark_core as benchmark_core;
-use diskann_benchmark_core::{recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::streaming::executors::bigann;
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
     utils::datatype::AsDataType,
     Benchmark, Checkpoint,
 };
-use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
+use diskann_bftree::BfTreeProvider;
 use diskann_providers::model::graph::provider::async_::common::Quantized;
 use diskann_quantization::alloc::{AllocatorError, GlobalAllocator, Poly};
 use diskann_quantization::spherical::{
     iface::{self as spherical_iface, Quantizer},
     SphericalQuantizer,
 };
-use diskann_utils::views::{Matrix, MatrixView};
 use rand::SeedableRng;
 
 use crate::{
-    index::{
-        build::{BuildKind, BuildStats},
-        search::knn,
-        streaming::{
-            managed::{self, Managed},
-            stats::{GenericStats, StreamStats},
-            ManagedStream,
-        },
+    index::streaming::{
+        managed::{self, Managed},
+        stats::StreamStats,
+        BfTreeMaintainer, StreamRunner,
     },
     inputs::{
         bftree::BfTreeSphericalDynamicRun,
         graph_index::{
-            InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
+            InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
         },
     },
     utils,
 };
-
-type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
-type BfTreeSQIndex = Arc<DiskANNIndex<BfTreeSQProvider>>;
 
 fn new_quantizer<const NBITS: usize>(
     quantizer: SphericalQuantizer,
@@ -58,92 +49,6 @@ where
 {
     let imp = spherical_iface::Impl::<NBITS>::new(quantizer)?;
     diskann_quantization::poly!(Quantizer, imp, GlobalAllocator)
-}
-
-struct BfTreeSQStream {
-    index: BfTreeSQIndex,
-    search: TopkSearchPhase,
-    runtime: tokio::runtime::Runtime,
-    ntasks: NonZeroUsize,
-    inplace_delete_num_to_replace: usize,
-    inplace_delete_method: InplaceDeleteMethod,
-}
-
-impl BfTreeSQStream {
-    fn insert_(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<BuildStats> {
-        let runner = benchmark_core::build::graph::SingleInsert::new(
-            self.index.clone(),
-            Arc::new(data.to_owned()),
-            Quantized,
-            benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = benchmark_core::build::build(
-            runner,
-            benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        BuildStats::new(BuildKind::SingleInsert, results)
-    }
-}
-
-impl ManagedStream<f32> for BfTreeSQStream {
-    type Output = StreamStats;
-
-    fn search(
-        &self,
-        queries: Arc<Matrix<f32>>,
-        groundtruth: &dyn Rows<u32>,
-    ) -> anyhow::Result<Self::Output> {
-        let knn = benchmark_core::search::graph::KNN::new(
-            self.index.clone(),
-            queries,
-            benchmark_core::search::graph::Strategy::broadcast(Quantized),
-        )?;
-
-        let steps = knn::SearchSteps::new(
-            self.search.reps,
-            &self.search.num_threads,
-            &self.search.runs,
-        );
-        let results = knn::run(&knn, groundtruth, steps)?;
-        Ok(StreamStats::Search(results))
-    }
-
-    fn insert(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Insert(self.insert_(data, slots)?))
-    }
-
-    fn replace(&self, data: MatrixView<'_, f32>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Replace(self.insert_(data, slots)?))
-    }
-
-    fn delete(&self, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        let runner = benchmark_core::streaming::graph::InplaceDelete::new(
-            self.index.clone(),
-            Quantized,
-            self.inplace_delete_num_to_replace,
-            self.inplace_delete_method,
-            benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = benchmark_core::build::build(
-            runner,
-            benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        Ok(StreamStats::Delete(GenericStats::new(
-            Cow::Borrowed("Delete"),
-            results,
-        )?))
-    }
-
-    fn maintain(&self) -> anyhow::Result<Self::Output> {
-        // bf-tree uses hard deletes — no deferred cleanup needed.
-        Ok(StreamStats::Maintain(Vec::new()))
-    }
 }
 
 /// The streaming benchmark for bf_tree spherical quantization.
@@ -278,14 +183,16 @@ fn bftree_sq_streaming_impl(
             let index = Arc::new(DiskANNIndex::new(config, provider, None));
 
             let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-            Ok(BfTreeSQStream {
+            Ok(StreamRunner::new(
                 index,
-                search: topk.clone(),
-                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-                ntasks: num_threads_and_tasks,
-                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
-                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
-            })
+                Quantized,
+                topk.clone(),
+                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                num_threads_and_tasks,
+                input.runbook_params().ip_delete_num_to_replace,
+                input.runbook_params().ip_delete_method.into(),
+                BfTreeMaintainer,
+            ))
         },
     )
 }

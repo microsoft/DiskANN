@@ -2,13 +2,13 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
+use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
-    graph::{DiskANNIndex, InplaceDeleteMethod, SampleableForStart},
-    utils::{VectorRepr, ONE},
+    graph::{DiskANNIndex, SampleableForStart},
+    utils::VectorRepr,
 };
-use diskann_benchmark_core::{self as benchmark_core, recall::Rows, streaming::executors::bigann};
+use diskann_benchmark_core::{self as benchmark_core, streaming::executors::bigann};
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     output::Output,
@@ -17,25 +17,19 @@ use diskann_benchmark_runner::{
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
-use diskann_utils::{
-    sampling::WithApproximateNorm,
-    views::{Matrix, MatrixView},
-};
+use diskann_utils::sampling::WithApproximateNorm;
 
 use crate::{
-    index::{
-        build::{BuildKind, BuildStats},
-        search::knn,
-        streaming::{
-            managed::{self, Managed},
-            stats::{GenericStats, StreamStats},
-            ManagedStream,
-        },
+    index::streaming::{
+        managed::{self, Managed},
+        runner::BfTreeMaintainer,
+        stats::StreamStats,
+        StreamRunner,
     },
     inputs::{
         bftree::BfTreeDynamicRun,
         graph_index::{
-            InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
+            InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
         },
     },
     utils,
@@ -44,106 +38,6 @@ use crate::{
 ////////////////////////
 // Streaming BfTree  //
 ////////////////////////
-
-type BfTreeFPIndex<T> = Arc<DiskANNIndex<BfTreeProvider<T, NoStore>>>;
-
-/// The bf_tree streaming index implementation.
-///
-/// Mirrors the in-memory `FullPrecisionStream` but targets `BfTreeProvider`.
-struct BfTreeStream<T>
-where
-    T: VectorRepr,
-{
-    index: BfTreeFPIndex<T>,
-    search: TopkSearchPhase,
-    runtime: tokio::runtime::Runtime,
-    ntasks: NonZeroUsize,
-    inplace_delete_num_to_replace: usize,
-    inplace_delete_method: InplaceDeleteMethod,
-}
-
-impl<T> BfTreeStream<T>
-where
-    T: VectorRepr,
-{
-    fn insert_(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<BuildStats> {
-        let runner = benchmark_core::build::graph::SingleInsert::new(
-            self.index.clone(),
-            Arc::new(data.to_owned()),
-            FullPrecision,
-            benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = benchmark_core::build::build(
-            runner,
-            benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        BuildStats::new(BuildKind::SingleInsert, results)
-    }
-}
-
-impl<T> ManagedStream<T> for BfTreeStream<T>
-where
-    T: VectorRepr,
-{
-    type Output = StreamStats;
-
-    fn search(
-        &self,
-        queries: Arc<Matrix<T>>,
-        groundtruth: &dyn Rows<u32>,
-    ) -> anyhow::Result<Self::Output> {
-        let knn = benchmark_core::search::graph::KNN::new(
-            self.index.clone(),
-            queries,
-            benchmark_core::search::graph::Strategy::broadcast(FullPrecision),
-        )?;
-
-        let steps = knn::SearchSteps::new(
-            self.search.reps,
-            &self.search.num_threads,
-            &self.search.runs,
-        );
-        let results = knn::run(&knn, groundtruth, steps)?;
-        Ok(StreamStats::Search(results))
-    }
-
-    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Insert(self.insert_(data, slots)?))
-    }
-
-    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        Ok(StreamStats::Replace(self.insert_(data, slots)?))
-    }
-
-    fn delete(&self, slots: &[u32]) -> anyhow::Result<Self::Output> {
-        let runner = benchmark_core::streaming::graph::InplaceDelete::new(
-            self.index.clone(),
-            FullPrecision,
-            self.inplace_delete_num_to_replace,
-            self.inplace_delete_method,
-            benchmark_core::build::ids::Slice::new(slots.into()),
-        );
-
-        let results = benchmark_core::build::build(
-            runner,
-            benchmark_core::build::Parallelism::fixed(Some(ONE), self.ntasks),
-            &self.runtime,
-        )?;
-
-        Ok(StreamStats::Delete(GenericStats::new(
-            Cow::Borrowed("Delete"),
-            results,
-        )?))
-    }
-
-    fn maintain(&self) -> anyhow::Result<Self::Output> {
-        // bf-tree uses hard deletes — no deferred cleanup needed.
-        Ok(StreamStats::Maintain(Vec::new()))
-    }
-}
 
 /// The dynamic/streaming benchmark for bf_tree full precision.
 pub(super) struct StreamingFullPrecision<T> {
@@ -257,14 +151,16 @@ where
             let index = Arc::new(DiskANNIndex::new(config, provider, None));
 
             let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-            Ok(BfTreeStream {
+            Ok(StreamRunner::new(
                 index,
-                search: topk.clone(),
-                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-                ntasks: num_threads_and_tasks,
-                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
-                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
-            })
+                FullPrecision,
+                topk.clone(),
+                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                num_threads_and_tasks,
+                input.runbook_params().ip_delete_num_to_replace,
+                input.runbook_params().ip_delete_method.into(),
+                BfTreeMaintainer,
+            ))
         },
     )
 }

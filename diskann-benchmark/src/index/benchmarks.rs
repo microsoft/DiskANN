@@ -40,7 +40,7 @@ use crate::{
     index::{
         result::{AggregatedSearchResults, BuildResult},
         search::plugins,
-        streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
+        streaming::{self, managed, stats::StreamStats, InmemMaintainer, Managed, StreamRunner},
     },
     inputs::graph_index::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
     utils::{
@@ -591,7 +591,7 @@ where
 
 /// The stack looks like this:
 ///
-/// - Bottom: [`FullPrecisionStream`]: The core streaming index implementation.
+/// - Bottom: [`StreamRunner`]: The core streaming index implementation.
 /// - Middle: [`Managed`]: Since the in-mem index currently does not split internal and external
 ///   IDs, the [`Managed`] layer is introduced as a temporary measure. This is responsible
 ///   for ID mapping.
@@ -629,14 +629,16 @@ where
             )?;
 
             let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
-            Ok(FullPrecisionStream {
+            Ok(StreamRunner::new(
                 index,
-                search: topk.clone(),
-                runtime: benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
-                ntasks: num_threads_and_tasks,
-                inplace_delete_num_to_replace: input.runbook_params().ip_delete_num_to_replace,
-                inplace_delete_method: input.runbook_params().ip_delete_method.into(),
-            })
+                common::FullPrecision,
+                topk.clone(),
+                benchmark_core::tokio::runtime(num_threads_and_tasks.get())?,
+                num_threads_and_tasks,
+                input.runbook_params().ip_delete_num_to_replace,
+                input.runbook_params().ip_delete_method.into(),
+                InmemMaintainer,
+            ))
         },
     )
 }
