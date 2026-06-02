@@ -34,7 +34,7 @@ Multi-hop search augments the regular beam search with a step to gather addition
 
 The code for multi-hop search is found [here](https://github.com/microsoft/DiskANN/blob/main/diskann/src/graph/search/multihop_search.rs).
 
-##### Two-Queue Search (929)
+#### Two-Queue Search (PR #929)
 
 Two-queue search maintains a queue of neighbors satisfying the filter predicate (size k*p), where p is a multiplicative factor set by the user, and a separate, unbounded size queue of the best neighbors found so far, regardless of predicate. The search proceeds as normal with the larger queue, adding any results satisfying the predicate to the filtered queue. The search terminates for one of four reasons: (1) when the closest unexplored node in the regular queue is further away from the query than the furthest node in the filter-satisfying queue, (2) when no candidates remain to visit, (3) the number of hops exceeds a user-set maximum, or (4) the QueryVisitDecision returns a termination. 
 
