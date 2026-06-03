@@ -18,9 +18,7 @@ use diskann_vector::PreprocessedDistanceFunction;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
-    ANNResult,
-    ANNError,
-    ANNErrorKind,
+    ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
     graph::{
         glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
@@ -53,7 +51,7 @@ impl From<AdaptiveLSearchError> for ANNError {
 
 /// Adaptive L for greedy filtered search.
 #[derive(Debug, Clone)]
-pub struct AdaptiveL{
+pub struct AdaptiveL {
     pub sample_count: usize,
     pub scale_factor: f64,
 }
@@ -91,7 +89,11 @@ pub struct InlineSearch<'q, InternalId> {
 
 impl<'q, InternalId> InlineSearch<'q, InternalId> {
     /// Create new greedy filter search parameters.
-    pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>, adaptive_l: Option<AdaptiveL>) -> Self {
+    pub fn new(
+        inner: Knn,
+        label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
+        adaptive_l: Option<AdaptiveL>,
+    ) -> Self {
         Self {
             inner,
             label_evaluator,

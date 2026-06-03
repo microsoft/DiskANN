@@ -676,8 +676,7 @@ where
         let groundtruth =
             datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
-        let steps =
-            search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 

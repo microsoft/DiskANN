@@ -112,7 +112,7 @@ where
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
-pub use inline_filter_search::{InlineSearch, AdaptiveL};
+pub use inline_filter_search::{AdaptiveL, InlineSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError};

@@ -3,16 +3,16 @@
  * Licensed under the MIT license.
  */
 
+pub mod inline;
 pub mod knn;
 pub mod multihop;
 pub mod range;
-pub mod inline;
 
 pub mod strategy;
 
+pub use inline::InlineSearch;
 pub use knn::KNN;
 pub use multihop::MultiHop;
-pub use inline::InlineSearch;
 pub use range::Range;
 
 pub use strategy::Strategy;

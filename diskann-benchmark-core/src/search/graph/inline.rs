@@ -114,7 +114,11 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let inline_search = graph::search::InlineSearch::new(*parameters, &*self.labels[index], self.adaptive_l.clone());
+        let inline_search = graph::search::InlineSearch::new(
+            *parameters,
+            &*self.labels[index],
+            self.adaptive_l.clone(),
+        );
         let stats = self
             .index
             .search(

@@ -245,7 +245,7 @@ impl MultiHopSearchPhase {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct AdaptiveL{
+pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
     pub(crate) scale_factor: f64,
 }
@@ -290,7 +290,10 @@ impl InlineSearchPhase {
 
     pub(crate) fn adaptive_l(&self) -> Option<graph::search::AdaptiveL> {
         if let Some(ref adaptive_l) = self.adaptive_l {
-            let adaptive_l = graph::search::AdaptiveL{sample_count: adaptive_l.sample_count.into(), scale_factor: adaptive_l.scale_factor};
+            let adaptive_l = graph::search::AdaptiveL {
+                sample_count: adaptive_l.sample_count.into(),
+                scale_factor: adaptive_l.scale_factor,
+            };
             Some(adaptive_l)
         } else {
             None
