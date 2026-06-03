@@ -1,0 +1,134 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "distance": "squared_l2",
+          "groundtruth": "target/tmp\\OpenAIArXiv/openai-100K",
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 4,
+          "queries": "target/tmp\\OpenAIArXiv/openai_query.bin",
+          "recall_at": 100,
+          "search_io_limit": null,
+          "search_list": [
+            200
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "build_ram_limit_gb": 4.0,
+          "data": "target/tmp\\OpenAIArXiv/openai_base.bin.crop_nb_100000",
+          "data_type": "float32",
+          "dim": 1536,
+          "disk-index-source": "Build",
+          "distance": "squared_l2",
+          "l_build": 80,
+          "max_degree": 59,
+          "num_pq_chunks": 384,
+          "num_threads": 8,
+          "quantization_type": "SQ_1_2",
+          "save_path": "openai_100k_benchmark_index"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": {
+        "build_time": 14311208,
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 637.1052631578947,
+                "duration_seconds": 5.9400338,
+                "elapsed_cycles": 97.97394561767578,
+                "peak_memory_usage": 0.6409149169921875
+              },
+              "span_name": "DiskIndexBuild-PqConstruction"
+            },
+            {
+              "metrics": {
+                "cpu_time": 649.4061757719714,
+                "duration_seconds": 6.5726779,
+                "elapsed_cycles": 109.70635223388672,
+                "peak_memory_usage": 0.6409149169921875
+              },
+              "span_name": "DiskIndexBuild-InmemIndexBuild"
+            },
+            {
+              "metrics": {
+                "cpu_time": 50.0,
+                "duration_seconds": 1.7909557,
+                "elapsed_cycles": 2.3841798305511475,
+                "peak_memory_usage": 0.6409149169921875
+              },
+              "span_name": "DiskIndexBuild-DiskLayout"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 14.3111938
+              },
+              "span_name": "disk-index-build"
+            }
+          ]
+        }
+      },
+      "search": {
+        "beam_width": 4,
+        "distance": "squared_l2",
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 4,
+        "recall_at": 100,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 5428.26605,
+            "mean_cpu_time": 3154.4369,
+            "mean_hops": 210.92425,
+            "mean_io_time": 15119.66785,
+            "mean_ios": 210.92425,
+            "mean_latency": 18369.25675,
+            "mean_pq_preprocess_time": 95.152,
+            "p95_latency": 20976,
+            "p999_latency": 204034,
+            "qps": 215.56365966796875,
+            "recall": 95.27324676513672,
+            "search_l": 200
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 16.216216216216218,
+                "duration_seconds": 0.5844746,
+                "elapsed_cycles": 0.2626197040081024,
+                "peak_memory_usage": 0.6409149169921875
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 92.8523155
+              },
+              "span_name": "search-with-L=200-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 124.01144203264344,
+                "duration_seconds": 92.8547886,
+                "elapsed_cycles": 301.41473388671875,
+                "peak_memory_usage": 0.6409149169921875
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  }
+]

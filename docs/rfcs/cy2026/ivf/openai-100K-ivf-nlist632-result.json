@@ -1,0 +1,121 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "distance": "squared_l2",
+          "groundtruth": "target/tmp\\OpenAIArXiv/openai-100K",
+          "nprobe_list": [
+            1,
+            4,
+            8,
+            16,
+            32,
+            64
+          ],
+          "num_threads": 4,
+          "queries": "target/tmp\\OpenAIArXiv/openai_query.bin",
+          "recall_at": 100
+        },
+        "source": {
+          "data": "target/tmp\\OpenAIArXiv/openai_base.bin.crop_nb_100000",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "ivf-source": "Build",
+          "kmeans_iterations": 20,
+          "nlist": 632,
+          "num_threads": 8,
+          "save_path": "target/tmp/openai_100k_ivf_index_nlist632"
+        }
+      },
+      "type": "ivf"
+    },
+    "results": {
+      "build": {
+        "build_time": 568862363,
+        "ndims": 1536,
+        "nlist": 632,
+        "npoints": 100000
+      },
+      "search": {
+        "distance": "squared_l2",
+        "num_threads": 4,
+        "recall_at": 100,
+        "search_results_per_nprobe": [
+          {
+            "mean_comparisons": 158.43985,
+            "mean_cpu_time": 1808.116559999999,
+            "mean_io_time": 1053.5300799999973,
+            "mean_ios": 1.0,
+            "mean_latency": 2861.6466399999877,
+            "p95_latency": 5003,
+            "p999_latency": 16252,
+            "qps": 1390.433837890625,
+            "recall": 20.099000930786133,
+            "search_l": 1
+          },
+          {
+            "mean_comparisons": 626.1564,
+            "mean_cpu_time": 3106.292915000007,
+            "mean_io_time": 3606.86949500001,
+            "mean_ios": 4.0,
+            "mean_latency": 6713.162410000041,
+            "p95_latency": 12022,
+            "p999_latency": 24264,
+            "qps": 593.10400390625,
+            "recall": 43.31174850463867,
+            "search_l": 4
+          },
+          {
+            "mean_comparisons": 1236.7869,
+            "mean_cpu_time": 4713.295880000014,
+            "mean_io_time": 7199.042059999993,
+            "mean_ios": 8.0,
+            "mean_latency": 11912.337940000052,
+            "p95_latency": 21227,
+            "p999_latency": 38290,
+            "qps": 335.7156982421875,
+            "recall": 56.721500396728516,
+            "search_l": 8
+          },
+          {
+            "mean_comparisons": 2445.8491,
+            "mean_cpu_time": 7748.554394999991,
+            "mean_io_time": 14130.597360000032,
+            "mean_ios": 16.0,
+            "mean_latency": 21879.1517550001,
+            "p95_latency": 37217,
+            "p999_latency": 64696,
+            "qps": 182.37828063964844,
+            "recall": 69.84850311279297,
+            "search_l": 16
+          },
+          {
+            "mean_comparisons": 4865.15325,
+            "mean_cpu_time": 14023.300369999984,
+            "mean_io_time": 29241.510265000044,
+            "mean_ios": 32.0,
+            "mean_latency": 43264.8106350002,
+            "p95_latency": 69965,
+            "p999_latency": 105974,
+            "qps": 92.06793212890625,
+            "recall": 81.53589630126953,
+            "search_l": 32
+          },
+          {
+            "mean_comparisons": 9740.38035,
+            "mean_cpu_time": 26170.523014999973,
+            "mean_io_time": 57687.78525500011,
+            "mean_ios": 64.0,
+            "mean_latency": 83858.30826999978,
+            "p95_latency": 127384,
+            "p999_latency": 189186,
+            "qps": 47.69481658935547,
+            "recall": 90.59329986572266,
+            "search_l": 64
+          }
+        ]
+      }
+    }
+  }
+]

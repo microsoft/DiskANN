@@ -1,0 +1,32 @@
+{
+    "search_directories": [
+        "target/tmp"
+    ],
+    "jobs": [
+        {
+            "type": "ivf",
+            "content": {
+                "source": {
+                    "ivf-source": "Build",
+                    "data_type": "float32",
+                    "data": "OpenAIArXiv/openai_base.bin.crop_nb_100000",
+                    "distance": "squared_l2",
+                    "nlist": 158,
+                    "num_threads": 8,
+                    "kmeans_iterations": 20,
+                    "save_path": "target/tmp/openai_100k_ivf_index_nlist158"
+                },
+                "search_phase": {
+                    "queries": "OpenAIArXiv/openai_query.bin",
+                    "groundtruth": "OpenAIArXiv/openai-100K",
+                    "nprobe_list": [
+                        1, 4, 8, 16, 32, 64
+                    ],
+                    "recall_at": 100,
+                    "num_threads": 4,
+                    "distance": "squared_l2"
+                }
+            }
+        }
+    ]
+}

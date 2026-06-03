@@ -1,0 +1,134 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "beam_width": 4,
+          "distance": "inner_product",
+          "groundtruth": "target/tmp\\wikipedia_cohere/wikipedia-100K",
+          "is_flat_search": false,
+          "num_nodes_to_cache": null,
+          "num_threads": 4,
+          "queries": "target/tmp\\wikipedia_cohere/wikipedia_query.bin",
+          "recall_at": 100,
+          "search_io_limit": null,
+          "search_list": [
+            200
+          ],
+          "vector_filters_file": null
+        },
+        "source": {
+          "build_ram_limit_gb": 4.0,
+          "data": "target/tmp\\wikipedia_cohere/wikipedia_base.bin.crop_nb_100000",
+          "data_type": "float32",
+          "dim": 768,
+          "disk-index-source": "Build",
+          "distance": "inner_product",
+          "l_build": 80,
+          "max_degree": 59,
+          "num_pq_chunks": 192,
+          "num_threads": 8,
+          "quantization_type": "SQ_1_2",
+          "save_path": "wikipedia_100k_benchmark_index"
+        }
+      },
+      "type": "disk-index"
+    },
+    "results": {
+      "build": {
+        "build_time": 10011833,
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 623.696682464455,
+                "duration_seconds": 3.299606,
+                "elapsed_cycles": 53.70648956298828,
+                "peak_memory_usage": 0.35486602783203125
+              },
+              "span_name": "DiskIndexBuild-PqConstruction"
+            },
+            {
+              "metrics": {
+                "cpu_time": 649.7267759562842,
+                "duration_seconds": 5.7116407,
+                "elapsed_cycles": 96.39838409423828,
+                "peak_memory_usage": 0.35486602783203125
+              },
+              "span_name": "DiskIndexBuild-InmemIndexBuild"
+            },
+            {
+              "metrics": {
+                "cpu_time": 50.0,
+                "duration_seconds": 0.9981244,
+                "elapsed_cycles": 1.3696380853652954,
+                "peak_memory_usage": 0.35486602783203125
+              },
+              "span_name": "DiskIndexBuild-DiskLayout"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 10.0118257
+              },
+              "span_name": "disk-index-build"
+            }
+          ]
+        }
+      },
+      "search": {
+        "beam_width": 4,
+        "distance": "inner_product",
+        "is_flat_search": false,
+        "num_nodes_to_cache": null,
+        "num_threads": 4,
+        "recall_at": 100,
+        "search_results_per_l": [
+          {
+            "cache_hit_percentage": 0.0,
+            "mean_comparisons": 5824.6594,
+            "mean_cpu_time": 1969.5932,
+            "mean_hops": 209.8512,
+            "mean_io_time": 26923.977,
+            "mean_ios": 209.8512,
+            "mean_latency": 28944.7912,
+            "mean_pq_preprocess_time": 51.221,
+            "p95_latency": 181879,
+            "p999_latency": 235427,
+            "qps": 137.8486328125,
+            "recall": 91.45899963378906,
+            "search_l": 200
+          }
+        ],
+        "span_metrics": {
+          "spans": [
+            {
+              "metrics": {
+                "cpu_time": 4.3478260869565215,
+                "duration_seconds": 0.3646831,
+                "elapsed_cycles": 0.05756315961480141,
+                "peak_memory_usage": 0.35486602783203125
+              },
+              "span_name": "search_disk_index-index_loaded"
+            },
+            {
+              "metrics": {
+                "duration_seconds": 36.2925863
+              },
+              "span_name": "search-with-L=200-bw=4"
+            },
+            {
+              "metrics": {
+                "cpu_time": 62.37623762376238,
+                "duration_seconds": 36.2935556,
+                "elapsed_cycles": 58.66838455200195,
+                "peak_memory_usage": 0.35486602783203125
+              },
+              "span_name": "search_disk_index-search_completed"
+            }
+          ]
+        },
+        "uses_vector_filters": false
+      }
+    }
+  }
+]

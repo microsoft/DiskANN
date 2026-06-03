@@ -1,0 +1,121 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "distance": "inner_product",
+          "groundtruth": "target/tmp\\wikipedia_cohere/wikipedia-100K",
+          "nprobe_list": [
+            1,
+            4,
+            8,
+            16,
+            32,
+            64
+          ],
+          "num_threads": 4,
+          "queries": "target/tmp\\wikipedia_cohere/wikipedia_query.bin",
+          "recall_at": 100
+        },
+        "source": {
+          "data": "target/tmp\\wikipedia_cohere/wikipedia_base.bin.crop_nb_100000",
+          "data_type": "float32",
+          "distance": "inner_product",
+          "ivf-source": "Build",
+          "kmeans_iterations": 20,
+          "nlist": 632,
+          "num_threads": 8,
+          "save_path": "target/tmp/wikipedia_100k_ivf_index_nlist632"
+        }
+      },
+      "type": "ivf"
+    },
+    "results": {
+      "build": {
+        "build_time": 275730409,
+        "ndims": 768,
+        "nlist": 632,
+        "npoints": 100000
+      },
+      "search": {
+        "distance": "inner_product",
+        "num_threads": 4,
+        "recall_at": 100,
+        "search_results_per_nprobe": [
+          {
+            "mean_comparisons": 206.3386,
+            "mean_cpu_time": 1042.328659999999,
+            "mean_io_time": 882.6219999999996,
+            "mean_ios": 1.0,
+            "mean_latency": 1924.9506599999984,
+            "p95_latency": 3725,
+            "p999_latency": 13632,
+            "qps": 2075.784423828125,
+            "recall": 25.055999755859375,
+            "search_l": 1
+          },
+          {
+            "mean_comparisons": 782.272,
+            "mean_cpu_time": 1888.75704,
+            "mean_io_time": 2380.834080000001,
+            "mean_ios": 4.0,
+            "mean_latency": 4269.591119999998,
+            "p95_latency": 10402,
+            "p999_latency": 29356,
+            "qps": 935.9885864257812,
+            "recall": 48.4192008972168,
+            "search_l": 4
+          },
+          {
+            "mean_comparisons": 1490.1652,
+            "mean_cpu_time": 2648.7916000000046,
+            "mean_io_time": 3768.6737200000002,
+            "mean_ios": 8.0,
+            "mean_latency": 6417.465319999984,
+            "p95_latency": 13974,
+            "p999_latency": 37157,
+            "qps": 620.0530395507812,
+            "recall": 60.61640167236328,
+            "search_l": 8
+          },
+          {
+            "mean_comparisons": 2838.4992,
+            "mean_cpu_time": 4311.4946600000085,
+            "mean_io_time": 7325.29736,
+            "mean_ios": 16.0,
+            "mean_latency": 11636.792019999997,
+            "p95_latency": 23866,
+            "p999_latency": 47001,
+            "qps": 343.3382263183594,
+            "recall": 72.02980041503906,
+            "search_l": 16
+          },
+          {
+            "mean_comparisons": 5478.0012,
+            "mean_cpu_time": 7237.139459999986,
+            "mean_io_time": 13416.722980000008,
+            "mean_ios": 32.0,
+            "mean_latency": 20653.862440000037,
+            "p95_latency": 35659,
+            "p999_latency": 56786,
+            "qps": 193.36143493652344,
+            "recall": 81.98200225830078,
+            "search_l": 32
+          },
+          {
+            "mean_comparisons": 10651.0416,
+            "mean_cpu_time": 12974.018219999976,
+            "mean_io_time": 25759.020779999984,
+            "mean_ios": 64.0,
+            "mean_latency": 38733.03900000001,
+            "p95_latency": 59015,
+            "p999_latency": 80742,
+            "qps": 101.25861358642578,
+            "recall": 89.9677963256836,
+            "search_l": 64
+          }
+        ]
+      }
+    }
+  }
+]
