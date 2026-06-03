@@ -141,3 +141,192 @@ Actual bytes read will be collected from the code in a future iteration.*
 10. **The nlist trade-off is recall vs throughput at fixed nprobe.** To match the same recall, higher nlist needs proportionally more nprobe (e.g., nlist=632 at nprobe=64 ≈ nlist=316 at nprobe=32 in recall). The total vectors scanned — and thus total bytes read — ends up similar, but more smaller IOs vs fewer larger IOs favors nlist=632 on latency.
 
 11. **Build time scales with nlist.** nlist=158 builds in ~146s (OpenAI), nlist=316 in ~270s, nlist=632 in ~569s — roughly linear since each k-means iteration does N×nlist distance computations.
+
+---
+
+## IVF List Read Distribution (nlist=316, nprobe=64)
+
+How uniformly are list reads distributed across clusters?
+Skew means some clusters are queried more often, enabling LRU cache benefits.
+
+### OpenAI 100K (L2, 1536 dims, 20K queries)
+
+nlist=316, nprobe=64, 20,000 queries, total list reads: 1,280,000
+
+```
+Reads/list       #lists
+   191- 1,708   39  #########
+ 1,709- 3,226  119  ##############################
+ 3,227- 4,744   60  ###############
+ 4,745- 6,262   39  #########
+ 6,263- 7,780   25  ######
+ 7,781- 9,298   18  ####
+ 9,299-10,816   10  ##
+10,817-12,334    3  #
+12,335-13,852    2  #
+18,407-19,924    1  #
+```
+
+Min: 191 | Max: 18,415 | Mean: 4,051
+
+**LRU top-10% cache** (31 of 316 lists): hit rate = **24.0%** (307,359 / 1,280,000 reads)
+
+### Wikipedia 100K (IP, 768 dims, 5K queries)
+
+nlist=316, nprobe=64, 5,000 queries, total list reads: 320,000
+
+```
+Reads/list       #lists
+   302-   463   17  #########
+   464-   625   39  ######################
+   626-   787   52  ##############################
+   788-   949   50  ############################
+   950- 1,111   40  #######################
+ 1,112- 1,273   39  ######################
+ 1,274- 1,435   32  ##################
+ 1,436- 1,597   20  ###########
+ 1,598- 1,759   11  ######
+ 1,760- 1,921    8  ####
+ 1,922- 2,083    3  #
+ 2,084- 2,245    4  ##
+ 2,246- 2,407    1  #
+```
+
+Min: 302 | Max: 2,252 | Mean: 1,013
+
+**LRU top-10% cache** (31 of 316 lists): hit rate = **17.5%** (55,845 / 320,000 reads)
+
+### LRU Hit Rate Estimation
+
+Assuming the top 10% most-read lists are cached in an LRU cache:
+
+`hit_rate = sum(counts of top 10% lists) / sum(counts of all lists)`
+
+| Dataset | Lists cached | Hit rate |
+|---------|-------------|----------|
+| OpenAI 100K | 31 / 316 (10%) | **24.0%** |
+| Wikipedia 100K | 31 / 316 (10%) | **17.5%** |
+
+---
+
+## IVF Cluster Size Distribution (nlist=316)
+
+### OpenAI 100K (L2, 1536 dims, 20K queries)
+
+Cluster file sizes (min: 18,448 | max: 4,063,832 | mean: 1,945,574):
+
+```
+  File size (bytes)  #lists
+     18448-   355562    1  #
+    355563-   692677    4  #
+    692678-  1029792   18  ########
+   1029793-  1366907   35  ###############
+   1366908-  1704022   54  ########################
+   1704023-  2041137   67  ##############################
+   2041138-  2378252   61  ###########################
+   2378253-  2715367   34  ###############
+   2715368-  3052482   25  ###########
+   3052483-  3389597   10  ####
+   3389598-  3726712    5  ##
+   3726713-  4063827    1  #
+   4063828-  4400942    1  #
+```
+
+### Wikipedia 100K (IP, 768 dims, 5K queries)
+
+Cluster file sizes (min: 95,360 | max: 13,586,696 | mean: 973,422):
+
+```
+  File size (bytes)  #lists
+     95360-  1219637  252  ##############################
+   1219638-  2343915   55  ######
+   2343916-  3468193    7  #
+   3468194-  4592471    1  #
+  13586696- 14710973    1  #
+```
+
+---
+
+## IVF Bytes Read Distribution (nlist=316, nprobe=64)
+
+Total bytes read per list = list_reads[i] × cluster_file_size[i].
+
+### OpenAI 100K (L2, 1536 dims, 20K queries)
+
+Total index: 614.8 MB, total bytes read across all queries: 2,387.2 GB
+
+```
+ Bytes read / list          #lists
+      3523568- 2391535797   31  ############
+   2391535798- 4779548027   76  ##############################
+   4779548028- 7167560257   74  #############################
+   7167560258- 9555572487   53  ####################
+   9555572488-11943584717   27  ##########
+  11943584718-14331596947   27  ##########
+  14331596948-16719609177    8  ###
+  16719609178-19107621407   12  ####
+  19107621408-21495633637    3  #
+  21495633638-23883645867    1  #
+  23883645868-26271658097    1  #
+  26271658098-28659670327    2  #
+  28659670328-31047682557    1  #
+```
+
+Top 10 lists by bytes read:
+
+| List | Reads | File size | Bytes read | % of total |
+|------|-------|-----------|-----------|-----------|
+| 305 | 7,642 | 3,750,284 | 28,659,670,328 | 1.20% |
+| 211 | 12,831 | 2,108,768 | 27,057,602,208 | 1.13% |
+| 155 | 12,877 | 2,047,288 | 26,362,927,576 | 1.10% |
+| 264 | 10,439 | 2,471,500 | 25,799,988,500 | 1.08% |
+| 270 | 10,214 | 2,305,504 | 23,548,417,856 | 0.99% |
+| 168 | 8,983 | 2,287,060 | 20,544,659,980 | 0.86% |
+| 198 | 6,718 | 2,944,896 | 19,783,811,328 | 0.83% |
+| 271 | 8,600 | 2,274,764 | 19,562,970,400 | 0.82% |
+| 61 | 18,415 | 1,026,720 | 18,907,048,800 | 0.79% |
+| 298 | 5,893 | 3,203,112 | 18,875,939,016 | 0.79% |
+
+**LRU cache = 10% of index** (61.5 MB):
+- Lists cached: 38 of 316
+- Bytes saved: **24.2%** of total bytes read
+
+### Wikipedia 100K (IP, 768 dims, 5K queries)
+
+Total index: 307.6 MB, total bytes read across all queries: 323.5 GB
+
+```
+ Bytes read / list          #lists
+     89254464- 1300090332  249  ##############################
+   1300090333- 2510926201   48  #####
+   2510926202- 3721762070   12  #
+   3721762071- 4932597939    5  #
+   4932597940- 6143433808    1  #
+  14619284892-15830120760    1  #
+```
+
+Top 10 lists by bytes read:
+
+| List | Reads | File size | Bytes read | % of total |
+|------|-------|-----------|-----------|-----------|
+| 136 | 1,076 | 13,586,696 | 14,619,284,896 | 4.52% |
+| 58 | 2,164 | 2,420,816 | 5,238,645,824 | 1.62% |
+| 114 | 1,502 | 3,125,220 | 4,694,080,440 | 1.45% |
+| 21 | 1,606 | 2,706,884 | 4,347,255,704 | 1.34% |
+| 220 | 2,119 | 1,977,872 | 4,191,110,768 | 1.30% |
+| 161 | 1,762 | 2,319,308 | 4,086,620,696 | 1.26% |
+| 37 | 1,494 | 2,673,048 | 3,993,533,712 | 1.23% |
+| 118 | 1,943 | 1,867,136 | 3,627,845,248 | 1.12% |
+| 258 | 1,433 | 2,516,172 | 3,605,674,476 | 1.11% |
+| 215 | 1,685 | 1,965,568 | 3,311,982,080 | 1.02% |
+
+**LRU cache = 10% of index** (30.8 MB):
+- Lists cached: 30 of 316
+- Bytes saved: **17.6%** of total bytes read
+
+### LRU Bytes-Saved Summary (10% of index cached)
+
+| Dataset | Index size | Cache (10%) | Lists cached | Bytes saved |
+|---------|-----------|-------------|-------------|-------------|
+| OpenAI 100K | 614.8 MB | 61.5 MB | 38 / 316 | **24.2%** |
+| Wikipedia 100K | 307.6 MB | 30.8 MB | 30 / 316 | **17.6%** |
