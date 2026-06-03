@@ -65,7 +65,7 @@ pub(crate) mod scratch;
 /// - [`Range`] - Range-based search within a distance radius
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
-/// - [`AdaptiveLGreedySearch`] - Pure greedy filtered search with adaptive L sizing
+/// - [`InlineSearch`] - Inline filtered search with adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<DP, S, T>
 where

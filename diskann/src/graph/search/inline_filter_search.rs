@@ -162,26 +162,21 @@ where
     }
 }
 
-/// Internal greedy filter search implementation.
+/// Inline filtered search: a standard k-NN search with an additional step
+/// of keeping track of all results satisfying the query predicate, and
+/// returning only those that meet the criteria.
 ///
-/// Pure greedy mode: all nodes (matched + unmatched) enter `scratch.best`
-/// for navigation. Matched results are tracked separately in `matched_results`.
-/// No two-hop expansion — unmatched nodes naturally participate in subsequent
-/// navigation rounds.
-///
-/// Adaptive L: after visiting `ADAPTIVE_L_SAMPLE_COUNT` nodes, the match rate
-/// is estimated and L is scaled up for low match rates:
-///   match_rate ≥ 50%    → 1× L (no change, most nodes match)
-///   10% ≤ match_rate < 50% → 2× L
-///   match_rate < 10%    → log-scale: 2^(-log10(match_rate))
-///     match_rate = 10%  (100/1000) → 2× L
-///     match_rate = 1%   (10/1000)  → 4× L
-///     match_rate = 0.1% (1/1000)   → 8× L
-///   0 matches in sample → 16× L (maximum expansion)
-///
-/// With 1000 samples, the minimum observable non-zero match rate is 0.1% (1/1000),
-/// so the effective multiplier range is [1×, 8×] for non-zero matches
-/// and 16× for zero matches.
+/// An additional option for better performance on low specificity scenarios
+/// is the use of the adaptive L algorithm. After visiting a set number of nodes,
+/// and estimating the specificity of the filter from that sample, `l_search` is
+/// scaled up in the following manner:
+///   specificity ≥ 50%    → 1× L (no change, most nodes match)
+///   10% ≤ specificity < 50% → 2× L
+///   specificity < 10%    → log-scale: 2^(-log10(specificity))
+///     specificity = 10%  (100/1000) → 2× L
+///     specificity = 1%   (10/1000)  → 4× L
+///     specificity = 0.1% (1/1000)   → 8× L
+///   and so on up to a pre-set maximum multipler 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn greedy_filter_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
@@ -301,7 +296,7 @@ where
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Adaptive L: after enough samples, estimate match rate and scale L.
+        // Adaptive L: after enough samples, estimate specificity and scale L.
         if let Some(adaptive_l) = adaptive_l.as_ref()
             && !l_adjusted
             && sample_visited >= adaptive_l.sample_count
@@ -326,16 +321,16 @@ where
     Ok(make_stats(scratch))
 }
 
-/// Compute adaptive L based on observed match rate.
+/// Compute adaptive L based on observed specificity.
 ///
 /// Piecewise scaling:
-///   match_rate ≥ 50%   → 1× L (no change, most nodes match)
-///   10% ≤ match_rate < 50%  → 2× L
-///   match_rate < 10%   → log-scale: 2^(1 - log10(match_rate))
-///     match_rate = 0.1  (10%)   → 2× L
-///     match_rate = 0.01 (1%)    → 4× L
-///     match_rate = 0.001 (0.1%) → 8× L
-///   0 matches in sample → 16× L (maximum expansion)
+///   specificity ≥ 50%   → 1× L (no change, most nodes match)
+///   10% ≤ specificity < 50%  → 2× L
+///   specificity < 10%   → log-scale: 2^(1 - log10(specificity))
+///     specificity = 0.1  (10%)   → 2× L
+///     specificity = 0.01 (1%)    → 4× L
+///     specificity = 0.001 (0.1%) → 8× L
+///   0 matches in sample → `max_multiplier`× L (maximum expansion)
 ///
 /// Clamped to [1×, max_multiplier] range.
 fn compute_adaptive_l(base_l: usize, visited: u32, matched: u32, max_multiplier: f64) -> usize {
@@ -344,18 +339,18 @@ fn compute_adaptive_l(base_l: usize, visited: u32, matched: u32, max_multiplier:
         return (base_l as f64 * max_multiplier) as usize;
     }
 
-    let match_rate = matched as f64 / visited as f64;
+    let specificity = matched as f64 / visited as f64;
 
-    let multiplier = if match_rate >= 0.5 {
-        // ≥50% match rate: no scaling needed
+    let multiplier = if specificity >= 0.5 {
+        // ≥50% specificity: no scaling needed
         1.0
-    } else if match_rate >= 0.1 {
+    } else if specificity >= 0.1 {
         // 10%-50%: use 2× L
         2.0
     } else {
         // Below 10%: log-scale from 2× upward
-        // match_rate=0.1 → 2×, match_rate=0.01 → 4×, match_rate=0.001 → 8×
-        let neg_log10 = -match_rate.log10(); // 0.1→1, 0.01→2, 0.001→3
+        // specificity=0.1 → 2×, specificity=0.01 → 4×, specificity=0.001 → 8×
+        let neg_log10 = -specificity.log10(); // 0.1→1, 0.01→2, 0.001→3
         2.0_f64.powf(neg_log10) // 2^1=2, 2^2=4, 2^3=8
     };
 
@@ -395,15 +390,15 @@ mod tests {
         let base_l = 100;
         let max_multiplier = 16.0;
 
-        // >= 50% match rate => 1x
+        // >= 50% specificity => 1x
         assert_eq!(compute_adaptive_l(base_l, 1000, 500, max_multiplier), 100);
         assert_eq!(compute_adaptive_l(base_l, 1000, 900, max_multiplier), 100);
 
-        // 10% to <50% match rate => 2x
+        // 10% to <50% specificity => 2x
         assert_eq!(compute_adaptive_l(base_l, 1000, 100, max_multiplier), 200);
         assert_eq!(compute_adaptive_l(base_l, 1000, 499, max_multiplier), 200);
 
-        // <10% match rate => log scaling (0.01 => 4x, 0.001 => 8x)
+        // <10% specificity => log scaling (0.01 => 4x, 0.001 => 8x)
         assert_eq!(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
         assert_eq!(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
     }
