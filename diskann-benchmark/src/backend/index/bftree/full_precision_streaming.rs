@@ -143,10 +143,7 @@ where
         // Clear delete caches to prevent unbounded memory growth.
         self.index.provider().flush_deletes();
 
-        Ok(StreamStats::Maintain {
-            drop_deleted: None,
-            release: None,
-        })
+        Ok(StreamStats::Maintain(Vec::new()))
     }
 }
 
