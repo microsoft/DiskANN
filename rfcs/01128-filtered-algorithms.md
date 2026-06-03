@@ -52,41 +52,7 @@ The goal is to align on at most two filtered search algorithms to remain in the 
 
 ## Benchmark Results
 
-This proposal is motivated by the following benchmark results on two open-source datasets.
-
-For each dataset, the graph is built once and then all search algorithms are executed on that graph. The best $\beta$ parameter for beta search for each query set was selected from the range of 0.5–0.8.
-
-### Caselaw
-
-The caselaw dataset consists of about 8 million legal cases that were embedded using OpenAI's text-embedding-small model. They have filters consisting of the court type, court name, date range of the case, and court jurisdiction. They are separated into three specificity regimes with 10000 queries in each regime: .005-.01, .01-.1, and .1-.5.
-
-<p align="center"> <img src="filtered_algorithms_plots/caselaw_high.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/caselaw_high_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-<p align="center"> <img src="filtered_algorithms_plots/caselaw_medium.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/caselaw_medium_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-<p align="center"> <img src="filtered_algorithms_plots/caselaw_low.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/caselaw_low_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-### YFCC
-
-The YFCC dataset consists of 10 million CLIP embeddings of images with single filters specifying the year the image was taken and the camera type. The query sets have single-filter queries and are separated into three specificity regimes: .0001-.001, .005-.037, and .114-.338. 
-
-<p align="center"> <img src="filtered_algorithms_plots/yfcc_single_high.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/yfcc_single_high_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-<p align="center"> <img src="filtered_algorithms_plots/yfcc_single_medium.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/yfcc_single_medium_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-<p align="center"> <img src="filtered_algorithms_plots/yfcc_single_low.png" alt="Plot 1" width="49%" /> <img src="filtered_algorithms_plots/yfcc_single_low_cmps.png" alt="Plot 2" width="49%" /> </p>
-
-### Analysis of Benchmark Results
-
-One of the most surprising insights from this data was that inline filtered search, which contains no optimizations other than storing any predicate-satisfying elements, is competitive with all of the filter-specific algorithms except beta search. While achieving slightly less accuracy than other filter-specific algorithms, it is still quite competitive. This suggests that existing filtered algorithms are either not taking advantage of correlations between filters, or that these correlations aren’t present enough to influence the results for these datasets. 
-
-Multi-hop search generally performs fewer distance comparisons than other algorithms, at the cost of more bitmap comparisons. This suggests that it is most successful at using filter information in navigation, and perhaps that further optimizations could compound on this advantage. 
-
-Since adaptive-L search can be thought of as a subroutine of an inline filtered search, we address performance of these two algorithms together. Adaptive-L search is capable of achieving high recall at best or close to best performance for all datasets.
-
-Two-queue search performs similarly to adaptive L search, but at the disadvantage that the main parameter controlling quality of search is a hard cap on the number of hops the search is allowed to perform. Since this is quite different from DiskANN's normal convergence criteria and harder to reason about, I suggest that we go in the direction of inline search.
-
-Beta search never achieves higher maximum recall than other types of search, and in most cases is also strictly slower in overlapping recall ranges. This illustrates that algorithms that adaptively explore more candidates depending on predicate satisfaction perform better.
+To avoid adding large files to the main repo, the presentation and discussion of benchmark results is contained in a [DiskANN Wiki page](https://github.com/microsoft/DiskANN/wiki/Evaluation-of-Filtered-Search-Algorithms).
 
 ## Proposal
 
