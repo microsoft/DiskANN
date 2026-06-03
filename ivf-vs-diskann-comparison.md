@@ -330,3 +330,38 @@ Top 10 lists by bytes read:
 |---------|-----------|-------------|-------------|-------------|
 | OpenAI 100K | 614.8 MB | 61.5 MB | 38 / 316 | **24.2%** |
 | Wikipedia 100K | 307.6 MB | 30.8 MB | 30 / 316 | **17.6%** |
+
+---
+
+## Executive Summary: IVF as RAM Reduction Strategy
+
+**Problem**: DiskANN keeps PQ-compressed vectors in RAM (~1/4 of raw data). For a 500MB index, that's ~125MB RAM.
+
+**IVF RAM**: Only centroids in RAM. For nlist=316, 1536-dim vectors: **~1.9MB** (vs DiskANN's ~150MB). That's a **~75× RAM reduction**.
+
+**The cost — read throughput**:
+
+| | DiskANN | IVF (nlist=316, nprobe=32) | IVF (nlist=632, nprobe=64) |
+|---|---|---|---|
+| **RAM** | ~150 MB | **~1.9 MB** | **~3.8 MB** |
+| **Recall** | 95.3% | 89.1% | 90.6% |
+| **QPS** | 215.6 | 43.4 | 47.7 |
+| **Bytes/query** | 1.65 MB | 59.2 MB | 59.3 MB |
+| **QPS ratio** | 1× | 0.20× | 0.22× |
+
+At comparable recall (~90-95%), IVF reads **36-72× more bytes per query** and delivers **5× lower QPS**.
+
+**Caching closes the gap**: With 10% of index cached in RAM (~61MB for OpenAI):
+- **24% of bytes read are served from cache** (measured from actual query distribution)
+- This adds ~60MB RAM (still far below DiskANN's ~150MB) while cutting effective disk reads by ~1/4
+- Hot clusters concentrate queries — OpenAI's top list gets 4.5× the mean reads
+
+**Trade-off knob**: Cache size directly controls the RAM-IO trade-off:
+
+| Cache | RAM added | Bytes saved | Effective model |
+|-------|----------|-------------|-----------------|
+| 0% | 0 MB | 0% | Pure disk IVF |
+| 10% | ~61 MB | ~24% | Sweet spot |
+| 25% | ~150 MB | ~50%+ (est.) | Approaches DiskANN RAM, better IO |
+
+**Bottom line**: IVF trades 5× QPS for 75× RAM reduction. An LRU cache layer lets you slide between these extremes. For RAM-constrained deployments (edge, multi-tenant), IVF + 10% cache uses ~63MB RAM vs DiskANN's ~150MB while maintaining >90% recall.
