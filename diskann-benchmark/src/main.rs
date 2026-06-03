@@ -254,10 +254,10 @@ mod tests {
         }
     }
 
-    fn run_integration_test_from_json_path(json_string: &str) {
+    fn run_integration_test(mut raw: serde_json::Value) {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = serde_json::from_str(json_string).unwrap();
+        // let mut raw = serde_json::from_str(json_string).unwrap();
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn graph_index_integration() {
         let raw = value_from_file(&example_directory().join("graph-index.json"));
-        run_integration_test_from_json_path(&serde_json::to_string(&raw).unwrap());
+        run_integration_test(raw);
     }
 
     ////////////////////////////
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn graph_index_dynamic_integration() {
         let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
-        run_integration_test_from_json_path(&serde_json::to_string(&raw).unwrap());
+        run_integration_test(raw);
     }
 
     ////////////////////////////
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn label_index_integration() {
         let raw = value_from_file(&example_directory().join("metadata-index.json"));
-        run_integration_test_from_json_path(&serde_json::to_string(&raw).unwrap());
+        run_integration_test(raw);
     }
 
     #[test]
@@ -543,7 +543,7 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
-        run_integration_test_from_json_path(&serde_json::to_string(&raw).unwrap());
+        run_integration_test(raw);
     }
 
     #[test]
