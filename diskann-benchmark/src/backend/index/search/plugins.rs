@@ -186,11 +186,11 @@ impl TopkMultihopFilter {
 
 /// A search plugin for adaptive L-greedy search.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct TopkAdaptiveLFilter;
+pub(crate) struct TopkInlineFilter;
 
-impl TopkAdaptiveLFilter {
-    /// Returns [`SearchPhaseKind::TopkAdaptiveLFilter`].
+impl TopkInlineFilter {
+    /// Returns [`SearchPhaseKind::TopkInlineFilter`].
     pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkAdaptiveLFilter
+        SearchPhaseKind::TopkInlineFilter
     }
 }

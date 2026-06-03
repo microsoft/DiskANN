@@ -10,6 +10,8 @@
 //! No two-hop expansion. The `QueryLabelProvider` controls early termination
 //! via `on_visit()` returning `Terminate`.
 
+use thiserror::Error;
+
 use diskann_utils::Reborrow;
 use diskann_utils::future::SendFuture;
 use diskann_vector::PreprocessedDistanceFunction;
@@ -17,6 +19,8 @@ use diskann_vector::PreprocessedDistanceFunction;
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
+    ANNError,
+    ANNErrorKind,
     error::{ErrorExt, IntoANNResult},
     graph::{
         glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
@@ -31,30 +35,72 @@ use crate::{
     utils::VectorId,
 };
 
+/// Error type for [`Knn`] parameter validation.
+#[derive(Debug, Error)]
+pub enum AdaptiveLSearchError {
+    #[error("adaptive L scale factor must be >= 1.0")]
+    ScaleFactorLessThanOne,
+    #[error("sample count cannot be zero")]
+    SampleCountZero,
+}
+
+impl From<AdaptiveLSearchError> for ANNError {
+    #[track_caller]
+    fn from(err: AdaptiveLSearchError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
+/// Adaptive L for greedy filtered search.
+#[derive(Debug, Clone)]
+pub struct AdaptiveL{
+    pub sample_count: usize,
+    pub scale_factor: f64,
+}
+
+impl AdaptiveL {
+    /// Create a new adaptive L.
+    pub fn new(sample_count: usize, scale_factor: f64) -> Result<Self, AdaptiveLSearchError> {
+        if scale_factor < 1.0 {
+            return Err(AdaptiveLSearchError::ScaleFactorLessThanOne);
+        }
+        if sample_count == 0 {
+            return Err(AdaptiveLSearchError::SampleCountZero);
+        }
+        Ok(Self {
+            sample_count,
+            scale_factor,
+        })
+    }
+}
+
 /// Parameters for pure greedy filtered search.
 ///
 /// All nodes participate in greedy navigation regardless of filter match.
 /// Matched results are tracked separately and returned as final output.
 /// Early termination is controlled by the `QueryLabelProvider` callback.
 #[derive(Debug)]
-pub struct AdaptiveLGreedySearch<'q, InternalId> {
+pub struct InlineSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: Knn,
     /// Label evaluator for determining node matches and early termination.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
+    /// Adaptive L for the search.
+    pub adaptive_l: Option<AdaptiveL>,
 }
 
-impl<'q, InternalId> AdaptiveLGreedySearch<'q, InternalId> {
+impl<'q, InternalId> InlineSearch<'q, InternalId> {
     /// Create new greedy filter search parameters.
-    pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
+    pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>, adaptive_l: Option<AdaptiveL>) -> Self {
         Self {
             inner,
             label_evaluator,
+            adaptive_l,
         }
     }
 }
 
-impl<'q, DP, S, T> Search<DP, S, T> for AdaptiveLGreedySearch<'q, DP::InternalId>
+impl<'q, DP, S, T> Search<DP, S, T> for InlineSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
     S: SearchStrategy<DP, T>,
@@ -94,6 +140,7 @@ where
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 self.label_evaluator,
+                self.adaptive_l,
             )
             .await?;
 
@@ -141,6 +188,7 @@ pub(crate) async fn greedy_filter_search_internal<I, A, T, SR>(
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
+    adaptive_l: Option<AdaptiveL>,
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
@@ -180,11 +228,8 @@ where
     // for greedy navigation, matched_results contains only filter-matching nodes.
     let mut matched_results = NeighborPriorityQueue::<I>::new(l_search);
 
-    // Adaptive L constants — defined at function scope, also used by compute_adaptive_l
-    const ADAPTIVE_L_SAMPLE_COUNT: u32 = 1000;
-    const ADAPTIVE_L_MAX_MULTIPLIER: f64 = 16.0;
-    let mut sample_visited: u32 = 0;
-    let mut sample_matched: u32 = 0;
+    let mut sample_visited: usize = 0;
+    let mut sample_matched: usize = 0;
     let mut l_adjusted = false;
 
     loop {
@@ -230,7 +275,9 @@ where
                     // matched nodes also go into matched_results for final output.
                     scratch.best.insert(neighbor);
                     matched_results.insert(accepted);
-                    sample_matched += 1;
+                    if adaptive_l.is_some() {
+                        sample_matched += 1;
+                    }
                 }
                 QueryVisitDecision::Reject => {
                     // Unmatched nodes still guide navigation
@@ -243,23 +290,27 @@ where
                     return Ok(make_stats(scratch));
                 }
             }
-            sample_visited += 1;
+            if adaptive_l.is_some() {
+                sample_visited += 1;
+            }
         }
 
         scratch.cmps += one_hop_neighbors.len() as u32;
         scratch.hops += scratch.beam_nodes.len() as u32;
 
-        // Adaptive L: after enough samples, estimate match rate and scale L
-        if !l_adjusted && sample_visited >= ADAPTIVE_L_SAMPLE_COUNT {
-            l_adjusted = true;
-            let new_l = compute_adaptive_l(
-                l_search,
-                sample_visited,
-                sample_matched,
-                ADAPTIVE_L_MAX_MULTIPLIER,
-            );
-            if new_l > l_search {
-                scratch.resize(new_l);
+        // Adaptive L: after enough samples, estimate match rate and scale L.
+        if let Some(adaptive_l) = adaptive_l.as_ref() {
+            if !l_adjusted && sample_visited >= adaptive_l.sample_count {
+                l_adjusted = true;
+                let new_l = compute_adaptive_l(
+                    l_search,
+                    sample_visited as u32,
+                    sample_matched as u32,
+                    adaptive_l.scale_factor,
+                );
+                if new_l > l_search {
+                    scratch.resize(new_l);
+                }
             }
         }
     }
@@ -306,4 +357,70 @@ fn compute_adaptive_l(base_l: usize, visited: u32, matched: u32, max_multiplier:
 
     let multiplier = multiplier.clamp(1.0, max_multiplier);
     (base_l as f64 * multiplier) as usize
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_adaptive_l_validation() {
+        // Valid
+        assert!(AdaptiveL::new(1000, 1.0).is_ok());
+        assert!(AdaptiveL::new(1000, 2.0).is_ok());
+
+        // Invalid: scale factor < 1.0
+        assert!(matches!(
+            AdaptiveL::new(1000, 0.99),
+            Err(AdaptiveLSearchError::ScaleFactorLessThanOne)
+        ));
+
+        // Invalid: sample count = 0
+        assert!(matches!(
+            AdaptiveL::new(0, 1.5),
+            Err(AdaptiveLSearchError::SampleCountZero)
+        ));
+    }
+
+    #[test]
+    fn test_compute_adaptive_l_piecewise_regions() {
+        let base_l = 100;
+        let max_multiplier = 16.0;
+
+        // >= 50% match rate => 1x
+        assert_eq!(compute_adaptive_l(base_l, 1000, 500, max_multiplier), 100);
+        assert_eq!(compute_adaptive_l(base_l, 1000, 900, max_multiplier), 100);
+
+        // 10% to <50% match rate => 2x
+        assert_eq!(compute_adaptive_l(base_l, 1000, 100, max_multiplier), 200);
+        assert_eq!(compute_adaptive_l(base_l, 1000, 499, max_multiplier), 200);
+
+        // <10% match rate => log scaling (0.01 => 4x, 0.001 => 8x)
+        assert_eq!(compute_adaptive_l(base_l, 1000, 10, max_multiplier), 400);
+        assert_eq!(compute_adaptive_l(base_l, 1000, 1, max_multiplier), 800);
+    }
+
+    #[test]
+    fn test_compute_adaptive_l_zero_samples_or_matches() {
+        let base_l = 100;
+        let max_multiplier = 16.0;
+
+        assert_eq!(compute_adaptive_l(base_l, 1000, 0, max_multiplier), 1600);
+        assert_eq!(compute_adaptive_l(base_l, 0, 0, max_multiplier), 1600);
+    }
+
+    #[test]
+    fn test_compute_adaptive_l_respects_max_multiplier() {
+        let base_l = 100;
+
+        // 0.1% would be 8x, but clamp to 4x.
+        assert_eq!(compute_adaptive_l(base_l, 1000, 1, 4.0), 400);
+
+        // 1% would be 4x, but clamp to 1.5x.
+        assert_eq!(compute_adaptive_l(base_l, 1000, 10, 1.5), 150);
+    }
 }

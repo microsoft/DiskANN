@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, glue, search::AdaptiveL},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -15,7 +15,7 @@ use diskann_utils::{future::AsyncFriendly, views::Matrix};
 use crate::search::{self, Search, graph::Strategy};
 
 /// A built-in helper for benchmarking filtered K-nearest neighbors search
-/// using the multi-hop search method.
+/// using the inline search method.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or [`search::search_all`]
 /// and provides some basic additional metrics for the latter. Result aggregation for
@@ -25,7 +25,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
-pub struct AdaptiveLGreedySearch<DP, T, S>
+pub struct InlineSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
@@ -33,13 +33,14 @@ where
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    adaptive_l: Option<AdaptiveL>,
 }
 
-impl<DP, T, S> AdaptiveLGreedySearch<DP, T, S>
+impl<DP, T, S> InlineSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`AdaptiveLGreedySearch`] searcher.
+    /// Construct a new [`InlineSearch`] searcher.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -63,6 +64,7 @@ where
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
         labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        adaptive_l: Option<AdaptiveL>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -78,12 +80,13 @@ where
                 queries,
                 strategy,
                 labels,
+                adaptive_l,
             }))
         }
     }
 }
 
-impl<DP, T, S> Search for AdaptiveLGreedySearch<DP, T, S>
+impl<DP, T, S> Search for InlineSearch<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
@@ -111,11 +114,11 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let adaptive_l_search = graph::search::AdaptiveLGreedySearch::new(*parameters, &*self.labels[index]);
+        let inline_search = graph::search::InlineSearch::new(*parameters, &*self.labels[index], self.adaptive_l.clone());
         let stats = self
             .index
             .search(
-                adaptive_l_search,
+                inline_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),

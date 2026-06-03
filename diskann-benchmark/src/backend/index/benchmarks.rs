@@ -77,7 +77,7 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkAdaptiveLFilter),
+            .search(plugins::TopkInlineFilter),
     )?;
 
     registry.register(
@@ -91,7 +91,7 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkAdaptiveLFilter),
+            .search(plugins::TopkInlineFilter),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
@@ -645,10 +645,10 @@ where
 }
 
 //----------------//
-// AdaptiveLFilter //
+// InlineFilter //
 //----------------//
 
-impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkAdaptiveLFilter
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkInlineFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
     S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
@@ -667,21 +667,21 @@ where
         phase: &SearchPhase,
         strategy: &Strategy<S>,
     ) -> anyhow::Result<AggregatedSearchResults> {
-        let adaptive_l = phase.as_topk_adaptive_l_filter()?;
+        let inline = phase.as_topk_inline_filter()?;
 
         let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
-            datafiles::BinFile(&adaptive_l.queries),
+            datafiles::BinFile(&inline.queries),
         )?);
 
         let groundtruth =
-            datafiles::load_range_groundtruth(datafiles::BinFile(&adaptive_l.groundtruth))?;
+            datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
 
         let steps =
-            search::knn::SearchSteps::new(adaptive_l.reps, &adaptive_l.num_threads, &adaptive_l.runs);
+            search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
 
-        let bit_maps = generate_bitmaps(&adaptive_l.query_predicates, &adaptive_l.data_labels)?;
+        let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
-        let adaptive_l = benchmark_core::search::graph::AdaptiveLGreedySearch::new(
+        let inline = benchmark_core::search::graph::InlineSearch::new(
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
@@ -689,9 +689,10 @@ where
                 .into_iter()
                 .map(utils::filters::as_query_label_provider)
                 .collect(),
+            inline.adaptive_l(),
         )?;
 
-        let result = search::knn::run(&adaptive_l, &groundtruth, steps)?;
+        let result = search::knn::run(&inline, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
     }
 }

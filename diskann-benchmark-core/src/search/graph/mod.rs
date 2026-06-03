@@ -6,13 +6,13 @@
 pub mod knn;
 pub mod multihop;
 pub mod range;
-pub mod adaptivel;
+pub mod inline;
 
 pub mod strategy;
 
 pub use knn::KNN;
 pub use multihop::MultiHop;
-pub use adaptivel::AdaptiveLGreedySearch;
+pub use inline::InlineSearch;
 pub use range::Range;
 
 pub use strategy::Strategy;

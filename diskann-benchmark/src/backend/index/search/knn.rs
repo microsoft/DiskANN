@@ -141,10 +141,10 @@ where
     }
 }
 
-impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::AdaptiveLGreedySearch<DP, T, S>>
+impl<DP, T, S> Knn<DP::InternalId> for Arc<core_search::graph::InlineSearch<DP, T, S>>
 where
     DP: diskann::provider::DataProvider,
-    core_search::graph::AdaptiveLGreedySearch<DP, T, S>: core_search::Search<
+    core_search::graph::InlineSearch<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
         Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,
