@@ -182,6 +182,7 @@ where
 /// With 1000 samples, the minimum observable non-zero match rate is 0.1% (1/1000),
 /// so the effective multiplier range is [1×, 8×] for non-zero matches
 /// and 16× for zero matches.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn greedy_filter_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
@@ -301,18 +302,19 @@ where
         scratch.hops += scratch.beam_nodes.len() as u32;
 
         // Adaptive L: after enough samples, estimate match rate and scale L.
-        if let Some(adaptive_l) = adaptive_l.as_ref() {
-            if !l_adjusted && sample_visited >= adaptive_l.sample_count {
-                l_adjusted = true;
-                let new_l = compute_adaptive_l(
-                    l_search,
-                    sample_visited as u32,
-                    sample_matched as u32,
-                    adaptive_l.scale_factor,
-                );
-                if new_l > l_search {
-                    scratch.resize(new_l);
-                }
+        if let Some(adaptive_l) = adaptive_l.as_ref()
+            && !l_adjusted
+            && sample_visited >= adaptive_l.sample_count
+        {
+            l_adjusted = true;
+            let new_l = compute_adaptive_l(
+                l_search,
+                sample_visited as u32,
+                sample_matched as u32,
+                adaptive_l.scale_factor,
+            );
+            if new_l > l_search {
+                scratch.resize(new_l);
             }
         }
     }
