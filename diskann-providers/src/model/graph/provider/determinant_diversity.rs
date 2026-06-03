@@ -132,18 +132,24 @@ pub fn determinant_diversity_post_process<Id: Copy>(
 /// d_i is the candidate's distance to the query and v_i is its full-precision
 /// vector in R^dim. Define the per-candidate scale
 ///
-///     alpha_i = similarity(d_i)^power * (1 / sqrt(eta))
+/// ```text
+/// alpha_i = similarity(d_i)^power * (1 / sqrt(eta))
+/// ```
 ///
 /// where similarity(.) in [0, 1] is the normalized "lower-distance-is-better"
 /// score from `distance_to_similarity`, and `1 / sqrt(eta)` is `inv_sqrt_eta`
 /// (it equals 1 in the unregularized eta == 0 branch -- see the caller). The
 /// scaled vectors are
 ///
-///     x_i = alpha_i * v_i.
+/// ```text
+/// x_i = alpha_i * v_i.
+/// ```
 ///
 /// Define the (regularized) Gram matrix of any subset S = { i_1, ..., i_m } as
 ///
-///     G_S = X_S * X_S^T + eta * I,
+/// ```text
+/// G_S = X_S * X_S^T + eta * I,
+/// ```
 ///
 /// where X_S stacks the rows x_i for i in S. The goal is to pick S of size k
 /// that approximately maximizes det(G_S), i.e. selects vectors whose scaled
@@ -164,13 +170,17 @@ pub fn determinant_diversity_post_process<Id: Copy>(
 /// 2. **Project & deflate.** For every remaining candidate i, project r_i
 ///    onto the chosen pivot direction r* = r_{i*} and remove that component:
 ///
-///        pi_i = <r_i, r*> / ||r*||^2
-///        r_i  := r_i - pi_i * r*
+///    ```text
+///    pi_i = <r_i, r*> / ||r*||^2
+///    r_i  := r_i - pi_i * r*
+///    ```
 ///
 /// 3. **Norm update (Pythagoras).** Because the new r_i is orthogonal to r*
 ///    by construction,
 ///
-///        ||r_i_new||^2 = ||r_i||^2 - pi_i^2 * ||r*||^2.
+///    ```text
+///    ||r_i_new||^2 = ||r_i||^2 - pi_i^2 * ||r*||^2.
+///    ```
 ///
 ///    We update the cached squared norm in place using this identity (clamped
 ///    at 0 for numerical safety) instead of recomputing the dot product.
@@ -318,7 +328,9 @@ fn greedy_orthogonal_select<Id: Copy>(
 /// DiskANN distance semantics are *lower is better*, so we invert and rescale
 /// against the observed [min, max] range:
 ///
-///     similarity(d) = max((d_max - d) / (d_max - d_min), 0) + EPSILON.
+/// ```text
+/// similarity(d) = max((d_max - d) / (d_max - d_min), 0) + EPSILON.
+/// ```
 ///
 /// - The numerator flips the order so that the *closest* candidate gets the
 ///   highest similarity (~1) and the *farthest* gets ~0.
