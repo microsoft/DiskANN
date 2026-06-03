@@ -254,12 +254,10 @@ mod tests {
         }
     }
 
-    // Graph Index Build Integration Test.
-    #[test]
-    fn graph_index_integration() {
+    fn run_integration_test(mut raw: serde_json::Value) {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index.json"));
+        // let mut raw = serde_json::from_str(json_string).unwrap();
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -291,6 +289,25 @@ mod tests {
 
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+    }
+
+    ////////////////////////////////
+    //      Graph Index Build     //
+    ////////////////////////////////
+    #[test]
+    fn graph_index_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
+    //      Dynamic Index     //
+    ////////////////////////////
+
+    #[test]
+    fn graph_index_dynamic_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+        run_integration_test(raw);
     }
 
     ////////////////////////////
@@ -362,7 +379,7 @@ mod tests {
     /////////////////////////
 
     #[test]
-    fn scalar_quantization_intergration() {
+    fn scalar_quantization_integration() {
         let input_paths = [example_directory().join("scalar.json")];
 
         for input_path in input_paths {
@@ -500,40 +517,8 @@ mod tests {
 
     #[test]
     fn label_index_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("metadata-index.json"));
-        prefix_search_directories(&mut raw, &root_directory());
-
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("metadata-index.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let raw = value_from_file(&example_directory().join("metadata-index.json"));
+        run_integration_test(raw);
     }
 
     #[test]
@@ -557,38 +542,8 @@ mod tests {
     fn graph_index_filter_integration() {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index-filter.json"));
-        prefix_search_directories(&mut raw, &root_directory());
-
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("graph-index-filter.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        run_integration_test(raw);
     }
 
     #[test]
@@ -770,6 +725,92 @@ mod tests {
 
         // The output file should not have been created because we failed the test.
         assert!(!output_path.exists());
+    }
+
+    ///////////////////
+    // Multi-Vector  //
+    ///////////////////
+
+    #[test]
+    fn multi_vector_integration() {
+        let path = example_directory().join("multi-vector.json");
+        let tempdir = tempfile::tempdir().unwrap();
+        let output_path = tempdir.path().join("output.json");
+        assert!(!output_path.exists());
+
+        let modified_input_path = tempdir.path().join("input.json");
+
+        let mut raw = value_from_file(&path);
+        prefix_search_directories(&mut raw, &root_directory());
+        save_to_file(&modified_input_path, &raw);
+
+        run_multi_vector_integration(&modified_input_path, &output_path)
+    }
+
+    #[cfg(feature = "multi-vector")]
+    fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        cli.run(&mut output).unwrap();
+        println!(
+            "output = {}",
+            String::from_utf8(output.into_inner()).unwrap()
+        );
+
+        // Check that the results file is generated.
+        assert!(output_path.exists());
+    }
+
+    #[cfg(not(feature = "multi-vector"))]
+    fn run_multi_vector_integration(input_path: &std::path::Path, output_path: &std::path::Path) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        let err = cli.run(&mut output).unwrap_err();
+        println!("err = {:?}", err);
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains("\"multi-vector\" feature"));
+        println!("output = {}", output);
+
+        // The output file should not have been created because we failed the test.
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    #[cfg(feature = "multi-vector")]
+    fn multi_vector_check_verify() {
+        let input_path = example_directory().join("multi-vector.json");
+        let tolerance_path = project_directory()
+            .join("perf_test_inputs")
+            .join("multi-vector-tolerance.json");
+
+        let command = Commands::Check(diskann_benchmark_runner::app::Check::Verify {
+            tolerances: tolerance_path,
+            input_file: input_path,
+        });
+
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+        cli.run(&mut output).unwrap();
+        println!(
+            "output = {}",
+            String::from_utf8(output.into_inner()).unwrap()
+        );
     }
 
     #[test]

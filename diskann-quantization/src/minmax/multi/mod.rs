@@ -74,7 +74,7 @@
 //!
 //! // Compute MaxSim: per-query-vector max similarities
 //! let mut scores = vec![0.0f32; num_query_vectors];
-//! MaxSim::new(&mut scores).unwrap().evaluate(query_mv.into(), doc_mv);
+//! MaxSim::new(&mut scores).evaluate(query_mv.into(), doc_mv);
 //! // scores[i] = min over all doc vectors of distance(query[i], doc[j])
 //!
 //! // Compute Chamfer distance (sum of MaxSim scores)
