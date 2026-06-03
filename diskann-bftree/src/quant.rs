@@ -219,11 +219,6 @@ impl QuantVectorProvider {
 
         Ok(())
     }
-
-    pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
-        self.quant_vector_index.delete(key);
-    }
 }
 
 /// Train a spherical quantizer on simple data and return it as a `Poly<dyn Quantizer>`.

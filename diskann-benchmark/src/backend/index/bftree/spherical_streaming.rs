@@ -40,7 +40,9 @@ use crate::{
     },
     inputs::{
         bftree::BfTreeSphericalDynamicRun,
-        graph_index::{SearchPhase, TopkSearchPhase},
+        graph_index::{
+            InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
+        },
     },
     utils::{self, datafiles},
 };
@@ -139,11 +141,7 @@ impl ManagedStream<f32> for BfTreeSQStream {
     }
 
     fn maintain(&self) -> anyhow::Result<Self::Output> {
-        // bf_tree doesn't have a separate release/consolidation step like inmem's
-        // TableDeleteProviderAsync. Deletes are handled in-place.
-        // Clear delete caches to prevent unbounded memory growth.
-        self.index.provider().flush_deletes();
-
+        // bf-tree uses hard deletes — no deferred cleanup needed.
         Ok(StreamStats::Maintain(Vec::new()))
     }
 }
@@ -175,6 +173,12 @@ impl Benchmark for StreamingSpherical {
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
             *failure_score.get_or_insert(0) += 1;
         }
+        if matches!(
+            input.runbook_params().ip_delete_method,
+            InputDeleteMethod::VisitedAndTopK { .. }
+        ) {
+            *failure_score.get_or_insert(0) += 1;
+        }
 
         match failure_score {
             None => Ok(MatchScore(0)),
@@ -194,6 +198,12 @@ impl Benchmark for StreamingSpherical {
             Some(input) => {
                 if !f32::is_match(input.data_type()) {
                     writeln!(f, "- Only `float32` supported, got {}", input.data_type())?;
+                }
+                if matches!(
+                    input.runbook_params().ip_delete_method,
+                    InputDeleteMethod::VisitedAndTopK { .. }
+                ) {
+                    writeln!(f, "- bf-tree does not support VisitedAndTopK delete method")?;
                 }
                 Ok(())
             }

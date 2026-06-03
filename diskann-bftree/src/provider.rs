@@ -9,7 +9,6 @@ use std::{
     io::{Read, Write},
     num::NonZeroUsize,
     str::FromStr,
-    sync::Mutex,
 };
 
 use diskann_quantization::{
@@ -198,9 +197,6 @@ where
     // Graph configuration parameters for persistence
     //
     pub(crate) graph_params: Option<GraphParams>,
-
-    // Nodes marked for deletion. Vector data is removed in `flush_deletes()`.
-    pending_deletes: Mutex<Vec<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,7 +265,6 @@ where
             )?,
             metric: params.metric,
             graph_params: params.graph_params,
-            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 
@@ -380,15 +375,6 @@ where
         )
     }
 
-    /// Flush deferred deletes. Removes vector data from bf-tree for all nodes
-    /// marked deleted since the last flush. Call after an `inplace_delete` batch.
-    pub fn flush_deletes(&self) {
-        let ids: Vec<u32> = self.pending_deletes.lock().unwrap().drain(..).collect();
-        for id in ids {
-            self.full_vectors.delete_vector(id as usize);
-            self.quant_vectors.delete_vector(id as usize);
-        }
-    }
 }
 
 impl<T> BfTreeProvider<T, NoStore>
@@ -399,15 +385,6 @@ where
     ///
     pub fn counts_for_get_vector(&self) -> (usize, usize) {
         (self.full_vectors.num_get_calls.get(), 0)
-    }
-
-    /// Flush deferred deletes. Removes vector data from bf-tree for all nodes
-    /// marked deleted since the last flush. Call after an `inplace_delete` batch.
-    pub fn flush_deletes(&self) {
-        let ids: Vec<u32> = self.pending_deletes.lock().unwrap().drain(..).collect();
-        for id in ids {
-            self.full_vectors.delete_vector(id as usize);
-        }
     }
 }
 
@@ -430,11 +407,7 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
-
-        // Don't delete yet as pruning still needs to read the vector.
-        // Recording the id to be handled in flush_deletes
-        self.pending_deletes.lock().unwrap().push(id);
-
+        self.full_vectors.delete_vector(id as usize);
         std::future::ready(Ok(()))
     }
 
@@ -453,11 +426,6 @@ where
         id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<diskann::provider::ElementStatus, Self::Error>> + Send
     {
-        // Check pending deletes first — these haven't been flushed yet.
-        if self.pending_deletes.lock().unwrap().contains(&id) {
-            return std::future::ready(Ok(ElementStatus::Deleted));
-        }
-
         let status = match self.full_vectors.get_vector_sync(id.into_usize()) {
             Ok(_) => Ok(ElementStatus::Valid),
             Err(RankedError::Transient(_)) => Ok(ElementStatus::Deleted),
@@ -1749,7 +1717,6 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
-            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 }
@@ -1912,7 +1879,6 @@ where
             neighbor_provider,
             metric,
             graph_params: saved_params.graph_params,
-            pending_deletes: Mutex::new(Vec::new()),
         })
     }
 }
@@ -2738,7 +2704,6 @@ mod tests {
         // Delete a couple of vectors
         provider.delete(ctx, &3u32).await.unwrap();
         provider.delete(ctx, &7u32).await.unwrap();
-        provider.flush_deletes();
 
         // Save to disk from in-memory
         let save_dir = tempdir().unwrap();
@@ -2844,7 +2809,6 @@ mod tests {
         }
 
         provider.delete(ctx, &2u32).await.unwrap();
-        provider.flush_deletes();
 
         // Save to disk from in-memory
         let save_dir = tempdir().unwrap();

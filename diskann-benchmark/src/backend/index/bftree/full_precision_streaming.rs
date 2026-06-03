@@ -34,7 +34,9 @@ use crate::{
     },
     inputs::{
         bftree::BfTreeDynamicRun,
-        graph_index::{SearchPhase, TopkSearchPhase},
+        graph_index::{
+            InplaceDeleteMethod as InputDeleteMethod, SearchPhase, TopkSearchPhase,
+        },
     },
     utils::{self, datafiles},
 };
@@ -138,11 +140,7 @@ where
     }
 
     fn maintain(&self) -> anyhow::Result<Self::Output> {
-        // bf_tree doesn't have a separate release/consolidation step like inmem's
-        // TableDeleteProviderAsync. Deletes are handled in-place.
-        // Clear delete caches to prevent unbounded memory growth.
-        self.index.provider().flush_deletes();
-
+        // bf-tree uses hard deletes — no deferred cleanup needed.
         Ok(StreamStats::Maintain(Vec::new()))
     }
 }
@@ -178,6 +176,13 @@ where
             *failure_score.get_or_insert(0) += 1;
         }
 
+        if matches!(
+            input.runbook_params().ip_delete_method,
+            InputDeleteMethod::VisitedAndTopK { .. }
+        ) {
+            *failure_score.get_or_insert(0) += 1;
+        }
+
         match failure_score {
             None => Ok(MatchScore(0)),
             Some(score) => Err(FailureScore(score)),
@@ -190,7 +195,16 @@ where
         input: Option<&Self::Input>,
     ) -> std::fmt::Result {
         match input {
-            Some(i) => write!(f, "{}", T::describe(i.build().data_type())),
+            Some(i) => {
+                write!(f, "{}", T::describe(i.build().data_type()))?;
+                if matches!(
+                    i.runbook_params().ip_delete_method,
+                    InputDeleteMethod::VisitedAndTopK { .. }
+                ) {
+                    write!(f, "\n- bf-tree does not support VisitedAndTopK delete method")?;
+                }
+                Ok(())
+            }
             None => write!(f, "{}", T::DATA_TYPE),
         }
     }
