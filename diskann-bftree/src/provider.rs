@@ -29,19 +29,20 @@ use diskann::{
         },
         strategy::{FullPrecision, Quantized},
         workingset::{map, Map},
-        AdjacencyList, SearchOutputBuffer,
+        SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
-        DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
-        NoopGuard, SetElement,
+        DelegateNeighbor, Delete, ElementStatus, HasId, NoopGuard, SetElement,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
 use diskann_utils::{future::AsyncFriendly, views::MatrixView};
 use diskann_vector::{distance::Metric, DistanceFunction};
+
+use crate::neighbors::NeighborScratch;
 
 use super::{
     neighbors::NeighborProvider, quant::QuantVectorProvider, vectors::VectorProvider, AccessError,
@@ -312,9 +313,10 @@ where
             // an uninitialized neighbor list in functions `consolidate_deletes` and
             // `consolidate_simple` and getting an error. This is a stop-gap solution
             // until BF-tree API is improved to handle `exists` queries.
+            let mut scratch = provider.neighbor_provider.scratch();
             for i in 0..params.max_points {
                 let vector_id = i as u32;
-                provider.neighbor_provider.set_neighbors(vector_id, &[])?;
+                scratch.write_neighbors(vector_id, &[])?;
             }
         }
         Ok(provider)
@@ -580,41 +582,10 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.neighbors()
-    }
-}
-
-impl NeighborAccessor for &NeighborProvider<u32> {
-    fn get_neighbors(
-        self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.get_neighbors(id, neighbors).map(|_| self))
-    }
-}
-
-impl NeighborAccessorMut for &NeighborProvider<u32> {
-    fn set_neighbors(
-        self,
-        vector_id: u32,
-        neighbors: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.set_neighbors(vector_id, neighbors).map(|_| self))
-    }
-
-    fn append_vector(
-        self,
-        vector_id: u32,
-        new_neighbor_ids: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(
-            self.append_vector(vector_id, new_neighbor_ids)
-                .map(|_| self),
-        )
+        self.neighbors().scratch()
     }
 }
 
@@ -732,13 +703,13 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
-            // Set the quantized vector
             self.quant_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -763,11 +734,12 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -834,10 +806,10 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
+        self.provider.neighbors().scratch()
     }
 }
 
@@ -1005,9 +977,9 @@ impl<'a, T> DelegateNeighbor<'a> for QuantAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
+        self.provider.neighbors().scratch()
     }
 }
 
@@ -1964,6 +1936,7 @@ mod tests {
     use super::*;
     use crate::quant::create_test_quantizer;
     use diskann::{
+        graph::AdjacencyList,
         graph::DiskANNIndex,
         graph::{self, search::Knn},
         neighbor::BackInserter,
@@ -2385,7 +2358,7 @@ mod tests {
         )
         .unwrap();
 
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
 
         // Insert new vectors without neighbors and empty neighbor list is
         // expected for each newly inserted vector
@@ -2396,12 +2369,12 @@ mod tests {
 
             // First attempt should return empty
             let mut out = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
             assert!(out.is_empty());
 
             // After we set the empty neighbor list, our attempt should succeed
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
 
             assert!(out.is_empty());
         }
@@ -2412,17 +2385,14 @@ mod tests {
         for i in 0..num_points {
             let mut out = AdjacencyList::new();
             let neighbors = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
 
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
 
             assert_eq!(&*out, &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
 
             assert!(out.is_empty());
         }
@@ -2432,9 +2402,8 @@ mod tests {
         let mut out = AdjacencyList::from_iter_untrusted([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
         // Attempt to access non-existant vector's neighbor list should fail as NotFound
-        assert!(neighbor_accessor
+        assert!(provider.neighbor_provider
             .get_neighbors(200, &mut out)
-            .await
             .is_err());
         assert!(out.is_empty());
     }
@@ -2506,15 +2475,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         assert_eq!(vector_config.get_leaf_page_size(), 8192);
@@ -2639,15 +2605,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         let storage = FileStorageProvider;
@@ -2764,15 +2727,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         // Delete a couple of vectors
@@ -2875,15 +2835,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         provider.delete(ctx, &2u32).await.unwrap();
