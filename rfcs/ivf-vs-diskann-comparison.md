@@ -1,16 +1,16 @@
 # IVF as RAM Reduction Strategy
 
-**Problem**: DiskANN keeps PQ-compressed vectors in RAM (~1/4 of raw data). For the OpenAI 100K benchmark (615MB index), that's ~154MB RAM.
+**Problem**: DiskANN keeps PQ-compressed vectors in RAM (~1/16 of raw data). For the OpenAI 100K benchmark (384 PQ chunks, 1536 dims), that's **~37MB** RAM (100K × 384 bytes).
 
-**IVF RAM**: Only centroids in RAM. For nlist=316, 1536-dim vectors: **~1.9MB** (vs DiskANN's ~154MB). That's a **~80× RAM reduction**.
+**IVF RAM**: Only centroids in RAM. For nlist=316, 1536-dim vectors: **~1.9MB** (vs DiskANN's ~37MB). That's a **~19× RAM reduction**.
 
-**TL;DR**: IVF trades 5× QPS for 80× RAM reduction. An LRU cache layer lets you slide between these extremes. For RAM-constrained deployments (edge, multi-tenant), IVF + 10% cache uses ~63MB RAM vs DiskANN's ~154MB while maintaining >90% recall.
+**TL;DR**: IVF trades 5× QPS for 19× RAM reduction. An LRU cache layer lets you slide between these extremes. For RAM-constrained deployments (edge, multi-tenant), IVF + 10% cache uses ~63MB RAM vs DiskANN's ~37MB while maintaining >90% recall — the cache makes IVF use *more* RAM than DiskANN, so the win is only meaningful without caching or with a small cache budget.
 
 **The cost — read throughput**:
 
 | | DiskANN | IVF (nlist=316, nprobe=32) | IVF (nlist=632, nprobe=64) |
 |---|---|---|---|
-| **RAM** | ~154 MB | **~1.9 MB** | **~3.8 MB** |
+| **RAM** | ~37 MB | **~1.9 MB** | **~3.8 MB** |
 | **Recall** | 95.3% | 89.1% | 90.6% |
 | **QPS** | 215.6 | 43.4 | 47.7 |
 | **Bytes/query** | 1.65 MB | 59.2 MB | 59.3 MB |
@@ -20,16 +20,16 @@ At comparable recall (~90-95%), IVF reads **36-72× more bytes per query** and d
 
 **Caching closes the gap**: With 10% of index cached in RAM (~61MB for OpenAI):
 - **24% of bytes read are served from cache** (measured from actual query distribution)
-- This adds ~61MB RAM (still far below DiskANN's ~154MB) while cutting effective disk reads by ~1/4
+- This adds ~61MB RAM — actually **more** than DiskANN's ~37MB PQ footprint
 - Hot clusters concentrate queries — OpenAI's top list gets 4.5× the mean reads
 
 **Trade-off knob**: Cache size directly controls the RAM-IO trade-off:
 
-| Cache | RAM added | Bytes saved | Effective model |
-|-------|----------|-------------|-----------------|
-| 0% | 0 MB | 0% | Pure disk IVF |
-| 10% | ~61 MB | ~24% | Sweet spot |
-| 25% | ~154 MB | ~50%+ (est.) | Approaches DiskANN RAM, better IO |
+| Cache | RAM added | Total IVF RAM | Bytes saved | vs DiskANN RAM |
+|-------|----------|--------------|-------------|----------------|
+| 0% | 0 MB | ~1.9 MB | 0% | 19× less |
+| 5% | ~31 MB | ~33 MB | ~12% (est.) | ~equal |
+| 10% | ~61 MB | ~63 MB | ~24% | 1.7× more |
 
 # IVF vs DiskANN Benchmark Comparison Report
 
