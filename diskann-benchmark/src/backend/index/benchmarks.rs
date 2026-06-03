@@ -86,12 +86,7 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
     registry.register(
         "graph-index-full-precision-u8",
-        FullPrecision::<u8>::new()
-            .search(plugins::Topk)
-            .search(plugins::Range)
-            .search(plugins::TopkBetaFilter)
-            .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkInlineFilter),
+        FullPrecision::<u8>::new().search(plugins::Topk),
     )?;
     registry.register(
         "graph-index-full-precision-i8",
