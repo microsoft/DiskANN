@@ -184,7 +184,7 @@ impl TopkMultihopFilter {
     }
 }
 
-/// A search plugin for adaptive L-greedy search.
+/// A search plugin for inline filtered search.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TopkInlineFilter;
 
