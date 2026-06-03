@@ -307,8 +307,8 @@ mod tests {
     ////////////////////////////
 
     #[test]
-    fn graph_index_dynamic_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+    fn graph_index_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-stream.json"));
         run_integration_test(raw);
     }
 
