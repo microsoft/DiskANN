@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 //! Bf_tree-backed benchmarks for DiskANN graph indices.
 //!
 //! Unlike the inmem provider, bf_tree uses a log-structured merge tree for storage,

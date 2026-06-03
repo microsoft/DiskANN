@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 use std::num::{NonZero, NonZeroUsize};
 
 use crate::inputs::{

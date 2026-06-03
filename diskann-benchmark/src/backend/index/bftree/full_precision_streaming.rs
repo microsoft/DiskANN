@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 use std::{borrow::Cow, io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::{
