@@ -1,16 +1,16 @@
 # IVF as RAM Reduction Strategy
 
-**Problem**: DiskANN keeps PQ-compressed vectors in RAM (~1/4 of raw data). For a 500MB index, that's ~125MB RAM.
+**Problem**: DiskANN keeps PQ-compressed vectors in RAM (~1/4 of raw data). For the OpenAI 100K benchmark (615MB index), that's ~154MB RAM.
 
-**IVF RAM**: Only centroids in RAM. For nlist=316, 1536-dim vectors: **~1.9MB** (vs DiskANN's ~150MB). That's a **~75× RAM reduction**.
+**IVF RAM**: Only centroids in RAM. For nlist=316, 1536-dim vectors: **~1.9MB** (vs DiskANN's ~154MB). That's a **~80× RAM reduction**.
 
-**TL;DR**: IVF trades 5× QPS for 75× RAM reduction. An LRU cache layer lets you slide between these extremes. For RAM-constrained deployments (edge, multi-tenant), IVF + 10% cache uses ~63MB RAM vs DiskANN's ~150MB while maintaining >90% recall.
+**TL;DR**: IVF trades 5× QPS for 80× RAM reduction. An LRU cache layer lets you slide between these extremes. For RAM-constrained deployments (edge, multi-tenant), IVF + 10% cache uses ~63MB RAM vs DiskANN's ~154MB while maintaining >90% recall.
 
 **The cost — read throughput**:
 
 | | DiskANN | IVF (nlist=316, nprobe=32) | IVF (nlist=632, nprobe=64) |
 |---|---|---|---|
-| **RAM** | ~150 MB | **~1.9 MB** | **~3.8 MB** |
+| **RAM** | ~154 MB | **~1.9 MB** | **~3.8 MB** |
 | **Recall** | 95.3% | 89.1% | 90.6% |
 | **QPS** | 215.6 | 43.4 | 47.7 |
 | **Bytes/query** | 1.65 MB | 59.2 MB | 59.3 MB |
@@ -20,7 +20,7 @@ At comparable recall (~90-95%), IVF reads **36-72× more bytes per query** and d
 
 **Caching closes the gap**: With 10% of index cached in RAM (~61MB for OpenAI):
 - **24% of bytes read are served from cache** (measured from actual query distribution)
-- This adds ~60MB RAM (still far below DiskANN's ~150MB) while cutting effective disk reads by ~1/4
+- This adds ~61MB RAM (still far below DiskANN's ~154MB) while cutting effective disk reads by ~1/4
 - Hot clusters concentrate queries — OpenAI's top list gets 4.5× the mean reads
 
 **Trade-off knob**: Cache size directly controls the RAM-IO trade-off:
@@ -29,7 +29,7 @@ At comparable recall (~90-95%), IVF reads **36-72× more bytes per query** and d
 |-------|----------|-------------|-----------------|
 | 0% | 0 MB | 0% | Pure disk IVF |
 | 10% | ~61 MB | ~24% | Sweet spot |
-| 25% | ~150 MB | ~50%+ (est.) | Approaches DiskANN RAM, better IO |
+| 25% | ~154 MB | ~50%+ (est.) | Approaches DiskANN RAM, better IO |
 
 # IVF vs DiskANN Benchmark Comparison Report
 
