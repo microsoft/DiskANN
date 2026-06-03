@@ -539,4 +539,143 @@ mod tests {
         let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
     }
+
+    /// k = 0 should return an empty result without panicking, even when
+    /// candidates are otherwise valid.
+    #[test]
+    fn test_k_zero_returns_empty() {
+        let candidates = vec![(0u32, 0.1, vec![1.0, 0.0]), (1u32, 0.2, vec![0.0, 1.0])];
+        let query = &[1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 0, 0.5, p(1.0));
+        assert_eq!(result.len(), 0);
+    }
+
+    /// Zero-dimensional candidate vectors must be rejected gracefully (the
+    /// algorithm has no meaningful work to do with empty vectors and the
+    /// query is treated as effectively empty).
+    #[test]
+    fn test_zero_dimensional_candidates() {
+        let candidates = vec![(0u32, 0.1, Vec::<f32>::new()), (1u32, 0.2, Vec::new())];
+        // Query is non-empty but candidate vectors have dim 0; we only reach
+        // the empty-vector early return if the dimension check would have
+        // matched (so use a 0-length query here to stay on the early path).
+        let query: &[f32] = &[];
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        assert_eq!(result.len(), 0);
+    }
+
+    /// Selecting all n candidates must exit the loop cleanly via the
+    /// `selected.len() == k` early break (no extra deflation pass).
+    #[test]
+    fn test_k_equals_candidates_returns_all() {
+        let candidates = vec![
+            (10u32, 0.1, vec![1.0, 0.0]),
+            (20u32, 0.2, vec![0.0, 1.0]),
+            (30u32, 0.3, vec![1.0, 1.0]),
+        ];
+        let query = &[1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(1.0));
+        assert_eq!(result.len(), 3);
+
+        // Result IDs must be a permutation of the input IDs (no duplicates,
+        // none lost).
+        let mut ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![10, 20, 30]);
+    }
+
+    /// When all candidates lie on a single line through the origin, the
+    /// second-and-later pivots collapse to zero-norm residuals. The pivot
+    /// loop must exit cleanly and still return up to `k` candidates without
+    /// dividing by zero.
+    #[test]
+    fn test_collinear_candidates_no_division_by_zero() {
+        // All vectors are positive multiples of (1, 0). After scaling and
+        // picking the first pivot, every remaining residual is exactly 0.
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0]),
+            (1u32, 0.1, vec![2.0, 0.0]),
+            (2u32, 0.1, vec![3.0, 0.0]),
+        ];
+        let query = &[1.0, 0.0];
+        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(1.0));
+        assert_eq!(result.len(), 3);
+
+        let mut ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    /// The first selected element should be the most relevant one (highest
+    /// similarity, i.e. smallest distance) when all candidates have equal
+    /// vector norms. This pins down the initial pivot choice.
+    #[test]
+    fn test_first_pivot_is_most_relevant_at_equal_norms() {
+        // Three orthogonal unit vectors with strictly increasing distances.
+        // Largest similarity → smallest distance → id=0 should be picked
+        // first.
+        let candidates = vec![
+            (0u32, 0.1, vec![1.0, 0.0, 0.0]),
+            (1u32, 0.5, vec![0.0, 1.0, 0.0]),
+            (2u32, 0.9, vec![0.0, 0.0, 1.0]),
+        ];
+        let query = &[1.0, 1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(2.0));
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].0, 0, "Most relevant candidate must be first");
+    }
+
+    /// Distances returned alongside selected ids must come from the
+    /// corresponding input candidate (not be reordered or recomputed).
+    #[test]
+    fn test_ids_pair_with_their_input_distance() {
+        let candidates = vec![(7u32, 1.5, vec![1.0, 0.0]), (9u32, 0.25, vec![0.0, 1.0])];
+        let query = &[1.0, 1.0];
+        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        assert_eq!(result.len(), 2);
+
+        for (id, dist) in &result {
+            match *id {
+                7 => assert_eq!(*dist, 1.5),
+                9 => assert_eq!(*dist, 0.25),
+                other => panic!("unexpected id {other}"),
+            }
+        }
+    }
+
+    /// `distance_to_similarity` must produce a strictly positive, finite
+    /// score even at the extremes of the observed distance range, so the
+    /// resulting alpha never becomes a hard zero or NaN.
+    #[test]
+    fn test_distance_to_similarity_extremes() {
+        let range = DistanceRange { min: 0.5, max: 2.0 };
+
+        let s_min = distance_to_similarity(0.5, range);
+        let s_max = distance_to_similarity(2.0, range);
+        let s_below = distance_to_similarity(-1.0, range);
+        let s_above = distance_to_similarity(10.0, range);
+
+        // All scores are strictly positive (we add EPSILON) and finite.
+        for s in [s_min, s_max, s_below, s_above] {
+            assert!(s.is_finite());
+            assert!(s > 0.0);
+        }
+        // Closer (smaller) distance is at least as similar as farther.
+        assert!(s_min >= s_max);
+        // A distance below the observed min still clamps to ~1 + EPSILON.
+        assert!(s_below >= s_min - f32::EPSILON);
+        // A distance above the observed max still clamps to ~EPSILON.
+        assert!(s_above <= s_max + f32::EPSILON);
+    }
+
+    /// Degenerate range (min == max) must not divide by zero. All
+    /// similarities should be finite and equal.
+    #[test]
+    fn test_distance_to_similarity_degenerate_range() {
+        let range = DistanceRange { min: 0.7, max: 0.7 };
+        let a = distance_to_similarity(0.7, range);
+        let b = distance_to_similarity(0.7, range);
+        assert!(a.is_finite() && b.is_finite());
+        assert_eq!(a, b);
+    }
 }
