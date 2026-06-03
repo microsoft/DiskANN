@@ -151,6 +151,8 @@ pub(super) struct IvfSearchResult {
     pub(super) mean_cpu_time: f64,
     pub(super) mean_comparisons: f64,
     pub(super) recall: f32,
+    /// Per-list read counts: `list_reads[i]` = number of queries that read cluster `i`.
+    pub(super) list_reads: Vec<u32>,
 }
 
 /// Squared L2 distance (lower = more similar).
@@ -183,7 +185,13 @@ fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
 }
 
 /// Search a single query: rank centroids (RAM), then read `nprobe` cluster files from disk.
-fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<u32>, QueryStats) {
+/// Returns (result_ids, stats, probed_cluster_indices).
+fn search_one(
+    index: &IvfIndex,
+    query: &[f32],
+    nprobe: usize,
+    k: usize,
+) -> (Vec<u32>, QueryStats, Vec<usize>) {
     let start = Instant::now();
     let ndims = index.ndims;
     let dist_fn = distance_fn(index._metric);
@@ -204,8 +212,10 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
     let mut total_comparisons: u64 = 0;
     let mut io_count: u64 = 0;
     let mut io_time = std::time::Duration::ZERO;
+    let mut probed_clusters: Vec<usize> = Vec::with_capacity(probe_count);
 
     for &(c_idx, _) in centroid_dists.iter().take(probe_count) {
+        probed_clusters.push(c_idx);
         // Real disk I/O: read the cluster file
         let io_start = Instant::now();
         let (ids, vecs) = match index.read_cluster(c_idx) {
@@ -248,7 +258,7 @@ fn search_one(index: &IvfIndex, query: &[f32], nprobe: usize, k: usize) -> (Vec<
         comparisons: total_comparisons,
     };
 
-    (result_ids, stats)
+    (result_ids, stats, probed_clusters)
 }
 
 pub(super) fn search_ivf_index(
@@ -278,7 +288,7 @@ pub(super) fn search_ivf_index(
         let start = Instant::now();
 
         // Run all queries in parallel — each thread does its own disk reads
-        let results: Vec<(Vec<u32>, QueryStats)> = (0..num_queries)
+        let results: Vec<(Vec<u32>, QueryStats, Vec<usize>)> = (0..num_queries)
             .into_par_iter()
             .map(|qi| {
                 let query = queries.row(qi);
@@ -288,9 +298,17 @@ pub(super) fn search_ivf_index(
 
         let total_time = start.elapsed();
 
+        // Aggregate per-list read counts
+        let mut list_reads = vec![0u32; index.nlist];
+        for (_, _, probed) in &results {
+            for &c_idx in probed {
+                list_reads[c_idx] += 1;
+            }
+        }
+
         // Gather result IDs into flat array for recall computation
         let mut result_ids = vec![0u32; num_queries * recall_at];
-        for (qi, (ids, _)) in results.iter().enumerate() {
+        for (qi, (ids, _, _)) in results.iter().enumerate() {
             let offset = qi * recall_at;
             let count = ids.len().min(recall_at);
             result_ids[offset..offset + count].copy_from_slice(&ids[..count]);
@@ -308,7 +326,7 @@ pub(super) fn search_ivf_index(
         )? as f32;
 
         // Compute statistics
-        let stats_vec: Vec<&QueryStats> = results.iter().map(|(_, s)| s).collect();
+        let stats_vec: Vec<&QueryStats> = results.iter().map(|(_, s, _)| s).collect();
         let n = num_queries as f64;
 
         let mean_latency: f64 = stats_vec.iter().map(|s| s.latency_us).sum::<f64>() / n;
@@ -343,6 +361,7 @@ pub(super) fn search_ivf_index(
             mean_cpu_time,
             mean_comparisons,
             recall,
+            list_reads,
         });
     }
 
