@@ -20,7 +20,7 @@ use crate::{
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::{Neighbor, NeighborPriorityQueue},
+    neighbor::Neighbor,
     provider::{BuildQueryComputer, DataProvider},
     utils::VectorId,
 };
@@ -136,7 +136,7 @@ where
 
             let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
 
-            let stats = inline_filter_search_internal(
+            let (stats, matched_results) = inline_filter_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
@@ -153,7 +153,7 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    scratch.best.iter().take(self.inner.l_value().get()),
+                    matched_results.into_iter().take(self.inner.l_value().get()),
                     output,
                 )
                 .await
@@ -174,7 +174,7 @@ pub(crate) async fn inline_filter_search_internal<I, A, T, SR>(
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
     adaptive_l: Option<AdaptiveL>,
-) -> ANNResult<InternalSearchStats>
+) -> ANNResult<(InternalSearchStats, Vec<Neighbor<I>>)>
 where
     I: VectorId,
     A: ExpandBeam<T, Id = I> + SearchExt,
@@ -190,20 +190,17 @@ where
         range_search_second_round: false,
     };
 
-    // Initialize search state if not already initialized.
-    // This allows paged search to call this function multiple times
-    if scratch.visited.is_empty() {
-        let start_ids = accessor.starting_points().await?;
+    // initialize the search with starting points
+    let start_ids = accessor.starting_points().await?;
 
-        for id in start_ids {
-            scratch.visited.insert(id);
-            let element = accessor
-                .get_element(id)
-                .await
-                .escalate("start point retrieval must succeed")?;
-            let dist = computer.evaluate_similarity(element.reborrow());
-            scratch.best.insert(Neighbor::new(id, dist));
-        }
+    for id in start_ids {
+        scratch.visited.insert(id);
+        let element = accessor
+            .get_element(id)
+            .await
+            .escalate("start point retrieval must succeed")?;
+        let dist = computer.evaluate_similarity(element.reborrow());
+        scratch.best.insert(Neighbor::new(id, dist));
     }
 
     // Pre-allocate with good capacity to avoid repeated allocations
@@ -211,7 +208,7 @@ where
 
     // Matched results tracked separately — scratch.best contains all nodes
     // for greedy navigation, matched_results contains only filter-matching nodes.
-    let mut matched_results = NeighborPriorityQueue::<I>::new(l_search);
+    let mut matched_results = Vec::new();
 
     let mut sample_visited: usize = 0;
     let mut sample_matched: usize = 0;
@@ -259,7 +256,7 @@ where
                     // All nodes go into scratch.best for navigation,
                     // matched nodes also go into matched_results for final output.
                     scratch.best.insert(neighbor);
-                    matched_results.insert(accepted);
+                    matched_results.push(accepted);
                     sample_matched += 1;
                 }
                 QueryVisitDecision::Reject => {
@@ -269,8 +266,13 @@ where
                 QueryVisitDecision::Terminate => {
                     scratch.cmps += one_hop_neighbors.len() as u32;
                     scratch.hops += scratch.beam_nodes.len() as u32;
-                    scratch.best = matched_results;
-                    return Ok(make_stats(scratch));
+                    matched_results.sort_unstable_by(|a, b| {
+                        a.distance
+                            .partial_cmp(&b.distance)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                    return Ok((make_stats(scratch), matched_results));
                 }
             }
             if adaptive_l.is_some() {
@@ -299,11 +301,13 @@ where
         }
     }
 
-    // Replace scratch.best with only the matched results
-    // so that post_process returns the right candidates.
-    scratch.best = matched_results;
+    matched_results.sort_unstable_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    Ok(make_stats(scratch))
+    Ok((make_stats(scratch), matched_results))
 }
 
 /// Compute adaptive L based on observed specificity.

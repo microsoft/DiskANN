@@ -194,20 +194,16 @@ where
         range_search_second_round: false,
     };
 
-    // Initialize search state if not already initialized.
-    // This allows paged search to call multihop_search_internal multiple times
-    if scratch.visited.is_empty() {
-        let start_ids = accessor.starting_points().await?;
+    let start_ids = accessor.starting_points().await?;
 
-        for id in start_ids {
-            scratch.visited.insert(id);
-            let element = accessor
-                .get_element(id)
-                .await
-                .escalate("start point retrieval must succeed")?;
-            let dist = computer.evaluate_similarity(element.reborrow());
-            scratch.best.insert(Neighbor::new(id, dist));
-        }
+    for id in start_ids {
+        scratch.visited.insert(id);
+        let element = accessor
+            .get_element(id)
+            .await
+            .escalate("start point retrieval must succeed")?;
+        let dist = computer.evaluate_similarity(element.reborrow());
+        scratch.best.insert(Neighbor::new(id, dist));
     }
 
     // Pre-allocate with good capacity to avoid repeated allocations
