@@ -6,7 +6,7 @@
 pub mod defaults;
 pub mod experimental;
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
 use thiserror::Error;
 
@@ -195,7 +195,7 @@ pub struct Config {
     prune_kind: PruneKind,
 
     /// The upper-bound of occlusion list sizes.
-    max_occlusion_size: NonZeroU32,
+    max_occlusion_size: NonZeroU16,
 
     /// Maximum number of backedges applied.
     max_backedges: NonZeroU32,
@@ -215,39 +215,54 @@ pub struct Config {
     experimental_insert_retry: Option<experimental::InsertRetry>,
 }
 
-/// Allow conversion from `NonZeroU32` to `NonZeroUsize`.
-///
-/// LLVM can recognice when this conversion is infallible and will emit code that never
-/// panics.
-macro_rules! to_nonzero_usize {
-    ($($x:tt)*) => {{
-        let y: NonZeroU32 = $($x)*;
-
-        const {
-            assert!(std::mem::size_of::<NonZeroUsize>() >= std::mem::size_of::<NonZeroU32>())
-        };
-
-        // Lint: Infallible on 64-bit systems.
-        #[allow(clippy::unwrap_used)]
-        <NonZeroUsize as TryFrom<NonZeroU32>>::try_from(y).unwrap()
-    }}
+trait ToNonZeroUsize {
+    fn to_nonzero_usize(self) -> NonZeroUsize;
 }
-pub(super) use to_nonzero_usize;
+
+impl ToNonZeroUsize for NonZeroU32 {
+    fn to_nonzero_usize(self) -> NonZeroUsize {
+        const { assert!(std::mem::size_of::<NonZeroUsize>() >= std::mem::size_of::<Self>()) };
+
+        // LLVM optimizes away the panic
+        #[expect(clippy::unwrap_used, reason = "infallible on 64-bit systems")]
+        self.try_into().unwrap()
+    }
+}
+
+trait TryFromUsize: Sized {
+    fn try_from_usize(x: usize) -> Result<Self, NotNonZero>;
+}
+
+impl TryFromUsize for NonZeroU32 {
+    fn try_from_usize(x: usize) -> Result<Self, NotNonZero> {
+        let y: u32 = x.try_into().map_err(|_| NotNonZero(x, Max::U32))?;
+        NonZeroU32::new(y).ok_or(NotNonZero(x, Max::U32))
+    }
+}
+
+impl TryFromUsize for NonZeroU16 {
+    fn try_from_usize(x: usize) -> Result<Self, NotNonZero> {
+        let y: u16 = x.try_into().map_err(|_| NotNonZero(x, Max::U16))?;
+        NonZeroU16::new(y).ok_or(NotNonZero(x, Max::U16))
+    }
+}
+
+fn non_zero_error<T>(param: &'static str, val: usize) -> Result<T, ConfigErrorInner>
+where
+    T: TryFromUsize,
+{
+    T::try_from_usize(val).map_err(|err| ConfigErrorInner::Parameter(param, err))
+}
 
 impl Config {
     /// Attempt to construct a [`Config`] from a builder.
     ///
     /// See: [`Builder::build`].
     pub fn try_from_builder(builder: Builder) -> Result<Self, ConfigError> {
-        let non_zero_error =
-            |param: &'static str, val: usize| -> Result<NonZeroU32, ConfigErrorInner> {
-                try_nonzero_u32(val).map_err(|err| ConfigErrorInner::Parameter(param, err))
-            };
-
         // TODO: Error checking for alpha.
         let alpha = builder.alpha.unwrap_or(defaults::ALPHA);
 
-        let pruned_degree = non_zero_error("pruned_degree", builder.pruned_degree)?;
+        let pruned_degree: NonZeroU32 = non_zero_error("pruned_degree", builder.pruned_degree)?;
 
         let max_degree = match builder.max_degree {
             MaxDegree::Value(max) => non_zero_error("max_degree", max)?,
@@ -328,18 +343,15 @@ impl Config {
     //-----------//
 
     pub fn pruned_degree(&self) -> NonZeroUsize {
-        const { assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>()) };
-        // Lint: Infallible on 64-bit systems.
-        #[expect(clippy::unwrap_used)]
-        self.pruned_degree_u32().try_into().unwrap()
+        self.pruned_degree_u32().to_nonzero_usize()
     }
 
     pub fn max_degree(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.max_degree_u32())
+        self.max_degree_u32().to_nonzero_usize()
     }
 
     pub fn l_build(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.l_build_u32())
+        self.l_build_u32().to_nonzero_usize()
     }
 
     pub fn alpha(&self) -> f32 {
@@ -351,15 +363,15 @@ impl Config {
     }
 
     pub fn max_occlusion_size(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.max_occlusion_size_u32())
+        self.max_occlusion_size_u32().to_nonzero_usize()
     }
 
     pub fn max_backedges(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.max_backedges_u32())
+        self.max_backedges_u32().to_nonzero_usize()
     }
 
     pub fn max_minibatch_par(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.max_minibatch_par_u32())
+        self.max_minibatch_par_u32().to_nonzero_usize()
     }
 
     pub fn intra_batch_candidates(&self) -> IntraBatchCandidates {
@@ -391,7 +403,7 @@ impl Config {
     }
 
     pub fn max_occlusion_size_u32(&self) -> NonZeroU32 {
-        self.max_occlusion_size
+        self.max_occlusion_size.into()
     }
 
     pub fn max_backedges_u32(&self) -> NonZeroU32 {
@@ -400,6 +412,14 @@ impl Config {
 
     pub fn max_minibatch_par_u32(&self) -> NonZeroU32 {
         self.max_minibatch_par
+    }
+
+    //---------------//
+    // u16 accessors //
+    //---------------//
+
+    pub fn max_occlusion_size_u16(&self) -> NonZeroU16 {
+        self.max_occlusion_size
     }
 }
 
@@ -422,7 +442,7 @@ impl From<ConfigError> for crate::ANNError {
 #[derive(Debug, Clone, Error)]
 enum ConfigErrorInner {
     #[error("parameter \"{0}\" invalid because {1}")]
-    Parameter(&'static str, NotNonZeroU32),
+    Parameter(&'static str, NotNonZero),
     #[error("parameter \"max_degree\" invalid because {0}")]
     Slack(InvalidSlack),
     #[error("parameter \"max_degree\" ({0}) must not be less than \"pruned_degree\" ({1})")]
@@ -433,24 +453,44 @@ enum ConfigErrorInner {
     BackedgeRatio(f32),
 }
 
-fn try_nonzero_u32(x: usize) -> Result<NonZeroU32, NotNonZeroU32> {
-    let y: u32 = x.try_into().map_err(|_| NotNonZeroU32(x))?;
-    NonZeroU32::new(y).ok_or(NotNonZeroU32(x))
-}
-
 #[derive(Debug, Clone)]
-struct NotNonZeroU32(usize);
+struct NotNonZero(usize, Max);
 
-impl std::fmt::Display for NotNonZeroU32 {
+impl std::fmt::Display for NotNonZero {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.0 == 0 {
             write!(f, "it cannot be zero")
-        } else if self.0 > (u32::MAX as usize) {
-            write!(f, "its value ({}) exceeds u32::MAX", self.0)
+        } else if self.0 > self.1.max() {
+            write!(f, "its value ({}) exceeds {}", self.0, self.1)
         } else {
             // Shouldn't reach here.
             Ok(())
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Max {
+    U32,
+    U16,
+}
+
+impl Max {
+    fn max(&self) -> usize {
+        match self {
+            Self::U32 => u32::MAX as usize,
+            Self::U16 => u16::MAX as usize,
+        }
+    }
+}
+
+impl std::fmt::Display for Max {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::U32 => "u32::MAX",
+            Self::U16 => "u16::MAX",
+        };
+        f.write_str(s)
     }
 }
 
@@ -705,6 +745,7 @@ mod tests {
 
     const SLACK: MaxDegree = MaxDegree::default_slack();
     const TOO_BIG: usize = 5_000_000_000;
+    const TOO_BIG_16: usize = 70_000;
 
     /// Utility to help check error messages.
     macro_rules! check_msg {
@@ -770,7 +811,7 @@ mod tests {
         assert_eq!(config.alpha(), defaults::ALPHA);
         assert_eq!(config.prune_kind(), prune_kind);
         assert_eq!(
-            config.max_occlusion_size_u32(),
+            config.max_occlusion_size_u16(),
             defaults::MAX_OCCLUSION_SIZE
         );
         assert_eq!(
@@ -927,6 +968,12 @@ mod tests {
                 .unwrap();
 
             assert_eq!(config.max_occlusion_size().get(), i);
+
+            let x: usize = config.max_occlusion_size_u32().get().try_into().unwrap();
+            assert_eq!(x, i);
+
+            let x: usize = config.max_occlusion_size_u16().get().into();
+            assert_eq!(x, i);
         }
 
         let msg = Builder::new_with(10, SLACK, 10, prune_kind, f(0))
@@ -939,14 +986,14 @@ mod tests {
             "parameter \"max_occlusion_size\" invalid because it cannot be zero",
         );
 
-        let msg = Builder::new_with(10, SLACK, 10, prune_kind, f(TOO_BIG))
+        let msg = Builder::new_with(10, SLACK, 10, prune_kind, f(TOO_BIG_16))
             .build()
             .unwrap_err()
             .to_string();
 
         check_msg!(
             msg,
-            "parameter \"max_occlusion_size\" invalid because its value (5000000000) exceeds u32::MAX",
+            "parameter \"max_occlusion_size\" invalid because its value (70000) exceeds u16::MAX",
         );
     }
 
