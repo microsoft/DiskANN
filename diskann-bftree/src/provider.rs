@@ -388,6 +388,15 @@ where
     }
 }
 
+/// Hard-delete implementation for `BfTreeProvider`.
+///
+/// This provider performs **hard deletes**: vector data is immediately and irrecoverably erased
+/// from the underlying bf-tree storage when [`Delete::delete`] is called. This has an important
+/// consequence for inplace delete: the [`InplaceDeleteMethod::VisitedAndTopK`] strategy is
+/// **incompatible** with this provider because it requires reading the deleted vector's data
+/// (via [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been
+/// committed. Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`]
+/// instead, as these strategies only require neighbor topology (which remains accessible).
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
@@ -801,8 +810,8 @@ where
 
     /// Return the full-precision vector stored at index `i`.
     ///
-    /// Falls back to the delete_cache for vectors that have been deleted but are
-    /// still needed for pruning during inplace_delete.
+    /// Returns an error for hard-deleted vectors whose graph edges have not yet
+    /// been cleaned up.
     ///
     #[inline(always)]
     fn get_element(
@@ -970,8 +979,8 @@ where
 
     /// Return the quantized vector stored at index `i`.
     ///
-    /// Falls back to the quant_delete_cache for vectors that have been deleted but are
-    /// still needed for pruning during inplace_delete.
+    /// Returns an error for hard-deleted vectors whose graph edges have not yet
+    /// been cleaned up.
     ///
     fn get_element(
         &mut self,
@@ -1181,8 +1190,14 @@ where
     }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using full-precision vectors.
 ///
+/// # Compatibility
+///
+/// This strategy is used with [`InplaceDeleteMethod::OneHop`] and
+/// [`InplaceDeleteMethod::TwoHopAndOneHop`]. It is **not compatible** with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] because `BfTreeProvider` performs hard deletes —
+/// the vector data is erased before `get_delete_element` is called, causing it to fail.
 impl<T, Q> InplaceDeleteStrategy<BfTreeProvider<T, Q>> for FullPrecision
 where
     T: VectorRepr,
@@ -1297,8 +1312,12 @@ where
     }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using quantized vectors.
 ///
+/// # Compatibility
+///
+/// Same constraint as [`FullPrecision`]'s impl: not compatible with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] due to hard deletes.
 impl<T> InplaceDeleteStrategy<BfTreeProvider<T, QuantVectorProvider>> for Quantized
 where
     T: VectorRepr,
