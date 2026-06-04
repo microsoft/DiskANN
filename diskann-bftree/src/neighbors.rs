@@ -159,7 +159,7 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Where list length is the full list length and 'Invalid' indicates unfilled empty slots in the list
     /// Note: assuming all neighbors in the input list, 'neighbors', are valid
     #[allow(clippy::expect_used)]
-    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut Vec<u8>) -> ANNResult<()> {
+    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
@@ -201,7 +201,7 @@ impl<I: VectorId> NeighborProvider<I> {
         &self,
         vector_id: I,
         new_neighbor_ids: &[I],
-        buf: &mut Vec<u8>,
+        buf: &mut [u8],
     ) -> ANNResult<()> {
         // Retrieve existing neighborlist
         let mut neighbor_list = AdjacencyList::with_capacity(self.dim);
