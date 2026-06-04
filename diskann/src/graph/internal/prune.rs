@@ -82,7 +82,7 @@ where
 ///
 /// Refer to the inline documentation in [`DiskANNIndex::occlude_factor`] for documentation
 /// on the use of these fields.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct State {
     /// The occlude factor for the pool item at the corresponding index.
     pub(in crate::graph) occlude_factor: f32,
@@ -90,16 +90,6 @@ pub(crate) struct State {
     pub(in crate::graph) last_checked: u16,
     /// The candidate index of this neighbor.
     pub(in crate::graph) neighbor: u16,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            occlude_factor: 0.0f32,
-            last_checked: 0,
-            neighbor: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Error)]
