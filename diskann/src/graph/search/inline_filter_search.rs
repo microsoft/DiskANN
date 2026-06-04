@@ -78,7 +78,7 @@ impl AdaptiveL {
 ///     specificity = 10%  (100/1000) → 2× L
 ///     specificity = 1%   (10/1000)  → 4× L
 ///     specificity = 0.1% (1/1000)   → 8× L
-///   and so on up to a pre-set maximum multipler 
+///   and so on up to a pre-set maximum multipler
 #[derive(Debug)]
 pub struct InlineSearch<'q, InternalId> {
     /// Base graph search parameters.
@@ -163,7 +163,6 @@ where
         }
     }
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn inline_filter_search_internal<I, A, T, SR>(
