@@ -22,8 +22,8 @@ mod tiled_reduce;
 
 /// Cache budgets fed to the tile planner.
 ///
-/// `Default` returns the production budgets derived from hardcoded L1/L2
-/// cache-size estimates and fixed fractions.
+/// `Default` derives the budgets from runtime-detected L1d/L2 cache sizes
+/// (see [`cache::cache_info`](super::cache::cache_info)).
 #[derive(Debug, Clone, Copy)]
 struct TileBudget {
     /// L2 budget in bytes reserved for A tiles.
@@ -33,17 +33,13 @@ struct TileBudget {
 }
 
 impl Default for TileBudget {
-    // TODO: Replace hardcoded fallbacks with detected cache sizes
-    // (e.g. via `diskann_platform`, env-var override, or runtime query).
     fn default() -> Self {
-        const L2_CACHE: usize = 1_250_000; // 1.25 MB fallback
-        const L1_CACHE: usize = 48_000; // 48 KB fallback
-
+        let cache = super::cache::cache_info();
         Self {
             // 50% of L2 for A tiles; remainder for B streaming + pollution.
-            l2_a: L2_CACHE / 2,
+            l2_a: cache.l2_bytes / 2,
             // 75% of L1 for B tiles; A micro-panel subtracted at runtime.
-            l1_b: L1_CACHE * 3 / 4,
+            l1_b: cache.l1d_bytes * 3 / 4,
         }
     }
 }
