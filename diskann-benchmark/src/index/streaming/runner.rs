@@ -16,7 +16,10 @@ use diskann::{
 use diskann_benchmark_core::{
     build::{self, graph::SingleInsert, ids::Slice, Parallelism},
     recall::Rows,
-    search::{self, graph::{KNN, Strategy}},
+    search::{
+        self,
+        graph::{Strategy, KNN},
+    },
     streaming::graph::InplaceDelete,
 };
 use diskann_utils::{
@@ -29,7 +32,10 @@ use crate::{
     index::{
         build::{BuildKind, BuildStats},
         search::knn,
-        streaming::{stats::{GenericStats, StreamStats}, ManagedStream},
+        streaming::{
+            stats::{GenericStats, StreamStats},
+            ManagedStream,
+        },
     },
     inputs::graph_index::TopkSearchPhase,
 };
@@ -147,19 +153,11 @@ where
         Ok(StreamStats::Search(results))
     }
 
-    fn insert(
-        &self,
-        data: MatrixView<'_, T>,
-        slots: &[u32],
-    ) -> anyhow::Result<Self::Output> {
+    fn insert(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Insert(self.build(data, slots)?))
     }
 
-    fn replace(
-        &self,
-        data: MatrixView<'_, T>,
-        slots: &[u32],
-    ) -> anyhow::Result<Self::Output> {
+    fn replace(&self, data: MatrixView<'_, T>, slots: &[u32]) -> anyhow::Result<Self::Output> {
         Ok(StreamStats::Replace(self.build(data, slots)?))
     }
 
@@ -185,7 +183,8 @@ where
     }
 
     fn maintain(&self) -> anyhow::Result<Self::Output> {
-        self.maintainer.maintain(&self.index, &self.runtime, self.ntasks)
+        self.maintainer
+            .maintain(&self.index, &self.runtime, self.ntasks)
     }
 }
 

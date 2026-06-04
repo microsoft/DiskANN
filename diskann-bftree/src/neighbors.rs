@@ -404,9 +404,7 @@ mod tests {
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
             set.spawn(async move {
                 let mut scratch = neighbor_provider_clone.scratch();
-                scratch
-                    .write_neighbors(i as u32, &neighbor_list)
-                    .unwrap();
+                scratch.write_neighbors(i as u32, &neighbor_list).unwrap();
             });
         }
 
@@ -505,9 +503,7 @@ mod tests {
             set.spawn(async move {
                 let mut scratch = neighbor_provider_clone.scratch();
                 for i in 0..5 {
-                    scratch
-                        .write_neighbors(i as u32, &[1, 2, 3, 4, 5])
-                        .unwrap();
+                    scratch.write_neighbors(i as u32, &[1, 2, 3, 4, 5]).unwrap();
                 }
 
                 let mut result = AdjacencyList::with_capacity(121);

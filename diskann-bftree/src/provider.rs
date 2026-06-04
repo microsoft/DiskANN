@@ -216,13 +216,17 @@ pub struct BfTreeProviderParameters {
     // The maximum number of neighbors to store for each vector
     pub max_degree: u32,
 
-    // bf-tree config for vector provider
+    // bf-tree config for vector provider.
+    // Note: bf-tree requires a minimum circular buffer size of 8192 bytes;
+    // the default is 32MB. Values below the minimum will cause bf-tree errors.
     pub vector_provider_config: Config,
 
-    // bf-tree config for quant vector provider
+    // bf-tree config for quant vector provider.
+    // Same minimum circular buffer constraint as above.
     pub quant_vector_provider_config: Config,
 
-    // bf-tree config for neighbor list provider
+    // bf-tree config for neighbor list provider.
+    // Same minimum circular buffer constraint as above.
     pub neighbor_list_provider_config: Config,
 
     // Optional graph configuration parameters for persistence
@@ -374,7 +378,6 @@ where
             self.quant_vectors.num_get_calls.get(),
         )
     }
-
 }
 
 impl<T> BfTreeProvider<T, NoStore>
@@ -1232,7 +1235,7 @@ where
         let elt = provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")?
+            .escalate("get_delete_element: failed to read vector for inplace delete")?
             .into();
         Ok(elt)
     }
@@ -1351,7 +1354,7 @@ where
         provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")
+            .escalate("get_delete_element: failed to read vector for inplace delete")
             .map(Into::into)
     }
 }
@@ -2354,12 +2357,18 @@ mod tests {
 
             // First attempt should return empty
             let mut out = AdjacencyList::new();
-            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
             assert!(out.is_empty());
 
             // After we set the empty neighbor list, our attempt should succeed
             scratch.write_neighbors(i, &[]).unwrap();
-            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2372,12 +2381,18 @@ mod tests {
             let neighbors = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
             scratch.write_neighbors(i, &neighbors).unwrap();
 
-            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert_eq!(&*out, &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
             scratch.write_neighbors(i, &[]).unwrap();
-            provider.neighbor_provider.get_neighbors(i, &mut out).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2387,7 +2402,8 @@ mod tests {
         let mut out = AdjacencyList::from_iter_untrusted([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
         // Attempt to access non-existant vector's neighbor list should fail as NotFound
-        assert!(provider.neighbor_provider
+        assert!(provider
+            .neighbor_provider
             .get_neighbors(200, &mut out)
             .is_err());
         assert!(out.is_empty());

@@ -32,12 +32,7 @@ use crate::{
         stats::StreamStats,
         BfTreeMaintainer, StreamRunner,
     },
-    inputs::{
-        bftree::BfTreeSphericalStreamingRun,
-        graph_index::{
-            InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
-        },
-    },
+    inputs::{bftree::BfTreeSphericalStreamingRun, graph_index::SearchPhase},
     utils,
 };
 
@@ -78,12 +73,6 @@ impl Benchmark for StreamingSpherical {
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
             *failure_score.get_or_insert(0) += 1;
         }
-        if matches!(
-            input.runbook_params().ip_delete_method,
-            InputDeleteMethod::VisitedAndTopK { .. }
-        ) {
-            *failure_score.get_or_insert(0) += 1;
-        }
 
         match failure_score {
             None => Ok(MatchScore(0)),
@@ -103,12 +92,6 @@ impl Benchmark for StreamingSpherical {
             Some(input) => {
                 if !f32::is_match(input.data_type()) {
                     writeln!(f, "- Only `float32` supported, got {}", input.data_type())?;
-                }
-                if matches!(
-                    input.runbook_params().ip_delete_method,
-                    InputDeleteMethod::VisitedAndTopK { .. }
-                ) {
-                    writeln!(f, "- bf-tree does not support VisitedAndTopK delete method")?;
                 }
                 Ok(())
             }

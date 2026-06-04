@@ -6,7 +6,7 @@ use std::num::{NonZero, NonZeroUsize};
 
 use crate::inputs::{
     as_input, exhaustive,
-    graph_index::{StreamingRunbookParams, IndexBuild, SearchPhase, TopkSearchPhase},
+    graph_index::{IndexBuild, SearchPhase, StreamingRunbookParams, TopkSearchPhase},
     write_field, Example, PRINT_WIDTH,
 };
 use diskann::graph::config;

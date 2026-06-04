@@ -42,7 +42,9 @@ use crate::{
         search::plugins,
         streaming::{self, managed, stats::StreamStats, InmemMaintainer, Managed, StreamRunner},
     },
-    inputs::graph_index::{StreamingIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::graph_index::{
+        IndexBuild, IndexOperation, IndexSource, SearchPhase, StreamingIndexRun,
+    },
     utils::{
         self,
         datafiles::{self},

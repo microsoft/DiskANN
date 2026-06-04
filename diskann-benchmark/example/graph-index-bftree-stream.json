@@ -41,7 +41,11 @@
           "dataset_name": "sift-small-256",
           "gt_directory": "example_runbook_gt",
           "ip_delete_method": {
-            "method": "one_hop"
+            "method": "visited_and_top_k",
+            "params": {
+              "k_value": 10,
+              "l_value": 40
+            }
           },
           "ip_delete_num_to_replace": 3,
           "consolidate_threshold": 0.2

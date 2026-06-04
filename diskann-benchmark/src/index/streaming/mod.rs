@@ -17,9 +17,9 @@ pub(crate) mod stats;
 
 pub(crate) use full_precision::InmemMaintainer;
 pub(crate) use managed::{Managed, ManagedStream};
-pub(crate) use runner::StreamRunner;
 #[cfg(feature = "bftree")]
 pub(crate) use runner::BfTreeMaintainer;
+pub(crate) use runner::StreamRunner;
 
 use crate::{
     inputs::graph_index::{StreamingRunbookParams, TopkSearchPhase},

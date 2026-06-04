@@ -26,12 +26,7 @@ use crate::{
         stats::StreamStats,
         StreamRunner,
     },
-    inputs::{
-        bftree::BfTreeStreamingRun,
-        graph_index::{
-            InplaceDeleteMethod as InputDeleteMethod, SearchPhase,
-        },
-    },
+    inputs::{bftree::BfTreeStreamingRun, graph_index::SearchPhase},
     utils,
 };
 
@@ -70,13 +65,6 @@ where
             *failure_score.get_or_insert(0) += 1;
         }
 
-        if matches!(
-            input.runbook_params().ip_delete_method,
-            InputDeleteMethod::VisitedAndTopK { .. }
-        ) {
-            *failure_score.get_or_insert(0) += 1;
-        }
-
         match failure_score {
             None => Ok(MatchScore(0)),
             Some(score) => Err(FailureScore(score)),
@@ -90,14 +78,7 @@ where
     ) -> std::fmt::Result {
         match input {
             Some(i) => {
-                write!(f, "{}", T::describe(i.build().data_type()))?;
-                if matches!(
-                    i.runbook_params().ip_delete_method,
-                    InputDeleteMethod::VisitedAndTopK { .. }
-                ) {
-                    write!(f, "\n- bf-tree does not support VisitedAndTopK delete method")?;
-                }
-                Ok(())
+                write!(f, "{}", T::describe(i.build().data_type()))
             }
             None => write!(f, "{}", T::DATA_TYPE),
         }

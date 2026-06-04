@@ -16,8 +16,7 @@ use diskann_benchmark_core::{
     streaming::graph::DropDeleted,
 };
 use diskann_providers::model::graph::provider::async_::{
-    inmem::DefaultProvider,
-    TableDeleteProviderAsync,
+    inmem::DefaultProvider, TableDeleteProviderAsync,
 };
 use diskann_utils::future::AsyncFriendly;
 use tokio::runtime::Runtime;
@@ -105,17 +104,9 @@ where
     ) -> anyhow::Result<StreamStats> {
         let range = index.provider().iter();
 
-        let runner = DropDeleted::new(
-            index.clone(),
-            false,
-            Range::new(range),
-        );
+        let runner = DropDeleted::new(index.clone(), false, Range::new(range));
 
-        let drop_deleted = build::build(
-            runner,
-            Parallelism::fixed(Some(ONE), ntasks),
-            runtime,
-        )?;
+        let drop_deleted = build::build(runner, Parallelism::fixed(Some(ONE), ntasks), runtime)?;
 
         let release = build::build(
             Release::new(index.clone()),
