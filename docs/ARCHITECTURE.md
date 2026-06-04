@@ -2,9 +2,19 @@
 
 ### Simplicity is the foundation of code quality
 
- Protect the simplicity of the codebase. Correct, maintainable systems come from code that is easy to understand, reason about, and evolve.
+Correct, maintainable systems come from code that is easy to understand, reason about, and evolve. We actively protect that simplicity.
+Example: Code should be readable locally. If understanding a single trait bound requires chasing through a long chain of files, the abstraction has become too indirect.
+
+### Build simple composable units
+
+Build small blocks with simple responsibilities.
+A good block has a durable API and a clear purpose, so it rarely needs changes.
+Extend behavior by adding code and composing core units, not by modifying them.
+If functionality grows without touching old code, the abstractions are sound.
 
 ### Keep complexity bounded
+
+Keep code simple at every abstraction level.
 
 1. Deep trait hierarchies increase complexity.
    A blanket impl or supertrait bound carries all invariants and edge cases of
@@ -14,12 +24,6 @@
 2. Prefer composition and encapsulation.
    Wrap types and delegate via traits rather than building deep trait
    hierarchies.
-
-## Patterns We Use
-
-### Build composable units
-
-Think SQL as a programming language. All we do is select, map, filter, join - it is easy (for the most part) to reason over a SQL script. This is possible because we have the core units that are composed of making a bigger capability stand out. Build primitives that compose together to represent the larger piece of code. Ensure that the abstraction at the high level is a composition of domain level capabilities and avoid abstraction mismatches.
 
 ### Dependencies point inward
 
