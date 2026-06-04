@@ -43,6 +43,7 @@
 //! // scores[1] =  0.0 (query[1] has no good match: max IP was 0)
 //! ```
 
+mod cache;
 mod factory;
 mod fallback;
 mod isa;
