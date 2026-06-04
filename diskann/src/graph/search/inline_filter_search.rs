@@ -2,14 +2,6 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-
-//! Pure greedy filtered search.
-//!
-//! All nodes (matched and unmatched) guide navigation in `scratch.best`.
-//! Matched results are tracked separately in `matched_results`.
-//! No two-hop expansion. The `QueryLabelProvider` controls early termination
-//! via `on_visit()` returning `Terminate`.
-
 use thiserror::Error;
 
 use diskann_utils::Reborrow;
@@ -49,11 +41,11 @@ impl From<AdaptiveLSearchError> for ANNError {
     }
 }
 
-/// Adaptive L for greedy filtered search.
+/// Adaptive L for inline filtered search.
 #[derive(Debug, Clone)]
 pub struct AdaptiveL {
-    pub sample_count: usize,
-    pub scale_factor: f64,
+    sample_count: usize,
+    scale_factor: f64,
 }
 
 impl AdaptiveL {
@@ -72,11 +64,21 @@ impl AdaptiveL {
     }
 }
 
-/// Parameters for pure greedy filtered search.
+/// Inline filtered search: a standard k-NN search with an additional step
+/// of keeping track of all results satisfying the query predicate, and
+/// returning only those that meet the criteria.
 ///
-/// All nodes participate in greedy navigation regardless of filter match.
-/// Matched results are tracked separately and returned as final output.
-/// Early termination is controlled by the `QueryLabelProvider` callback.
+/// An additional option for better performance on low specificity scenarios
+/// is the use of the adaptive L algorithm. After visiting a set number of nodes,
+/// and estimating the specificity of the filter from that sample, `l_search` is
+/// scaled up in the following manner:
+///   specificity ≥ 50%    → 1× L (no change, most nodes match)
+///   10% ≤ specificity < 50% → 2× L
+///   specificity < 10%    → log-scale: 2^(-log10(specificity))
+///     specificity = 10%  (100/1000) → 2× L
+///     specificity = 1%   (10/1000)  → 4× L
+///     specificity = 0.1% (1/1000)   → 8× L
+///   and so on up to a pre-set maximum multipler 
 #[derive(Debug)]
 pub struct InlineSearch<'q, InternalId> {
     /// Base graph search parameters.
@@ -88,7 +90,7 @@ pub struct InlineSearch<'q, InternalId> {
 }
 
 impl<'q, InternalId> InlineSearch<'q, InternalId> {
-    /// Create new greedy filter search parameters.
+    /// Create new inline filter search parameters.
     pub fn new(
         inner: Knn,
         label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
@@ -134,7 +136,7 @@ where
 
             let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
 
-            let stats = greedy_filter_search_internal(
+            let stats = inline_filter_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
@@ -162,23 +164,9 @@ where
     }
 }
 
-/// Inline filtered search: a standard k-NN search with an additional step
-/// of keeping track of all results satisfying the query predicate, and
-/// returning only those that meet the criteria.
-///
-/// An additional option for better performance on low specificity scenarios
-/// is the use of the adaptive L algorithm. After visiting a set number of nodes,
-/// and estimating the specificity of the filter from that sample, `l_search` is
-/// scaled up in the following manner:
-///   specificity ≥ 50%    → 1× L (no change, most nodes match)
-///   10% ≤ specificity < 50% → 2× L
-///   specificity < 10%    → log-scale: 2^(-log10(specificity))
-///     specificity = 10%  (100/1000) → 2× L
-///     specificity = 1%   (10/1000)  → 4× L
-///     specificity = 0.1% (1/1000)   → 8× L
-///   and so on up to a pre-set maximum multipler 
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn greedy_filter_search_internal<I, A, T, SR>(
+pub(crate) async fn inline_filter_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
@@ -273,9 +261,7 @@ where
                     // matched nodes also go into matched_results for final output.
                     scratch.best.insert(neighbor);
                     matched_results.insert(accepted);
-                    if adaptive_l.is_some() {
-                        sample_matched += 1;
-                    }
+                    sample_matched += 1;
                 }
                 QueryVisitDecision::Reject => {
                     // Unmatched nodes still guide navigation
@@ -304,8 +290,8 @@ where
             l_adjusted = true;
             let new_l = compute_adaptive_l(
                 l_search,
-                sample_visited as u32,
-                sample_matched as u32,
+                sample_visited,
+                sample_matched,
                 adaptive_l.scale_factor,
             );
             if new_l > l_search {
@@ -333,7 +319,7 @@ where
 ///   0 matches in sample → `max_multiplier`× L (maximum expansion)
 ///
 /// Clamped to [1×, max_multiplier] range.
-fn compute_adaptive_l(base_l: usize, visited: u32, matched: u32, max_multiplier: f64) -> usize {
+fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multiplier: f64) -> usize {
     if matched == 0 || visited == 0 {
         // No matches at all — use maximum multiplier
         return (base_l as f64 * max_multiplier) as usize;
