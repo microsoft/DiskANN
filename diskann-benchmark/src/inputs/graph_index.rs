@@ -19,7 +19,7 @@ use diskann_providers::{
     },
     utils::load_metadata_from_file,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -244,6 +244,13 @@ impl MultiHopSearchPhase {
     }
 }
 
+fn require_present_option<'de, D>(deserializer: D) -> Result<Option<AdaptiveL>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<AdaptiveL>::deserialize(deserializer)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
@@ -252,9 +259,8 @@ pub(crate) struct AdaptiveL {
 
 impl AdaptiveL {
     pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        if self.scale_factor <= 0.0 {
-            return Err(anyhow::anyhow!("scale_factor must be positive"));
-        }
+        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
+            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
         Ok(())
     }
 }
@@ -268,6 +274,7 @@ pub(crate) struct InlineSearchPhase {
     pub(crate) data_labels: InputFile,
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
+    #[serde(deserialize_with = "require_present_option")]
     pub(crate) adaptive_l: Option<AdaptiveL>,
 }
 
@@ -288,15 +295,15 @@ impl InlineSearchPhase {
         Ok(())
     }
 
-    pub(crate) fn adaptive_l(&self) -> Option<graph::search::AdaptiveL> {
+    pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
         if let Some(ref adaptive_l) = self.adaptive_l {
-            let adaptive_l = graph::search::AdaptiveL {
-                sample_count: adaptive_l.sample_count.into(),
-                scale_factor: adaptive_l.scale_factor,
-            };
-            Some(adaptive_l)
+            let adaptive_l = graph::search::AdaptiveL::new(
+                adaptive_l.sample_count.into(),
+                adaptive_l.scale_factor,
+            )?; // Safe to unwrap since we've already validated the input
+            Ok(Some(adaptive_l))
         } else {
-            None
+            Ok(None)
         }
     }
 }

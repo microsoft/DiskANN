@@ -683,7 +683,7 @@ where
                 .into_iter()
                 .map(utils::filters::as_query_label_provider)
                 .collect(),
-            inline.adaptive_l(),
+            inline.adaptive_l()?,
         )?;
 
         let result = search::knn::run(&inline, &groundtruth, steps)?;
