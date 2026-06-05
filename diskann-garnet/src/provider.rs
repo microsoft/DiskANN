@@ -730,13 +730,18 @@ impl<T: VectorRepr> Delete for GarnetProvider<T> {
         let mut ok = true;
         ok &= self.callbacks.delete_iid(&context.term(Term::ExtMap), id);
         ok &= self.callbacks.delete_eid(&context.term(Term::IntMap), gid);
-        ok &= self
+
+        // It is not an error to fail deleting attributes; they may not exist.
+        let _: bool = self
             .callbacks
             .delete_eid(&context.term(Term::Attributes), gid);
+
         // NOTE: Commented out until DiskANN fixes accessing neighbor data post-delete.
         //ok &= self.callbacks.delete_iid(context.term(Term::Neighbors), id);
         ok &= self.callbacks.delete_iid(&context.term(Term::Vector), id);
-        ok &= self
+
+        // It is not an error to fail deleting quantized terms; they may not exist yet.
+        let _: bool = self
             .callbacks
             .delete_iid(&context.term(Term::Quantized), id);
 
@@ -1533,5 +1538,41 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for DynamicQuantiza
             return future::ready(Err(GarnetError::Read.into()));
         }
         future::ready(Ok(v.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diskann::provider::{Delete, SetElement};
+    use diskann_vector::distance::Metric;
+
+    use crate::{
+        VectorQuantType,
+        garnet::{Context, GarnetId},
+        provider::GarnetProvider,
+        test_utils::Store,
+    };
+
+    #[tokio::test]
+    async fn simple_insert_delete() {
+        let store = Store;
+        let ctx = Context::new(0);
+        let provider = GarnetProvider::<f32>::new(
+            2,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            10,
+            store.callbacks(),
+            &ctx,
+        )
+        .unwrap();
+
+        let id = GarnetId::from(bytemuck::bytes_of(&0));
+
+        let res = provider.set_element(&ctx, &id, &[0f32, 0f32]).await;
+        assert!(res.is_ok());
+
+        let res = provider.delete(&ctx, &id).await;
+        assert!(res.is_ok());
     }
 }
