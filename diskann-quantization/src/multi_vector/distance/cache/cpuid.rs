@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//! x86_64 CPUID cache probe via the deterministic cache parameter leaf
-//! (CPUID `0x4` on Intel, `0x8000001D` on AMD). Returns `None` on CPUs exposing
-//! neither, i.e. old AMD without the `TopologyExtensions` feature. We don't read
-//! AMD's legacy `0x80000005/06` leaves; no deployment target is that old.
+//! x86_64 CPUID cache probe via deterministic cache parameters — `raw-cpuid`'s
+//! cache-parameter enumeration (CPUID `0x4` on Intel, `0x8000001D` on AMD).
+//! Returns `None` when those parameters are unavailable; we don't fall back to
+//! AMD's legacy `0x80000005/06` leaves.
 
 use raw_cpuid::{CacheType, CpuId};
 
