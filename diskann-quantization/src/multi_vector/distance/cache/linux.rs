@@ -56,9 +56,9 @@ fn parse_size(s: &str) -> Option<usize> {
     let n: usize = num.parse().ok()?;
     match suffix.trim() {
         "" => Some(n),
-        "K" | "KB" | "KiB" => Some(n * 1024),
-        "M" | "MB" | "MiB" => Some(n * 1024 * 1024),
-        "G" | "GB" | "GiB" => Some(n * 1024 * 1024 * 1024),
+        "K" | "KB" | "KiB" => n.checked_mul(1024),
+        "M" | "MB" | "MiB" => n.checked_mul(1024 * 1024),
+        "G" | "GB" | "GiB" => n.checked_mul(1024 * 1024 * 1024),
         _ => None,
     }
 }
@@ -77,5 +77,8 @@ mod tests {
         assert_eq!(parse_size(" 32K\n"), Some(32 * 1024));
         assert_eq!(parse_size("garbage"), None);
         assert_eq!(parse_size(""), None);
+        // A value that parses but overflows on the suffix multiply must yield
+        // None, not a silently wrapped size (release builds skip overflow checks).
+        assert_eq!(parse_size(&format!("{}K", usize::MAX)), None);
     }
 }
