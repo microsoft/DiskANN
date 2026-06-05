@@ -828,232 +828,6 @@ fn convert_ip(row: &mut [f32], n: usize) {
     }
 }
 
-/// Build a leaf using caller-provided buffers, bypassing thread-local access.
-///
-/// Tiles the leaf GEMM in MR-row chunks (≤ 2 MB dot buffer → L2-resident),
-/// converts to distance and extracts top-k inline. Never materializes the
-/// full m×m dist matrix.
-pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
-    data: &[T],
-    ndims: usize,
-    indices: &[u32],
-    k: usize,
-    metric: diskann_vector::distance::Metric,
-    bufs: &mut LeafBuffers,
-) -> Vec<Edge> {
-    use diskann_vector::distance::Metric;
-
-    let n = indices.len();
-    bufs.ensure_capacity(n, ndims, k);
-
-    // Fused row-tile size: tile output (mb × n × 4) targets L2 (≤2 MB/core).
-    // At MR=256, n=1024 → 1 MB; at n=2048 → 2 MB. Falls back to MR=n for small n.
-    const MR: usize = 256;
-    let mr = MR.min(n);
-
-    let actual_k = if k == 0 || n <= 1 { 0 } else { k.min(n - 1) };
-
-    // ───── Gather + compute norms (no full GEMM yet) ─────
-    let needs_norms = matches!(metric, Metric::L2 | Metric::Cosine);
-    {
-        let local_data = &mut bufs.local_data[..n * ndims];
-        for (i, &idx) in indices.iter().enumerate() {
-            crate::partition::gather_f16_to_f32_simd(
-                data, idx as usize, ndims,
-                &mut local_data[i * ndims..(i + 1) * ndims],
-            );
-        }
-        if needs_norms {
-            let norms_sq = &mut bufs.norms_sq[..n];
-            crate::partition::compute_p_norm_sq_batch_into(local_data, n, ndims, norms_sq);
-        }
-    }
-
-    // For Cosine, precompute sqrt(norms_sq) once into the reusable buf (no per-leaf alloc).
-    if matches!(metric, Metric::Cosine) {
-        if bufs.cosine_denoms.len() < n {
-            bufs.cosine_denoms.resize(n, 0.0);
-        }
-        for i in 0..n {
-            bufs.cosine_denoms[i] = bufs.norms_sq[i].sqrt();
-        }
-    }
-
-    // ───── Reset knn_result to hold n × actual_k slots ─────
-    bufs.knn_result.clear();
-    if actual_k > 0 {
-        bufs.knn_result.resize(n * actual_k, (u32::MAX, f32::MAX));
-    }
-
-    // ───── Fused tile loop: GEMM row-tile → dist convert → top-k ─────
-    // dot_tile reuses bufs.dot_matrix prefix (capacity n*n ≥ mr*n).
-    // Avoid borrow conflict by capturing raw pointers to disjoint bufs fields.
-    if actual_k > 0 {
-        let norms_sq_ptr = bufs.norms_sq.as_ptr();
-        let cosine_denoms_ptr = bufs.cosine_denoms.as_ptr();
-        let mut tile_start = 0usize;
-        while tile_start < n {
-            let mb = (n - tile_start).min(mr);
-            let tile_len = mb * n;
-
-            // 1. GEMM: dot_tile = A[tile_rows] · A^T (mb × n)
-            // Raw-pointer slices needed because a_full and dot_tile borrow disjoint
-            // fields of bufs but the borrow checker can't see that through indexing.
-            {
-                let a_full = &bufs.local_data[..n * ndims];
-                let a_tile_ptr = a_full[tile_start * ndims..].as_ptr();
-                let a_full_ptr = a_full.as_ptr();
-                let a_full_len = a_full.len();
-                let dot_tile = &mut bufs.dot_matrix[..tile_len];
-                // SAFETY: a_tile_ptr/a_full_ptr come from the live `&bufs.local_data`
-                // borrow above; lengths `mb*ndims` and `a_full_len` match the slice
-                // they were taken from. Disjoint from `dot_tile` (different field).
-                let a_tile_slice = unsafe { std::slice::from_raw_parts(a_tile_ptr, mb * ndims) };
-                // SAFETY: see preceding block — same source slice and lifetime.
-                let a_full_slice = unsafe { std::slice::from_raw_parts(a_full_ptr, a_full_len) };
-                diskann_linalg::sgemm_abt(a_tile_slice, mb, ndims, a_full_slice, n, dot_tile);
-            }
-
-            // 2 + 3. Convert dot row to dist inline + extract top-k per row.
-            // Output: bufs.knn_result[(tile_start+local_i) * actual_k..]
-            let dot_tile = &mut bufs.dot_matrix[..tile_len];
-            for local_i in 0..mb {
-                let global_i = tile_start + local_i;
-                let row = &mut dot_tile[local_i * n..(local_i + 1) * n];
-
-                // norms_sq_ptr and cosine_denoms_ptr point to bufs fields that
-                // are disjoint from bufs.dot_matrix (which `row` borrows). All reads are
-                // in-bounds (i < n, j < n). SIMD tier is now selected at runtime by
-                // the convert_* dispatcher rather than at compile time.
-                match metric {
-                    Metric::CosineNormalized => {
-                        convert_cosnorm(row, n);
-                    }
-                    Metric::L2 => {
-                        // SAFETY: norms_sq_ptr points to bufs.norms_sq, sized `n`, and
-                        // `global_i = tile_start + local_i < n`. The pointer remains
-                        // valid throughout the loop because bufs is borrowed for the
-                        // call.
-                        let ni = unsafe { *norms_sq_ptr.add(global_i) };
-                        // SAFETY: norms_sq_ptr spans `n` floats; convert_l2 reads up to
-                        // index `n-1`.
-                        unsafe { convert_l2(row, n, ni, norms_sq_ptr) };
-                    }
-                    Metric::Cosine => {
-                        // SAFETY: cosine_denoms_ptr spans `n` floats, `global_i < n`.
-                        let ni_sqrt = unsafe { *cosine_denoms_ptr.add(global_i) };
-                        // Cosine path is rare in PiPNN. Keep scalar — the sqrt+div
-                        // would dominate any SIMD savings anyway.
-                        for (j, val) in row.iter_mut().enumerate() {
-                            // SAFETY: same as above — `j < n` and ptr spans `n`.
-                            let nj = unsafe { *cosine_denoms_ptr.add(j) };
-                            let denom = ni_sqrt * nj;
-                            let cos = if denom > 0.0 { *val / denom } else { 0.0 };
-                            *val = (1.0 - cos).max(0.0);
-                        }
-                    }
-                    Metric::InnerProduct => {
-                        convert_ip(row, n);
-                    }
-                }
-
-                if actual_k <= 3 {
-                    let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
-                    topk_row_small(row, n, global_i, actual_k, out);
-                } else {
-                    // k > 3 (rare in PiPNN — leaf_k is typically 2-3): per-row
-                    // sort. Mark self as ineligible, then sort indices by distance.
-                    row[global_i] = f32::MAX;
-                    let mut idxs: Vec<u32> = (0..n as u32).collect();
-                    idxs.sort_unstable_by(|&a, &b| {
-                        row[a as usize]
-                            .partial_cmp(&row[b as usize])
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
-                    for t in 0..actual_k {
-                        let j = idxs[t] as usize;
-                        out[t] = (j as u32, row[j]);
-                    }
-                }
-            }
-
-            tile_start += mb;
-        }
-    }
-
-    // ───── Bidirected edges, CSR-grouped by local source ─────
-    // All four PiPNN metrics yield symmetric distances; reverse-edge insertion
-    // adds candidates that aren't otherwise covered by leaf overlap alone (drops
-    // avg_degree from 62.2 → 49.8 if omitted).
-    //
-    // CSR layout: group_starts[i]..group_starts[i+1] indexes group_data for
-    // edges with local source `i`. HP::add_edges_grouped locks each src's
-    // reservoir once and processes all its inserts in cache — eliminates the
-    // ~5x lock+cache cost of interleaved-source insertion.
-    let seen = &mut bufs.seen[..n * n];
-    seen.fill(false);
-
-    // Pass 1: count edges per local src (with dedup).
-    bufs.group_starts.clear();
-    bufs.group_starts.resize(n + 1, 0);
-    for i in 0..n {
-        let row_knn = &bufs.knn_result[i * actual_k..(i + 1) * actual_k];
-        for &(dst_local, _) in row_knn {
-            if dst_local == u32::MAX {
-                continue;
-            }
-            let dst = dst_local as usize;
-            if !seen[i * n + dst] {
-                seen[i * n + dst] = true;
-                bufs.group_starts[i + 1] += 1;
-            }
-            if !seen[dst * n + i] {
-                seen[dst * n + i] = true;
-                bufs.group_starts[dst + 1] += 1;
-            }
-        }
-    }
-    for i in 1..=n {
-        bufs.group_starts[i] += bufs.group_starts[i - 1];
-    }
-    let total_edges_n = bufs.group_starts[n] as usize;
-    if bufs.group_data.len() < total_edges_n {
-        bufs.group_data.resize(total_edges_n, (0, 0.0));
-    }
-
-    // Pass 2: write per-src using a per-row cursor (Vec reused via group_data_cursor).
-    // Local var: clone of group_starts as cursor.
-    let mut cursor: Vec<u32> = bufs.group_starts[..n].to_vec();
-    seen.fill(false);
-    for i in 0..n {
-        let row_knn = &bufs.knn_result[i * actual_k..(i + 1) * actual_k];
-        for &(dst_local, dist) in row_knn {
-            if dst_local == u32::MAX {
-                continue;
-            }
-            let dst = dst_local as usize;
-            if !seen[i * n + dst] {
-                seen[i * n + dst] = true;
-                let pos = cursor[i] as usize;
-                bufs.group_data[pos] = (dst_local, dist);
-                cursor[i] = (pos + 1) as u32;
-            }
-            if !seen[dst * n + i] {
-                seen[dst * n + i] = true;
-                let pos = cursor[dst] as usize;
-                bufs.group_data[pos] = (i as u32, dist);
-                cursor[dst] = (pos + 1) as u32;
-            }
-        }
-    }
-
-    if cfg!(test) {
-        materialize_edges_from_csr(bufs, indices);
-    }
-    std::mem::take(&mut bufs.edges)
-}
-
 /// Materialize `bufs.edges` from the CSR (`group_starts`, `group_data`) layout.
 /// Called from `build_leaf_with_buffers` for back-compat — the public `Vec<Edge>`
 /// return is used by tests and `build_leaf`. Production callers go through
@@ -1089,14 +863,7 @@ pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
 ) -> usize {
-    // `PIPNN_LEAF_V2=1` routes through the triangular-GEMM path
-    // (single sgemm_aat_lower call + symmetrize) instead of the row-tile
-    // fused path. Same output, ~50% fewer FLOPs in the GEMM phase.
-    if std::env::var("PIPNN_LEAF_V2").as_deref() == Ok("1") {
-        let _edges = build_leaf_v2_with_buffers(data, ndims, indices, k, metric, bufs);
-    } else {
-        let _edges = build_leaf_with_buffers(data, ndims, indices, k, metric, bufs);
-    }
+    let _edges = build_leaf_with_buffers(data, ndims, indices, k, metric, bufs);
     bufs.group_starts[indices.len()] as usize
 }
 
@@ -1216,23 +983,12 @@ unsafe fn symmetrize_avx2_block8(dot: &mut [f32], n: usize) {
     }
 }
 
-/// 16×16 block transpose using AVX-512. Mirrors strictly-lower blocks to the
-/// strictly-upper diagonal-mirror position. Per block: 16 loads + transpose
-/// (~20 shuffles) + 16 stores = ~52 vector ops for 256 elements = ~5x
-/// throughput vs scalar loop.
-
-/// v2 build: single triangular GEMM over the full leaf (no tile loop),
-/// symmetrize the lower triangle into the upper, then per-row convert + topk.
+/// Build a leaf using caller-provided buffers, bypassing thread-local access.
 ///
-/// Compared to [`build_leaf_with_buffers`]:
-/// - One `sgemm_aat_lower` call instead of `ceil(n/MR)` `sgemm_abt` tiles.
-/// - ~50% fewer FMAs in the GEMM phase (faer's `triangular::matmul` skips
-///   upper-triangle FMAs at the microkernel-dispatch layer).
-/// - +N²/2 memory writes from the symmetrize pass (L2-resident at n ≤ 1024).
-/// - Lose the tiled fused convert+topk; instead convert+topk run over the
-///   full `n × n` matrix per-row. At n ≤ 1024, dot_matrix fits L2 and the
-///   per-row stride is L1-friendly anyway.
-pub(crate) fn build_leaf_v2_with_buffers<T: VectorRepr + 'static>(
+/// Pipeline: one triangular GEMM (`sgemm_aat_lower`) over the full leaf, read
+/// per-row norms off the SYRK diagonal, then either the fused dual-end SIMD
+/// scan (L2 + k=3 + AVX-512) or symmetrize + per-row convert + per-row top-k.
+pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     data: &[T],
     ndims: usize,
     indices: &[u32],
@@ -1297,12 +1053,13 @@ pub(crate) fn build_leaf_v2_with_buffers<T: VectorRepr + 'static>(
             }
         }
 
-        // ───── Step 3 (v3 fused path for L2 + k=3) ─────
-        // PIPNN_FUSED=1 enables the dual-end fused scan: walks strictly-lower
-        // triangle once, updates both row and column top-k trackers in one
-        // pass. No upper-triangle materialisation, no separate convert pass.
-        let fused_eligible = matches!(metric, Metric::L2) && actual_k == 3
-            && std::env::var("PIPNN_FUSED").as_deref() == Ok("1")
+        // ───── Step 3 (fused path for L2 + k=3 on AVX-512) ─────
+        // Walks the strictly-lower triangle once, updates both row and column
+        // top-k trackers in one pass. No upper-triangle materialisation, no
+        // separate convert pass. Other metrics / k≠3 / non-AVX-512 fall back
+        // to symmetrize + per-row convert + top-k below.
+        let fused_eligible = matches!(metric, Metric::L2)
+            && actual_k == 3
             && matches!(tier(), SimdTier::Avx512);
         if fused_eligible {
             unsafe {
@@ -1315,15 +1072,9 @@ pub(crate) fn build_leaf_v2_with_buffers<T: VectorRepr + 'static>(
                     actual_k,
                 );
             }
-            // CSR build runs after; skip the symmetrize + convert + topk block.
-            // Fall through to the post-topk CSR build (shared with v2).
         } else {
         // ───── Step 3: symmetrize lower → upper ─────
-        // PIPNN_NO_SYMM=1 skips this for cost-attribution. Output is invalid
-        // (upper triangle holds garbage) but lets us measure symmetrize wall.
-        if std::env::var("PIPNN_NO_SYMM").as_deref() != Ok("1") {
-            symmetrize_lower_to_upper(&mut bufs.dot_matrix[..n * n], n);
-        }
+        symmetrize_lower_to_upper(&mut bufs.dot_matrix[..n * n], n);
 
         // ───── Step 4: per-row distance convert + top-k ─────
         let norms_sq_ptr = bufs.norms_sq.as_ptr();
@@ -1368,17 +1119,10 @@ pub(crate) fn build_leaf_v2_with_buffers<T: VectorRepr + 'static>(
                 }
             }
         }
-        } // close `else` of `if fused_eligible`
+        }
     }
 
-    // knn_result was allocated as a Vec but only up to `n * actual_k` entries
-    // are populated. Pre-size it via clear+resize to match v1/v2 semantics.
-    // (The fused path writes via get_unchecked_mut, so the Vec must already
-    // be sized correctly. ensure_capacity reserves capacity but not length.)
-    // Note: build_leaf_v2_with_buffers below does .clear() + .resize() above,
-    // so this is just a sanity comment.
-
-    // ───── CSR build: identical to v1 (bidirected edges, dedup) ─────
+    // ───── CSR build (bidirected edges, dedup against `seen`) ─────
     let seen = &mut bufs.seen[..n * n];
     seen.fill(false);
     bufs.group_starts.clear();

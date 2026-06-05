@@ -21,9 +21,11 @@ tracing = { workspace = true }
 parking_lot = "0.12"
 
 [features]
-# Pass through to diskann-linalg: routes sgemm_aat_lower → OpenBLAS
-# cblas_ssyrk (real 50% FLOP savings) instead of the broken faer
-# triangular path. OpenBLAS preferred over MKL (no anti-AMD CPUID dispatch).
+# Default ON: routes sgemm_aat_lower → OpenBLAS cblas_ssyrk (real 50% FLOP
+# savings). Without it, the faer triangular fallback is ~60% slower than full
+# GEMM on our shapes — a silent regression. OpenBLAS preferred over MKL (no
+# anti-AMD CPUID dispatch). Disable with `--no-default-features` if needed.
+default = ["openblas"]
 openblas = ["diskann-linalg/openblas"]
 
 [dev-dependencies]

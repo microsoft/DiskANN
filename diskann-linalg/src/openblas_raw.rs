@@ -67,21 +67,36 @@ unsafe extern "C" {
         c: *mut f32,
         ldc: c_int,
     );
+
+    pub unsafe fn openblas_set_num_threads(num_threads: c_int);
+}
+
+// PiPNN calls cblas_ssyrk from rayon worker threads. Without pinning OpenBLAS
+// to a single thread, every worker spins up OpenBLAS's own pool → N·N
+// oversubscription. Pin once at first call.
+static OPENBLAS_PIN: std::sync::Once = std::sync::Once::new();
+
+#[inline]
+fn ensure_openblas_single_threaded() {
+    OPENBLAS_PIN.call_once(|| {
+        // SAFETY: openblas_set_num_threads is exported by every recent OpenBLAS.
+        unsafe { openblas_set_num_threads(1) };
+    });
 }
 
 /// `C = A · Aᵀ` for `m × k` row-major A, writing only the LOWER triangle of C.
-/// Uses MKL ssyrk with `CblasLower` + `CblasNoTrans`.
+/// Uses OpenBLAS ssyrk with `CblasLower` + `CblasNoTrans`.
 ///
 /// In row-major storage, the lower triangle of A·Aᵀ contains entries
 /// `C[i][j]` for `j ≤ i`. CBLAS_ROW_MAJOR + CblasLower writes those.
 pub fn sgemm_aat_lower_openblas(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
     debug_assert_eq!(a.len(), m * k);
     debug_assert_eq!(c.len(), m * m);
+    ensure_openblas_single_threaded();
     let m_i = m as c_int;
     let k_i = k as c_int;
-    // SAFETY: pointers come from live slices; lda=k matches row-major stride;
-    // ldc=m matches row-major stride; alpha/beta scalars are fine. The MKL
-    // shared library is linked via build.rs when the `mkl` feature is enabled.
+    // SAFETY: pointers come from live slices; lda=k and ldc=m match row-major
+    // stride; alpha/beta are plain scalars. OpenBLAS is linked via build.rs.
     unsafe {
         cblas_ssyrk(
             CBLAS_LAYOUT::CblasRowMajor,

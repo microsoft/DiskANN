@@ -443,15 +443,6 @@ unsafe fn gather_f16_avx2_f16c(src_ptr: *const u16, gi: usize, ndims: usize, dst
     }
 }
 
-/// SIMD batch compute of ||p_i||² for `np` rows of length `ndims`. Returns a
-/// `Vec<f32>` of length `np`. Replaces process_row's per-call
-/// `p_row.iter().map(|v| v*v).sum()` which showed up at 10% of partition
-/// cycles in the c4-48 PMU profile (perf attributed it as `Map::next`).
-pub(crate) fn compute_p_norm_sq_batch_into(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
-    debug_assert!(out.len() >= np);
-    compute_p_norm_sq_into_impl(p_data, np, ndims, out);
-}
-
 fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; np];
     compute_p_norm_sq_into_impl(p_data, np, ndims, &mut out);
