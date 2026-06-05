@@ -2393,16 +2393,21 @@ where
                     force_saturate: false,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    source,
-                    &adj_list,
-                    scratch,
-                    working_set,
-                    options,
-                )
-                .await
-                .escalate("retrieving inserted vector must succeed")?;
+                if self
+                    .robust_prune_list(
+                        &mut accessor,
+                        source,
+                        &adj_list,
+                        scratch,
+                        working_set,
+                        options,
+                    )
+                    .await
+                    .allow_transient("source vector was deleted, skipping back-edge prune")?
+                    .is_none()
+                {
+                    return Ok(());
+                }
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",

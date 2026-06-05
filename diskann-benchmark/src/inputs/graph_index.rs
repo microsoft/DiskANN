@@ -1201,7 +1201,10 @@ pub(crate) struct StreamingRunbookParams {
     pub(crate) gt_directory: String,
     pub(crate) ip_delete_method: InplaceDeleteMethod,
     pub(crate) ip_delete_num_to_replace: usize,
-    pub(crate) consolidate_threshold: f32,
+    /// Threshold for deferred consolidation. Required for soft-delete providers (inmem).
+    /// Hard-delete providers (bf-tree) ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) consolidate_threshold: Option<f32>,
     #[serde(skip)]
     pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
 }
@@ -1214,12 +1217,14 @@ impl StreamingRunbookParams {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.runbook_path.resolve(checker)?;
 
-        // Validate consolidate_threshold is greater than 0
-        if self.consolidate_threshold <= 0.0 {
-            return Err(anyhow::anyhow!(
-                "consolidate_threshold must be greater than 0, but got {}",
-                self.consolidate_threshold
-            ));
+        // Validate consolidate_threshold if provided
+        if let Some(threshold) = self.consolidate_threshold {
+            if threshold <= 0.0 {
+                return Err(anyhow::anyhow!(
+                    "consolidate_threshold must be greater than 0, but got {}",
+                    threshold
+                ));
+            }
         }
 
         // Resolve gt_directory using search directories, similar to InputFile
@@ -1286,8 +1291,19 @@ impl Example for StreamingRunbookParams {
                 l_value: 64,
             },
             ip_delete_num_to_replace: 3,
-            consolidate_threshold: 0.2,
+            consolidate_threshold: Some(0.2),
             resolved_gt_directory: None,
+        }
+    }
+}
+
+impl StreamingRunbookParams {
+    /// Example for hard-delete providers that don't use consolidation.
+    #[cfg(feature = "bftree")]
+    pub(crate) fn example_immediate() -> Self {
+        Self {
+            consolidate_threshold: None,
+            ..Self::example()
         }
     }
 }
@@ -1319,7 +1335,9 @@ impl std::fmt::Display for StreamingRunbookParams {
             }
         }
         write_field!(f, "IP Delete Num to Replace", self.ip_delete_num_to_replace)?;
-        write_field!(f, "Consolidate Threshold", self.consolidate_threshold)?;
+        if let Some(threshold) = self.consolidate_threshold {
+            write_field!(f, "Consolidate Threshold", threshold)?;
+        }
 
         Ok(())
     }

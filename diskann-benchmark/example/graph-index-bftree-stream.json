@@ -47,8 +47,7 @@
               "l_value": 40
             }
           },
-          "ip_delete_num_to_replace": 3,
-          "consolidate_threshold": 0.2
+          "ip_delete_num_to_replace": 3
         },
         "vector_store_config": {
           "cb_size_byte": 67108864,

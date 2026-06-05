@@ -609,13 +609,16 @@ where
 {
     let topk = input.search_phase().as_topk()?;
 
-    let consolidate_threshold: f32 = input.runbook_params().consolidate_threshold;
+    let consolidate_threshold: f32 = input
+        .runbook_params()
+        .consolidate_threshold
+        .ok_or_else(|| anyhow::anyhow!("consolidate_threshold is required for inmem streaming"))?;
     let capacity = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
     streaming::build_streamer(
         input.build().data(),
         topk,
-        consolidate_threshold,
+        streaming::managed::SlotReclaim::Deferred(consolidate_threshold),
         capacity,
         |data, capacity| {
             let index = diskann_async::new_index::<T, _>(

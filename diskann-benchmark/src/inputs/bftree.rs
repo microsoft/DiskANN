@@ -381,7 +381,7 @@ impl Example for BfTreeStreamingRun {
         Self {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: StreamingRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example_immediate(),
             vector_store_config: None,
             neighbor_store_config: None,
         }
@@ -664,7 +664,7 @@ impl Example for BfTreeSphericalStreamingRun {
         Self {
             build: IndexBuild::example(),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: StreamingRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example_immediate(),
             seed: 42,
             transform_kind: exhaustive::TransformKind::Null,
             num_bits: NonZeroUsize::new(1).unwrap(),

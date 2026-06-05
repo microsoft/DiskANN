@@ -112,14 +112,13 @@ where
         _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
     };
 
-    let consolidate_threshold: f32 = input.runbook_params().consolidate_threshold;
     let num_start_points = input.build().start_point_strategy().count();
     let capacity = max_points + num_start_points;
 
     crate::index::streaming::build_streamer(
         input.build().data(),
         topk,
-        consolidate_threshold,
+        crate::index::streaming::managed::SlotReclaim::Immediate,
         capacity,
         |data, capacity| {
             let config = input.try_as_config()?.build()?;

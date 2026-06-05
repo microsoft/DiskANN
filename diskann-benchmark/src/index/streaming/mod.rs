@@ -36,7 +36,7 @@ use crate::{
 pub(crate) fn build_streamer<T, M, F>(
     data_path: &diskann_benchmark_runner::files::InputFile,
     topk: &TopkSearchPhase,
-    consolidate_threshold: f32,
+    reclaim: managed::SlotReclaim,
     capacity: usize,
     make_stream: F,
 ) -> anyhow::Result<bigann::WithData<T, u32, Managed<T, stats::StreamStats>>>
@@ -51,7 +51,7 @@ where
     ))?);
 
     let managed_stream = make_stream(&data, capacity)?;
-    let managed = Managed::new(capacity, consolidate_threshold, managed_stream);
+    let managed = Managed::new(capacity, reclaim, managed_stream);
 
     let max_k = topk.max_k();
     let layered = bigann::WithData::new(managed, data, queries, move |path| {
