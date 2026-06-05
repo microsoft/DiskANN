@@ -30,6 +30,7 @@ use super::{
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
+        PagedSearch,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
@@ -41,7 +42,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
     internal,
-    neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
+    neighbor::{self, Neighbor, NeighborQueue},
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
         DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
@@ -136,34 +137,6 @@ pub struct PartitionedNeighbors<I> {
     pub deleted: Vec<I>,
 }
 
-/// Placeholder for extra state.
-///
-/// The contents of the search state are designed for the synchronous index.
-/// However, use cases in the asynchronous index require some extra state.
-///
-/// This placeholder is used in the synchronous code-paths.
-pub struct NoExtraState;
-
-/// Represents the state of the pagged search.
-/// It can be used to do paged search by doing multiple `nextSearchResults()` queries.
-///
-/// Generic extra state can be included to facilitate extra use-cases.
-/// However, this extra state **must** be '`static' as we do not know how long the search
-/// state will live for.
-#[derive(Debug)]
-pub struct SearchState<VectorIdType: VectorId, ExtraState: 'static = NoExtraState> {
-    /// Scratch space for query processing.
-    pub scratch: SearchScratch<VectorIdType>,
-    /// The computed search results ready to be returned in `nextSearchResults()` query
-    pub computed_result: Vec<Neighbor<VectorIdType>>,
-    /// The index of the next result to be returned.
-    pub next_result_index: usize,
-    /// The search computes results in the multiple of `search_param_l`.
-    pub search_param_l: usize,
-    /// Any extra data needed by down-stream implementations.
-    pub extra: ExtraState,
-}
-
 /// Edge pending submission for multi-insert.
 #[derive(Debug)]
 struct PendingEdge<I> {
@@ -202,16 +175,6 @@ where
 /// A `Result` that indicates an error, but returns a value of type `T` on both the `Ok`
 /// and `Err` paths.
 type BatchResult<T> = Result<T, (T, ANNError)>;
-
-/// State used during by paged search to perform multiple, consecutive searches over the index.
-///
-/// Type parameters:
-///
-/// * `DP`: The type of the [`DataProvider`].
-/// * `S`: The type of the [`SearchStrategy`].
-/// * `C`: The type of `S`'s [`BuildQueryComputer`] computer. This exists as a separate
-///   type parameter because the type of the query computer depends on the type of the query.
-pub type PagedSearchState<DP, S, C> = SearchState<<DP as DataProvider>::InternalId, (S, C)>;
 
 impl<DP> DiskANNIndex<DP>
 where
@@ -358,9 +321,8 @@ where
                         &mut search_record.visited,
                         self.max_occlusion_size(),
                     ),
-                    occlude_factor: &mut prune_scratch.occlude_factor,
+                    states: &mut prune_scratch.states,
                     neighbors: &mut new_neighbors,
-                    last_checked: &mut prune_scratch.last_checked,
                 };
 
                 let options = prune::Options {
@@ -2089,35 +2051,6 @@ where
         }
     }
 
-    /// Filter out start nodes from the best candidates in the scratch.
-    fn filter_search_candidates(
-        &self,
-        start_points: &[DP::InternalId],
-        l_value: usize,
-        best: &mut NeighborPriorityQueue<DP::InternalId>,
-    ) -> impl SendFuture<ANNResult<(Vec<Neighbor<DP::InternalId>>, usize)>> {
-        async move {
-            let mut total = 0usize;
-            let mut candidates = Vec::with_capacity(l_value);
-            for n in best.iter() {
-                total += 1;
-                if !start_points.contains(&n.id) {
-                    candidates.push(n);
-                    if candidates.len() >= l_value {
-                        break;
-                    }
-                }
-            }
-
-            debug_assert!(
-                l_value.min(best.size().saturating_sub(start_points.len())) <= candidates.len(),
-                "Not enough candidates after filtering starting points",
-            );
-
-            Ok((candidates, total))
-        }
-    }
-
     /// Execute a search using the unified search interface.
     ///
     /// This method provides a single entry point for all search types. The `search_params` argument
@@ -2186,34 +2119,42 @@ where
     // Paged Search //
     //////////////////
 
-    pub fn start_paged_search<S, T>(
-        &self,
+    /// Begin a paged search over the index.
+    ///
+    /// Returns a [`PagedSearch`] handle whose [`next_page`](PagedSearch::next_page) method
+    /// yields successive pages of nearest-neighbor results.
+    pub fn paged_search<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
-        S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        S: SearchStrategy<DP, T>,
+        T: Copy + Send + 'a,
     {
         async move {
-            self.start_paged_search_with_init_ids(strategy, context, query, l_value, None)
+            self.paged_search_with_init_ids(strategy, context, query, l_value, None)
                 .await
         }
     }
 
-    pub fn start_paged_search_with_init_ids<S, T>(
-        &self,
+    /// Begin a paged search with explicit initial seed IDs.
+    ///
+    /// This is the same as [`paged_search`](Self::paged_search) but allows the caller to
+    /// provide custom starting points for the graph traversal.
+    pub fn paged_search_with_init_ids<'a, S, T>(
+        &'a self,
         strategy: S,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-        init_ids: Option<&[DP::InternalId]>,
-    ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
+        init_ids: Option<&'a [DP::InternalId]>,
+    ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S, T>>>
     where
-        S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        S: SearchStrategy<DP, T>,
+        T: Copy + Send + 'a,
     {
         async move {
             let (computer, scratch) = {
@@ -2256,118 +2197,17 @@ where
                 (computer, scratch)
             };
 
-            ANNResult::Ok(SearchState {
+            ANNResult::Ok(PagedSearch {
+                index: self,
+                context,
                 scratch,
                 computed_result: vec![Neighbor::default(); l_value],
                 next_result_index: l_value,
                 search_param_l: l_value,
-                extra: (strategy, computer),
+                strategy,
+                computer,
+                _query: std::marker::PhantomData,
             })
-        }
-    }
-
-    pub fn next_search_results<S, T>(
-        &self,
-        context: &DP::Context,
-        search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-        k: usize,
-        result_output: &mut [Neighbor<DP::InternalId>],
-    ) -> impl SendFuture<ANNResult<usize>>
-    where
-        S: SearchStrategy<DP, T>,
-    {
-        async move {
-            if k > search_state.search_param_l {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be less than or equal to search_param_l".to_string(),
-                ));
-            }
-            if k == 0 {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "k should be greater than 0".to_string(),
-                ));
-            }
-            if result_output.len() < k {
-                return ANNResult::Err(ANNError::log_paged_search_error(
-                    "The size of result_output should be greater than or equal to k".to_string(),
-                ));
-            }
-
-            let copy_to_output =
-                |search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-                 count: usize,
-                 result_output: &mut [Neighbor<DP::InternalId>],
-                 result_output_offset: usize| {
-                    result_output[result_output_offset..result_output_offset + count]
-                        .copy_from_slice(
-                            &search_state.computed_result[search_state.next_result_index
-                                ..search_state.next_result_index + count],
-                        );
-                    search_state.next_result_index += count;
-                };
-
-            let used_computed_result_count: usize = cmp::min(
-                k,
-                search_state.computed_result.len() - search_state.next_result_index,
-            );
-            if used_computed_result_count > 0 {
-                copy_to_output(
-                    search_state,
-                    used_computed_result_count,
-                    result_output,
-                    0, // result_output_offset
-                );
-
-                if used_computed_result_count == k {
-                    return ANNResult::Ok(k);
-                }
-            }
-
-            let start_points = {
-                let mut accessor = search_state
-                    .extra
-                    .0
-                    .search_accessor(&self.data_provider, context)
-                    .into_ann_result()?;
-
-                let start_ids = accessor.starting_points().await?;
-                self.search_internal(
-                    None, // beam_width
-                    &start_ids,
-                    &mut accessor,
-                    &search_state.extra.1,
-                    &mut search_state.scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
-
-                start_ids
-            };
-
-            let (mut candidates, total_considered) = self
-                .filter_search_candidates(&start_points, k, &mut search_state.scratch.best)
-                .await?;
-            search_state.scratch.best.drain_best(total_considered);
-
-            let computed_result_count = candidates.len();
-            search_state.computed_result.clear();
-            search_state.computed_result.append(&mut candidates);
-
-            search_state.next_result_index = 0;
-            if computed_result_count != search_state.search_param_l {
-                search_state.computed_result.truncate(computed_result_count);
-            }
-
-            let leftover_results = cmp::min(k - used_computed_result_count, computed_result_count);
-
-            copy_to_output(
-                search_state,
-                leftover_results, // count of results to copy
-                result_output,
-                used_computed_result_count, // result_output_offset
-            );
-
-            ANNResult::Ok(used_computed_result_count + leftover_results)
         }
     }
 
@@ -2762,8 +2602,7 @@ where
 
             let mut context = prune::Context {
                 pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
-                occlude_factor: &mut scratch.occlude_factor,
-                last_checked: &mut scratch.last_checked,
+                states: &mut scratch.states,
                 neighbors: &mut scratch.neighbors,
             };
 
@@ -2822,28 +2661,27 @@ where
         C: for<'a, 'b> DistanceFunction<M::ElementRef<'a>, M::ElementRef<'b>, f32>,
         F: Fn(DP::InternalId) -> bool,
     {
-        if context.pool.is_empty() {
-            return;
-        }
+        assert!(
+            context.pool.len() <= u16::MAX.into_usize(),
+            "this has an upper bound set by `diskann::graph::Config` and should not exceed `u16::MAX`"
+        );
 
         let prune::Context {
             pool,
-            occlude_factor,
-            neighbors: dst,
-            last_checked,
+            states,
+            neighbors,
         } = context;
 
-        dst.clear();
-        occlude_factor.clear();
+        if pool.is_empty() {
+            neighbors.clear();
+            return;
+        }
 
         let alpha = self.config.alpha();
         let degree = self.config.pruned_degree().get();
 
-        occlude_factor.clear();
-        occlude_factor.resize(pool.len(), 0.0);
-
-        last_checked.clear();
-        last_checked.resize(pool.len(), 0u16);
+        states.clear();
+        states.resize(pool.len(), prune::State::default());
 
         let mut current_alpha = 1.0f32;
         let increment_factor = alpha.min(1.2);
@@ -2866,17 +2704,57 @@ where
             })
             .collect();
 
-        // Loop will also terminate after cur_alpha reaches alpha
-        while dst.len() < degree {
+        // For an alpha value `A`, a candidate `i` is promoted to a neighbor if for all
+        // ```
+        // max{j < i | j is a neighbor}(occlude_factor(i, j))
+        // ```
+        // This process happens with multiple values of `A`.
+        //
+        // We can compute this efficiently using the following rules:
+        //
+        // 1. For a candidate `i`, start scanning `j < i`, computing occlude factors.
+        // 2. If we find an occlude factor greater than `A`, record that `i` has visited
+        //    `j`, stop computing occlude factors, and move on to `i + 1`.
+        // 3. If we reach `j == i - 1` with the maximum occlude factor less than `A`, then
+        //    `i` gets promoted to a neighbor.
+        //
+        // On the implementation side, we use `states` in the following way:
+        //
+        // * `states[n].neighbor` is the **index** in `pool` of the `n`th **neighbor**.
+        //   Note that a "neighbor" is a candidate that passes pruning.
+        //
+        //   Very important: to get the index `j` in the above description, we need to
+        //   check `pool[states[n].neighbor]`.
+        //
+        //   This indexing naturally skips candidates `j` that have not been promoted to
+        //   neighbors.
+        //
+        // * `states[i].occlude_factor` is the maximum occlude factor found for a candidate
+        //   `i`. This gets set to `f32::MAX` when `i` is promoted to a neighbor which
+        //   excludes it from future consideration.
+        //
+        // * `states[i].last_checked` is the highest value of `n` against which the
+        //   occlude factor for `j = pool[states[n].neighbor]` has been checked.
+        //
+        //   The maximum value this should reach is `i`.
+        //
+        // Note that we use `states` for both "candidate" and "neighbor" tracking.
+        let mut found = 0;
+        while found < degree {
             for (i, (neighbor_distance, neighbor)) in cache.iter().enumerate() {
-                if dst.len() >= degree {
+                if found >= degree {
                     break;
                 }
 
-                let factor = &mut occlude_factor[i];
+                // The tracking states for candidate `i`.
+                let prune::State {
+                    mut occlude_factor,
+                    mut last_checked,
+                    ..
+                } = states[i];
 
                 // If the occlusion factor for this neighbor is too high, skip it.
-                if *factor > current_alpha {
+                if occlude_factor > current_alpha {
                     continue;
                 }
 
@@ -2886,39 +2764,28 @@ where
                 let neighbor = match neighbor {
                     Some(n) => n,
                     None => {
-                        *factor = f32::MAX;
+                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                        // SAFETY: We've already checked `states[i]`.
+                        unsafe { states.get_unchecked_mut(i) }.occlude_factor = f32::MAX;
                         continue;
                     }
                 };
-
-                // This neighbor has not been exluded.
-                //
-                // To determine whether or not to add it, we must compute its occlusion
-                // factor against all elements in `result` that appear before it in `pool`.
-                //
-                // This computation may be resumed from previous `alpha` values, so we need
-                // to access our scratch data structures.
-                let position = &mut last_checked[i];
-
-                // During computation, we've found an occlusion factor greater than alpha
-                // and wish to abort this neighbor from consideration.
-                let mut skip: bool = false;
 
                 // Increment `position` until we've compared with all current entries in
                 // `result`.
                 //
                 // When the list is empty, the loop is skipped allowing the first undeleted
                 // element to be added.
-                while *position as usize != dst.len() {
-                    let result_to_check = *position;
-                    // Increment the position pointer.
-                    *position += 1;
-
-                    let result_position = dst[result_to_check as usize].into_usize();
+                while last_checked as usize != found {
+                    let result_position = states[last_checked as usize].neighbor.into_usize();
+                    last_checked += 1;
 
                     // If the position of this result in `pool` is greater than or equal
                     // the current working position, then skip this candidate.
                     if result_position >= i {
+                        debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                        // SAFETY: We've already checked `states[i]`.
+                        unsafe { states.get_unchecked_mut(i) }.last_checked = last_checked;
                         continue;
                     }
 
@@ -2932,43 +2799,36 @@ where
                     };
 
                     // Update occlude factor
-                    *factor = self.config.prune_kind().update_occlude_factor(
+                    occlude_factor = self.config.prune_kind().update_occlude_factor(
                         *neighbor_distance,
                         distance,
-                        *factor,
+                        occlude_factor,
                         current_alpha,
                     );
 
                     // Check if the most recent update to the occlusion factor removes this
                     // neighbor from consideration.
-                    if *factor > current_alpha {
-                        // Don't add this neighbor.
-                        skip = true;
+                    if occlude_factor > current_alpha {
                         break;
                     }
                 }
 
-                // N.B.: We can get here straight from the self-neighbor check when the
-                // neighbor and the data at `location` have the same encoding.
-                //
-                // SO, we use short-circuiting logic to avoid checking the occlusion factor
-                // twice, though that might not really save much.
-                if skip || *factor > current_alpha {
+                debug_assert!(states.get(i).is_some(), "index {i} is out of bounds");
+                // SAFETY: We've already checked `states[i]`.
+                let state = unsafe { states.get_unchecked_mut(i) };
+
+                state.last_checked = last_checked;
+                if occlude_factor > current_alpha {
+                    state.occlude_factor = occlude_factor;
                     continue;
                 }
 
                 // This neighbor has passed all the requirements of being a candidate.
-                *factor = f32::MAX;
+                state.occlude_factor = f32::MAX;
 
                 // This conversion should always succeed.
-                #[expect(
-                    clippy::expect_used,
-                    reason = "`i` cannot exceed `u16::MAX` so conversion should succeed"
-                )]
-                dst.push(
-                    i.try_into_vector_id()
-                        .expect("argument should not exceed u16::MAX"),
-                );
+                states[found].neighbor = i as u16;
+                found += 1;
             }
 
             // Exit if we completed the final iteration.
@@ -2979,21 +2839,25 @@ where
             current_alpha = (current_alpha * increment_factor).min(alpha);
         }
 
-        // Cleanup `result` by undoing the local indirection.
-        dst.remap_trusted(|r| *r = pool[r.into_usize()].id);
-        debug_assert!(dst.len() <= degree, "max degree bound violated");
+        let mut guard = neighbors.resize(found);
+        std::iter::zip(guard.iter_mut(), states.iter()).for_each(|(d, s)| {
+            *d = pool[s.neighbor.into_usize()].id;
+        });
+        guard.finish(found);
+
+        debug_assert!(neighbors.len() <= degree, "max degree bound violated");
 
         // Post processing saturation if enabled.
         if options.force_saturate || (self.config.saturate_after_prune() && alpha > 1.0f32) {
             for neighbor in context.pool.iter() {
-                if dst.len() >= degree {
+                if neighbors.len() >= degree {
                     break;
                 }
 
                 if !exclude(neighbor.id) {
                     // `AdjacencyList` filters out duplicates. No need to explicitly
                     // check.
-                    dst.push(neighbor.id);
+                    neighbors.push(neighbor.id);
                 }
             }
         }
