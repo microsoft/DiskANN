@@ -211,7 +211,7 @@ pub struct Config {
     /// Whether to attempt graph saturation after all prunes.
     saturate_after_prune: bool,
 
-    /// Experiemntal fields.
+    /// Experimental fields.
     experimental_insert_retry: Option<experimental::InsertRetry>,
 }
 

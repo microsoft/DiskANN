@@ -80,7 +80,7 @@ where
 
 /// Position-wise state tracking.
 ///
-/// Refer to the inline documentation in [`DiskANNIndex::occlude_factor`] for documentation
+/// Refer to the inline documentation in [`DiskANNIndex::occlude_list`] for documentation
 /// on the use of these fields.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct State {

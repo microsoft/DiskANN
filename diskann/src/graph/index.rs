@@ -2666,15 +2666,16 @@ where
             "this has an upper bound set by `diskann::graph::Config` and should not exceed `u16::MAX`"
         );
 
-        if context.pool.is_empty() {
-            return;
-        }
-
         let prune::Context {
             pool,
             states,
             neighbors,
         } = context;
+
+        if pool.is_empty() {
+            neighbors.clear();
+            return;
+        }
 
         let alpha = self.config.alpha();
         let degree = self.config.pruned_degree().get();
