@@ -39,12 +39,19 @@ impl Store {
         STORE.with(|s| s.get(&k).map(|v| v.to_owned()))
     }
 
-    pub fn delete(&self, context: u64, key: &[u8]) {
+    pub fn delete(&self, context: u64, key: &[u8]) -> bool {
         let context = context & TERM_BITMASK;
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
-        STORE.with(|s| s.remove(&k));
+        STORE.with(|s| {
+            if s.contains_key(&k) {
+                s.remove(&k);
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -97,8 +104,7 @@ unsafe extern "C" fn test_delete(ctx: u64, id_bytes: *const u8, id_len: usize) -
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
     let store = Store;
-    store.delete(ctx, id);
-    true
+    store.delete(ctx, id)
 }
 
 unsafe extern "C" fn test_rmw(
