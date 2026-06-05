@@ -93,7 +93,7 @@ async fn test_prune_range() {
 
     index.prune_range(&strat, &ctx, 0..4).await.unwrap();
 
-    let accessor = index.provider().neighbors();
+    let mut accessor = index.provider().neighbors();
     let mut list = AdjacencyList::new();
     for node in 0u32..4 {
         accessor.get_neighbors(node, &mut list).await.unwrap();

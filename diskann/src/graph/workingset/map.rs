@@ -134,8 +134,6 @@ use hashbrown::hash_map;
 
 use crate::graph::glue;
 
-use super::AsWorkingSet;
-
 /////////
 // Map //
 /////////
@@ -143,8 +141,7 @@ use super::AsWorkingSet;
 /// Default [working set](super) state backed by a `HashMap` with an optional overlay for
 /// [`multi_insert`](crate::graph::glue::MultiInsertStrategy).
 ///
-/// This struct uses [`Builder`] as its constructor, which implements [`AsWorkingSet`] for
-/// multi-insert compatibility.
+/// This struct uses [`Builder`] as its constructor.
 ///
 /// Additionally, [working set reuse](super#reuse-in-a-workingset) is optionally supported and
 /// is controlled by the [`Capacity`] enum. See the [module level docs](self#working-set-reuse)
@@ -874,15 +871,6 @@ impl<K, P: Projection> Clone for Builder<K, P> {
             overlay: self.overlay.clone(),
             capacity: self.capacity,
         }
-    }
-}
-
-impl<K, V, P> AsWorkingSet<Map<K, V, P>> for Builder<K, P>
-where
-    P: Projection,
-{
-    fn as_working_set(&self, capacity: usize) -> Map<K, V, P> {
-        self.clone().build(capacity)
     }
 }
 
@@ -1845,14 +1833,6 @@ mod tests {
         let ws: TestMap = Builder::new(Capacity::Default).build(32);
         assert!(!ws.contains_key(&1));
         // No overlay.
-        let view = ws.view();
-        assert!(view.get(1).is_none());
-    }
-
-    #[test]
-    fn builder_as_working_set() {
-        let ws: TestMap = Builder::new(Capacity::Default).as_working_set(32);
-        assert!(!ws.contains_key(&1));
         let view = ws.view();
         assert!(view.get(1).is_none());
     }

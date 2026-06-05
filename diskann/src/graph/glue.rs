@@ -91,7 +91,7 @@
 
 use std::{future::Future, sync::Arc};
 
-use diskann_utils::Reborrow;
+use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 
@@ -100,7 +100,7 @@ use crate::{
     error::StandardError,
     graph::{SearchOutputBuffer, workingset},
     neighbor::Neighbor,
-    provider::{AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef, HasId},
+    provider::{self, DataProvider, HasId},
 };
 
 /// The main extension point for graph search.
@@ -569,6 +569,75 @@ where
     }
 }
 
+////////////
+// Insert //
+////////////
+
+pub trait PruneAccessor: HasId + Send + Sync {
+    type ElementRef<'a>;
+
+    type View<'a>: for<'x> workingset::View<Self::Id, ElementRef<'x> = Self::ElementRef<'x>>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    type Distance<'a>: for<'x, 'y> DistanceFunction<Self::ElementRef<'x>, Self::ElementRef<'y>, f32>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    type Neighbors<'a>: provider::NeighborAccessorMut<Id = Self::Id>
+    where
+        Self: 'a;
+
+    /// Populate a `WorkingSet` with data from an accessor and return a [`View`] over the set.
+    ///
+    /// For each `i` in `itr` - the accessor should make the data behind `i` available, either
+    /// by storing it in `working_set` or through direct storage in the returned [`View`].
+    ///
+    /// The `WorkingSet` type is constructed by either:
+    ///
+    /// * [`PruneStrategy`](crate::graph::glue::PruneStrategy::create_working_set): Direct
+    ///   construction of a working set for use in multiple prunes.
+    ///
+    /// * [`MultiInsertStrategy::Seed`](crate::graph::glue::MultiInsertStrategy::Seed): Indirect
+    ///   creation that uses [`AsWorkingSet`] for the final conversion. This allows the elements
+    ///   in the input batch to [`multi_insert`](crate::graph::DiskANNIndex::multi_insert) to be
+    ///   directly accessible by the `WorkingSet`/[`View`] types.
+    ///
+    /// For many simple use cases, [`Map::fill`] should be sufficient to provide a good
+    /// implementation of [`Fill::fill`].
+    ///
+    /// See Also: [`View`], [`AsWorkingSet`], [`Map`].
+    ///
+    /// Make the data elements for items in `itr` available in the returned [`View`].
+    ///
+    /// Implementations may use `working_set` as scratch and to persist work across multiple calls.
+    ///
+    /// The input `itr` is `Clone` and is expected that the implementation of `Clone` is cheap
+    /// and without interior mutability. This allows implementers to perform multiple passes
+    /// of `itr` if needed.
+    ///
+    /// ## Missing Entries
+    ///
+    /// While it's a good idea to ensure all items in `itr` are fetched, callers are
+    /// designed to tolerate a small number of missing entries without serious performance
+    /// degradation.
+    ///
+    /// If a ID really needs to be fetched for algorithmic purposes, it will be the first
+    /// item yielded from `itr`.
+    fn fill<'a, Itr>(
+        &'a mut self,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::View<'a>, Self::Distance<'a>)>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_>;
+}
+
 /// A strategy for inserting elements from the data provider.
 ///
 /// This strategy is used during the greedy search portion of index construction.
@@ -611,53 +680,22 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
-    /// The [working set](crate::graph::workingset) used during pruning.
-    ///
-    /// For single insert this is typically an empty [`Map`](super::workingset::Map).
-    /// For multi-insert it may be pre-seeded with batch elements.
-    type WorkingSet: Send + Sync;
-
-    /// The distance computer used during pruning.
-    ///
-    /// We could grab this type from the `PruneAccessor` associated type, but it's
-    /// useful enough that we move it up here.
-    type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
-            <Self::PruneAccessor<'a> as HasElementRef>::ElementRef<'b>,
-            <Self::PruneAccessor<'c> as HasElementRef>::ElementRef<'d>,
-            f32,
-        > + Send
-        + Sync;
-
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
     /// The accessor implements [`workingset::Fill`] for the strategy's
     /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
     /// cached for distance computations.
-    type PruneAccessor<'a>: HasId<Id = Provider::InternalId>
-        + HasElementRef
-        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
-        + AsNeighborMut
-        + workingset::Fill<Self::WorkingSet>
-        + Send
-        + Sync;
+    type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
-
-    /// Create a fresh working set pre-sized for up to `capacity` elements.
-    ///
-    /// Argument `capacity` is an upper-bound: callers guarantee that no more than
-    /// `capacity` elements will be inserted into the working set during a single
-    /// [fill](workingset::Fill).
-    ///
-    /// Implementations may use this to pre-allocate or panic if exceeded.
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet;
 
     /// Return the prune accessor.
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
+        size_hint: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
 }
 
@@ -667,27 +705,21 @@ where
 /// one difference, the [working set](crate::graph::workingset) provided to the insertion
 /// [`PruneStrategy`] is seeded from [`Self::Seed`]. Seeding allows elements of the input
 /// batch `B` to be part of the working set throughout prune, saving on vector retrievals.
-pub trait MultiInsertStrategy<Provider, B>: Send + Sync
+pub trait MultiInsertStrategy<Provider, B>: Send + Sync + 'static
 where
     Provider: DataProvider,
     B: Batch,
 {
-    /// The working set for the insertion [`PruneStrategy`].
-    type WorkingSet: Send + Sync + 'static;
-
     /// The working set "seed", potentially containing `B` for faster access.
-    type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
+    type Seed: Send + Sync + 'static;
 
     /// Any critical error that occurs during [`finish`](Self::finish).
     type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
+    type PruneStrategy: PruneStrategy<Provider>;
+
     /// The delegated [`InsertStrategy`] for most insertion related decisions.
-    type InsertStrategy: for<'a> InsertStrategy<
-            'a,
-            Provider,
-            B::Element<'a>,
-            PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
-        >;
+    type InsertStrategy: for<'a> InsertStrategy<'a, Provider, B::Element<'a>, PruneStrategy = Self::PruneStrategy>;
 
     /// Construct the associated [`InsertStrategy`].
     fn insert_strategy(&self) -> Self::InsertStrategy;
@@ -707,6 +739,14 @@ where
     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
         Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        context: &'a Provider::Context,
+        seed: &'a Self::Seed,
+        capacity: usize,
+    ) -> ANNResult<<Self::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>>;
 }
 
 /// A batch of elements indexed positionally.
