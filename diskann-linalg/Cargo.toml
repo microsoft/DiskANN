@@ -14,6 +14,13 @@ thiserror.workspace = true
 rand_distr.workspace = true
 rand.workspace = true
 
+[features]
+# OpenBLAS backend for selected ops (sgemm_aat_lower → cblas_ssyrk).
+# build.rs uses pkg-config to find OpenBLAS; falls back to plain -lopenblas
+# (Ubuntu's libopenblas-dev installs to /usr/lib/x86_64-linux-gnu).
+# Preferred over MKL because OpenBLAS lacks MKL's anti-AMD CPUID dispatch.
+openblas = []
+
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"

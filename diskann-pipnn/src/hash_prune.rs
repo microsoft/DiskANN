@@ -11,6 +11,7 @@
 
 use parking_lot::Mutex;
 
+use crate::cpu_dispatch::{tier, SimdTier};
 use crate::rayon_util::ParIterInstalled;
 use diskann::utils::VectorRepr;
 use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
@@ -51,14 +52,290 @@ struct ReservoirEntry {
     distance: u16,
 }
 
+/// Scalar fallback for `find_hash`. Linear scan, no SIMD.
+#[inline(always)]
+fn find_hash_scalar(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
+    for (i, e) in entries.iter().enumerate() {
+        if e.hash == hash {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// AoSoA-packed AVX-512 `find_hash`: scans `&[u16]` 32 hashes per
+/// `_mm512_cmpeq_epi16_mask`. Microbench shows 1.6-2× speedup over the
+/// 8-byte-stride scan of [`find_hash_avx512`] (3.95ns vs 6.16ns at l_max=64;
+/// 4.55ns vs 9.32ns at l_max=128).
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX-512F + AVX-512BW.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+unsafe fn find_hash_packed_avx512(hashes: &[u16], target_hash: u16) -> Option<usize> {
+    use std::arch::x86_64::*;
+    let n = hashes.len();
+    let target = _mm512_set1_epi16(target_hash as i16);
+    let chunks = n / 32;
+    let mut found: u64 = 0;
+    for chunk in 0..chunks {
+        let base = chunk * 32;
+        let data = _mm512_loadu_si512(hashes.as_ptr().add(base) as *const __m512i);
+        let cmp = _mm512_cmpeq_epi16_mask(data, target);
+        found |= (cmp as u64) << (chunk * 32);
+    }
+    let tail = n - chunks * 32;
+    if tail > 0 {
+        let kmask: u32 = (1u32 << tail) - 1;
+        let base = chunks * 32;
+        let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(base) as *const i16);
+        let cmp = _mm512_cmpeq_epi16_mask(data, target) & kmask;
+        found |= (cmp as u64) << base;
+    }
+    if found != 0 {
+        Some(found.trailing_zeros() as usize)
+    } else {
+        None
+    }
+}
+
+/// AoSoA-packed AVX-2 `find_hash`: scans `&[u16]` 16 hashes per `_mm256_cmpeq_epi16`.
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn find_hash_packed_avx2(hashes: &[u16], target_hash: u16) -> Option<usize> {
+    use std::arch::x86_64::*;
+    let n = hashes.len();
+    let target = _mm256_set1_epi16(target_hash as i16);
+    let chunks = n / 16;
+    let mut found: u64 = 0;
+    for chunk in 0..chunks {
+        let base = chunk * 16;
+        let data = _mm256_loadu_si256(hashes.as_ptr().add(base) as *const __m256i);
+        let cmp = _mm256_cmpeq_epi16(data, target);
+        // _mm256_movemask_epi8 gives 32 bits (one per byte); we want 16 bits one per u16.
+        // For epi16 equality, the cmp result has 0xFFFF in matching lanes — take every
+        // other byte via movemask + interleaved extraction.
+        let bytes = _mm256_movemask_epi8(cmp) as u32;
+        // Convert byte-mask (32 bits, 2 per u16 lane) to 16-bit u16 lane mask.
+        // Each pair of consecutive bits has the same value; take the even-position bit.
+        let mut bits: u32 = 0;
+        let mut i = 0usize;
+        while i < 16 {
+            bits |= ((bytes >> (i * 2)) & 1) << i;
+            i += 1;
+        }
+        found |= (bits as u64) << (chunk * 16);
+    }
+    // Scalar tail
+    for i in (chunks * 16)..n {
+        if *hashes.get_unchecked(i) == target_hash {
+            found |= 1u64 << i;
+        }
+    }
+    if found != 0 {
+        Some(found.trailing_zeros() as usize)
+    } else {
+        None
+    }
+}
+
+/// AoSoA-packed scalar `find_hash`.
+#[inline(always)]
+fn find_hash_packed_scalar(hashes: &[u16], target_hash: u16) -> Option<usize> {
+    hashes.iter().position(|&h| h == target_hash)
+}
+
+/// AVX-512 `find_hash`: 8 entries per cmpeq mask, branch-free OR over all chunks.
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX-512F. The `#[target_feature]`
+/// attribute promises the compiler we are running with that feature set.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[allow(dead_code)]
+unsafe fn find_hash_avx512(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
+    use std::arch::x86_64::*;
+    let n = entries.len();
+    if n >= 8 {
+        // SAFETY: AVX-512F enabled by target_feature. ReservoirEntry is
+        // `#[repr(C)]` with size 8 = sizeof(u64), so the u64 cast aliases bytes
+        // legally. `ptr.add(base)` stays within `entries` since `base + 8 ≤ n`.
+        //
+        // Branch-free: scan ALL chunks unconditionally, OR the per-chunk
+        // 8-bit cmpeq masks into a single 64-bit "found" mask (8 bits per
+        // chunk × up to 8 chunks for l_max=64). Then trailing_zeros() of
+        // the 64-bit value gives the absolute lane index.
+        //
+        // Eliminates the data-dependent `if cmp != 0 { return }` per chunk —
+        // that branch was the dominant source of HP's 19% bad-spec slots
+        // (per c4-48 PMU profile). Cost: scan all chunks even when an early
+        // chunk matches; benefit: zero misprediction.
+        let ptr = entries.as_ptr() as *const u64;
+        let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
+        let mask = _mm512_set1_epi64(0x0000FFFF00000000u64 as i64);
+        let chunks = n / 8;
+        let mut found: u64 = 0;
+        for chunk in 0..chunks {
+            let base = chunk * 8;
+            let data = _mm512_loadu_si512(ptr.add(base) as *const __m512i);
+            let masked = _mm512_and_si512(data, mask);
+            let cmp = _mm512_cmpeq_epi64_mask(masked, target);
+            found |= (cmp as u64) << (chunk * 8);
+        }
+        // Tail (n % 8 entries): use a final masked load to fold into `found`.
+        let tail = n - chunks * 8;
+        if tail > 0 {
+            let kmask: u8 = (1u8 << tail) - 1;
+            let base = chunks * 8;
+            let data = _mm512_maskz_loadu_epi64(kmask, ptr.add(base) as *const i64);
+            let masked = _mm512_and_si512(data, mask);
+            let cmp = _mm512_cmpeq_epi64_mask(masked, target) & kmask;
+            found |= (cmp as u64) << base;
+        }
+        if found != 0 {
+            return Some(found.trailing_zeros() as usize);
+        }
+        return None;
+    }
+    // Small-n path: scalar.
+    find_hash_scalar(entries, hash)
+}
+
+/// AVX2 `find_hash`: 4 entries per cmpeq mask, branch-free OR over all chunks.
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn find_hash_avx2(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
+    use std::arch::x86_64::*;
+    let n = entries.len();
+    if n >= 4 {
+        // SAFETY: AVX2 enabled by target_feature; ReservoirEntry is `#[repr(C)]`
+        // size 8, so the u64 cast aliases legally. `ptr.add(base)` stays in
+        // bounds by `base + 4 ≤ n`. Tail `get_unchecked(i)` has `i < n`.
+        let ptr = entries.as_ptr() as *const u64;
+        let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
+        let mask = _mm256_set1_epi64x(0x0000FFFF00000000u64 as i64);
+        let chunks = n / 4;
+        let mut found: u64 = 0;
+        for chunk in 0..chunks {
+            let base = chunk * 4;
+            let data = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
+            let masked = _mm256_and_si256(data, mask);
+            let cmp = _mm256_cmpeq_epi64(masked, target);
+            // movemask_pd: 4 bits, one per 64-bit lane.
+            let bits = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64;
+            found |= bits << (chunk * 4);
+        }
+        for i in (chunks * 4)..n {
+            if entries.get_unchecked(i).hash == hash {
+                found |= 1u64 << i;
+            }
+        }
+        if found != 0 {
+            return Some(found.trailing_zeros() as usize);
+        }
+        return None;
+    }
+    find_hash_scalar(entries, hash)
+}
+
+/// Scalar relative_hash on local f32 sketches.
+///
+/// `relative_hash`: bit j = (dst[j] - src[j] >= 0). Branch-free: sign bit is 0
+/// when diff >= 0 (incl +0). `m` is the number of planes (up to 16).
+#[inline(always)]
+fn relative_hash_local_scalar(dst: &[f32], src: &[f32], m: usize) -> u16 {
+    let mut h: u16 = 0;
+    for j in 0..m {
+        let diff = dst[j] - src[j];
+        let bit = ((!diff.is_sign_negative()) as u16) << j;
+        h |= bit;
+    }
+    h
+}
+
+/// AVX-512 relative_hash: one masked sub + cmp_ge_mask gives the bit pattern
+/// directly.
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX-512F. `dst` and `src` must each
+/// have at least `m.min(16)` valid f32 lanes.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[inline]
+unsafe fn relative_hash_local_avx512(dst: &[f32], src: &[f32], m: usize) -> u16 {
+    use std::arch::x86_64::*;
+    // SAFETY: AVX-512F enabled. We bound the load to `m` lanes via kmask;
+    // planes is validated 1..=16 by PiPNNConfig.
+    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
+    let dst_v = _mm512_maskz_loadu_ps(kmask, dst.as_ptr());
+    let src_v = _mm512_maskz_loadu_ps(kmask, src.as_ptr());
+    let diff = _mm512_sub_ps(dst_v, src_v);
+    let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
+    mask & kmask
+}
+
+/// AVX2 relative_hash: 8-lane SIMD via `_mm256_maskload_ps` +
+/// `_mm256_movemask_ps`. Splits up-to-16 planes into low-8 and optional
+/// high-(m-8) halves.
+///
+/// # Safety
+/// Caller must ensure the CPU supports AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn relative_hash_local_avx2(dst: &[f32], src: &[f32], m: usize) -> u16 {
+    use std::arch::x86_64::*;
+    // SAFETY: AVX2 enabled; maskload returns 0 for masked-off lanes so reading
+    // past the end is safe.
+    let make_mask = |count: usize| -> __m256i {
+        // -1 for active lanes, 0 for inactive.
+        let m_arr: [i32; 8] = std::array::from_fn(|k| if k < count { -1 } else { 0 });
+        _mm256_loadu_si256(m_arr.as_ptr() as *const __m256i)
+    };
+    let lo_count = m.min(8);
+    let mask_lo = make_mask(lo_count);
+    let dst_lo = _mm256_maskload_ps(dst.as_ptr(), mask_lo);
+    let src_lo = _mm256_maskload_ps(src.as_ptr(), mask_lo);
+    let diff_lo = _mm256_sub_ps(dst_lo, src_lo);
+    let cmp_lo = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_lo, _mm256_setzero_ps());
+    let bits_lo = _mm256_movemask_ps(cmp_lo) as u16;
+    let lo_kmask: u16 = (1u16 << lo_count) - 1;
+    let mut h = bits_lo & lo_kmask;
+    if m > 8 {
+        let hi_count = m - 8;
+        let mask_hi = make_mask(hi_count);
+        let dst_hi = _mm256_maskload_ps(dst.as_ptr().add(8), mask_hi);
+        let src_hi = _mm256_maskload_ps(src.as_ptr().add(8), mask_hi);
+        let diff_hi = _mm256_sub_ps(dst_hi, src_hi);
+        let cmp_hi = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_hi, _mm256_setzero_ps());
+        let bits_hi = _mm256_movemask_ps(cmp_hi) as u16;
+        let hi_kmask: u16 = (1u16 << hi_count) - 1;
+        h |= (bits_hi & hi_kmask) << 8;
+    }
+    h
+}
+
 /// HashPrune reservoir for a single point.
 ///
 /// Stores at most `l_max` entries keyed by their hash bucket. Insertion is O(1)
 /// (push or swap_remove); lookups are O(l_max) linear scan, vectorised by
 /// [`find_hash`] (AVX-512 8-way / AVX2 4-way / scalar fallback). The farthest
 /// entry is cached so a full-reservoir reject path is O(1).
+///
+/// AoSoA hot slab: `hashes` is a parallel `Vec<u16>` kept in sync with
+/// `entries`. find_hash scans this packed array via 32-way AVX-512 SIMD
+/// (1.6-2× faster than scanning the 8-byte `entries` Vec, per microbench).
+/// The hash field in `ReservoirEntry` is now redundant but kept for now to
+/// minimise downstream churn.
 pub(crate) struct HashPruneReservoir {
     entries: Vec<ReservoirEntry>,
+    hashes: Vec<u16>,
     /// Maximum reservoir size.
     l_max: usize,
     /// Cached farthest distance (bf16) and its index in entries.
@@ -73,6 +350,7 @@ impl HashPruneReservoir {
     pub(crate) fn new(l_max: usize) -> Self {
         Self {
             entries: Vec::with_capacity(l_max),
+            hashes: Vec::with_capacity(l_max),
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
@@ -83,110 +361,11 @@ impl HashPruneReservoir {
     pub(crate) fn new_lazy(l_max: usize) -> Self {
         Self {
             entries: Vec::new(),
+            hashes: Vec::new(),
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
         }
-    }
-
-    /// Find entry with matching hash.
-    /// Uses AVX-512 to compare 8 entries per instruction by loading the hash+distance
-    /// word (upper 32 bits of each 8-byte entry) and masking to the hash field.
-    #[inline(always)]
-    fn find_hash(&self, hash: u16) -> Option<usize> {
-        let n = self.entries.len();
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-        {
-            use std::arch::x86_64::*;
-            if n >= 8 {
-                // SAFETY: AVX-512 intrinsics gated by target_feature cfg. ReservoirEntry
-                // is `#[repr(C)]` with size 8 = sizeof(u64), so the u64 cast aliases bytes
-                // legally. `ptr.add(base)` stays within `entries` since `base + 8 ≤ n`.
-                // Trailing `get_unchecked(i)` has `i < n`.
-                //
-                // Branch-free: scan ALL chunks unconditionally, OR the per-chunk
-                // 8-bit cmpeq masks into a single 64-bit "found" mask (8 bits per
-                // chunk × up to 8 chunks for l_max=64). Then trailing_zeros() of
-                // the 64-bit value gives the absolute lane index.
-                //
-                // Eliminates the data-dependent `if cmp != 0 { return }` per chunk —
-                // that branch was the dominant source of HP's 19% bad-spec slots
-                // (per c4-48 PMU profile). Cost: scan all chunks even when an early
-                // chunk matches; benefit: zero misprediction.
-                unsafe {
-                    let ptr = self.entries.as_ptr() as *const u64;
-                    let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
-                    let mask = _mm512_set1_epi64(0x0000FFFF00000000u64 as i64);
-                    let chunks = n / 8;
-                    let mut found: u64 = 0;
-                    for chunk in 0..chunks {
-                        let base = chunk * 8;
-                        let data = _mm512_loadu_si512(ptr.add(base) as *const __m512i);
-                        let masked = _mm512_and_si512(data, mask);
-                        let cmp = _mm512_cmpeq_epi64_mask(masked, target);
-                        found |= (cmp as u64) << (chunk * 8);
-                    }
-                    // Tail (n % 8 entries): use a final masked load to fold into `found`.
-                    let tail = n - chunks * 8;
-                    if tail > 0 {
-                        let kmask: u8 = (1u8 << tail) - 1;
-                        let base = chunks * 8;
-                        let data = _mm512_maskz_loadu_epi64(kmask, ptr.add(base) as *const i64);
-                        let masked = _mm512_and_si512(data, mask);
-                        let cmp = _mm512_cmpeq_epi64_mask(masked, target) & kmask;
-                        found |= (cmp as u64) << base;
-                    }
-                    if found != 0 {
-                        return Some(found.trailing_zeros() as usize);
-                    }
-                }
-                return None;
-            }
-        }
-        // AVX2 fallback: 4 entries per comparison (256-bit / 64-bit). Same
-        // branch-free OR-pattern as the AVX-512 path — `_mm256_movemask_pd`
-        // collapses a 256-bit qword-mask into 4 bits per chunk.
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")))]
-        {
-            use std::arch::x86_64::*;
-            if n >= 4 {
-                // SAFETY: AVX2 cfg-gated; ReservoirEntry is `#[repr(C)]` size 8,
-                // so the u64 cast aliases legally. `ptr.add(base)` stays in
-                // bounds by `base + 4 ≤ n`. Tail `get_unchecked(i)` has `i < n`.
-                unsafe {
-                    let ptr = self.entries.as_ptr() as *const u64;
-                    let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
-                    let mask = _mm256_set1_epi64x(0x0000FFFF00000000u64 as i64);
-                    let chunks = n / 4;
-                    let mut found: u64 = 0;
-                    for chunk in 0..chunks {
-                        let base = chunk * 4;
-                        let data = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
-                        let masked = _mm256_and_si256(data, mask);
-                        let cmp = _mm256_cmpeq_epi64(masked, target);
-                        // movemask_pd: 4 bits, one per 64-bit lane.
-                        let bits = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64;
-                        found |= bits << (chunk * 4);
-                    }
-                    for i in (chunks * 4)..n {
-                        if self.entries.get_unchecked(i).hash == hash {
-                            found |= 1u64 << i;
-                        }
-                    }
-                    if found != 0 {
-                        return Some(found.trailing_zeros() as usize);
-                    }
-                }
-                return None;
-            }
-        }
-        // Scalar fallback
-        for (i, e) in self.entries.iter().enumerate() {
-            if e.hash == hash {
-                return Some(i);
-            }
-        }
-        None
     }
 
     /// Update the cached farthest entry.
@@ -209,30 +388,42 @@ impl HashPruneReservoir {
         self.farthest_idx = max_idx;
     }
 
-    /// Try to insert a candidate neighbor with the given hash and distance.
-    /// Distance is converted to bf16 at the boundary for compact storage.
+    /// Generic insert parameterized by the `find_hash` strategy.
+    /// Tier-specialized wrappers (`insert_avx512`, `insert_avx2`, `insert_scalar`)
+    /// pass the matching SIMD `find_hash` so the call inlines without a runtime
+    /// tier check.
     ///
     /// Unsorted storage: find_hash is O(l_max) linear scan but insert/evict
     /// are O(1) via push/swap_remove.
+    ///
+    /// Perf: `farthest_dist` / `farthest_idx` are hoisted into locals to keep
+    /// them in registers across the `find` call. The `&mut self.entries`
+    /// borrow inside `find` previously invalidated their liveness, causing a
+    /// stack-spill that perf annotate showed as 24% of HP cycles.
     #[inline(always)]
-    pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+    fn insert_with<F: FnOnce(&[u16], u16) -> Option<usize>>(
+        &mut self,
+        hash: u16,
+        neighbor: u32,
+        distance: f32,
+        find: F,
+    ) -> bool {
         let dist_bf16 = f32_to_bf16(distance);
 
-        // Early rejection: if reservoir is full and the new entry is farther
-        // than the worst current entry, it can't improve any bucket.
-        //
-        // Correctness: if hash exists with distance X, then X <= farthest_dist.
-        // If dist_bf16 >= farthest_dist >= X, dist_bf16 wouldn't replace X anyway.
-        if self.entries.len() >= self.l_max && dist_bf16 >= self.farthest_dist {
+        let mut local_far_dist = self.farthest_dist;
+        let mut local_far_idx = self.farthest_idx;
+
+        if self.entries.len() >= self.l_max && dist_bf16 >= local_far_dist {
             return false;
         }
 
-        // If the hash bucket already exists, keep the closer point.
-        if let Some(idx) = self.find_hash(hash) {
+        // find() now scans the AoSoA hot `hashes` slab (1.6-2× faster).
+        if let Some(idx) = find(&self.hashes, hash) {
             if dist_bf16 < self.entries[idx].distance {
-                let was_farthest = idx == self.farthest_idx;
+                let was_farthest = idx == local_far_idx;
                 self.entries[idx].neighbor = neighbor;
                 self.entries[idx].distance = dist_bf16;
+                // self.hashes[idx] stays the same (hash bucket unchanged).
                 if was_farthest {
                     self.update_farthest();
                 }
@@ -241,13 +432,10 @@ impl HashPruneReservoir {
             return false;
         }
 
-        // If reservoir is not full, append (O(1), no memmove).
         if self.entries.len() < self.l_max {
-            // First push: allocate full l_max upfront to avoid grow-doublings
-            // (Vec::push otherwise reallocs at 4 → 8 → 16 → 32 → 64 → 128).
-            // Saves ~1 KB of memcpy per fully-filled reservoir.
             if self.entries.is_empty() {
                 self.entries.reserve_exact(self.l_max);
+                self.hashes.reserve_exact(self.l_max);
             }
             let new_idx = self.entries.len();
             self.entries.push(ReservoirEntry {
@@ -255,26 +443,53 @@ impl HashPruneReservoir {
                 distance: dist_bf16,
                 hash,
             });
-            if dist_bf16 >= self.farthest_dist {
-                self.farthest_dist = dist_bf16;
-                self.farthest_idx = new_idx;
+            self.hashes.push(hash);
+            if dist_bf16 >= local_far_dist {
+                local_far_dist = dist_bf16;
+                local_far_idx = new_idx;
             }
+            self.farthest_dist = local_far_dist;
+            self.farthest_idx = local_far_idx;
             return true;
         }
 
-        // Reservoir is full: evict farthest if new is closer.
-        if dist_bf16 < self.farthest_dist {
-            self.entries[self.farthest_idx] = ReservoirEntry {
+        if dist_bf16 < local_far_dist {
+            self.entries[local_far_idx] = ReservoirEntry {
                 neighbor,
                 distance: dist_bf16,
                 hash,
             };
+            self.hashes[local_far_idx] = hash;
             self.update_farthest();
             return true;
         }
 
         false
     }
+
+    /// Insert with runtime-dispatched find_hash. Convenience API for callers
+    /// that don't already know the SIMD tier (tests, single-edge add_edge).
+    /// Hot per-edge paths in `add_edges_*` use `insert_with` with a
+    /// tier-specialized `find_hash` to hoist the dispatch out of the inner
+    /// loop.
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+        match tier() {
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx512 => self
+                .insert_with(hash, neighbor, distance, |h, t| unsafe {
+                    find_hash_packed_avx512(h, t)
+                }),
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx2 => self
+                .insert_with(hash, neighbor, distance, |h, t| unsafe {
+                    find_hash_packed_avx2(h, t)
+                }),
+            _ => self.insert_with(hash, neighbor, distance, find_hash_packed_scalar),
+        }
+    }
+
 
     /// Get all neighbors sorted by distance, truncated to `max_degree`.
     pub fn get_neighbors_saturated(&self, max_degree: usize) -> Vec<(u32, f32)> {
@@ -398,13 +613,31 @@ impl HashPrune {
     /// Caches the lock on the last source seen, so callers whose edges are
     /// grouped by source acquire each reservoir mutex once per group (rather
     /// than once per edge). Leaf-build emits edges in this grouped order.
+    ///
+    /// Dispatches on the runtime SIMD tier ONCE at entry; the per-edge inner
+    /// loop is monomorphized to call the tier-matched `find_hash` directly,
+    /// avoiding a per-edge runtime tier check.
     pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
         if edges.is_empty() {
             return;
         }
+        match tier() {
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx512 => unsafe { self.add_edges_batched_inner_avx512(edges) },
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx2 => unsafe { self.add_edges_batched_inner_avx2(edges) },
+            _ => self.add_edges_batched_inner_scalar(edges),
+        }
+    }
 
-        // Process edges directly. Cache last reservoir lock to avoid redundant
-        // lock ops for consecutive edges with the same source.
+    /// Generic inner body for `add_edges_batched`, parameterized by `find_hash`.
+    #[inline(always)]
+    fn add_edges_batched_inner<F>(&self, edges: &[crate::leaf_build::Edge], find: F)
+    where
+        F: Copy + Fn(&[u16], u16) -> Option<usize>,
+    {
+        // Cache last reservoir lock to avoid redundant lock ops for consecutive
+        // edges with the same source.
         let mut last_src = u32::MAX;
         let mut last_reservoir: Option<parking_lot::MutexGuard<'_, HashPruneReservoir>> = None;
 
@@ -418,8 +651,24 @@ impl HashPrune {
             let hash = self
                 .sketches
                 .relative_hash(edge.src as usize, edge.dst as usize);
-            reservoir.insert(hash, edge.dst, edge.distance);
+            reservoir.insert_with(hash, edge.dst, edge.distance, find);
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f", enable = "avx512bw")]
+    unsafe fn add_edges_batched_inner_avx512(&self, edges: &[crate::leaf_build::Edge]) {
+        self.add_edges_batched_inner(edges, |e, h| find_hash_packed_avx512(e, h));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn add_edges_batched_inner_avx2(&self, edges: &[crate::leaf_build::Edge]) {
+        self.add_edges_batched_inner(edges, |e, h| find_hash_packed_avx2(e, h));
+    }
+
+    fn add_edges_batched_inner_scalar(&self, edges: &[crate::leaf_build::Edge]) {
+        self.add_edges_batched_inner(edges, find_hash_packed_scalar);
     }
 
     /// Insert leaf edges in CSR-grouped form.
@@ -431,6 +680,8 @@ impl HashPrune {
     /// One lock acquisition per source — reservoir + sketch loaded into cache
     /// once and used for all edges of that source, eliminating ~5x of HP
     /// insert cost versus interleaved-source insertion.
+    ///
+    /// Dispatches on the runtime SIMD tier ONCE at entry.
     pub fn add_edges_grouped(
         &self,
         group_starts: &[u32],
@@ -440,6 +691,29 @@ impl HashPrune {
         if group_data.is_empty() {
             return;
         }
+        match tier() {
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx512 => unsafe {
+                self.add_edges_grouped_inner_avx512(group_starts, group_data, local_indices)
+            },
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx2 => unsafe {
+                self.add_edges_grouped_inner_avx2(group_starts, group_data, local_indices)
+            },
+            _ => self.add_edges_grouped_inner_scalar(group_starts, group_data, local_indices),
+        }
+    }
+
+    #[inline(always)]
+    fn add_edges_grouped_inner<F>(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        find: F,
+    ) where
+        F: Copy + Fn(&[u16], u16) -> Option<usize>,
+    {
         let n = local_indices.len();
         debug_assert!(group_starts.len() >= n + 1);
 
@@ -458,9 +732,49 @@ impl HashPrune {
                 let hash = self
                     .sketches
                     .relative_hash(global_src, global_dst as usize);
-                reservoir.insert(hash, global_dst, dist);
+                reservoir.insert_with(hash, global_dst, dist, find);
             }
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f", enable = "avx512bw")]
+    unsafe fn add_edges_grouped_inner_avx512(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+    ) {
+        self.add_edges_grouped_inner(group_starts, group_data, local_indices, |e, h| {
+            find_hash_packed_avx512(e, h)
+        });
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn add_edges_grouped_inner_avx2(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+    ) {
+        self.add_edges_grouped_inner(group_starts, group_data, local_indices, |e, h| {
+            find_hash_packed_avx2(e, h)
+        });
+    }
+
+    fn add_edges_grouped_inner_scalar(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+    ) {
+        self.add_edges_grouped_inner(
+            group_starts,
+            group_data,
+            local_indices,
+            find_hash_packed_scalar,
+        );
     }
 
     /// CSR-grouped insert that consumes a leaf-local sketches buffer.
@@ -468,6 +782,11 @@ impl HashPrune {
     /// during the leaf's data gather). Hash compute happens against this
     /// L1-resident buffer instead of the multi-hundred-MB global sketches —
     /// eliminates the per-edge global sketches cache miss in HP insertion.
+    ///
+    /// Dispatches on the runtime SIMD tier ONCE at entry; both `relative_hash`
+    /// and `find_hash` inside the per-edge loop run at the matched tier with
+    /// no per-call runtime check (the `#[target_feature]` on the inner fn lets
+    /// the compiler inline the SIMD intrinsics into the same hot kernel).
     pub fn add_edges_grouped_local_sketches(
         &self,
         group_starts: &[u32],
@@ -478,6 +797,50 @@ impl HashPrune {
         if group_data.is_empty() {
             return;
         }
+        match tier() {
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx512 => unsafe {
+                self.add_edges_grouped_local_sketches_inner_avx512(
+                    group_starts,
+                    group_data,
+                    local_indices,
+                    local_sketches,
+                )
+            },
+            #[cfg(target_arch = "x86_64")]
+            SimdTier::Avx2 => unsafe {
+                self.add_edges_grouped_local_sketches_inner_avx2(
+                    group_starts,
+                    group_data,
+                    local_indices,
+                    local_sketches,
+                )
+            },
+            _ => self.add_edges_grouped_local_sketches_inner_scalar(
+                group_starts,
+                group_data,
+                local_indices,
+                local_sketches,
+            ),
+        }
+    }
+
+    /// Generic inner body for `add_edges_grouped_local_sketches`, parameterized
+    /// by `find_hash` and `relative_hash_local`. The compiler monomorphizes per
+    /// tier so both SIMD ops inline into the per-edge hot loop.
+    #[inline(always)]
+    fn add_edges_grouped_local_sketches_inner<F, H>(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        local_sketches: &[f32],
+        find: F,
+        relhash: H,
+    ) where
+        F: Copy + Fn(&[u16], u16) -> Option<usize>,
+        H: Copy + Fn(&[f32], &[f32], usize) -> u16,
+    {
         let n = local_indices.len();
         let m = self.sketches.num_planes();
         debug_assert!(group_starts.len() >= n + 1);
@@ -497,84 +860,74 @@ impl HashPrune {
                 let dst_sketch =
                     &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
                 // relative_hash: bit j = (dst[j] - src[j] >= 0). Branch-free
-                // SIMD: compute diff in one AVX-512 sub, then cmp_ge_mask
-                // gives the bit pattern directly. Eliminates the 12-iter
-                // data-dependent `if >= 0` branch chain that contributed
-                // to HP's bad-spec slot share (PMU profile).
-                let hash: u16;
-                #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-                {
-                    use std::arch::x86_64::*;
-                    // SAFETY: AVX-512 cfg-gated. We bound the load to `m`
-                    // lanes via kmask; planes is validated 1..=16 by
-                    // PiPNNConfig.
-                    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
-                    unsafe {
-                        let dst_v = _mm512_maskz_loadu_ps(kmask, dst_sketch.as_ptr());
-                        let src_v = _mm512_maskz_loadu_ps(kmask, src_sketch.as_ptr());
-                        let diff = _mm512_sub_ps(dst_v, src_v);
-                        let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
-                        hash = mask & kmask;
-                    }
-                }
-                // AVX2 path: 8-lane SIMD via `_mm256_maskload_ps` (which
-                // suppresses out-of-bounds loads) + `_mm256_movemask_ps` for
-                // a 1-bit-per-lane mask. Splits up-to-16 planes into low-8
-                // and optional high-(m-8) halves.
-                #[cfg(all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")))]
-                {
-                    use std::arch::x86_64::*;
-                    // SAFETY: AVX2 cfg-gated; maskload returns 0 for masked-off
-                    // lanes so reading past the end is safe.
-                    unsafe {
-                        let make_mask = |start: usize, count: usize| -> __m256i {
-                            // -1 for active lanes, 0 for inactive.
-                            let m_arr: [i32; 8] = std::array::from_fn(|k| {
-                                if k < count { -1 } else { 0 }
-                            });
-                            let _ = start;
-                            _mm256_loadu_si256(m_arr.as_ptr() as *const __m256i)
-                        };
-                        let lo_count = m.min(8);
-                        let mask_lo = make_mask(0, lo_count);
-                        let dst_lo = _mm256_maskload_ps(dst_sketch.as_ptr(), mask_lo);
-                        let src_lo = _mm256_maskload_ps(src_sketch.as_ptr(), mask_lo);
-                        let diff_lo = _mm256_sub_ps(dst_lo, src_lo);
-                        let cmp_lo = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_lo, _mm256_setzero_ps());
-                        let bits_lo = _mm256_movemask_ps(cmp_lo) as u16;
-                        let lo_kmask: u16 = (1u16 << lo_count) - 1;
-                        let mut h = bits_lo & lo_kmask;
-                        if m > 8 {
-                            let hi_count = m - 8;
-                            let mask_hi = make_mask(0, hi_count);
-                            let dst_hi = _mm256_maskload_ps(dst_sketch.as_ptr().add(8), mask_hi);
-                            let src_hi = _mm256_maskload_ps(src_sketch.as_ptr().add(8), mask_hi);
-                            let diff_hi = _mm256_sub_ps(dst_hi, src_hi);
-                            let cmp_hi = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_hi, _mm256_setzero_ps());
-                            let bits_hi = _mm256_movemask_ps(cmp_hi) as u16;
-                            let hi_kmask: u16 = (1u16 << hi_count) - 1;
-                            h |= (bits_hi & hi_kmask) << 8;
-                        }
-                        hash = h;
-                    }
-                }
-                #[cfg(not(any(
-                    all(target_arch = "x86_64", target_feature = "avx512f"),
-                    all(target_arch = "x86_64", target_feature = "avx2", not(target_feature = "avx512f")),
-                )))]
-                {
-                    let mut h: u16 = 0;
-                    for j in 0..m {
-                        // Branch-free: sign bit is 0 when diff >= 0 (incl +0).
-                        let diff = dst_sketch[j] - src_sketch[j];
-                        let bit = ((!diff.is_sign_negative()) as u16) << j;
-                        h |= bit;
-                    }
-                    hash = h;
-                }
-                reservoir.insert(hash, global_dst, dist);
+                // SIMD: compute diff in one masked sub, then cmp_ge_mask gives
+                // the bit pattern directly. Eliminates the 12-iter data-
+                // dependent `if >= 0` branch chain that contributed to HP's
+                // bad-spec slot share (PMU profile).
+                let hash = relhash(dst_sketch, src_sketch, m);
+                reservoir.insert_with(hash, global_dst, dist, find);
             }
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f", enable = "avx512bw")]
+    unsafe fn add_edges_grouped_local_sketches_inner_avx512(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        local_sketches: &[f32],
+    ) {
+        // SAFETY: AVX-512F enabled by `#[target_feature]`; the inlined
+        // `find_hash_avx512` and `relative_hash_local_avx512` calls share the
+        // same feature scope, so the compiler emits the AVX-512 codegen
+        // identically to the previous `#[cfg(target_feature)]` blocks.
+        self.add_edges_grouped_local_sketches_inner(
+            group_starts,
+            group_data,
+            local_indices,
+            local_sketches,
+            |e, h| find_hash_packed_avx512(e, h),
+            |dst, src, m| relative_hash_local_avx512(dst, src, m),
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn add_edges_grouped_local_sketches_inner_avx2(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        local_sketches: &[f32],
+    ) {
+        // SAFETY: AVX2 enabled by `#[target_feature]`.
+        self.add_edges_grouped_local_sketches_inner(
+            group_starts,
+            group_data,
+            local_indices,
+            local_sketches,
+            |e, h| find_hash_packed_avx2(e, h),
+            |dst, src, m| relative_hash_local_avx2(dst, src, m),
+        );
+    }
+
+    fn add_edges_grouped_local_sketches_inner_scalar(
+        &self,
+        group_starts: &[u32],
+        group_data: &[(u32, f32)],
+        local_indices: &[u32],
+        local_sketches: &[f32],
+    ) {
+        self.add_edges_grouped_local_sketches_inner(
+            group_starts,
+            group_data,
+            local_indices,
+            local_sketches,
+            find_hash_packed_scalar,
+            relative_hash_local_scalar,
+        );
     }
 
     /// Copy sketches for `indices` into `out` (length must be `indices.len() * num_planes`).

@@ -35,12 +35,12 @@ pub struct Leaf {
 /// the partition-layer invariants on `fanout` and `leader_cap`.
 #[derive(Debug, Clone)]
 pub struct PartitionConfig {
-    c_max: usize,
-    c_min: usize,
-    p_samp: f64,
-    fanout: Vec<usize>,
-    metric: diskann_vector::distance::Metric,
-    leader_cap: usize,
+    pub(crate) c_max: usize,
+    pub(crate) c_min: usize,
+    pub(crate) p_samp: f64,
+    pub(crate) fanout: Vec<usize>,
+    pub(crate) metric: diskann_vector::distance::Metric,
+    pub(crate) leader_cap: usize,
 }
 
 impl PartitionConfig {
@@ -168,21 +168,41 @@ pub fn partition<T: VectorRepr + Send + Sync>(
         seed,
     }];
 
+    // Iteration cap: if the leader-based partition can't crack remaining
+    // oversized clusters within `max_iter` rounds (e.g. CLIP-like hub geometry
+    // where sampled leaders are themselves bunched in the dense region and
+    // argmin assignment degenerates), accept them as oversized leaves and
+    // hand off to the leaf builder. Override via env var.
+    let max_iter: usize = std::env::var("PIPNN_MAX_PARTITION_ITER")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
     let mut iteration = 0;
     while !work.is_empty() {
         iteration += 1;
-        // 50 iterations is a safety net against a partitioning loop divergence.
-        // Leaves halve in size each level, so 50 covers > 2^50 points in
-        // healthy runs. If we hit this the partition config is degenerate.
-        assert!(
-            iteration <= 50,
-            "partition diverged at iteration {} (npoints={}, c_max={}, c_min={}, fanout={:?})",
-            iteration,
-            npoints,
-            config.c_max,
-            config.c_min,
-            config.fanout
+        let work_points: usize = work.iter().map(|w| w.indices.len()).sum();
+        tracing::info!(
+            iter = iteration,
+            work_items = work.len(),
+            work_points,
+            leaves = leaves.len(),
+            "partition iter"
         );
+
+        if iteration > max_iter {
+            tracing::warn!(
+                iter = iteration,
+                work_items = work.len(),
+                work_points,
+                "partition iter cap hit, accepting remaining work as oversized leaves"
+            );
+            for item in work.drain(..) {
+                leaves.push(Leaf {
+                    indices: item.indices,
+                });
+            }
+            break;
+        }
 
         let results: Vec<(Vec<WorkItem>, Vec<Leaf>)> = work
             .into_par_iter()
@@ -221,7 +241,20 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
     let n = item.indices.len();
     debug_assert!(n > config.c_max);
 
-    let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
+    // PIPNN_DEEP_FANOUT_LAST: when item.level >= fanout.len(), reuse last fanout
+    // (e.g. 3 for fanout=[10,3]) instead of collapsing to 1. Trades a wider
+    // overlap at deep recursion levels for fewer leaf shards.
+    let fanout = if std::env::var("PIPNN_DEEP_FANOUT_LAST").is_ok() {
+        config
+            .fanout
+            .get(item.level)
+            .copied()
+            .or_else(|| config.fanout.last().copied())
+            .unwrap_or(1)
+            .min(n)
+    } else {
+        config.fanout.get(item.level).copied().unwrap_or(1).min(n)
+    };
     let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
@@ -229,15 +262,33 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
         .seed
         .wrapping_mul(6364136223846793005)
         .wrapping_add(n as u64);
+    let t_sample = std::time::Instant::now();
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let leaders: Vec<u32> = item
         .indices
         .choose_multiple(&mut rng, num_leaders)
         .copied()
         .collect();
+    let sample_us = t_sample.elapsed().as_micros() as u64;
 
     // Assign each point to its `fanout` nearest leaders → per-leader clusters.
+    let t_assign = std::time::Instant::now();
     let clusters = assign_to_leaders(data, ndims, &item.indices, &leaders, fanout, config.metric);
+    let assign_us = t_assign.elapsed().as_micros() as u64;
+
+    let n_oversized: usize = clusters.iter().filter(|c| c.len() > config.c_max).count();
+    let n_finished: usize = clusters.iter().filter(|c| !c.is_empty() && c.len() <= config.c_max).count();
+    tracing::info!(
+        level = item.level,
+        n = n,
+        num_leaders = num_leaders,
+        fanout = fanout,
+        sample_us = sample_us,
+        assign_us = assign_us,
+        n_oversized = n_oversized,
+        n_finished = n_finished,
+        "partition_one_level"
+    );
 
     let mut next_work = Vec::new();
     let mut finished_leaves = Vec::new();
@@ -292,88 +343,104 @@ thread_local! {
 /// SAFETY: only enters the SIMD path when `size_of::<T>() == 2` and
 /// `align_of::<T>() == 2` — matches `half::f16`'s `repr(transparent) u16`
 /// layout. Falls back to the generic trait for other `T`.
+///
+/// Dispatch: runtime-checked via [`cpu_dispatch::tier`]. The SIMD bodies are
+/// `#[target_feature(enable = "...")]` `unsafe fn` so they generate the same
+/// codegen as the previous compile-time `#[cfg(target_feature)]` paths
+/// without requiring `target-cpu=native`. Hot-path call sites in
+/// `assign_to_leaders` hoist the tier check to a fn pointer once per
+/// closure invocation (see `gather_f16_dispatch_fn`).
 #[inline]
 pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
     src: &[T], gi: usize, ndims: usize, dst: &mut [f32],
 ) {
     debug_assert!(dst.len() >= ndims);
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    #[cfg(target_arch = "x86_64")]
     {
         if std::mem::size_of::<T>() == 2 && std::mem::align_of::<T>() == 2 {
-            use std::arch::x86_64::*;
-            // SAFETY: f16 is repr(transparent) u16; the raw slice aliases the
-            // same bytes. ndims-sized rows of f16 at `gi * ndims` stay in
-            // bounds by `src.len() >= (gi + 1) * ndims` which the caller
-            // enforces via `data[gi * ndims..(gi+1) * ndims]` slicing.
+            use crate::cpu_dispatch::{tier, SimdTier};
             let src_ptr = src.as_ptr() as *const u16;
-            let row_ptr = unsafe { src_ptr.add(gi * ndims) };
-            let dst_ptr = dst.as_mut_ptr();
-            let chunks = ndims / 16;
-            let tail = ndims - chunks * 16;
-            unsafe {
-                for c in 0..chunks {
-                    let h = _mm256_loadu_si256(row_ptr.add(c * 16) as *const __m256i);
-                    let f = _mm512_cvtph_ps(h);
-                    _mm512_storeu_ps(dst_ptr.add(c * 16), f);
+            match tier() {
+                SimdTier::Avx512 => {
+                    // SAFETY: tier()==Avx512 implies AVX-512F at runtime, so
+                    // the `#[target_feature]` precondition holds.
+                    unsafe { gather_f16_avx512(src_ptr, gi, ndims, dst.as_mut_ptr()) };
+                    return;
                 }
-                if tail > 0 {
-                    let kmask: u16 = (1u16 << tail) - 1;
-                    let h = _mm256_maskz_loadu_epi16(kmask, row_ptr.add(chunks * 16) as *const i16);
-                    let f = _mm512_cvtph_ps(h);
-                    _mm512_mask_storeu_ps(dst_ptr.add(chunks * 16), kmask, f);
+                SimdTier::Avx2 => {
+                    // SAFETY: tier()==Avx2 implies AVX2 + F16C at runtime.
+                    unsafe { gather_f16_avx2_f16c(src_ptr, gi, ndims, dst.as_mut_ptr()) };
+                    return;
                 }
+                SimdTier::Scalar => {}
             }
-            return;
-        }
-    }
-    // AVX2 + F16C: 8 lanes per vcvtph2ps. F16C is independent of AVX-512 and
-    // ships with every Ivy Bridge+ / AMD Bulldozer+ CPU, so v3 baseline is safe.
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        target_feature = "f16c",
-        not(target_feature = "avx512f")
-    ))]
-    {
-        if std::mem::size_of::<T>() == 2 && std::mem::align_of::<T>() == 2 {
-            use std::arch::x86_64::*;
-            let src_ptr = src.as_ptr() as *const u16;
-            // SAFETY: see AVX-512 branch above; same alias + bounds invariants.
-            let row_ptr = unsafe { src_ptr.add(gi * ndims) };
-            let dst_ptr = dst.as_mut_ptr();
-            let chunks = ndims / 8;
-            let tail = ndims - chunks * 8;
-            unsafe {
-                for c in 0..chunks {
-                    let h = _mm_loadu_si128(row_ptr.add(c * 8) as *const __m128i);
-                    let f = _mm256_cvtph_ps(h);
-                    _mm256_storeu_ps(dst_ptr.add(c * 8), f);
-                }
-                if tail > 0 {
-                    // AVX2 has no masked 16-bit load; copy tail through a tiny
-                    // stack buffer (zero-padded) so the SIMD convert is safe.
-                    let mut hbuf = [0u16; 8];
-                    std::ptr::copy_nonoverlapping(
-                        row_ptr.add(chunks * 8),
-                        hbuf.as_mut_ptr(),
-                        tail,
-                    );
-                    let h = _mm_loadu_si128(hbuf.as_ptr() as *const __m128i);
-                    let f = _mm256_cvtph_ps(h);
-                    let mut fbuf = [0f32; 8];
-                    _mm256_storeu_ps(fbuf.as_mut_ptr(), f);
-                    std::ptr::copy_nonoverlapping(
-                        fbuf.as_ptr(),
-                        dst_ptr.add(chunks * 8),
-                        tail,
-                    );
-                }
-            }
-            return;
         }
     }
     let src_row = &src[gi * ndims..(gi + 1) * ndims];
     T::as_f32_into(src_row, &mut dst[..ndims]).expect("f32 conversion");
+}
+
+/// AVX-512 + F16C `vcvtph2ps` 16-lane fp16→fp32 row gather.
+///
+/// SAFETY: caller must guarantee AVX-512F is available at runtime (matched
+/// by [`crate::cpu_dispatch::tier`] == `Avx512`). `src_ptr` must point to
+/// at least `(gi + 1) * ndims` `u16` elements, and `dst_ptr` must be writable
+/// for at least `ndims` `f32` elements.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn gather_f16_avx512(src_ptr: *const u16, gi: usize, ndims: usize, dst_ptr: *mut f32) {
+    use std::arch::x86_64::*;
+    // SAFETY: f16 is repr(transparent) u16; the raw slice aliases the
+    // same bytes. ndims-sized rows of f16 at `gi * ndims` stay in
+    // bounds by `src.len() >= (gi + 1) * ndims` which the caller
+    // enforces via `data[gi * ndims..(gi+1) * ndims]` slicing.
+    let row_ptr = src_ptr.add(gi * ndims);
+    let chunks = ndims / 16;
+    let tail = ndims - chunks * 16;
+    for c in 0..chunks {
+        let h = _mm256_loadu_si256(row_ptr.add(c * 16) as *const __m256i);
+        let f = _mm512_cvtph_ps(h);
+        _mm512_storeu_ps(dst_ptr.add(c * 16), f);
+    }
+    if tail > 0 {
+        let kmask: u16 = (1u16 << tail) - 1;
+        let h = _mm256_maskz_loadu_epi16(kmask, row_ptr.add(chunks * 16) as *const i16);
+        let f = _mm512_cvtph_ps(h);
+        _mm512_mask_storeu_ps(dst_ptr.add(chunks * 16), kmask, f);
+    }
+}
+
+/// AVX2 + F16C 8-lane fp16→fp32 row gather. F16C is independent of AVX-512
+/// and ships with every Ivy Bridge+ / AMD Bulldozer+ CPU.
+///
+/// SAFETY: caller must guarantee AVX2 + F16C are available at runtime
+/// (matched by [`crate::cpu_dispatch::tier`] == `Avx2`). `src_ptr` must
+/// point to at least `(gi + 1) * ndims` `u16` elements, and `dst_ptr` must
+/// be writable for at least `ndims` `f32` elements.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,f16c")]
+unsafe fn gather_f16_avx2_f16c(src_ptr: *const u16, gi: usize, ndims: usize, dst_ptr: *mut f32) {
+    use std::arch::x86_64::*;
+    // SAFETY: see AVX-512 helper; same alias + bounds invariants.
+    let row_ptr = src_ptr.add(gi * ndims);
+    let chunks = ndims / 8;
+    let tail = ndims - chunks * 8;
+    for c in 0..chunks {
+        let h = _mm_loadu_si128(row_ptr.add(c * 8) as *const __m128i);
+        let f = _mm256_cvtph_ps(h);
+        _mm256_storeu_ps(dst_ptr.add(c * 8), f);
+    }
+    if tail > 0 {
+        // AVX2 has no masked 16-bit load; copy tail through a tiny
+        // stack buffer (zero-padded) so the SIMD convert is safe.
+        let mut hbuf = [0u16; 8];
+        std::ptr::copy_nonoverlapping(row_ptr.add(chunks * 8), hbuf.as_mut_ptr(), tail);
+        let h = _mm_loadu_si128(hbuf.as_ptr() as *const __m128i);
+        let f = _mm256_cvtph_ps(h);
+        let mut fbuf = [0f32; 8];
+        _mm256_storeu_ps(fbuf.as_mut_ptr(), f);
+        std::ptr::copy_nonoverlapping(fbuf.as_ptr(), dst_ptr.add(chunks * 8), tail);
+    }
 }
 
 /// SIMD batch compute of ||p_i||² for `np` rows of length `ndims`. Returns a
@@ -393,93 +460,114 @@ fn compute_p_norm_sq_batch(p_data: &[f32], np: usize, ndims: usize) -> Vec<f32> 
 
 /// Inner kernel shared by the `_into` and owning forms. Three arch paths:
 /// AVX-512 (16-wide FMA), AVX2 (8-wide FMA), scalar fallback.
+///
+/// Dispatch is runtime-checked once per call via [`cpu_dispatch::tier`]; the
+/// per-tier bodies are `#[target_feature(enable = "...")] unsafe fn` so
+/// their SIMD codegen matches the prior compile-time `#[cfg]` paths without
+/// requiring `target-cpu=native`. The match cost is amortized across `np`
+/// FMA chains by the caller (called twice per partition pass).
 #[inline(always)]
 fn compute_p_norm_sq_into_impl(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    #[cfg(target_arch = "x86_64")]
     {
-        use std::arch::x86_64::*;
-        let chunks = ndims / 16;
-        let tail = ndims - chunks * 16;
-        // SAFETY: AVX-512 cfg-gated; pointer arithmetic stays in p_data's
-        // allocation since i < np and `p_data.len() >= np * ndims` (caller).
-        unsafe {
-            for i in 0..np {
-                let p = p_data.as_ptr().add(i * ndims);
-                let mut acc = _mm512_setzero_ps();
-                for c in 0..chunks {
-                    let v = _mm512_loadu_ps(p.add(c * 16));
-                    acc = _mm512_fmadd_ps(v, v, acc);
-                }
-                if tail > 0 {
-                    let kmask: u16 = (1u16 << tail) - 1;
-                    let v = _mm512_maskz_loadu_ps(kmask, p.add(chunks * 16));
-                    acc = _mm512_fmadd_ps(v, v, acc);
-                }
-                *out.get_unchecked_mut(i) = _mm512_reduce_add_ps(acc);
+        use crate::cpu_dispatch::{tier, SimdTier};
+        match tier() {
+            SimdTier::Avx512 => {
+                // SAFETY: tier()==Avx512 implies AVX-512F at runtime.
+                unsafe { compute_p_norm_sq_avx512(p_data, np, ndims, out) };
+                return;
+            }
+            SimdTier::Avx2 => {
+                // SAFETY: tier()==Avx2 implies AVX2 + FMA at runtime.
+                unsafe { compute_p_norm_sq_avx2_fma(p_data, np, ndims, out) };
+                return;
+            }
+            SimdTier::Scalar => {}
+        }
+    }
+    // Pure-Rust fallback. LLVM auto-vectorizes on whatever the base
+    // target-cpu supports (v3 baseline already has AVX2).
+    for i in 0..np {
+        let row = &p_data[i * ndims..(i + 1) * ndims];
+        out[i] = row.iter().map(|v| v * v).sum();
+    }
+}
+
+/// AVX-512 16-wide FMA ||p||² per row.
+///
+/// SAFETY: caller must guarantee AVX-512F is available at runtime, and
+/// `p_data.len() >= np * ndims` and `out.len() >= np`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn compute_p_norm_sq_avx512(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
+    use std::arch::x86_64::*;
+    let chunks = ndims / 16;
+    let tail = ndims - chunks * 16;
+    // SAFETY: AVX-512 enabled by target_feature; pointer arithmetic stays
+    // in p_data's allocation since i < np and `p_data.len() >= np * ndims`
+    // (caller invariant).
+    for i in 0..np {
+        let p = p_data.as_ptr().add(i * ndims);
+        let mut acc = _mm512_setzero_ps();
+        for c in 0..chunks {
+            let v = _mm512_loadu_ps(p.add(c * 16));
+            acc = _mm512_fmadd_ps(v, v, acc);
+        }
+        if tail > 0 {
+            let kmask: u16 = (1u16 << tail) - 1;
+            let v = _mm512_maskz_loadu_ps(kmask, p.add(chunks * 16));
+            acc = _mm512_fmadd_ps(v, v, acc);
+        }
+        *out.get_unchecked_mut(i) = _mm512_reduce_add_ps(acc);
+    }
+}
+
+/// AVX2 + FMA 8-wide ||p||² per row, dual-accumulator to feed both FMA units.
+///
+/// SAFETY: caller must guarantee AVX2 + FMA are available at runtime, and
+/// `p_data.len() >= np * ndims` and `out.len() >= np`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn compute_p_norm_sq_avx2_fma(p_data: &[f32], np: usize, ndims: usize, out: &mut [f32]) {
+    use std::arch::x86_64::*;
+    let chunks = ndims / 8;
+    let tail = ndims - chunks * 8;
+    // SAFETY: AVX2+FMA enabled by target_feature; same bounds as AVX-512 helper.
+    for i in 0..np {
+        let p = p_data.as_ptr().add(i * ndims);
+        // Two independent accumulators to feed both FMA units.
+        let mut acc0 = _mm256_setzero_ps();
+        let mut acc1 = _mm256_setzero_ps();
+        let pair_chunks = chunks / 2;
+        for c in 0..pair_chunks {
+            let v0 = _mm256_loadu_ps(p.add(c * 16));
+            let v1 = _mm256_loadu_ps(p.add(c * 16 + 8));
+            acc0 = _mm256_fmadd_ps(v0, v0, acc0);
+            acc1 = _mm256_fmadd_ps(v1, v1, acc1);
+        }
+        let mut leftover_chunk = pair_chunks * 2;
+        if leftover_chunk < chunks {
+            let v = _mm256_loadu_ps(p.add(leftover_chunk * 8));
+            acc0 = _mm256_fmadd_ps(v, v, acc0);
+            leftover_chunk += 1;
+        }
+        let _ = leftover_chunk;
+        let acc = _mm256_add_ps(acc0, acc1);
+        // Horizontal reduce: 8 → 4 → 2 → 1.
+        let lo = _mm256_castps256_ps128(acc);
+        let hi = _mm256_extractf128_ps(acc, 1);
+        let s4 = _mm_add_ps(lo, hi);
+        let s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+        let s1 = _mm_add_ss(s2, _mm_shuffle_ps(s2, s2, 0b01));
+        let mut tail_sum = _mm_cvtss_f32(s1);
+        if tail > 0 {
+            let base = chunks * 8;
+            for j in 0..tail {
+                let v = *p.add(base + j);
+                tail_sum += v * v;
             }
         }
-        return;
-    }
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        target_feature = "fma",
-        not(target_feature = "avx512f")
-    ))]
-    {
-        use std::arch::x86_64::*;
-        let chunks = ndims / 8;
-        let tail = ndims - chunks * 8;
-        // SAFETY: AVX2+FMA cfg-gated; same bounds as AVX-512 branch.
-        unsafe {
-            for i in 0..np {
-                let p = p_data.as_ptr().add(i * ndims);
-                // Two independent accumulators to feed both FMA units.
-                let mut acc0 = _mm256_setzero_ps();
-                let mut acc1 = _mm256_setzero_ps();
-                let pair_chunks = chunks / 2;
-                for c in 0..pair_chunks {
-                    let v0 = _mm256_loadu_ps(p.add(c * 16));
-                    let v1 = _mm256_loadu_ps(p.add(c * 16 + 8));
-                    acc0 = _mm256_fmadd_ps(v0, v0, acc0);
-                    acc1 = _mm256_fmadd_ps(v1, v1, acc1);
-                }
-                let mut leftover_chunk = pair_chunks * 2;
-                if leftover_chunk < chunks {
-                    let v = _mm256_loadu_ps(p.add(leftover_chunk * 8));
-                    acc0 = _mm256_fmadd_ps(v, v, acc0);
-                    leftover_chunk += 1;
-                }
-                let _ = leftover_chunk;
-                let acc = _mm256_add_ps(acc0, acc1);
-                // Horizontal reduce: 8 → 4 → 2 → 1.
-                let lo = _mm256_castps256_ps128(acc);
-                let hi = _mm256_extractf128_ps(acc, 1);
-                let s4 = _mm_add_ps(lo, hi);
-                let s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
-                let s1 = _mm_add_ss(s2, _mm_shuffle_ps(s2, s2, 0b01));
-                let mut tail_sum = _mm_cvtss_f32(s1);
-                if tail > 0 {
-                    let base = chunks * 8;
-                    for j in 0..tail {
-                        let v = *p.add(base + j);
-                        tail_sum += v * v;
-                    }
-                }
-                *out.get_unchecked_mut(i) = tail_sum;
-            }
-        }
-        return;
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-    {
-        // Pure-Rust fallback. LLVM will auto-vectorize on AVX2-only targets
-        // (the AVX2+FMA explicit path above is preferred when both features
-        // are statically available).
-        for i in 0..np {
-            let row = &p_data[i * ndims..(i + 1) * ndims];
-            out[i] = row.iter().map(|v| v * v).sum();
-        }
+        *out.get_unchecked_mut(i) = tail_sum;
     }
 }
 

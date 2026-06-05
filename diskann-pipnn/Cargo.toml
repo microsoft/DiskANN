@@ -20,6 +20,12 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
 
+[features]
+# Pass through to diskann-linalg: routes sgemm_aat_lower → OpenBLAS
+# cblas_ssyrk (real 50% FLOP savings) instead of the broken faer
+# triangular path. OpenBLAS preferred over MKL (no anti-AMD CPUID dispatch).
+openblas = ["diskann-linalg/openblas"]
+
 [dev-dependencies]
 criterion = { workspace = true }
 rand = { workspace = true }

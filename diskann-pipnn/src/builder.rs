@@ -40,27 +40,26 @@ fn make_dist_fn(metric: Metric, ndims: usize) -> Distance<f32, f32> {
 }
 
 /// Log which SIMD tier the hand-written kernels in partition / leaf_build /
-/// hash_prune were compiled against (AVX-512 needs `target-cpu=cascadelake` or
-/// `+avx512f`; AVX2 is enabled by `target-cpu=x86-64-v3` which is the workspace
-/// default in `.cargo/config.toml`).
+/// hash_prune will dispatch to at runtime.
+///
+/// The tier is selected by [`crate::cpu_dispatch::tier`] based on the host
+/// CPU's `is_x86_feature_detected!` results, not the compile-time
+/// `target_feature` flags — so a single binary built against the workspace
+/// `target-cpu=x86-64-v3` floor still picks up the AVX-512 paths on hosts
+/// that support them.
 fn log_simd_tier() {
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-    const TIER: &str = "AVX-512";
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(target_feature = "avx512f"),
-        target_feature = "avx2"
-    ))]
-    const TIER: &str = "AVX2";
-    #[cfg(all(
-        target_arch = "x86_64",
-        not(target_feature = "avx512f"),
-        not(target_feature = "avx2")
-    ))]
-    const TIER: &str = "scalar";
-    #[cfg(not(target_arch = "x86_64"))]
-    const TIER: &str = "scalar (non-x86)";
-    tracing::info!(simd_tier = TIER, "PiPNN SIMD tier");
+    let tier = match crate::cpu_dispatch::tier() {
+        crate::cpu_dispatch::SimdTier::Avx512 => "AVX-512",
+        crate::cpu_dispatch::SimdTier::Avx2 => "AVX2",
+        crate::cpu_dispatch::SimdTier::Scalar => {
+            if cfg!(target_arch = "x86_64") {
+                "scalar"
+            } else {
+                "scalar (non-x86)"
+            }
+        }
+    };
+    tracing::info!(simd_tier = tier, "PiPNN SIMD tier");
 }
 
 /// Timing breakdown for the PiPNN build phases.
@@ -540,15 +539,18 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             "Final prune input"
         );
 
-        let adj = final_prune_from_candidates(
-            data,
-            ndims,
-            &candidates,
-            max_degree,
-            metric,
-            config.alpha,
-            config.saturate_after_prune,
-        );
+        let adj = if std::env::var("PIPNN_DISKANN_PRUNE").as_deref() == Ok("1") {
+            tracing::info!("PIPNN_DISKANN_PRUNE=1 → DiskANN-style iterative RobustPrune");
+            final_prune_diskann_style(
+                data, ndims, &candidates, max_degree, metric,
+                config.alpha, config.saturate_after_prune,
+            )
+        } else {
+            final_prune_from_candidates(
+                data, ndims, &candidates, max_degree, metric,
+                config.alpha, config.saturate_after_prune,
+            )
+        };
 
         // Log output stats after pruning.
         let total_edges: usize = adj.iter().map(|a| a.len()).sum();
@@ -711,6 +713,170 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             selected
         })
         .collect_installed()
+}
+
+/// DiskANN-style iterative RobustPrune. Ramps `current_alpha` from 1.0 up to
+/// the target `alpha` in `min(alpha, 1.2)` increments, resuming each candidate's
+/// occlusion-factor and last-checked position across iterations. Mirrors
+/// `diskann::graph::index::prune_neighbor` (diskann/src/graph/index.rs:2811-2942).
+///
+/// For L2 / Cosine metrics uses the triangle-inequality rule:
+///   factor = max(factor, candidate_dist / dist_to_selected)
+/// and a candidate is occluded when factor > current_alpha.
+fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
+    data: &[T],
+    ndims: usize,
+    candidates_per_node: &[Vec<(u32, f32)>],
+    max_degree: usize,
+    metric: Metric,
+    alpha: f32,
+    saturate: bool,
+) -> Vec<Vec<u32>> {
+    let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
+
+    candidates_per_node
+        .par_iter()
+        .map(|candidates| {
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+            let nc = candidates.len();
+            if nc <= max_degree {
+                return candidates.iter().map(|&(id, _)| id).collect();
+            }
+
+            let mut cand_f32 = vec![0.0f32; nc * ndims];
+            for (ci, &(id, _)) in candidates.iter().enumerate() {
+                let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
+                T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
+                    .expect("f32 conversion");
+            }
+
+            let mut occlude_factor = vec![0.0f32; nc];
+            let mut last_checked = vec![0u32; nc];
+            // selected stores INDICES into `candidates` / `cand_f32`, in selection order.
+            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+
+            let mut current_alpha = 1.0f32;
+            let increment_factor = alpha.min(1.2);
+
+            // Outer alpha-ramp loop, mirrors diskann/src/graph/index.rs:2833-2943.
+            loop {
+                for i in 0..nc {
+                    if selected.len() >= max_degree {
+                        break;
+                    }
+                    if occlude_factor[i] > current_alpha {
+                        continue;
+                    }
+                    let neighbor_distance = candidates[i].1;
+                    let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+
+                    // Resume occlusion check from last_checked[i].
+                    let mut skip = false;
+                    while (last_checked[i] as usize) < selected.len() {
+                        let result_idx = selected[last_checked[i] as usize] as usize;
+                        last_checked[i] += 1;
+                        if result_idx >= i {
+                            // already past i in pool order — skip per diskann
+                            continue;
+                        }
+                        let r_f32 = &cand_f32[result_idx * ndims..(result_idx + 1) * ndims];
+                        let dist_jk = dist_fn.call(y_f32, r_f32);
+                        // TriangleInequality rule (L2, Cosine variants).
+                        if dist_jk == 0.0 {
+                            occlude_factor[i] = f32::MAX;
+                        } else {
+                            let new_factor = neighbor_distance / dist_jk;
+                            if new_factor > occlude_factor[i] {
+                                occlude_factor[i] = new_factor;
+                            }
+                        }
+                        if occlude_factor[i] > current_alpha {
+                            skip = true;
+                            break;
+                        }
+                    }
+                    if skip || occlude_factor[i] > current_alpha {
+                        continue;
+                    }
+                    // Mark this candidate selected for ALL future alpha iterations.
+                    occlude_factor[i] = f32::MAX;
+                    selected.push(i as u32);
+                }
+                if current_alpha >= alpha || selected.len() >= max_degree {
+                    break;
+                }
+                current_alpha = (current_alpha * increment_factor).min(alpha);
+            }
+
+            let mut result: Vec<u32> = selected.iter()
+                .map(|&idx| candidates[idx as usize].0)
+                .collect();
+
+            if saturate && result.len() < max_degree {
+                for i in 0..nc {
+                    if result.len() >= max_degree {
+                        break;
+                    }
+                    if occlude_factor[i] != f32::MAX {
+                        // not selected
+                        result.push(candidates[i].0);
+                    }
+                }
+            }
+            result
+        })
+        .collect_installed()
+}
+
+/// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
+/// loop given pre-computed partition leaves and an initialized [`HashPrune`].
+///
+/// Mirrors the inner block of [`build_internal_impl`] (the `par_chunks(LEAF_BATCH)`
+/// loop, lines around 460-492). Returns `(wall_secs, total_edges)`.
+///
+/// Used by isolation benches/perf profiles to attribute cycles strictly to
+/// leaf+HP without partition / LSH-init / extract / final-prune contamination.
+pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
+    data: &[T],
+    ndims: usize,
+    leaves: &[crate::partition::Leaf],
+    hash_prune: &HashPrune,
+    k: usize,
+    metric: Metric,
+) -> (f64, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const LEAF_BATCH: usize = 256;
+    let total_edges = AtomicUsize::new(0);
+    let num_planes = hash_prune.num_planes();
+    let t = Instant::now();
+    leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
+        leaf_build::LEAF_BUFFERS.with(|cell| {
+            let mut bufs = cell.borrow_mut();
+            for leaf in chunk {
+                let _ = leaf_build::build_leaf_into(
+                    data, ndims, &leaf.indices, k, metric, &mut bufs,
+                );
+                let n = leaf.indices.len();
+                let group_edges = bufs.group_starts[n] as usize;
+                total_edges.fetch_add(group_edges, Ordering::Relaxed);
+                let need = n * num_planes;
+                if bufs.local_sketches.len() < need {
+                    bufs.local_sketches.resize(need, 0.0);
+                }
+                hash_prune.gather_sketches_into(&leaf.indices, &mut bufs.local_sketches[..need]);
+                hash_prune.add_edges_grouped_local_sketches(
+                    &bufs.group_starts,
+                    &bufs.group_data[..group_edges],
+                    &leaf.indices,
+                    &bufs.local_sketches[..need],
+                );
+            }
+        });
+    });
+    let wall = t.elapsed().as_secs_f64();
+    (wall, total_edges.load(Ordering::Relaxed))
 }
 
 #[cfg(test)]
