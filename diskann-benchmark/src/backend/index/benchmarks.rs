@@ -400,7 +400,7 @@ where
         + for<'a> provider::SetElement<&'a [T]>,
     CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: for<'a> glue::SearchStrategy<DP, &'a [T]> + Clone + Send + Sync,
+    B: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -451,7 +451,7 @@ impl<S> Strategy<S> {
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -498,7 +498,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -542,7 +542,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -601,7 +601,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()

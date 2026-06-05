@@ -21,12 +21,6 @@ use crate::TestCallCount;
 
 pub struct QuantQueryComputer(QueryComputer<GlobalAllocator>);
 
-impl QuantQueryComputer {
-    pub(crate) fn into_inner(self) -> QueryComputer<GlobalAllocator> {
-        self.0
-    }
-}
-
 impl PreprocessedDistanceFunction<&[u8], f32> for QuantQueryComputer {
     fn evaluate_similarity(&self, x: &[u8]) -> f32 {
         self.0

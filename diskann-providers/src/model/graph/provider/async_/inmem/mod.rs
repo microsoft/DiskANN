@@ -40,5 +40,3 @@ pub(super) use full_precision::{GetFullPrecision, Rerank};
 
 #[cfg(test)]
 pub mod product;
-#[cfg(test)]
-pub(crate) mod test;
