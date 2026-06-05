@@ -34,8 +34,7 @@ where
     I: VectorId,
 {
     pub(in crate::graph) pool: Vec<Neighbor<I>>,
-    pub(in crate::graph) occlude_factor: Vec<f32>,
-    pub(in crate::graph) last_checked: Vec<u16>,
+    pub(in crate::graph) states: Vec<State>,
     pub(in crate::graph) neighbors: AdjacencyList<I>,
 }
 
@@ -49,9 +48,8 @@ where
     pub(in crate::graph) fn new() -> Self {
         Self {
             pool: Vec::new(),
-            occlude_factor: Vec::new(),
+            states: Vec::new(),
             neighbors: AdjacencyList::new(),
-            last_checked: Vec::new(),
         }
     }
 
@@ -60,9 +58,8 @@ where
     pub(in crate::graph) fn as_context(&mut self, max_candidates: usize) -> Context<'_, I> {
         Context {
             pool: SortedNeighbors::new(&mut self.pool, max_candidates),
-            occlude_factor: &mut self.occlude_factor,
+            states: &mut self.states,
             neighbors: &mut self.neighbors,
-            last_checked: &mut self.last_checked,
         }
     }
 }
@@ -75,12 +72,24 @@ where
 {
     /// Input: The list of candidates to prune.
     pub(in crate::graph) pool: SortedNeighbors<'ctx, I>,
-    /// Scratch: Tracker for occlude factors during prune.
-    pub(in crate::graph) occlude_factor: &'ctx mut Vec<f32>,
-    /// Scratch: Used to help with lazy pruning.
-    pub(in crate::graph) last_checked: &'ctx mut Vec<u16>,
+    /// Scratch: State tracking for prune.
+    pub(in crate::graph) states: &'ctx mut Vec<State>,
     /// Output: The pruned candidates list.
     pub(in crate::graph) neighbors: &'ctx mut AdjacencyList<I>,
+}
+
+/// Position-wise state tracking.
+///
+/// Refer to the inline documentation in [`DiskANNIndex::occlude_list`] for documentation
+/// on the use of these fields.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct State {
+    /// The occlude factor for the pool item at the corresponding index.
+    pub(in crate::graph) occlude_factor: f32,
+    /// The index of the last checked neighbor.
+    pub(in crate::graph) last_checked: u16,
+    /// The candidate index of this neighbor.
+    pub(in crate::graph) neighbor: u16,
 }
 
 #[derive(Debug, Clone, Copy, Error)]

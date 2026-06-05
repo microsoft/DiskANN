@@ -5,7 +5,7 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use super::to_nonzero_usize;
+use super::ToNonZeroUsize;
 
 /// An experimental addition to index construction that will retry the search and prune
 /// phase if an insufficient number of candidates are discovered.
@@ -49,11 +49,11 @@ impl InsertRetry {
     }
 
     pub fn max_retries(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.max_retries)
+        self.max_retries.to_nonzero_usize()
     }
 
     pub fn retry_if_candidates_shorter_than(&self) -> NonZeroUsize {
-        to_nonzero_usize!(self.retry_if_candidates_shorter_than)
+        self.retry_if_candidates_shorter_than.to_nonzero_usize()
     }
 
     pub fn saturate_on_last_attempt(&self) -> bool {
