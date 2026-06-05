@@ -317,7 +317,6 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 pub trait SearchStrategy<'a, Provider, T>: Send + Sync
 where
     Provider: DataProvider,
-    T: 'a,
 {
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
@@ -349,7 +348,6 @@ pub trait DefaultPostProcessor<'a, Provider, T, O = <Provider as DataProvider>::
 where
     Provider: DataProvider,
     O: Send,
-    T: 'a,
 {
     /// The default post-processor type.
     type Processor: SearchPostProcess<Self::SearchAccessor, T, O> + Send + Sync;
@@ -364,7 +362,6 @@ pub trait DefaultSearchStrategy<'a, Provider, T, O = <Provider as DataProvider>:
 where
     Provider: DataProvider,
     O: Send,
-    T: 'a,
 {
 }
 
@@ -373,7 +370,6 @@ where
     S: SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>,
     Provider: DataProvider,
     O: Send,
-    T: 'a,
 {
 }
 
@@ -577,7 +573,6 @@ where
 pub trait InsertStrategy<'a, Provider, T>: SearchStrategy<'a, Provider, T> + 'static
 where
     Provider: DataProvider,
-    T: 'a,
 {
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;

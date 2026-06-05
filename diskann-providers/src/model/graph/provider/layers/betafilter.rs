@@ -106,7 +106,6 @@ where
     I: VectorId,
     Provider: DataProvider<InternalId = I>,
     Strategy: SearchStrategy<'a, Provider, T>,
-    T: 'a,
 {
     /// An accessor that returns the ID in addition to the element yielded by the inner
     /// accessor.
@@ -140,7 +139,6 @@ where
     O: Send,
     Provider: DataProvider<InternalId = I>,
     Strategy: glue::DefaultPostProcessor<'a, Provider, T, O>,
-    T: 'a,
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 

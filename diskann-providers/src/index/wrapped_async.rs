@@ -202,7 +202,7 @@ where
     where
         S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
-        T: Copy + Send + 'a,
+        T: Copy + Send,
     {
         self.handle
             .block_on(self.inner.insert(strategy, context, id, vector))
@@ -333,7 +333,6 @@ where
         S: DefaultSearchStrategy<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        T: 'a,
     {
         self.handle.block_on(
             self.inner

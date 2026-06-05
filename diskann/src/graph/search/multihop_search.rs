@@ -55,7 +55,7 @@ impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopSearch<'b, DP::InternalI
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,
-    T: Copy + Send + Sync + 'a,
+    T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 

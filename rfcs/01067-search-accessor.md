@@ -81,7 +81,6 @@ and `SearchStrategy` to
 pub trait SearchStrategy<'a, Provider, T>: Send + Sync
 where
     Provider: DataProvider,
-    T: 'a,
 {
     type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
     type SearchAccessorError: StandardError;

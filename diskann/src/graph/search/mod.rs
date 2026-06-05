@@ -69,7 +69,6 @@ pub trait Search<'a, DP, S, T>
 where
     DP: DataProvider,
     S: graph::glue::SearchStrategy<'a, DP, T>,
-    T: 'a,
 {
     /// The result type returned by this search.
     type Output;

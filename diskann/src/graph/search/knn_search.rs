@@ -146,7 +146,7 @@ impl<'a, DP, S, T> Search<'a, DP, S, T> for Knn
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,
-    T: Copy + Send + Sync + 'a,
+    T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
@@ -242,7 +242,7 @@ impl<'a, DP, S, T, SR> Search<'a, DP, S, T> for RecordedKnn<'a, SR>
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,
-    T: Copy + Send + Sync + 'a,
+    T: Copy + Send + Sync,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;

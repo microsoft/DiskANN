@@ -262,7 +262,7 @@ where
     where
         S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
-        T: Copy + Send + 'a,
+        T: Copy + Send,
     {
         async move {
             let guard = self
@@ -2068,7 +2068,6 @@ where
         S: glue::DefaultPostProcessor<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        T: 'a,
     {
         let processor = strategy.default_post_processor();
         self.search_with(search_params, strategy, processor, context, query, output)
@@ -2090,7 +2089,6 @@ where
         PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        T: 'a,
     {
         search_params.search(self, strategy, processor, context, query, output)
     }

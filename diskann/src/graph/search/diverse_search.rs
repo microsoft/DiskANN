@@ -95,7 +95,7 @@ where
 impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
-    T: Copy + Send + Sync + 'a,
+    T: Copy + Send + Sync,
     S: SearchStrategy<'a, DP, T>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
