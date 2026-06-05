@@ -5,6 +5,28 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Tag(AtomicU64);
+
+impl Tag {
+    pub const fn new(generation: Generation) -> Self {
+        Self(AtomicU64::new(generation.raw()))
+    }
+
+    pub fn as_ref(&self) -> Ref<'_> {
+        Ref::new(&self.0)
+    }
+
+    pub fn as_mut(&self) -> Mut<'_> {
+        Mut::new(&self.0)
+    }
+
+    pub unsafe fn from_ptr<'a>(ptr: *mut Tag) -> &'a Self {
+        unsafe { &*ptr }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Generation(u64);
@@ -52,7 +74,7 @@ impl Generation {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metadata {
     Zero = 0,
     One = 1,

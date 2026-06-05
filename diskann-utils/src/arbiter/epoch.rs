@@ -17,9 +17,8 @@ pub struct Registry {
     /// * 0 = "available".
     /// * non-zero: generation is active.
     slots: Box<[AtomicU64]>,
-    hint: AtomicU32,
     generation: AtomicU64,
-    lock: Mutex<()>,
+    barrier: Mutex<Hint>,
 }
 
 impl Registry {
@@ -30,22 +29,21 @@ impl Registry {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             slots: (0..capacity).map(|_| AtomicU64::new(0)).collect(),
-            hint: AtomicU32::new(0),
             generation: AtomicU64::new(1),
-            lock: Mutex::new(()),
+            barrier: Mutex::new(Hint(0)),
         }
     }
 
     pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
+        self.generation.load(Ordering::Acquire)
     }
 
     pub fn register(&self) -> Guard<'_> {
-        let _lock = self.lock.lock().unwrap();
+        let mut barrier = self.barrier.lock().unwrap();
 
         // No synchronization happens on the global generation tag.
-        let generation = self.generation.load(Ordering::Relaxed);
-        let hint = self.hint.fetch_add(1, Ordering::Relaxed) as usize;
+        let generation = self.generation.load(Ordering::Acquire);
+        let hint = barrier.increment();
 
         let nslots = self.slots.len();
         for i in 0..nslots {
@@ -67,14 +65,14 @@ impl Registry {
         panic!("Let's turn this into a proper error.");
     }
 
-    fn advance(&self) -> u64 {
+    pub fn advance(&self) -> u64 {
         // TODO: What to do on the unlikely event of a wrap-around?
-        self.generation.fetch_add(1, Ordering::Relaxed)
+        self.generation.fetch_add(1, Ordering::AcqRel)
     }
 
     fn wait_for(&self, generation: u64) {
         let wait_list = {
-            let _lock = self.lock.lock().unwrap();
+            let _barrier = self.barrier.lock().unwrap();
             let mut wait_list = Vec::new();
             for (i, s) in self.slots.iter().enumerate() {
                 let g = s.load(Ordering::Relaxed);
@@ -89,13 +87,34 @@ impl Registry {
         for slot in wait_list {
             let s = &self.slots[slot];
             loop {
-                let g = s.load(Ordering::Acquire);
+                let g = s.load(Ordering::Relaxed);
                 if g == 0 || g > generation {
                     break;
                 }
                 std::hint::spin_loop();
             }
         }
+
+        // This barrier synchronizes with all the relaxed loads on the slots, which are
+        // set with `Release` semantics.
+        std::sync::atomic::fence(Ordering::Acquire);
+    }
+
+    /// Return the oldest generation that is currently being protected.
+    ///
+    /// This is a syncronizing operation.
+    pub fn waiting(&self) -> u64 {
+        let _barrier = self.barrier.lock().unwrap();
+        let mut lowest = u64::MAX;
+        for s in self.slots.iter() {
+            let g = s.load(Ordering::Relaxed);
+            lowest = lowest.min(g);
+        }
+
+        // `acquires` with respect to all previous relaxed loads.
+        std::sync::atomic::fence(Ordering::Acquire);
+
+        lowest
     }
 }
 
@@ -119,3 +138,15 @@ impl Drop for Guard<'_> {
         self.registry.slots[self.slot].store(0, Ordering::Release)
     }
 }
+
+#[derive(Debug)]
+struct Hint(usize);
+
+impl Hint {
+    fn increment(&mut self) -> usize {
+        let x = self.0;
+        self.0 += 1;
+        x
+    }
+}
+

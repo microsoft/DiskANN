@@ -1,0 +1,15 @@
+[package]
+name = "diskann-inmem"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+diskann = { workspace = true }
+diskann-utils = { workspace = true, default-features = false }
+
+[lints]
+workspace = true

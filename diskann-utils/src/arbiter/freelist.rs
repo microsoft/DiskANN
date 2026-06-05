@@ -115,3 +115,4 @@ impl Freelist {
         self.capacity.get() as usize
     }
 }
+

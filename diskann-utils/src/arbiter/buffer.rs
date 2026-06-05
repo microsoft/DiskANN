@@ -13,7 +13,7 @@ use std::{alloc::Layout, marker::PhantomData, ptr::NonNull, sync::atomic::Atomic
 pub fn prefetch_cachelines(ptr: *const u8, bytes: usize) {
     #[cfg(target_arch = "x86_64")]
     {
-        use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
         let lines = bytes.div_ceil(64);
         for i in 0..lines {
             // SAFETY: _mm_prefetch is a hint; invalid addresses are silently ignored.
@@ -137,22 +137,33 @@ pub struct Slice<'a> {
 }
 
 impl<'a> Slice<'a> {
-    #[inline]
-    pub fn truncate(&self, n: usize) -> Slice<'a> {
-        Slice {
-            ptr: self.ptr,
-            len: self.len.min(n),
+    unsafe fn new(ptr: NonNull<u8>, len: usize) -> Self {
+        Self {
+            ptr,
+            len,
             _lifetime: PhantomData,
         }
     }
 
     #[inline]
+    pub fn truncate(&self, n: usize) -> Slice<'a> {
+        unsafe { Self::new(self.ptr, self.len.min(n)) }
+    }
+
+    #[inline]
     pub fn skip(&self, n: usize) -> Slice<'a> {
         let advance_by = self.len.min(n);
-        Slice {
-            ptr: unsafe { self.ptr.add(advance_by) },
-            len: self.len - advance_by,
-            _lifetime: PhantomData,
+        unsafe { Self::new(self.ptr.add(advance_by), self.len - advance_by) }
+    }
+
+    #[inline]
+    pub fn split(&self, n: usize) -> (Slice<'a>, Slice<'a>) {
+        let n = self.len.min(n);
+        unsafe {
+            (
+                Self::new(self.ptr, n),
+                Self::new(self.ptr.add(n), self.len - n),
+            )
         }
     }
 
@@ -164,6 +175,10 @@ impl<'a> Slice<'a> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn as_ptr(&self) -> NonNull<u8> {
+        self.ptr
     }
 
     #[inline]

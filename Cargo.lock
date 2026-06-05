@@ -805,6 +805,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-inmem"
+version = "0.53.0"
+dependencies = [
+ "diskann",
+ "diskann-utils",
+]
+
+[[package]]
 name = "diskann-label-filter"
 version = "0.53.0"
 dependencies = [

@@ -8,8 +8,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::{buffer, epoch, generation, Buffer, Freelist, Generation};
 use super::buffer::prefetch_tag;
+use super::{buffer, epoch, generation, Buffer, Freelist, Generation};
 
 #[derive(Debug)]
 pub struct Store {

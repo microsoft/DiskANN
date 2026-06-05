@@ -4,7 +4,7 @@
  */
 
 mod buffer;
-pub use buffer::{Buffer, prefetch_cachelines};
+pub use buffer::{prefetch_cachelines, Buffer, Slice};
 
 pub mod epoch;
 
