@@ -2363,10 +2363,7 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
+    /// Forwards errors from [`PruneAccessor::fill`].
     fn robust_prune<A>(
         &self,
         accessor: &mut A,
@@ -2412,13 +2409,9 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune unless
-    /// the vector that was not retrieved was `location`. If this is the case,
-    /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
-    /// the caller.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
+    /// Forwards errors from [`PruneAccessor::fill`]. If `location` was not made available
+    /// during [`PruneAccessor::Fill`], [`prune::ListError::FailedVectorRetrieval`] is
+    /// returned to delegate escalation to the caller.
     fn robust_prune_list<A>(
         &self,
         accessor: &mut A,
@@ -2496,10 +2489,8 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. If `internal_id` cannot be retrieved
-    /// from the working set, [`prune::ListError::FailedVectorRetrieval`] is returned.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated
+    /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved
+    /// from the, [`prune::ListError::FailedVectorRetrieval`] is returned.
     fn robust_prune_with<A, Itr>(
         &self,
         accessor: &mut A,

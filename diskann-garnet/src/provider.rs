@@ -17,8 +17,8 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        BuildDistanceComputer, DataProvider, DelegateNeighbor, Delete, ElementStatus,
-        HasElementRef, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        DataProvider, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
+        NoopGuard, SetElement,
     },
     utils::VectorRepr,
 };
@@ -1188,6 +1188,8 @@ where
     quantized: bool,
     id_buffer: PooledRef<'a, AdjList>,
     filtered_ids: PooledRef<'a, Vec<u32>>,
+    distance: GarnetDistanceComputer,
+    set: workingset::Map<u32, Box<[u8]>>,
 }
 
 impl<'a, T> PruneAccessor<'a, T>
@@ -1198,7 +1200,17 @@ where
         provider: &'a GarnetProvider<T>,
         context: &'a Context,
         quantized: bool,
-    ) -> Self {
+        capacity: usize,
+    ) -> Result<Self, GarnetProviderError> {
+        let distance = if quantized && let Some(quantizer) = provider.quantizer() {
+            quantizer.distance_computer()?
+        } else {
+            GarnetDistanceComputer::new(FullPrecisionDistance::<T>(T::distance(
+                provider.metric_type,
+                Some(provider.dim),
+            )))
+        };
+
         let id_buffer = provider
             .id_buffer_pool
             .get_ref(Undef::new(provider.max_degree + 1));
@@ -1208,13 +1220,23 @@ where
             .filtered_ids_pool
             .get_ref(Undef::new(MAX_OCCLUSION_SIZE.get() as usize * 2));
 
-        Self {
+        // Using `Capacity::Default` means that the constructed working set will act as a
+        // cache and persist up to `capacity` items across uses of the working set.
+        //
+        // This reuse is limited to a single collection of backedges for an insert or multi-insert.
+        let set = workingset::map::Builder::new(workingset::map::Capacity::Default).build(capacity);
+
+        let this = Self {
             provider,
             context,
             quantized,
             id_buffer,
             filtered_ids,
-        }
+            distance,
+            set,
+        };
+
+        Ok(this)
     }
 }
 
@@ -1225,38 +1247,79 @@ where
     type Id = u32;
 }
 
-impl<T> HasElementRef for PruneAccessor<'_, T>
+impl<T> glue::PruneAccessor for PruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
     type ElementRef<'a> = &'a [u8];
-}
+    type View<'a>
+        = workingset::map::View<'a, u32, Box<[u8]>>
+    where
+        Self: 'a;
+    type Distance<'a>
+        = &'a GarnetDistanceComputer
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = DelegateNeighborAccessor<'a, T>
+    where
+        Self: 'a;
 
-impl<T: VectorRepr> BuildDistanceComputer for PruneAccessor<'_, T> {
-    type DistanceComputer = GarnetDistanceComputer;
-    type DistanceComputerError = GarnetProviderError;
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        itr: Itr,
+    ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        // Evict items from the working set to make room if needed.
+        self.set.prepare(itr.clone());
 
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        if self.quantized
-            && let Some(quantizer) = self.provider.quantizer()
-        {
-            Ok(quantizer.distance_computer()?)
-        } else {
-            Ok(GarnetDistanceComputer::new(FullPrecisionDistance::<T>(
-                T::distance(self.provider.metric_type, Some(self.provider.dim)),
-            )))
+        self.filtered_ids.clear();
+        for id in itr {
+            if id == 0 {
+                if self.quantized
+                    && let Entry::Vacant(e) = self.set.entry(id)
+                {
+                    if let Some(guard) = self.provider.start_point_quant_cache.get(&id) {
+                        e.insert((&**guard).into());
+                    } else {
+                        return Err(GarnetProviderError::StartPoint.into());
+                    }
+                } else if let Entry::Vacant(e) = self.set.entry(id) {
+                    if let Some(guard) = self.provider.start_point_cache.get(&id) {
+                        e.insert((&**guard).into());
+                    } else {
+                        return Err(GarnetProviderError::StartPoint.into());
+                    }
+                } else {
+                    continue;
+                };
+            } else if !self.set.contains_key(&id) {
+                self.filtered_ids.push(4);
+                self.filtered_ids.push(id);
+            }
         }
-    }
-}
 
-impl<'a, T> DelegateNeighbor<'a> for PruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = DelegateNeighborAccessor<'a, T>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+        let ctx = if self.quantized {
+            self.context.term(Term::Quantized)
+        } else {
+            self.context.term(Term::Vector)
+        };
+
+        if !self.filtered_ids.is_empty() {
+            self.provider
+                .callbacks
+                .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
+                    self.set
+                        .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
+                });
+        }
+
+        Ok((self.set.view(), &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
         DelegateNeighborAccessor {
             provider: self.provider,
             context: self.context,
@@ -1280,12 +1343,12 @@ impl<T: VectorRepr> HasId for DelegateNeighborAccessor<'_, T> {
 
 impl<T: VectorRepr> NeighborAccessor for DelegateNeighborAccessor<'_, T> {
     fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
+    ) -> impl Future<Output = ANNResult<()>> + Send {
         let result = if self.provider.get_neighbors(self.context, id, neighbors) {
-            Ok(self)
+            Ok(())
         } else {
             Err(ANNError::from(GarnetProviderError::Garnet(
                 GarnetError::Read,
@@ -1298,122 +1361,28 @@ impl<T: VectorRepr> NeighborAccessor for DelegateNeighborAccessor<'_, T> {
 
 impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, T> {
     fn set_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        let result = match self
+    ) -> impl Future<Output = ANNResult<()>> + Send {
+        let result = self
             .provider
             .set_neighbors(self.context, id, neighbors, self.scratch)
-        {
-            Ok(()) => Ok(self),
-            Err(err) => Err(ANNError::from(err)),
-        };
+            .map_err(ANNError::from);
 
         std::future::ready(result)
     }
 
     fn append_vector(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        let result = match self.provider.append_vector(self.context, id, neighbors) {
-            Ok(()) => Ok(self),
-            Err(err) => Err(ANNError::from(err)),
-        };
-
+    ) -> impl Future<Output = ANNResult<()>> + Send {
+        let result = self
+            .provider
+            .append_vector(self.context, id, neighbors)
+            .map_err(ANNError::from);
         std::future::ready(result)
-    }
-}
-
-pub(crate) struct WorkingSet {
-    map: workingset::Map<u32, Box<[u8]>>,
-    contains_unquantized: bool,
-}
-
-impl WorkingSet {
-    pub(crate) fn new(capacity_type: workingset::map::Capacity, capacity: usize) -> Self {
-        Self {
-            map: workingset::map::Builder::new(capacity_type).build(capacity),
-            contains_unquantized: false,
-        }
-    }
-}
-
-type WorkingSetView<'a> = workingset::map::View<'a, u32, Box<[u8]>>;
-
-impl<T: VectorRepr> workingset::Fill<WorkingSet> for PruneAccessor<'_, T> {
-    type Error = GarnetProviderError;
-
-    type View<'a>
-        = WorkingSetView<'a>
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        set: &'a mut WorkingSet,
-        itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        if !self.quantized {
-            // Mark this working set as having full vectors if we're not quantizing yet
-            set.contains_unquantized = true;
-        } else if set.contains_unquantized {
-            // Working set is polluted by full vectors, it must be cleared
-            set.map.clear();
-            set.contains_unquantized = false;
-        }
-
-        // Evict items from the working set to make room if needed.
-        set.map.prepare(itr.clone());
-
-        self.filtered_ids.clear();
-        for id in itr {
-            if id == 0 {
-                if self.quantized
-                    && let Entry::Vacant(e) = set.map.entry(id)
-                {
-                    if let Some(guard) = self.provider.start_point_quant_cache.get(&id) {
-                        e.insert((&**guard).into());
-                    } else {
-                        return Err(GarnetProviderError::StartPoint);
-                    }
-                } else if let Entry::Vacant(e) = set.map.entry(id) {
-                    if let Some(guard) = self.provider.start_point_cache.get(&id) {
-                        e.insert((&**guard).into());
-                    } else {
-                        return Err(GarnetProviderError::StartPoint);
-                    }
-                } else {
-                    continue;
-                };
-            } else if !set.map.contains_key(&id) {
-                self.filtered_ids.push(4);
-                self.filtered_ids.push(id);
-            }
-        }
-
-        let ctx = if self.quantized {
-            self.context.term(Term::Quantized)
-        } else {
-            self.context.term(Term::Vector)
-        };
-
-        if !self.filtered_ids.is_empty() {
-            self.provider
-                .callbacks
-                .read_multi_lpiid(&ctx, &self.filtered_ids, |id, v| {
-                    set.map
-                        .insert(self.filtered_ids[id as usize * 2 + 1], v.into());
-                });
-        }
-
-        Ok(set.map.view())
     }
 }
 
@@ -1447,24 +1416,15 @@ impl<'a, T: VectorRepr> DefaultPostProcessor<'a, GarnetProvider<T>, &'a [T], Gar
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for DynamicQuantization {
     type PruneAccessor<'a> = PruneAccessor<'a, T>;
     type PruneAccessorError = GarnetProviderError;
-    type DistanceComputer<'a> = GarnetDistanceComputer;
-    type WorkingSet = WorkingSet;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a GarnetProvider<T>,
         context: &'a <GarnetProvider<T> as DataProvider>::Context,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let quantized = provider.is_quantized();
-        Ok(PruneAccessor::new(provider, context, quantized))
-    }
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        // Using `Capacity::Default` means that the constructed working set will act as a
-        // cache and persist up to `capacity` items across uses of the working set.
-        //
-        // This reuse is limited to a single collection of backedges for an insert or multi-insert.
-        WorkingSet::new(workingset::map::Capacity::Default, capacity)
+        PruneAccessor::new(provider, context, quantized, capacity)
     }
 }
 
