@@ -34,7 +34,7 @@ use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{DefaultProvider, GetFullPrecision, PassThrough, Rerank};
+use super::{DefaultProvider, GetFullPrecision, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::provider::async_::{
@@ -367,7 +367,6 @@ where
 // PruneAccessor //
 ///////////////////
 
-#[derive(Clone, Copy)]
 pub struct PruneAccessor<'a, const NBITS: usize> {
     store: &'a SQStore<NBITS>,
     neighbors: &'a SimpleNeighborProviderAsync<u32>,
@@ -383,8 +382,12 @@ where
         store: &'a SQStore<NBITS>,
         neighbors: &'a SimpleNeighborProviderAsync<u32>,
     ) -> ANNResult<Self> {
-        let computer = store.distance_computer()?;
-        Ok(Self { store, neighbors, computer })
+        let distance = store.distance_computer()?;
+        Ok(Self {
+            store,
+            neighbors,
+            distance,
+        })
     }
 }
 
@@ -395,11 +398,21 @@ impl<const NBITS: usize> HasId for PruneAccessor<'_, NBITS> {
 impl<const NBITS: usize> glue::PruneAccessor for PruneAccessor<'_, NBITS>
 where
     Unsigned: Representation<NBITS>,
+    DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
 {
     type ElementRef<'a> = CVRef<'a, NBITS>;
-    type View<'a> = &'a Self where Self: 'a;
-    type Distance<'a> = &'a DistanceComputer where Self: 'a;
-    type Neighbors<'a> = &'a SimpleNeighborProviderAsync<u32> where Self: 'a;
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+    type Distance<'a>
+        = &'a DistanceComputer
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync<u32>
+    where
+        Self: 'a;
 
     async fn fill<'a, Itr>(
         &'a mut self,
@@ -407,13 +420,12 @@ where
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
     {
-        Ok((self, &self.computer))
+        Ok((self, &self.distance))
     }
 
     fn neighbors(&mut self) -> Self::Neighbors<'_> {
-        &self.neighbors
+        self.neighbors
     }
 }
 
@@ -680,7 +692,7 @@ where
         &'a self,
         provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
         _context: &'a Ctx,
-        _capacity: usize
+        _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         PruneAccessor::new(&provider.aux_vectors, provider.neighbors())
     }
@@ -713,7 +725,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     B: glue::Batch,
-    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, WorkingSet = PassThrough>
+    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>
         + for<'a> InsertStrategy<
             'a,
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
@@ -721,9 +733,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type WorkingSet = PassThrough;
-    type Seed = PassThrough;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -740,7 +752,20 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(PassThrough))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<
+        <Self as PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>>::PruneAccessor<'a>,
+    > {
+        self.prune_accessor(provider, context, capacity)
+            .into_ann_result()
     }
 }
 

@@ -50,7 +50,7 @@
 //!   implementations may allow internal IDs to be reused immediately following the deletion
 //!   of the external ID while others may wait for a "release".
 //!
-//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`DelegateNeighbors`] all need to
+//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`NeighborAccessorMut`] all need to
 //!   interact with the underlying [`DataProvider`] using an internal ID type.
 //!
 //!   The [`HasId`] trait provides a common base-trait for these related concepts, which
@@ -348,16 +348,6 @@ where
 ///
 /// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
-///
-/// To avoid repeating implementations for every accessor flavor, the trait
-/// [`DelegateNeighbor`] should be used instead to route the implementation of
-/// [`NeighborAccessor`] to a single type if applicable.
-///
-/// # Note
-///
-/// The `NeighborAccessor` method receive by value. Implementations are strongly encouraged
-/// to be cheap to construct, copy, or clone. This can generally be achieved by implementing
-/// `NeighborAccessor` for `&T`, `&mut T`, or a thing wrapper around such references.
 pub trait NeighborAccessor: HasId + Sized + Send + Sync {
     /// Get the neighbors for the node associated with `id`.
     ///
@@ -373,9 +363,6 @@ pub trait NeighborAccessor: HasId + Sized + Send + Sync {
 
 /// A mutable extension of [`NeighborAccessor`] that enables the underlying graph to be
 /// mutated.
-///
-/// Generally, data accessors should implement [`DelegateNeighbor`] instead of extending this
-/// trait if graph and data access are naturally decoupled.
 pub trait NeighborAccessorMut: NeighborAccessor {
     /// Overwrite the neighbor list for the node associated with `id`.
     fn set_neighbors(
@@ -384,7 +371,7 @@ pub trait NeighborAccessorMut: NeighborAccessor {
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 
-    /// Append all entries in `neighbors` tothe neighbor list currently associated with `id`.
+    /// Append all entries in `neighbors` to the neighbor list currently associated with `id`.
     ///
     /// The behavior when the resulting list exceeds some pre-configured capacity or
     /// contains duplicates is implementation defined.
@@ -414,6 +401,61 @@ pub trait NeighborAccessorMut: NeighborAccessor {
             }
             Ok(())
         }
+    }
+}
+
+/// A small adaptor providing [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
+pub struct Neighbors<'a, T>(pub &'a mut T);
+
+impl<T> HasId for Neighbors<'_, T>
+where
+    T: HasId,
+{
+    type Id = T::Id;
+}
+
+impl<T> NeighborAccessor for Neighbors<'_, T>
+where
+    T: NeighborAccessor,
+{
+    fn get_neighbors(
+        &mut self,
+        id: Self::Id,
+        neighbors: &mut AdjacencyList<Self::Id>,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.get_neighbors(id, neighbors)
+    }
+}
+
+impl<T> NeighborAccessorMut for Neighbors<'_, T>
+where
+    T: NeighborAccessorMut,
+{
+    fn set_neighbors(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.set_neighbors(id, neighbors)
+    }
+
+    fn append_vector(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.append_vector(id, neighbors)
+    }
+
+    fn set_neighbors_bulk<I, U>(
+        &mut self,
+        iter: I,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        I: Iterator<Item = (Self::Id, U)> + Send,
+        U: Deref<Target = [Self::Id]> + Send,
+    {
+        self.0.set_neighbors_bulk(iter)
     }
 }
 

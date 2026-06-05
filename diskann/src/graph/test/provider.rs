@@ -820,9 +820,6 @@ impl From<AccessedInvalidId> for ANNError {
 
 /// A transient error from the test accessor — the ID exists but the retrieval
 /// temporarily failed. Must be acknowledged or escalated before being dropped.
-///
-/// Amognst other things, this is used to test the transient error handling of the blanket
-/// implementation of [`workingset::Fill`] for [`workingset::Map`].
 #[derive(Debug)]
 pub struct TransientAccessError {
     id: u32,
@@ -1063,22 +1060,7 @@ impl<'a> PruneAccessor<'a> {
             set,
         }
     }
-
-    // fn get(&mut self, id: u32) -> Result<Box<[f32]>, AccessError> {
-    //     let f = |data: &[f32]| -> Result<Box<[f32]>, TransientAccessError> {
-    //         self.transient_ids.check(id)?;
-    //         self.get_vector.increment();
-    //         Ok(data.into())
-    //     };
-
-    //     match self.provider.get(id, f) {
-    //         Ok(Ok(buf)) => Ok(buf),
-    //         Ok(Err(transient)) => Err(AccessError::Transient(transient)),
-    //         Err(invalid) => Err(AccessError::InvalidId(invalid)),
-    //     }
-    // }
 }
-
 
 impl provider::HasId for PruneAccessor<'_> {
     type Id = u32;
@@ -1086,9 +1068,18 @@ impl provider::HasId for PruneAccessor<'_> {
 
 impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
-    type View<'a> = View<'a> where Self: 'a;
-    type Distance<'a> = <f32 as VectorRepr>::Distance where Self: 'a;
-    type Neighbors<'a> = NeighborAccessor<'a> where Self: 'a;
+    type View<'a>
+        = View<'a>
+    where
+        Self: 'a;
+    type Distance<'a>
+        = <f32 as VectorRepr>::Distance
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = NeighborAccessor<'a>
+    where
+        Self: 'a;
 
     async fn fill<'a, Itr>(
         &'a mut self,
@@ -1109,7 +1100,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
                 Ok(Err(transient)) => {
                     transient.acknowledge("transient failures allowed");
                     Ok(None)
-                },
+                }
                 Err(invalid) => Err(invalid),
             }
         })?;
@@ -1121,31 +1112,6 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         NeighborAccessor::new(self.provider)
     }
 }
-
-// impl provider::HasElementRef for PruneAccessor<'_> {
-//     type ElementRef<'a> = &'a [f32];
-// }
-//
-// impl<'a> provider::DelegateNeighbor<'a> for PruneAccessor<'_> {
-//     type Delegate = NeighborAccessor<'a>;
-//     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-//         NeighborAccessor::new(self.provider)
-//     }
-// }
-//
-// impl provider::BuildDistanceComputer for PruneAccessor<'_> {
-//     type DistanceComputerError = Infallible;
-//     type DistanceComputer = <f32 as VectorRepr>::Distance;
-//
-//     fn build_distance_computer(
-//         &self,
-//     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-//         Ok(f32::distance(
-//             self.provider.distance_metric(),
-//             Some(self.provider.dim()),
-//         ))
-//     }
-// }
 
 //////////////
 // Accessor //

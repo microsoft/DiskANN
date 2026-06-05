@@ -149,7 +149,7 @@ mod tests {
         .unwrap();
 
         // Ensure that the index is correctly populated.
-        let accessor = index.provider().neighbors();
+        let mut accessor = index.provider().neighbors();
         let mut v = diskann::graph::AdjacencyList::new();
 
         for i in 0..data.nrows() {

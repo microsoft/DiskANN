@@ -23,7 +23,7 @@ pub trait DistanceFunction<Left, Right, To = f32> {
 
 impl<Left, Right, To, T> DistanceFunction<Left, Right, To> for &T
 where
-    T: DistanceFunction<Left, Right, To>
+    T: DistanceFunction<Left, Right, To>,
 {
     fn evaluate_similarity(&self, x: Left, y: Right) -> To {
         <T as DistanceFunction<_, _, _>>::evaluate_similarity(self, x, y)

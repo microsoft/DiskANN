@@ -645,24 +645,24 @@ where
 
 impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
     async fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
+    ) -> ANNResult<()> {
         self.get_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 }
 
 impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
-    async fn set_neighbors(self, id: u32, neighbors: &[u32]) -> ANNResult<Self> {
+    async fn set_neighbors(&mut self, id: u32, neighbors: &[u32]) -> ANNResult<()> {
         self.set_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
+        Ok(())
     }
 
-    async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
+    async fn append_vector(&mut self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<()> {
         self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
-        Ok(self)
+        Ok(())
     }
 }
 
@@ -779,7 +779,7 @@ mod tests {
         for i in iter.clone() {
             // set adjacency list to non-empty before release
             provider
-                .neighbor_provider
+                .neighbors()
                 .set_neighbors(i, &[1, 2])
                 .await
                 .unwrap();
@@ -795,7 +795,7 @@ mod tests {
             // check that adjacency list was reset after release
             let mut neighbors = AdjacencyList::new();
             provider
-                .neighbor_provider
+                .neighbors()
                 .get_neighbors(i, &mut neighbors)
                 .await
                 .unwrap();
