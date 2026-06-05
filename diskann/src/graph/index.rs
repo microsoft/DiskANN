@@ -41,6 +41,10 @@ use super::{
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
+    graph::internal::prune::{
+        Outcome,
+        TransientHandling::{self, Allow, Escalate},
+    },
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
@@ -328,6 +332,7 @@ where
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune(
@@ -458,6 +463,7 @@ where
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune_with(
@@ -688,6 +694,7 @@ where
             // Enabling saturation help achieve that.
             let options = prune::Options {
                 force_saturate: true,
+                transient_handling: TransientHandling::Escalate,
             };
 
             self.robust_prune_list(
@@ -1960,9 +1967,10 @@ where
                     // No need to force during consolidation.
                     let options = prune::Options {
                         force_saturate: false,
+                        transient_handling: TransientHandling::Allow,
                     };
 
-                    if self
+                    match self
                         .robust_prune_list(
                             accessor,
                             vector_id,
@@ -1971,11 +1979,12 @@ where
                             &mut working_set,
                             options,
                         )
-                        .await
-                        .allow_transient("vector retrieval is allowed to fail during consolidate")?
-                        .is_none()
+                        .await?
                     {
-                        return Ok(ConsolidateKind::FailedVectorRetrieval);
+                        prune::Outcome::SourceUnavailable => {
+                            return Ok(ConsolidateKind::FailedVectorRetrieval);
+                        }
+                        prune::Outcome::Pruned => {}
                     }
 
                     prune_scratch.neighbors
@@ -2391,9 +2400,10 @@ where
                 // No need to enable saturation.
                 let options = prune::Options {
                     force_saturate: false,
+                    transient_handling: TransientHandling::Allow,
                 };
 
-                if self
+                match self
                     .robust_prune_list(
                         &mut accessor,
                         source,
@@ -2402,11 +2412,10 @@ where
                         working_set,
                         options,
                     )
-                    .await
-                    .allow_transient("source vector was deleted, skipping back-edge prune")?
-                    .is_none()
+                    .await?
                 {
-                    return Ok(());
+                    prune::Outcome::SourceUnavailable => return Ok(()),
+                    prune::Outcome::Pruned => {}
                 }
 
                 tracked_trace!(
@@ -2496,7 +2505,7 @@ where
         scratch: &mut prune::Scratch<DP::InternalId>,
         working_set: &mut Set,
         options: prune::Options,
-    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
+    ) -> impl SendFuture<Result<Outcome, prune::ListError<DP::InternalId>>>
     where
         A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
         Set: Send + Sync,
@@ -2504,7 +2513,7 @@ where
         async move {
             // Early exit.
             if list.is_empty() {
-                return Ok(());
+                return Ok(Outcome::Pruned);
             }
 
             let computer = accessor.build_distance_computer().into_ann_result()?;
@@ -2526,7 +2535,10 @@ where
             {
                 let vector = match view.get(location) {
                     Some(v) => v,
-                    None => return Err(prune::ListError::failed_retrieval(location)),
+                    None => match options.transient_handling {
+                        Allow => return Ok(Outcome::SourceUnavailable),
+                        Escalate => return Err(prune::ListError::failed_retrieval(location)),
+                    },
                 };
 
                 for id in list.iter().filter(|&&i| i != location) {
@@ -2548,7 +2560,7 @@ where
                 options,
             );
 
-            Ok(())
+            Ok(Outcome::Pruned)
         }
     }
 
@@ -2897,6 +2909,7 @@ where
                 // Saturation is controlled by the index configuration.
                 let options = prune::Options {
                     force_saturate: false,
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune_list(
