@@ -19,7 +19,7 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{
-        BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext, HasElementRef,
+        DefaultContext, ExecutionContext,
         HasId,
     },
     utils::{IntoUsize, VectorRepr},

@@ -18,7 +18,7 @@ use diskann::{
         },
         workingset,
     },
-    provider::{BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId},
+    provider::{ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_quantization::{
