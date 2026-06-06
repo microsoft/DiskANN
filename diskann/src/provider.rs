@@ -348,7 +348,7 @@ where
 ///
 /// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
-pub trait NeighborAccessor: HasId + Sized + Send + Sync {
+pub trait NeighborAccessor: HasId + Send + Sync {
     /// Get the neighbors for the node associated with `id`.
     ///
     /// Populate the neighbors into the `neighbors` out parameter.
