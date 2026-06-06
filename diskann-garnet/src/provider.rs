@@ -1270,10 +1270,7 @@ where
     where
         Self: 'a;
 
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        itr: Itr,
-    ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
+    async fn fill<Itr>(&mut self, itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {

@@ -1024,10 +1024,10 @@ where
     where
         Self: 'a;
 
-    fn fill<'a, Itr>(
-        &'a mut self,
+    fn fill<Itr>(
+        &mut self,
         itr: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::View<'a>, Self::Distance<'a>)>>
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
@@ -1122,10 +1122,10 @@ where
     where
         Self: 'a;
 
-    fn fill<'a, Itr>(
-        &'a mut self,
+    fn fill<Itr>(
+        &mut self,
         itr: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::View<'a>, Self::Distance<'a>)>>
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {

@@ -650,10 +650,10 @@ pub trait PruneAccessor: HasId + Send + Sync {
     ///
     /// See: [`Map`](crate::graph::workingset::Map) for a flexible data structure that
     /// can be used to make an implementation.
-    fn fill<'a, Itr>(
-        &'a mut self,
+    fn fill<Itr>(
+        &mut self,
         itr: Itr,
-    ) -> impl SendFuture<ANNResult<(Self::View<'a>, Self::Distance<'a>)>>
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 }
