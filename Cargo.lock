@@ -806,6 +806,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-inmem"
+version = "0.53.0"
+dependencies = [
+ "bytemuck",
+ "diskann",
+ "diskann-utils",
+ "diskann-vector",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "diskann-label-filter"
 version = "0.53.0"
 dependencies = [
