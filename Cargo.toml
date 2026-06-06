@@ -24,7 +24,7 @@ members = [
     "diskann-benchmark",
     "diskann-tools",
     "vectorset",
-    "diskann-bftree",
+    "diskann-bftree", "diskann-inmem",
 ]
 
 default-members = [
