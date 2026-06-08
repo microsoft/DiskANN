@@ -33,8 +33,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         BuildDistanceComputer, DataProvider, DefaultContext, DelegateNeighbor, Delete,
-        ElementStatus, HasElementRef, HasId, NoopGuard,
-        SetElement,
+        ElementStatus, HasElementRef, HasId, NoopGuard, SetElement,
     },
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
