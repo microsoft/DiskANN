@@ -23,6 +23,7 @@ use rayon::prelude::*;
 use crate::hash_prune::HashPrune;
 use crate::leaf_build;
 use crate::partition::PartitionConfig;
+use crate::cpu_dispatch::{tier, SimdTier};
 use crate::rayon_util::ParIterInstalled;
 use crate::{PiPNNBuildContext, PiPNNError, PiPNNResult};
 
@@ -623,6 +624,92 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 /// is filled (controlled by `saturate`).
 ///
 /// Candidates are pre-sorted ascending by HashPrune output.
+// ───── Inline distance kernels for final_prune's inner pair-loop ─────
+//
+// Microbench (BigANN 10M f[8,3] candidate shape, d=128, nc=67):
+//   DistanceProvider dispatch path: 6.10 ns/dist, 164 M dist/s
+//   Inline AVX-512 d=128:           3.69 ns/dist, 271 M dist/s  (1.66x faster)
+//   Inline AVX-2+FMA d=128:         4.91 ns/dist, 204 M dist/s  (1.24x faster)
+//
+// The DistanceProvider path's overhead is the indirect-fn-pointer call plus
+// the closure boundary, NOT the FMA work (perf annotate proved V4 contains
+// the actual vfmadd231ps loop). Inlining a d=128 const-generic kernel right
+// in the inner loop avoids the call boundary entirely.
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn final_prune_sql2_d128_avx512(a: *const f32, b: *const f32) -> f32 {
+    use std::arch::x86_64::*;
+    let mut acc0 = _mm512_setzero_ps();
+    let mut acc1 = _mm512_setzero_ps();
+    // d=128 = 4 × 32 = 8 × 16 lanes; unrolled in 4 chunks × 2 zmm each.
+    for c in 0..4 {
+        let va = _mm512_loadu_ps(a.add(c * 32));
+        let vb = _mm512_loadu_ps(b.add(c * 32));
+        let dif = _mm512_sub_ps(va, vb);
+        acc0 = _mm512_fmadd_ps(dif, dif, acc0);
+        let va = _mm512_loadu_ps(a.add(c * 32 + 16));
+        let vb = _mm512_loadu_ps(b.add(c * 32 + 16));
+        let dif = _mm512_sub_ps(va, vb);
+        acc1 = _mm512_fmadd_ps(dif, dif, acc1);
+    }
+    _mm512_reduce_add_ps(_mm512_add_ps(acc0, acc1))
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn final_prune_sql2_d128_avx2(a: *const f32, b: *const f32) -> f32 {
+    use std::arch::x86_64::*;
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    // d=128 = 8 × 16 = 16 × 8 lanes; unrolled in 8 chunks × 2 ymm each.
+    for c in 0..8 {
+        let va = _mm256_loadu_ps(a.add(c * 16));
+        let vb = _mm256_loadu_ps(b.add(c * 16));
+        let dif = _mm256_sub_ps(va, vb);
+        acc0 = _mm256_fmadd_ps(dif, dif, acc0);
+        let va = _mm256_loadu_ps(a.add(c * 16 + 8));
+        let vb = _mm256_loadu_ps(b.add(c * 16 + 8));
+        let dif = _mm256_sub_ps(va, vb);
+        acc1 = _mm256_fmadd_ps(dif, dif, acc1);
+    }
+    let sum = _mm256_add_ps(acc0, acc1);
+    let lo = _mm256_castps256_ps128(sum);
+    let hi = _mm256_extractf128_ps::<1>(sum);
+    let s = _mm_add_ps(lo, hi);
+    let s = _mm_hadd_ps(s, s);
+    let s = _mm_hadd_ps(s, s);
+    _mm_cvtss_f32(s)
+}
+
+/// Dispatch the d=128 squared-L2 to the best available inline kernel, falling
+/// back to the DistanceProvider path for other dimensions / metrics.
+enum FinalPruneKernel {
+    DispatchL2D128Avx512,
+    DispatchL2D128Avx2,
+    Generic(diskann_vector::distance::Distance<f32, f32>),
+}
+
+impl FinalPruneKernel {
+    #[inline(always)]
+    fn call(&self, a: &[f32], b: &[f32]) -> f32 {
+        match self {
+            #[cfg(target_arch = "x86_64")]
+            FinalPruneKernel::DispatchL2D128Avx512 => unsafe {
+                final_prune_sql2_d128_avx512(a.as_ptr(), b.as_ptr())
+            },
+            #[cfg(target_arch = "x86_64")]
+            FinalPruneKernel::DispatchL2D128Avx2 => unsafe {
+                final_prune_sql2_d128_avx2(a.as_ptr(), b.as_ptr())
+            },
+            FinalPruneKernel::Generic(d) => d.call(a, b),
+            #[cfg(not(target_arch = "x86_64"))]
+            #[allow(unreachable_patterns)]
+            _ => 0.0,
+        }
+    }
+}
+
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
@@ -632,10 +719,21 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     alpha: f32,
     saturate: bool,
 ) -> Vec<Vec<u32>> {
-    // Dimension-specialized distance kernel — enables SIMD target features AND
-    // compile-time loop unrolling for the known dimension. dispatch2 (not no_features)
-    // applies #[target_feature] for AVX2/AVX-512 based on runtime CPU detection.
-    let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
+    // Per-node thread-local scratch buffers eliminate ~30M Vec allocations
+    // (cand_f32, state, selected). The allocator (mimalloc + glibc arenas) is
+    // contention-prone at high thread count; thread-local reuse removes that.
+    thread_local! {
+        static FP_CAND_F32: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static FP_STATE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        static FP_SELECTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    // Tier selection once per phase. d=128 L2 hits the inline AVX-512 path
+    // (the BigANN production shape); everything else falls back to the
+    // DistanceProvider dispatch.
+    let use_inline_d128_l2 = ndims == 128 && matches!(metric, Metric::L2);
+    let inline_tier = if use_inline_d128_l2 { tier() } else { SimdTier::Scalar };
+    let generic_dist = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
     candidates_per_node
         .par_iter()
@@ -643,88 +741,78 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             if candidates.is_empty() {
                 return Vec::new();
             }
-
             let nc = candidates.len();
 
-            // Note: do NOT short-circuit when nc <= max_degree. Paper Algorithm 2\u0027s
-            // occlusion clause (alpha * d(y,z) < d(x,z)) deletes z without selecting it
-            // and runs every outer iteration regardless of |E| < R. Early-returning
-            // here defeats the sparsification on the most common candidate-pool size
-            // for our config (avg ~45-50 at f[5,3] k=3 hp=14).
-            //
-            // Precompute f32 data for all candidates once, instead of converting
-            // Pre-converting once is O(nc × ndims); per-comparison conversion
-            // was O(l_max × max_degree × ndims) — quadratic in l_max.
-            let mut cand_f32 = vec![0.0f32; nc * ndims];
-            for (ci, &(id, _)) in candidates.iter().enumerate() {
-                let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
-                T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                    .expect("f32 conversion");
-            }
+            // Per-thread tier-specialised inline kernel; generic fallback owns
+            // the comparer for cross-thread safety (closure is Send/Sync).
+            let kernel = match (use_inline_d128_l2, inline_tier) {
+                #[cfg(target_arch = "x86_64")]
+                (true, SimdTier::Avx512) => FinalPruneKernel::DispatchL2D128Avx512,
+                #[cfg(target_arch = "x86_64")]
+                (true, SimdTier::Avx2) => FinalPruneKernel::DispatchL2D128Avx2,
+                _ => FinalPruneKernel::Generic(generic_dist.clone()),
+            };
 
-            // Paper's Algorithm 2: greedy selection with occlusion removal.
-            // Track selected vs occluded separately for saturation.
-            const UNVISITED: u8 = 0;
-            const SELECTED: u8 = 1;
-            const OCCLUDED: u8 = 2;
-            let mut state = vec![UNVISITED; nc];
-            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
-
-            for i in 0..nc {
-                if selected.len() >= max_degree {
-                    break;
-                }
-                if state[i] != UNVISITED {
-                    continue;
+            FP_CAND_F32.with(|cf_cell| {
+            FP_STATE.with(|st_cell| {
+            FP_SELECTED.with(|sel_cell| {
+                let mut cf = cf_cell.borrow_mut();
+                if cf.len() < nc * ndims { cf.resize(nc * ndims, 0.0); }
+                let cand_f32 = &mut cf[..nc * ndims];
+                for (ci, &(id, _)) in candidates.iter().enumerate() {
+                    let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
+                    T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
+                        .expect("f32 conversion");
                 }
 
-                selected.push(candidates[i].0);
-                state[i] = SELECTED;
+                // Algorithm 2 state.
+                const UNVISITED: u8 = 0;
+                const SELECTED: u8 = 1;
+                const OCCLUDED: u8 = 2;
+                let mut st = st_cell.borrow_mut();
+                st.clear();
+                st.resize(nc, UNVISITED);
+                let state = &mut st[..];
 
-                let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+                let mut sel = sel_cell.borrow_mut();
+                sel.clear();
+                sel.reserve(max_degree);
 
-                for j in (i + 1)..nc {
-                    if state[j] != UNVISITED {
-                        continue;
-                    }
-                    let dist_x_z = candidates[j].1;
-                    let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
-                    let dist_y_z = dist_fn.call(y_f32, z_f32);
-
-                    if alpha * dist_y_z < dist_x_z {
-                        state[j] = OCCLUDED;
-                    }
-                }
-            }
-
-            // Saturation: fill remaining degree slots with any non-selected candidate,
-            // closest-first (candidates are distance-sorted). Matches DiskANN's behavior:
-            // iterate pool in distance order, add any candidate not already selected.
-            if saturate && selected.len() < max_degree {
                 for i in 0..nc {
-                    if selected.len() >= max_degree {
-                        break;
-                    }
-                    if state[i] != SELECTED {
-                        selected.push(candidates[i].0);
+                    if sel.len() >= max_degree { break; }
+                    if state[i] != UNVISITED { continue; }
+                    sel.push(candidates[i].0);
+                    state[i] = SELECTED;
+
+                    let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+
+                    for j in (i + 1)..nc {
+                        if state[j] != UNVISITED { continue; }
+                        let dist_x_z = candidates[j].1;
+                        let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
+                        let dist_y_z = kernel.call(y_f32, z_f32);
+                        if alpha * dist_y_z < dist_x_z {
+                            state[j] = OCCLUDED;
+                        }
                     }
                 }
-            }
 
-            selected
+                if saturate && sel.len() < max_degree {
+                    for i in 0..nc {
+                        if sel.len() >= max_degree { break; }
+                        if state[i] != SELECTED {
+                            sel.push(candidates[i].0);
+                        }
+                    }
+                }
+
+                sel.clone()
+            })})})
         })
         .collect_installed()
 }
 
 
-/// DiskANN-style iterative RobustPrune. Ramps `current_alpha` from 1.0 up to
-/// the target `alpha` in `min(alpha, 1.2)` increments, resuming each candidate's
-/// occlusion-factor and last-checked position across iterations. Mirrors
-/// `diskann::graph::index::prune_neighbor` (diskann/src/graph/index.rs:2811-2942).
-///
-/// For L2 / Cosine metrics uses the triangle-inequality rule:
-///   factor = max(factor, candidate_dist / dist_to_selected)
-/// and a candidate is occluded when factor > current_alpha.
 /// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
 /// loop given pre-computed partition leaves and an initialized [`HashPrune`].
 ///
