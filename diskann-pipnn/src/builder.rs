@@ -289,16 +289,22 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
         *c *= inv_n;
     }
 
-    let mut best_idx = 0;
-    let mut best_dist = f32::MAX;
-    for i in 0..npoints {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).map_err(convert_err)?;
-        let dist = dist_fn.call(&point_buf, &centroid);
-        if dist < best_dist {
-            best_dist = dist;
-            best_idx = i;
-        }
-    }
+    // Parallel argmin: each thread converts its slice + finds local best, then reduce.
+    use rayon::prelude::*;
+    let (best_idx, _best_dist) = (0..npoints)
+        .into_par_iter()
+        .fold(
+            || (usize::MAX, f32::MAX),
+            |(bi, bd), i| {
+                let mut buf = vec![0.0f32; ndims];
+                if T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf).is_err() {
+                    return (bi, bd);
+                }
+                let d = dist_fn.call(&buf, &centroid);
+                if d < bd { (i, d) } else { (bi, bd) }
+            },
+        )
+        .reduce(|| (usize::MAX, f32::MAX), |a, b| if a.1 <= b.1 { a } else { b });
 
     Ok(best_idx)
 }
@@ -632,65 +638,88 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     // applies #[target_feature] for AVX2/AVX-512 based on runtime CPU detection.
     let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
-    candidates_per_node
-        .par_iter()
-        .map(|candidates| {
-            if candidates.is_empty() {
-                return Vec::new();
-            }
-
-            let nc = candidates.len();
-
-            // Skip prune if already at or below max_degree.
-            if nc <= max_degree {
-                return candidates.iter().map(|&(id, _)| id).collect();
-            }
-
-            // Precompute f32 data for all candidates once, instead of converting
-            // Pre-converting once is O(nc × ndims); per-comparison conversion
-            // was O(l_max × max_degree × ndims) — quadratic in l_max.
-            let mut cand_f32 = vec![0.0f32; nc * ndims];
-            for (ci, &(id, _)) in candidates.iter().enumerate() {
-                let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
-                T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                    .expect("f32 conversion");
-            }
-
-            // Paper's Algorithm 2: greedy selection with occlusion removal.
-            const UNVISITED: u8 = 0;
-            const OCCLUDED: u8 = 2;
-            let mut state = vec![UNVISITED; nc];
-            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
-
-            for i in 0..nc {
-                if selected.len() >= max_degree {
-                    break;
-                }
-                if state[i] != UNVISITED {
-                    continue;
-                }
-
-                selected.push(candidates[i].0);
-
-                let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
-
-                for j in (i + 1)..nc {
-                    if state[j] != UNVISITED {
-                        continue;
-                    }
-                    let dist_x_z = candidates[j].1;
-                    let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
-                    let dist_y_z = dist_fn.call(y_f32, z_f32);
-
-                    if alpha * dist_y_z < dist_x_z {
-                        state[j] = OCCLUDED;
-                    }
+    // Per-node body, factored so the parallel strategy can be swapped at the
+    // bottom via PIPNN_PRUNE_PARALLEL.
+    let process_node = |candidates: &Vec<(u32, f32)>| -> Vec<u32> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let nc = candidates.len();
+        if nc <= max_degree {
+            return candidates.iter().map(|&(id, _)| id).collect();
+        }
+        let mut cand_f32 = vec![0.0f32; nc * ndims];
+        for (ci, &(id, _)) in candidates.iter().enumerate() {
+            let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
+            T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
+                .expect("f32 conversion");
+        }
+        const UNVISITED: u8 = 0;
+        const OCCLUDED: u8 = 2;
+        let mut state = vec![UNVISITED; nc];
+        let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+        for i in 0..nc {
+            if selected.len() >= max_degree { break; }
+            if state[i] != UNVISITED { continue; }
+            selected.push(candidates[i].0);
+            let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+            for j in (i + 1)..nc {
+                if state[j] != UNVISITED { continue; }
+                let dist_x_z = candidates[j].1;
+                let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
+                let dist_y_z = dist_fn.call(y_f32, z_f32);
+                if alpha * dist_y_z < dist_x_z {
+                    state[j] = OCCLUDED;
                 }
             }
+        }
+        selected
+    };
 
-            selected
-        })
-        .collect_installed()
+    // SPOT-CHECK: choose parallel strategy by env var.
+    //   unset / "rayon"  -> rayon par_iter (production)
+    //   "chunks"         -> rayon par_chunks(PIPNN_PRUNE_CHUNK, default 8192)
+    //   "native"         -> std::thread::scope, 48-way contiguous chunks
+    match std::env::var("PIPNN_PRUNE_PARALLEL").ok().as_deref() {
+        Some("chunks") => {
+            let chunk_sz: usize = std::env::var("PIPNN_PRUNE_CHUNK")
+                .ok().and_then(|s| s.parse().ok()).unwrap_or(8192);
+            candidates_per_node
+                .par_chunks(chunk_sz)
+                .flat_map(|chunk| {
+                    chunk.iter().map(|c| process_node(c)).collect::<Vec<_>>()
+                })
+                .collect_installed()
+        }
+        Some("native") => {
+            let n = candidates_per_node.len();
+            let n_threads: usize = std::env::var("PIPNN_PRUNE_NATIVE_THREADS")
+                .ok().and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|p| p.get()).unwrap_or(48));
+            let chunk_sz = (n + n_threads - 1) / n_threads;
+            let process_node = &process_node;
+            std::thread::scope(|s| {
+                let handles: Vec<_> = (0..n_threads).map(|t| {
+                    let start = t * chunk_sz;
+                    let end = (start + chunk_sz).min(n);
+                    s.spawn(move || {
+                        (start..end).map(|node_id| {
+                            process_node(&candidates_per_node[node_id])
+                        }).collect::<Vec<_>>()
+                    })
+                }).collect();
+                let mut out: Vec<Vec<u32>> = Vec::with_capacity(n);
+                for h in handles { out.extend(h.join().unwrap()); }
+                out
+            })
+        }
+        _ => {
+            candidates_per_node
+                .par_iter()
+                .map(|c| process_node(c))
+                .collect_installed()
+        }
+    }
 }
 
 /// DiskANN-style iterative RobustPrune. Ramps `current_alpha` from 1.0 up to

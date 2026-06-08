@@ -663,7 +663,11 @@ impl HashPrune {
         // Lazy: each reservoir allocates its entry Vec on first push, not upfront.
         // Upfront alloc of npoints × l_max bytes spikes peak RSS and adds serial
         // malloc time; spreading the allocs over parallel inserts is net cheaper.
-        let reservoirs = (0..npoints)
+        // Parallel construction: 10M Mutex<Reservoir> sequential alloc is wall-bound by
+        // the single-thread Mutex::new + Vec::push cost. into_par_iter splits across rayon.
+        use rayon::prelude::*;
+        let reservoirs: Vec<_> = (0..npoints)
+            .into_par_iter()
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
         tracing::debug!(
