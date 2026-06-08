@@ -100,6 +100,14 @@ where
                          Rewrite query using complemented AND/OR logic.",
                     ))
                 }
+                CompareOp::SNe(_) => {
+                    // SNe returns true when the field is absent or has a different value;
+                    // computing the absent-field set requires a document universe.
+                    Err(QueryError::unsupported(
+                        "SNe",
+                        "SNe operation requires document universe tracking.",
+                    ))
+                }
                 CompareOp::Gte(_) | CompareOp::Gt(_) | CompareOp::Lte(_) | CompareOp::Lt(_) => {
                     // Range query - scan both integer and float ranges
                     let mut result = PL::empty();
@@ -600,6 +608,25 @@ mod tests {
         match result {
             Err(QueryError::UnsupportedOperation { operation, .. }) => {
                 assert_eq!(operation, "NE");
+            }
+            _ => panic!("Expected UnsupportedOperation error"),
+        }
+    }
+
+    #[test]
+    fn test_evaluate_query_sne_unsupported() {
+        let index = make_index();
+
+        let expr = ASTExpr::Compare {
+            field: "field".to_string(),
+            op: CompareOp::SNe(json!("value")),
+        };
+
+        let result = index.evaluate_query(&expr);
+        assert!(result.is_err());
+        match result {
+            Err(QueryError::UnsupportedOperation { operation, .. }) => {
+                assert_eq!(operation, "SNe");
             }
             _ => panic!("Expected UnsupportedOperation error"),
         }

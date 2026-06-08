@@ -26,7 +26,11 @@ pub enum CompareOp {
     /// Equal comparison, can be used with any value type
     Eq(Value), // $eq
     /// Not equal comparison, can be used with any value type
+    /// Returns FALSE if the field is not present in the given expression
     Ne(Value), // $ne
+    /// Strict not equal comparison: true when the field value is not equal to the given value,
+    /// OR when the field is not present at all.
+    SNe(Value), // $sne
     /// Less than comparison, only valid for numeric values
     Lt(f64), // $lt
     /// Less than or equal comparison, only valid for numeric values
@@ -42,6 +46,7 @@ impl fmt::Display for CompareOp {
         match self {
             CompareOp::Eq(_) => write!(f, "=="),
             CompareOp::Ne(_) => write!(f, "!="),
+            CompareOp::SNe(_) => write!(f, "!!="),
             CompareOp::Lt(_) => write!(f, "<"),
             CompareOp::Lte(_) => write!(f, "<="),
             CompareOp::Gt(_) => write!(f, ">"),
@@ -185,6 +190,7 @@ impl ASTVisitor for PrintVisitor {
         let value_str = match op {
             CompareOp::Eq(value) => Self::value_to_string(value),
             CompareOp::Ne(value) => Self::value_to_string(value),
+            CompareOp::SNe(value) => Self::value_to_string(value),
             CompareOp::Lt(num) => num.to_string(),
             CompareOp::Lte(num) => num.to_string(),
             CompareOp::Gt(num) => num.to_string(),

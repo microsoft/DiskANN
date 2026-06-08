@@ -203,7 +203,7 @@ where
     /// Helper to extract numeric value from CompareOp
     pub(crate) fn get_compare_value(op: &CompareOp) -> Option<f64> {
         match op {
-            CompareOp::Eq(v) | CompareOp::Ne(v) => v.as_f64(),
+            CompareOp::Eq(v) | CompareOp::Ne(v) | CompareOp::SNe(v) => v.as_f64(),
             CompareOp::Lt(v) | CompareOp::Lte(v) | CompareOp::Gt(v) | CompareOp::Gte(v) => Some(*v),
         }
     }

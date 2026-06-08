@@ -18,13 +18,12 @@ let label = json!({
     "tags": ["red", "blue", "green"]
 });
 
-// Create a filter that matches labels with a=1 AND b>1 AND specs.cpu="i7" AND tags contains "blue"
+// Create a filter that matches labels with a=1 AND b>1 AND specs.cpu="i7" 
 let filter = json!({
     "$and": [
         {"a": {"$eq": 1}},
         {"b": {"$gt": 1}},
         {"specs.cpu": {"$eq": "i7"}},
-        {"tags": {"$in": ["blue"]}}
     ]
 });
 
@@ -107,12 +106,11 @@ The `CompareOp` enum uses type-safe representations for different comparison ope
 pub enum CompareOp {
     Eq(Value),       // Equal to any JSON value
     Ne(Value),       // Not equal to any JSON value
+    SNe(Value),      // Not equal to any JSON value, including if the field is not present at all
     Lt(f64),         // Less than (numeric only)
     Lte(f64),        // Less than or equal (numeric only)
     Gt(f64),         // Greater than (numeric only)
     Gte(f64),        // Greater than or equal (numeric only)
-    In(Vec<Value>),  // Value is in array
-    Nin(Vec<Value>), // Value is not in array
 }
 ```
 
@@ -123,7 +121,7 @@ The type-safe design ensures that each operator only accepts appropriate value t
 The parser (`parser.rs`) converts JSON filter specifications into the AST. Key features:
 
 - Support for logical operators (`$and`, `$or`, `$not`)
-- Support for comparison operators (`$eq`, `$ne`, `$lt`, `$lte`, `$gt`, `$gte`, `$in`, `$nin`)
+- Support for comparison operators (`$eq`, `$ne`, `$sne`, `$lt`, `$lte`, `$gt`, `$gte`)
 - Automatic handling of implicit `$and` for multiple field conditions
 - Support for dot notation to access nested fields (`user.profile.age`)
 - Enforced nesting depth limit

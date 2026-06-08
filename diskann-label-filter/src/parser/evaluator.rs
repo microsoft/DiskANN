@@ -22,6 +22,7 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                 match op {
                     CompareOp::Eq(value) => field_val == value,
                     CompareOp::Ne(value) => field_val != value,
+                    CompareOp::SNe(value) => field_val != value,
                     CompareOp::Lt(num) => {
                         if let Some(f1) = field_val.as_f64() {
                             f1 < *num
@@ -52,7 +53,8 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                     }
                 }
             } else {
-                false // Field not found
+                // Field not present: SNe is true (absent value is "not equal"), others are false
+                matches!(op, CompareOp::SNe(_))
             }
         }
     }
@@ -369,5 +371,68 @@ mod tests {
         let filter = json!({"float": {"$lt": 10.500001}});
         let ast = parse_query_filter(&filter).expect("Failed to parse filter");
         assert!(eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_sne_field_present_and_equal() {
+        // $sne on a field that exists and equals the value → false
+        let label = json!({"color": "red"});
+        let filter = json!({"color": {"$sne": "red"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+        assert!(!eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_sne_field_present_and_not_equal() {
+        // $sne on a field that exists but has a different value → true
+        let label = json!({"color": "blue"});
+        let filter = json!({"color": {"$sne": "red"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+        assert!(eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_sne_field_absent() {
+        // $sne on a field that is completely absent from the label → true (key difference vs $ne)
+        let label = json!({"size": 10});
+        let filter = json!({"color": {"$sne": "red"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+        assert!(eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_ne_field_absent_returns_false() {
+        // Contrast: $ne on an absent field → false (standard Ne behaviour)
+        let label = json!({"size": 10});
+        let filter = json!({"color": {"$ne": "red"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+        assert!(!eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_sne_nested_field_absent() {
+        // $sne with dot-notation path where nested key is missing → true
+        let label = json!({"specs": {}});
+        let filter = json!({"specs.cpu": {"$sne": "i7"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+        assert!(eval_query_expr(&ast, &label));
+    }
+
+    #[test]
+    fn test_sne_in_and_expression() {
+        // $sne inside an $and: only passes if both sides hold
+        let label_matches = json!({"brand": "Dell", "color": "blue"});
+        let label_color_eq = json!({"brand": "Dell", "color": "red"});
+        let label_missing_color = json!({"brand": "Dell"});
+
+        let filter = json!({"$and": [
+            {"brand": {"$eq": "Dell"}},
+            {"color": {"$sne": "red"}}
+        ]});
+        let ast = parse_query_filter(&filter).expect("Failed to parse");
+
+        assert!(eval_query_expr(&ast, &label_matches)); // brand==Dell, color!=red → true
+        assert!(!eval_query_expr(&ast, &label_color_eq)); // brand==Dell, color==red → false
+        assert!(eval_query_expr(&ast, &label_missing_color)); // brand==Dell, color absent (SNe) → true
     }
 }

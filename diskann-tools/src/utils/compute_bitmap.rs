@@ -103,6 +103,22 @@ impl QueryAccelerator for InvertedIndexAccelerator {
                 }
                 Ok(result)
             }
+            CompareOp::SNe(v) => {
+                let attr_val = AttributeValue::try_from(v)
+                    .map_err(|e| anyhow::anyhow!("Failed to convert value for SNe: {e}"))?;
+                let mut result = BitSet::new();
+                for (val, bits) in self.map.iter() {
+                    if val != &attr_val {
+                        result.extend(bits);
+                    }
+                }
+                // SNe also includes docs whose field is absent; those are not present in
+                // any posting list entry, so they are included via the universe complement
+                // at the call site (compute_query_bitmaps). The accelerator itself returns
+                // only the subset that does have the field but with a different value.
+                // The absent-field docs are handled in eval_query_using_accelerators.
+                Ok(result)
+            }
             _ => Err(anyhow::anyhow!(
                 "Only equality comparisons are supported with the inverted index accelerator"
             )),
@@ -141,10 +157,10 @@ impl QueryAccelerator for BTreeAccelerator {
                     Ok(BitSet::new())
                 }
             }
-            CompareOp::Ne(v) => {
+            CompareOp::Ne(v) | CompareOp::SNe(v) => {
                 let fval = v
                     .as_f64()
-                    .ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Ne"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Failed to convert value to f64 for Ne/SNe"))?;
                 let fval = OrderedFloat::new(fval)
                     .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                 let mut bitset = BitSet::new();
@@ -244,12 +260,13 @@ fn insert_into_bitset(ids: Vec<usize>) -> BitSet {
 fn eval_query_using_accelerators(
     query_expr: &ASTExpr,
     query_accelerators: &HashMap<String, Box<dyn QueryAccelerator>>,
+    full_universe: &BitSet,
 ) -> Result<BitSet, anyhow::Error> {
     match query_expr {
         ASTExpr::And(subs) => {
             let mut acc: Option<BitSet> = None;
             for e in subs {
-                let b = eval_query_using_accelerators(e, query_accelerators)?;
+                let b = eval_query_using_accelerators(e, query_accelerators, full_universe)?;
                 acc = Some(match acc {
                     None => b,
                     Some(acc_b) => acc_b.intersection(&b).collect(),
@@ -260,7 +277,7 @@ fn eval_query_using_accelerators(
         ASTExpr::Or(subs) => {
             let mut acc: Option<BitSet> = None;
             for e in subs {
-                let b = eval_query_using_accelerators(e, query_accelerators)?;
+                let b = eval_query_using_accelerators(e, query_accelerators, full_universe)?;
                 acc = Some(match acc {
                     None => b,
                     Some(acc_b) => acc_b.union(&b).collect(),
@@ -278,7 +295,7 @@ fn eval_query_using_accelerators(
             let universe = compute_universe(universe_labels, query_accelerators);
 
             // Evaluate the sub-expression
-            let sub_result = eval_query_using_accelerators(sub, query_accelerators)?;
+            let sub_result = eval_query_using_accelerators(sub, query_accelerators, full_universe)?;
 
             // Return the difference between the sub-expression result and the universe
             Ok(universe.difference(&sub_result).collect())
@@ -286,9 +303,23 @@ fn eval_query_using_accelerators(
         ASTExpr::Compare { field, op } => {
             let field = prepend_separator(field);
             if let Some(accelerator) = query_accelerators.get(&field) {
-                accelerator.eval(op)
+                let base = accelerator.eval(op)?;
+                // SNe: also include all docs that don't have this field at all
+                if matches!(op, CompareOp::SNe(_)) {
+                    let field_universe = accelerator.universe();
+                    let absent: BitSet = full_universe.difference(&field_universe).collect();
+                    Ok(base.union(&absent).collect())
+                } else {
+                    Ok(base)
+                }
             } else {
-                Ok(BitSet::new())
+                // Field is not present in any document.
+                // SNe: all docs qualify (absent == not equal)
+                if matches!(op, CompareOp::SNe(_)) {
+                    Ok(full_universe.clone())
+                } else {
+                    Ok(BitSet::new())
+                }
             }
         }
     }
@@ -435,6 +466,8 @@ pub fn compute_query_bitmaps(
         })
         .collect::<Result<_, _>>()?;
 
+    let full_universe: BitSet = base_doc_ids.iter().cloned().collect();
+
     // These large intermediates are not needed after accelerators are built.
     drop(global_label_set);
     drop(flattened_base_label_hashmaps);
@@ -447,7 +480,7 @@ pub fn compute_query_bitmaps(
     let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
         .par_iter()
         .map(|(_query_id, query_expr)| {
-            eval_query_using_accelerators(query_expr, &query_accelerators)
+            eval_query_using_accelerators(query_expr, &query_accelerators, &full_universe)
         })
         .collect();
 
@@ -1069,5 +1102,76 @@ mod tests {
         // Empty
         let err = compute_query_accelerator("none", &AttributeValue::Empty, &doc_ids, &base);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_sne_field_present_not_equal() {
+        // $sne: field present and value differs → doc matches
+        let base_labels = vec![
+            Document { doc_id: 0, label: json!({"color": "red"}) },
+            Document { doc_id: 1, label: json!({"color": "blue"}) },
+            Document { doc_id: 2, label: json!({"color": "red"}) },
+        ];
+        let query = ASTExpr::Compare {
+            field: "color".to_string(),
+            op: CompareOp::SNe(json!("red")),
+        };
+        let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query)]).expect("should succeed");
+        assert!(!bitmaps[0].contains(0)); // color==red → excluded
+        assert!(bitmaps[0].contains(1));  // color==blue → included
+        assert!(!bitmaps[0].contains(2)); // color==red → excluded
+    }
+
+    #[test]
+    fn test_sne_field_absent_included() {
+        // Key difference from Ne: docs missing the field entirely are included by SNe
+        let base_labels = vec![
+            Document { doc_id: 0, label: json!({"color": "red"}) },
+            Document { doc_id: 1, label: json!({"color": "blue"}) },
+            Document { doc_id: 2, label: json!({"size": 10}) }, // no 'color' field
+        ];
+        let query_sne = ASTExpr::Compare {
+            field: "color".to_string(),
+            op: CompareOp::SNe(json!("red")),
+        };
+        let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_sne)])
+            .expect("should succeed");
+        assert!(!bitmaps[0].contains(0)); // color==red → excluded
+        assert!(bitmaps[0].contains(1));  // color!=red → included
+        assert!(bitmaps[0].contains(2));  // color absent → included (SNe semantics)
+    }
+
+    #[test]
+    fn test_sne_field_never_indexed() {
+        // If the queried field appears in no document, SNe should return ALL docs
+        let base_labels = vec![
+            Document { doc_id: 0, label: json!({"size": 1}) },
+            Document { doc_id: 1, label: json!({"size": 2}) },
+        ];
+        let query = ASTExpr::Compare {
+            field: "color".to_string(),
+            op: CompareOp::SNe(json!("red")),
+        };
+        let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query)]).expect("should succeed");
+        assert!(bitmaps[0].contains(0));
+        assert!(bitmaps[0].contains(1));
+    }
+
+    #[test]
+    fn test_sne_numeric_field() {
+        // SNe on a numeric (BTree) field: absent docs are included
+        let base_labels = vec![
+            Document { doc_id: 0, label: json!({"score": 1.0}) },
+            Document { doc_id: 1, label: json!({"score": 2.0}) },
+            Document { doc_id: 2, label: json!({"tag": "x"}) }, // no 'score'
+        ];
+        let query = ASTExpr::Compare {
+            field: "score".to_string(),
+            op: CompareOp::SNe(json!(1.0)),
+        };
+        let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query)]).expect("should succeed");
+        assert!(!bitmaps[0].contains(0)); // score==1.0 → excluded
+        assert!(bitmaps[0].contains(1));  // score!=1.0 → included
+        assert!(bitmaps[0].contains(2));  // score absent → included
     }
 }

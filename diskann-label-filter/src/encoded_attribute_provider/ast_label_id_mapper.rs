@@ -100,6 +100,10 @@ impl ASTVisitor for ASTLabelIdMapper {
                 tracing::warn!("<> Not supported ");
                 None
             }
+            CompareOp::SNe(_value) => {
+                tracing::warn!("SNe Not supported ");
+                None
+            }
             CompareOp::Lt(_num) => {
                 tracing::warn!("< Not supported ");
                 None
@@ -258,6 +262,16 @@ mod tests {
         let expr = ASTExpr::Compare {
             field: "category".to_string(),
             op: CompareOp::Ne(Value::String("electronics".to_string())),
+        };
+
+        let result = mapper.visit(&expr);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not supported"));
+
+        // Test SNe operation (not supported)
+        let expr = ASTExpr::Compare {
+            field: "category".to_string(),
+            op: CompareOp::SNe(Value::String("electronics".to_string())),
         };
 
         let result = mapper.visit(&expr);

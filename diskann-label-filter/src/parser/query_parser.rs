@@ -133,6 +133,7 @@ fn parse_query_filter_with_depth(
                     let op = match op.as_str() {
                         "$eq" => CompareOp::Eq(val.clone()),
                         "$ne" => CompareOp::Ne(val.clone()),
+                        "$sne" => CompareOp::SNe(val.clone()),
                         "$lt" => {
                             if let Some(num) = val.as_f64() {
                                 CompareOp::Lt(num)
@@ -381,6 +382,20 @@ mod tests {
         } else {
             panic!("Expected implicit AND, got {:?}", ast);
         }
+    }
+
+    #[test]
+    fn test_parse_sne_operator() {
+        let filter = json!({"color": {"$sne": "red"}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse $sne");
+
+        assert!(matches!(
+            ast,
+            ASTExpr::Compare {
+                field,
+                op: CompareOp::SNe(value)
+            } if field == "color" && value == json!("red")
+        ));
     }
 
     #[test]

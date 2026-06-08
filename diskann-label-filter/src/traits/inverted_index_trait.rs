@@ -468,6 +468,9 @@ mod reference_impl {
                     crate::CompareOp::Ne(_v) => {
                         todo!();
                     }
+                    crate::CompareOp::SNe(_v) => {
+                        todo!();
+                    }
                     crate::CompareOp::Lt(num) => self.range_query_lt(field, *num),
                     crate::CompareOp::Lte(num) => self.range_query_lte(field, *num),
                     crate::CompareOp::Gt(num) => self.range_query_gt(field, *num),
