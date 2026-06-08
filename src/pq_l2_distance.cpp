@@ -2,6 +2,7 @@
 #include "pq.h"
 #include "pq_l2_distance.h"
 #include "pq_scratch.h"
+#include <immintrin.h>
 
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
@@ -260,18 +261,20 @@ template <typename data_t>
 void PQL2Distance<data_t>::prepopulate_chunkwise_distances(const float *query_vec, float *dist_vec)
 {
     memset(dist_vec, 0, 256 * _num_chunks * sizeof(float));
-    // chunk wise distance computation
     for (size_t chunk = 0; chunk < _num_chunks; chunk++)
     {
-        // sum (q-c)^2 for the dimensions associated with this chunk
         float *chunk_dists = dist_vec + (256 * chunk);
         for (size_t j = _chunk_offsets[chunk]; j < _chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = _tables_tr + (256 * j);
-            for (size_t idx = 0; idx < 256; idx++)
+            __m256 q_val = _mm256_set1_ps(query_vec[j]);
+            for (size_t idx = 0; idx < 256; idx += 8)
             {
-                double diff = centers_dim_vec[idx] - (query_vec[j]);
-                chunk_dists[idx] += (float)(diff * diff);
+                __m256 c = _mm256_loadu_ps(centers_dim_vec + idx);
+                __m256 d = _mm256_sub_ps(c, q_val);
+                __m256 acc = _mm256_loadu_ps(chunk_dists + idx);
+                acc = _mm256_fmadd_ps(d, d, acc);
+                _mm256_storeu_ps(chunk_dists + idx, acc);
             }
         }
     }
