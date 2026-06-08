@@ -450,7 +450,10 @@ pub fn compute_query_bitmaps(
         (flattened_base_label_hashmaps, base_doc_ids)
     };
 
-    println!("Flattened {} base labels", flattened_base_label_hashmaps.len());
+    println!(
+        "Flattened {} base labels",
+        flattened_base_label_hashmaps.len()
+    );
 
     // compute the global set of labels ahead of time so that we can compute
     // each accelerator in parallel
@@ -1108,9 +1111,18 @@ mod tests {
     fn test_sne_field_present_not_equal() {
         // $sne: field present and value differs → doc matches
         let base_labels = vec![
-            Document { doc_id: 0, label: json!({"color": "red"}) },
-            Document { doc_id: 1, label: json!({"color": "blue"}) },
-            Document { doc_id: 2, label: json!({"color": "red"}) },
+            Document {
+                doc_id: 0,
+                label: json!({"color": "red"}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"color": "blue"}),
+            },
+            Document {
+                doc_id: 2,
+                label: json!({"color": "red"}),
+            },
         ];
         let query = ASTExpr::Compare {
             field: "color".to_string(),
@@ -1118,7 +1130,7 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query)]).expect("should succeed");
         assert!(!bitmaps[0].contains(0)); // color==red → excluded
-        assert!(bitmaps[0].contains(1));  // color==blue → included
+        assert!(bitmaps[0].contains(1)); // color==blue → included
         assert!(!bitmaps[0].contains(2)); // color==red → excluded
     }
 
@@ -1126,9 +1138,18 @@ mod tests {
     fn test_sne_field_absent_included() {
         // Key difference from Ne: docs missing the field entirely are included by SNe
         let base_labels = vec![
-            Document { doc_id: 0, label: json!({"color": "red"}) },
-            Document { doc_id: 1, label: json!({"color": "blue"}) },
-            Document { doc_id: 2, label: json!({"size": 10}) }, // no 'color' field
+            Document {
+                doc_id: 0,
+                label: json!({"color": "red"}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"color": "blue"}),
+            },
+            Document {
+                doc_id: 2,
+                label: json!({"size": 10}),
+            }, // no 'color' field
         ];
         let query_sne = ASTExpr::Compare {
             field: "color".to_string(),
@@ -1137,16 +1158,22 @@ mod tests {
         let bitmaps = compute_query_bitmaps(base_labels.clone(), vec![(0, query_sne)])
             .expect("should succeed");
         assert!(!bitmaps[0].contains(0)); // color==red → excluded
-        assert!(bitmaps[0].contains(1));  // color!=red → included
-        assert!(bitmaps[0].contains(2));  // color absent → included (SNe semantics)
+        assert!(bitmaps[0].contains(1)); // color!=red → included
+        assert!(bitmaps[0].contains(2)); // color absent → included (SNe semantics)
     }
 
     #[test]
     fn test_sne_field_never_indexed() {
         // If the queried field appears in no document, SNe should return ALL docs
         let base_labels = vec![
-            Document { doc_id: 0, label: json!({"size": 1}) },
-            Document { doc_id: 1, label: json!({"size": 2}) },
+            Document {
+                doc_id: 0,
+                label: json!({"size": 1}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"size": 2}),
+            },
         ];
         let query = ASTExpr::Compare {
             field: "color".to_string(),
@@ -1161,9 +1188,18 @@ mod tests {
     fn test_sne_numeric_field() {
         // SNe on a numeric (BTree) field: absent docs are included
         let base_labels = vec![
-            Document { doc_id: 0, label: json!({"score": 1.0}) },
-            Document { doc_id: 1, label: json!({"score": 2.0}) },
-            Document { doc_id: 2, label: json!({"tag": "x"}) }, // no 'score'
+            Document {
+                doc_id: 0,
+                label: json!({"score": 1.0}),
+            },
+            Document {
+                doc_id: 1,
+                label: json!({"score": 2.0}),
+            },
+            Document {
+                doc_id: 2,
+                label: json!({"tag": "x"}),
+            }, // no 'score'
         ];
         let query = ASTExpr::Compare {
             field: "score".to_string(),
@@ -1171,7 +1207,7 @@ mod tests {
         };
         let bitmaps = compute_query_bitmaps(base_labels, vec![(0, query)]).expect("should succeed");
         assert!(!bitmaps[0].contains(0)); // score==1.0 → excluded
-        assert!(bitmaps[0].contains(1));  // score!=1.0 → included
-        assert!(bitmaps[0].contains(2));  // score absent → included
+        assert!(bitmaps[0].contains(1)); // score!=1.0 → included
+        assert!(bitmaps[0].contains(2)); // score absent → included
     }
 }
