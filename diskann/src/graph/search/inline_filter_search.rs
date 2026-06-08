@@ -301,10 +301,10 @@ where
 /// Compute adaptive L based on observed specificity.
 ///
 /// Piecewise scaling:
+/// Piecewise scaling:
 ///   specificity ≥ 50%   → 1× L (no change, most nodes match)
 ///   10% ≤ specificity < 50%  → 2× L
-///   specificity < 10%   → log-scale: 2^(1 - log10(specificity))
-///     specificity = 0.1  (10%)   → 2× L
+///   specificity < 10%   → log-scale: 2^(-log10(specificity))
 ///     specificity = 0.01 (1%)    → 4× L
 ///     specificity = 0.001 (0.1%) → 8× L
 ///   0 matches in sample → `max_multiplier`× L (maximum expansion)
