@@ -390,38 +390,36 @@ pub fn compute_query_bitmaps(
     base_labels: Vec<Document>,
     query_labels: Vec<(usize, ASTExpr)>,
 ) -> Result<Vec<BitSet>, anyhow::Error> {
-    // Flatten base labels so that nested structures are converted to a flat list of key-value pairs
-    let flattened_base_labels: Vec<Vec<(std::string::String, AttributeValue)>> = base_labels
-        .iter()
-        .map(|base_label| {
-            flatten_json_pointers_with_config(&base_label.label, &FlattenConfig::dot_notation())
-        })
-        .collect();
-
-    let flattened_base_label_hashmaps: Result<Vec<HashMap<String, AttributeValue>>, anyhow::Error> =
-        flattened_base_labels
-            .iter()
-            .map(|labels| {
-                let mut map = HashMap::new();
-                for (key, value) in labels {
+    // Consume base labels once and build only the representation needed downstream.
+    // Keep this in a scope so the original Vec<Document> is dropped immediately after ingestion.
+    let (flattened_base_label_hashmaps, base_doc_ids) = {
+        let flatten_config = FlattenConfig::dot_notation();
+        #[allow(clippy::disallowed_methods)]
+        let flattened_and_ids: Vec<(HashMap<String, AttributeValue>, usize)> = base_labels
+            .into_par_iter()
+            .map(|base_label| {
+                let flattened =
+                    flatten_json_pointers_with_config(&base_label.label, &flatten_config);
+                let mut map = HashMap::with_capacity(flattened.len());
+                for (key, value) in flattened {
                     // a base label may not have two values for the same key
-                    if let Some(_existing_value) = map.get(key) {
+                    if map.insert(key.clone(), value).is_some() {
                         return Err(anyhow::anyhow!(
                             "Duplicate keys in the same document: {}",
                             key
                         ));
                     }
-                    map.insert(key.clone(), value.clone());
                 }
-                Ok(map)
+                Ok((map, base_label.doc_id))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
-    let flattened_base_label_hashmaps = flattened_base_label_hashmaps?;
-    let base_doc_ids: Vec<usize> = base_labels
-        .iter()
-        .map(|base_label| base_label.doc_id)
-        .collect();
+        let (flattened_base_label_hashmaps, base_doc_ids): (Vec<_>, Vec<_>) =
+            flattened_and_ids.into_iter().unzip();
+        (flattened_base_label_hashmaps, base_doc_ids)
+    };
+
+    println!("Flattened {} base labels", flattened_base_label_hashmaps.len());
 
     // compute the global set of labels ahead of time so that we can compute
     // each accelerator in parallel
@@ -436,6 +434,13 @@ pub fn compute_query_bitmaps(
                 .map(|accel| (key.clone(), accel))
         })
         .collect::<Result<_, _>>()?;
+
+    // These large intermediates are not needed after accelerators are built.
+    drop(global_label_set);
+    drop(flattened_base_label_hashmaps);
+    drop(base_doc_ids);
+
+    println!("Computed query accelerators");
 
     // Evaluate each query using the precomputed accelerators
     #[allow(clippy::disallowed_methods)]
