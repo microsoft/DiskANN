@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Label-filtered search using multi-hop expansion.
+//! Inline label-filtered search with optional adaptive-L sizing.
 
 use diskann_utils::future::SendFuture;
 use thiserror::Error;
