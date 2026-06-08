@@ -47,6 +47,12 @@ pub enum PiPNNError {
     /// I/O error from `PiPNNGraph::save_graph`.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A `VectorRepr::as_f32_into` call failed during build. The contained
+    /// message preserves the underlying error's `Display` text, since the
+    /// associated `T::Error` type is erased at the public boundary.
+    #[error("vector conversion failed: {0}")]
+    Conversion(String),
 }
 
 /// Result type for PiPNN operations.
@@ -81,11 +87,30 @@ pub struct PiPNNConfig {
     pub alpha: f32,
     /// Maximum leaders per partition level. Default: 1000 (paper recommendation).
     pub leader_cap: usize,
-    /// Whether to saturate the result after final prune by filling occluded 
+    /// Whether to saturate the result after final prune by filling occluded
     /// candidates until max_degree is reached. Default: false (paper-faithful).
     /// DiskANN-style sets true.
     #[serde(default)]
     pub saturate_after_prune: bool,
+    /// Max iterations of the partition loop before remaining oversized clusters
+    /// are accepted as leaves. Guards against pathological hub geometries where
+    /// argmin assignment fails to crack a dense cluster. Default: 30.
+    #[serde(default = "default_max_partition_iter")]
+    pub max_partition_iter: usize,
+    /// When recursion depth exceeds `fanout.len()`, reuse the last fanout entry
+    /// (true) instead of collapsing to 1 (false). Trades wider overlap at deep
+    /// levels for fewer leaf shards. Default: false.
+    #[serde(default)]
+    pub deep_fanout_last: bool,
+    /// Override the auto-detected per-core L2 cache size (bytes) used to size
+    /// the partition GEMM stripe. `None` means auto-detect (falls back to 512
+    /// KB on unknown CPUs).
+    #[serde(default)]
+    pub l2_size_override: Option<usize>,
+}
+
+fn default_max_partition_iter() -> usize {
+    30
 }
 
 impl PiPNNConfig {
@@ -150,6 +175,9 @@ impl Default for PiPNNConfig {
             alpha: 1.2,
             leader_cap: 1000,
             saturate_after_prune: false,
+            max_partition_iter: 30,
+            deep_fanout_last: false,
+            l2_size_override: None,
         }
     }
 }

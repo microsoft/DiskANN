@@ -548,17 +548,13 @@ fn process_row_ip_scalar(dot_row: &[f32], top: &mut TopBuf, threshold_idx: usize
 }
 
 /// Detect the CPU's private L2 cache size in bytes. Cached on first call.
-/// Override via `PIPNN_L2_SIZE=<bytes>`. Falls back to 512 KB (Zen 3 default).
+/// Falls back to 512 KB (Zen 3 default). Callers may override via
+/// `PartitionConfig.l2_size_override` — this auto-detected value is used when
+/// no override is set.
 pub(crate) fn l2_size_bytes() -> usize {
     use std::sync::OnceLock;
     static L2_SIZE: OnceLock<usize> = OnceLock::new();
     *L2_SIZE.get_or_init(|| {
-        if let Ok(s) = std::env::var("PIPNN_L2_SIZE") {
-            if let Ok(v) = s.parse::<usize>() {
-                tracing::info!(l2_bytes = v, source = "env", "PiPNN: L2 cache size");
-                return v;
-            }
-        }
         #[cfg(target_os = "linux")]
         if let Ok(s) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cache/index2/size") {
             let trimmed = s.trim();
