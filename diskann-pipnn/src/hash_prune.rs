@@ -77,23 +77,53 @@ unsafe fn find_hash_packed_avx512(hashes: &[u16], target_hash: u16) -> Option<us
     let n = hashes.len();
     let target = _mm512_set1_epi16(target_hash as i16);
     let chunks = n / 32;
-    let mut found: u64 = 0;
+    // Fast path for n <= 64 (the designed l_max range): the per-chunk 32-bit
+    // cmpeq masks fit one u64 with no shift overflow -> branch-free accumulate,
+    // byte-identical to the original hot path (no regression at l_max <= 64).
+    if n <= 64 {
+        let mut found: u64 = 0;
+        for chunk in 0..chunks {
+            let base = chunk * 32;
+            let data = _mm512_loadu_si512(hashes.as_ptr().add(base) as *const __m512i);
+            let cmp = _mm512_cmpeq_epi16_mask(data, target);
+            found |= (cmp as u64) << (chunk * 32);
+        }
+        let tail = n - chunks * 32;
+        if tail > 0 {
+            let kmask: u32 = (1u32 << tail) - 1;
+            let base = chunks * 32;
+            let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(base) as *const i16);
+            let cmp = _mm512_cmpeq_epi16_mask(data, target) & kmask;
+            found |= (cmp as u64) << base;
+        }
+        return if found != 0 {
+            Some(found.trailing_zeros() as usize)
+        } else {
+            None
+        };
+    }
+    // n > 64: a single u64 accumulator would overflow `<< (chunk*32)` (the old
+    // bug mis-indexed any match past entry 64). Use a branch-free running-min
+    // first-match instead. Correct for any n.
+    let mut result: u32 = u32::MAX;
     for chunk in 0..chunks {
-        let base = chunk * 32;
-        let data = _mm512_loadu_si512(hashes.as_ptr().add(base) as *const __m512i);
+        let base = (chunk * 32) as u32;
+        let data = _mm512_loadu_si512(hashes.as_ptr().add(chunk * 32) as *const __m512i);
         let cmp = _mm512_cmpeq_epi16_mask(data, target);
-        found |= (cmp as u64) << (chunk * 32);
+        let cand = if cmp != 0 { base + cmp.trailing_zeros() } else { u32::MAX };
+        result = result.min(cand);
     }
     let tail = n - chunks * 32;
     if tail > 0 {
         let kmask: u32 = (1u32 << tail) - 1;
-        let base = chunks * 32;
-        let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(base) as *const i16);
+        let base = (chunks * 32) as u32;
+        let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(chunks * 32) as *const i16);
         let cmp = _mm512_cmpeq_epi16_mask(data, target) & kmask;
-        found |= (cmp as u64) << base;
+        let cand = if cmp != 0 { base + cmp.trailing_zeros() } else { u32::MAX };
+        result = result.min(cand);
     }
-    if found != 0 {
-        Some(found.trailing_zeros() as usize)
+    if result != u32::MAX {
+        Some(result as usize)
     } else {
         None
     }
@@ -110,33 +140,32 @@ unsafe fn find_hash_packed_avx2(hashes: &[u16], target_hash: u16) -> Option<usiz
     let n = hashes.len();
     let target = _mm256_set1_epi16(target_hash as i16);
     let chunks = n / 16;
-    let mut found: u64 = 0;
+    // Branch-free first-match: cmov-record the lowest matching absolute index.
+    // The previous `found |= bits << (chunk*16)` / `1u64 << i` overflowed the u64
+    // accumulator for n > 64 (l_max=128), mis-indexing any match past entry 64.
+    let mut result: u32 = u32::MAX;
     for chunk in 0..chunks {
-        let base = chunk * 16;
-        let data = _mm256_loadu_si256(hashes.as_ptr().add(base) as *const __m256i);
+        let base = (chunk * 16) as u32;
+        let data = _mm256_loadu_si256(hashes.as_ptr().add(chunk * 16) as *const __m256i);
         let cmp = _mm256_cmpeq_epi16(data, target);
-        // _mm256_movemask_epi8 gives 32 bits (one per byte); we want 16 bits one per u16.
-        // For epi16 equality, the cmp result has 0xFFFF in matching lanes — take every
-        // other byte via movemask + interleaved extraction.
         let bytes = _mm256_movemask_epi8(cmp) as u32;
-        // Convert byte-mask (32 bits, 2 per u16 lane) to 16-bit u16 lane mask.
-        // Each pair of consecutive bits has the same value; take the even-position bit.
         let mut bits: u32 = 0;
         let mut i = 0usize;
         while i < 16 {
             bits |= ((bytes >> (i * 2)) & 1) << i;
             i += 1;
         }
-        found |= (bits as u64) << (chunk * 16);
+        let cand = if bits != 0 { base + bits.trailing_zeros() } else { u32::MAX };
+        result = result.min(cand);
     }
     // Scalar tail
     for i in (chunks * 16)..n {
         if *hashes.get_unchecked(i) == target_hash {
-            found |= 1u64 << i;
+            result = result.min(i as u32);
         }
     }
-    if found != 0 {
-        Some(found.trailing_zeros() as usize)
+    if result != u32::MAX {
+        Some(result as usize)
     } else {
         None
     }
@@ -376,12 +405,63 @@ impl HashPruneReservoir {
             self.farthest_idx = 0;
             return;
         }
+        #[cfg(target_arch = "x86_64")]
+        if matches!(tier(), SimdTier::Avx512) {
+            unsafe { self.update_farthest_avx512() };
+            return;
+        }
         let mut max_dist: u16 = 0;
         let mut max_idx = 0;
         for (idx, entry) in self.entries.iter().enumerate() {
             if entry.distance > max_dist {
                 max_dist = entry.distance;
                 max_idx = idx;
+            }
+        }
+        self.farthest_dist = max_dist;
+        self.farthest_idx = max_idx;
+    }
+
+    /// SIMD argmax of the reservoir's farthest (max) distance + its index.
+    /// `distance` is bits 48..64 of each 8-byte ReservoirEntry, so we load 8
+    /// entries per zmm as u64 and shift. Replaces the O(l_max) scalar rescan
+    /// that runs on every full-reservoir eviction (the per-eviction cost that
+    /// scales linearly with l_max).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f")]
+    unsafe fn update_farthest_avx512(&mut self) {
+        use std::arch::x86_64::*;
+        let n = self.entries.len();
+        let ptr = self.entries.as_ptr() as *const u64;
+        let chunks = n / 8;
+        let mut vmax = _mm512_setzero_si512();
+        for c in 0..chunks {
+            let v = _mm512_loadu_si512(ptr.add(c * 8) as *const __m512i);
+            vmax = _mm512_max_epu64(vmax, _mm512_srli_epi64::<48>(v));
+        }
+        let mut max_dist = _mm512_reduce_max_epu64(vmax) as u16;
+        for i in (chunks * 8)..n {
+            let d = self.entries.get_unchecked(i).distance;
+            if d > max_dist {
+                max_dist = d;
+            }
+        }
+        let tgt = _mm512_set1_epi64(max_dist as i64);
+        let mut max_idx = 0usize;
+        'find: {
+            for c in 0..chunks {
+                let v = _mm512_loadu_si512(ptr.add(c * 8) as *const __m512i);
+                let m = _mm512_cmpeq_epi64_mask(_mm512_srli_epi64::<48>(v), tgt);
+                if m != 0 {
+                    max_idx = c * 8 + m.trailing_zeros() as usize;
+                    break 'find;
+                }
+            }
+            for i in (chunks * 8)..n {
+                if self.entries.get_unchecked(i).distance == max_dist {
+                    max_idx = i;
+                    break 'find;
+                }
             }
         }
         self.farthest_dist = max_dist;
