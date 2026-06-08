@@ -656,6 +656,7 @@ dependencies = [
  "diskann",
  "diskann-benchmark-core",
  "diskann-benchmark-runner",
+ "diskann-bftree",
  "diskann-disk",
  "diskann-label-filter",
  "diskann-providers",

@@ -41,6 +41,10 @@ use super::{
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
+    graph::internal::prune::{
+        Outcome,
+        TransientHandling::{self, Allow, Escalate},
+    },
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
@@ -322,6 +326,7 @@ where
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune(
@@ -448,6 +453,7 @@ where
 
                 let options = prune::Options {
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune_with(
@@ -679,6 +685,7 @@ where
             // Enabling saturation help achieve that.
             let options = prune::Options {
                 force_saturate: true,
+                transient_handling: TransientHandling::Escalate,
             };
 
             self.robust_prune_list(
@@ -1218,17 +1225,13 @@ where
         id: DP::InternalId,
         l_value: usize,
         k_value: usize,
+        v: S::DeleteElementGuard,
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
-            let v = strategy
-                .get_delete_element(&self.data_provider, context, id)
-                .await
-                .into_ann_result()?;
-
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
                 .search_accessor(&self.data_provider, context, v.reborrow())
@@ -1647,6 +1650,21 @@ where
                 .data_provider
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
+
+            // For VisitedAndTopK, we must capture the delete element *before* erasing
+            // the vector data, since it uses the deleted vector as a search query.
+            // This is especially necessary in hard-delete providers, such as the bf-tree.
+            // soft-delete providers, like in-mem don't mind the ordering as much.
+            let delete_element = match inplace_delete_method {
+                InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
+                    strategy
+                        .get_delete_element(&self.data_provider, context, vector_id)
+                        .await
+                        .into_ann_result()?,
+                ),
+                _ => None,
+            };
+
             self.data_provider
                 .delete(context, id)
                 .await
@@ -1665,8 +1683,14 @@ where
                     k_value: k,
                     l_value: l,
                 } => {
-                    self.get_candidates_using_visited_and_topk(strategy, context, vector_id, *l, *k)
-                        .await?
+                    // delete_element is always Some for VisitedAndTopK (set above).
+                    let Some(v) = delete_element else {
+                        unreachable!("delete_element is set for VisitedAndTopK");
+                    };
+                    self.get_candidates_using_visited_and_topk(
+                        strategy, context, vector_id, *l, *k, v,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
                     self.get_candidates_using_twohop_and_onehop(context, &mut accessor, vector_id)
@@ -1926,9 +1950,10 @@ where
                     // No need to force during consolidation.
                     let options = prune::Options {
                         force_saturate: false,
+                        transient_handling: TransientHandling::Allow,
                     };
 
-                    if self
+                    match self
                         .robust_prune_list(
                             accessor,
                             vector_id,
@@ -1937,11 +1962,12 @@ where
                             &mut working_set,
                             options,
                         )
-                        .await
-                        .allow_transient("vector retrieval is allowed to fail during consolidate")?
-                        .is_none()
+                        .await?
                     {
-                        return Ok(ConsolidateKind::FailedVectorRetrieval);
+                        prune::Outcome::SourceUnavailable => {
+                            return Ok(ConsolidateKind::FailedVectorRetrieval);
+                        }
+                        prune::Outcome::Pruned => {}
                     }
 
                     prune_scratch.neighbors
@@ -2344,18 +2370,23 @@ where
                 // No need to enable saturation.
                 let options = prune::Options {
                     force_saturate: false,
+                    transient_handling: TransientHandling::Allow,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    source,
-                    &adj_list,
-                    scratch,
-                    working_set,
-                    options,
-                )
-                .await
-                .escalate("retrieving inserted vector must succeed")?;
+                match self
+                    .robust_prune_list(
+                        &mut accessor,
+                        source,
+                        &adj_list,
+                        scratch,
+                        working_set,
+                        options,
+                    )
+                    .await?
+                {
+                    prune::Outcome::SourceUnavailable => return Ok(()),
+                    prune::Outcome::Pruned => {}
+                }
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
@@ -2444,7 +2475,7 @@ where
         scratch: &mut prune::Scratch<DP::InternalId>,
         working_set: &mut Set,
         options: prune::Options,
-    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
+    ) -> impl SendFuture<Result<Outcome, prune::ListError<DP::InternalId>>>
     where
         A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
         Set: Send + Sync,
@@ -2452,7 +2483,7 @@ where
         async move {
             // Early exit.
             if list.is_empty() {
-                return Ok(());
+                return Ok(Outcome::Pruned);
             }
 
             let computer = accessor.build_distance_computer().into_ann_result()?;
@@ -2474,7 +2505,10 @@ where
             {
                 let vector = match view.get(location) {
                     Some(v) => v,
-                    None => return Err(prune::ListError::failed_retrieval(location)),
+                    None => match options.transient_handling {
+                        Allow => return Ok(Outcome::SourceUnavailable),
+                        Escalate => return Err(prune::ListError::failed_retrieval(location)),
+                    },
                 };
 
                 for id in list.iter().filter(|&&i| i != location) {
@@ -2496,7 +2530,7 @@ where
                 options,
             );
 
-            Ok(())
+            Ok(Outcome::Pruned)
         }
     }
 
@@ -2869,6 +2903,7 @@ where
                 // Saturation is controlled by the index configuration.
                 let options = prune::Options {
                     force_saturate: false,
+                    transient_handling: TransientHandling::Escalate,
                 };
 
                 self.robust_prune_list(

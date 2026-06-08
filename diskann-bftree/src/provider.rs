@@ -33,7 +33,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         BuildDistanceComputer, DataProvider, DefaultContext, DelegateNeighbor, Delete,
-        ElementStatus, HasElementRef, HasId, NeighborAccessor, NeighborAccessorMut, NoopGuard,
+        ElementStatus, HasElementRef, HasId, NoopGuard,
         SetElement,
     },
     utils::{IntoUsize, VectorRepr},
@@ -44,6 +44,8 @@ use diskann_utils::{
     views::MatrixView,
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
+
+use crate::neighbors::NeighborScratch;
 
 use super::{
     neighbors::NeighborProvider, quant::QuantVectorProvider, vectors::VectorProvider, AccessError,
@@ -218,13 +220,17 @@ pub struct BfTreeProviderParameters {
     // The maximum number of neighbors to store for each vector
     pub max_degree: u32,
 
-    // bf-tree config for vector provider
+    // bf-tree config for vector provider.
+    // Note: bf-tree requires a minimum circular buffer size of 8192 bytes;
+    // the default is 32MB. Values below the minimum will cause bf-tree errors.
     pub vector_provider_config: Config,
 
-    // bf-tree config for quant vector provider
+    // bf-tree config for quant vector provider.
+    // Same minimum circular buffer constraint as above.
     pub quant_vector_provider_config: Config,
 
-    // bf-tree config for neighbor list provider
+    // bf-tree config for neighbor list provider.
+    // Same minimum circular buffer constraint as above.
     pub neighbor_list_provider_config: Config,
 
     // Optional graph configuration parameters for persistence
@@ -310,9 +316,10 @@ where
             // an uninitialized neighbor list in functions `consolidate_deletes` and
             // `consolidate_simple` and getting an error. This is a stop-gap solution
             // until BF-tree API is improved to handle `exists` queries.
+            let mut scratch = provider.neighbor_provider.scratch();
             for i in 0..params.max_points {
                 let vector_id = i as u32;
-                provider.neighbor_provider.set_neighbors(vector_id, &[])?;
+                scratch.write_neighbors(vector_id, &[])?;
             }
         }
         Ok(provider)
@@ -388,17 +395,25 @@ where
     }
 }
 
+/// Hard-delete implementation for `BfTreeProvider`.
+///
+/// This provider performs **hard deletes**: vector data is immediately and irrecoverably erased
+/// from the underlying bf-tree storage when [`Delete::delete`] is called. This has an important
+/// consequence for inplace delete: the [`InplaceDeleteMethod::VisitedAndTopK`] strategy is
+/// **incompatible** with this provider because it requires reading the deleted vector's data
+/// (via [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been
+/// committed. Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`]
+/// instead, as these strategies only require neighbor topology (which remains accessible).
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
-    Q: AsyncFriendly + QuantDelete,
+    Q: AsyncFriendly,
 {
     fn release(
         &self,
         _context: &Self::Context,
         _id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        // no-op: hard delete removes the data
         std::future::ready(Ok(()))
     }
 
@@ -408,12 +423,7 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
-
-        if let Err(e) = self.neighbor_provider.set_neighbors(id, &[]) {
-            return std::future::ready(Err(e));
-        }
         self.full_vectors.delete_vector(id as usize);
-        self.quant_vectors.delete_vector(id as usize);
 
         std::future::ready(Ok(()))
     }
@@ -487,22 +497,6 @@ impl CreateQuantProvider for Poly<dyn Quantizer> {
     }
 }
 
-pub(crate) trait QuantDelete {
-    fn delete_vector(&self, id: usize);
-}
-
-impl QuantDelete for NoStore {
-    fn delete_vector(&self, _id: usize) {
-        //no-op
-    }
-}
-
-impl QuantDelete for QuantVectorProvider {
-    fn delete_vector(&self, id: usize) {
-        self.delete_vector(id);
-    }
-}
-
 impl<T, Q> BfTreeProvider<T, Q>
 where
     T: VectorRepr,
@@ -573,41 +567,10 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.neighbors()
-    }
-}
-
-impl NeighborAccessor for &NeighborProvider<u32> {
-    fn get_neighbors(
-        self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.get_neighbors(id, neighbors).map(|_| self))
-    }
-}
-
-impl NeighborAccessorMut for &NeighborProvider<u32> {
-    fn set_neighbors(
-        self,
-        vector_id: u32,
-        neighbors: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.set_neighbors(vector_id, neighbors).map(|_| self))
-    }
-
-    fn append_vector(
-        self,
-        vector_id: u32,
-        new_neighbor_ids: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(
-            self.append_vector(vector_id, new_neighbor_ids)
-                .map(|_| self),
-        )
+        self.neighbors().scratch()
     }
 }
 
@@ -725,13 +688,13 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
-            // Set the quantized vector
             self.quant_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -756,11 +719,12 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -1023,10 +987,10 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
+        self.provider.neighbors().scratch()
     }
 }
 
@@ -1140,9 +1104,9 @@ impl<'a, T> DelegateNeighbor<'a> for QuantPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Delegate = &'a NeighborProvider<u32>;
+    type Delegate = NeighborScratch<'a, u32>;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
+        self.provider.neighbors().scratch()
     }
 }
 
@@ -1328,8 +1292,14 @@ where
     }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using full-precision vectors.
 ///
+/// # Compatibility
+///
+/// This strategy is used with [`InplaceDeleteMethod::OneHop`] and
+/// [`InplaceDeleteMethod::TwoHopAndOneHop`]. It is **not compatible** with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] because `BfTreeProvider` performs hard deletes —
+/// the vector data is erased before `get_delete_element` is called, causing it to fail.
 impl<T, Q> InplaceDeleteStrategy<BfTreeProvider<T, Q>> for FullPrecision
 where
     T: VectorRepr,
@@ -1364,7 +1334,7 @@ where
         let elt = provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")?
+            .escalate("get_delete_element: failed to read vector for inplace delete")?
             .into();
         Ok(elt)
     }
@@ -1442,8 +1412,12 @@ where
     }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using quantized vectors.
 ///
+/// # Compatibility
+///
+/// Same constraint as [`FullPrecision`]'s impl: not compatible with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] due to hard deletes.
 impl<T> InplaceDeleteStrategy<BfTreeProvider<T, QuantVectorProvider>> for Quantized
 where
     T: VectorRepr,
@@ -1477,7 +1451,7 @@ where
         provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")
+            .escalate("get_delete_element: failed to read vector for inplace delete")
             .map(Into::into)
     }
 }
@@ -1847,8 +1821,10 @@ where
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
             saved_params.is_memory,
         )?;
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
+            saved_params.max_degree,
+            adjacency_list_index,
+        )?;
 
         Ok(Self {
             quant_vectors: NoStore,
@@ -1993,8 +1969,10 @@ where
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
             saved_params.is_memory,
         )?;
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
+            saved_params.max_degree,
+            adjacency_list_index,
+        )?;
 
         let filename = BfTreePaths::quant_data_bin(&saved_params.prefix);
         let mut reader = storage.open_reader(&filename)?;
@@ -2460,7 +2438,7 @@ mod tests {
         )
         .unwrap();
 
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
 
         // Insert new vectors without neighbors and empty neighbor list is
         // expected for each newly inserted vector
@@ -2471,12 +2449,18 @@ mod tests {
 
             // First attempt should return empty
             let mut out = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
             assert!(out.is_empty());
 
             // After we set the empty neighbor list, our attempt should succeed
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2487,17 +2471,20 @@ mod tests {
         for i in 0..num_points {
             let mut out = AdjacencyList::new();
             let neighbors = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
 
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert_eq!(&*out, &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2507,9 +2494,9 @@ mod tests {
         let mut out = AdjacencyList::from_iter_untrusted([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
         // Attempt to access non-existant vector's neighbor list should fail as NotFound
-        assert!(neighbor_accessor
+        assert!(provider
+            .neighbor_provider
             .get_neighbors(200, &mut out)
-            .await
             .is_err());
         assert!(out.is_empty());
     }
@@ -2581,15 +2568,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         assert_eq!(vector_config.get_leaf_page_size(), 8192);
@@ -2714,15 +2698,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         let storage = FileStorageProvider;
@@ -2839,15 +2820,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         // Delete a couple of vectors
@@ -2949,15 +2927,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         provider.delete(ctx, &2u32).await.unwrap();
