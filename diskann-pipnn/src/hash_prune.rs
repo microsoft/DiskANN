@@ -16,8 +16,10 @@
 //! Both slabs are one Vec each (contiguous in VA), so `madvise(HUGEPAGE)` is
 //! effective when the kernel actually backs THP.
 //!
-//! `L_MAX_MAX` is hard-coded at 64 — the production value. Configs with
-//! `l_max > 64` are rejected at construction time.
+//! `L_MAX_MAX` is hard-coded at 128 to match `PiPNNConfig` default.
+//! Configs with `l_max > 128` are rejected at construction time.
+//! `find_hash_simd` scans `L_MAX_MAX / 32 = 4` AVX-512 chunks (128 lanes)
+//! with a u128 mask accumulator.
 
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
 
@@ -27,10 +29,8 @@ use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
 use diskann_vector::lsh::LshSketches;
 use rayon::prelude::*;
 
-/// Fixed cap on reservoir size. Production benchmark (`l_max = 64`) is the
-/// tuned value; `find_hash_simd` is also 64-lane-optimal at 2 SIMD ops per
-/// scan. Tests that use `PiPNNConfig::default()` (`l_max = 128`) must override
-/// to `l_max = 64`.
+/// Compile-time bound on reservoir size. Equals `PiPNNConfig` default
+/// (l_max = 128). `find_hash_simd` scans L_MAX_MAX/32 = 4 AVX-512 chunks.
 pub(crate) const L_MAX_MAX: usize = 128;
 
 /// Compute LSH sketches over `data` (row-major `npoints × ndims` of `T`).
