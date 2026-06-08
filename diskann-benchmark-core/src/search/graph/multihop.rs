@@ -86,7 +86,14 @@ where
 impl<DP, T, S> Search for MultiHop<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [T],
+            DP::ExternalId,
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;

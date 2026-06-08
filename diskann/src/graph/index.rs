@@ -2108,7 +2108,7 @@ where
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2130,7 +2130,7 @@ where
         init_ids: Option<&'a [DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {

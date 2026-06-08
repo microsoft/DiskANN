@@ -324,7 +324,7 @@ where
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor: SearchAccessor<Id = Provider::InternalId>;
+    type SearchAccessor: HasId<Id = Provider::InternalId> + Send + Sync;
 
     /// Construct and return the search accessor.
     fn search_accessor(
@@ -570,7 +570,8 @@ where
 /// This strategy is used during the greedy search portion of index construction.
 /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
 /// is used for the rest.
-pub trait InsertStrategy<'a, Provider, T>: SearchStrategy<'a, Provider, T> + 'static
+pub trait InsertStrategy<'a, Provider, T>:
+    SearchStrategy<'a, Provider, T, SearchAccessor: SearchAccessor> + 'static
 where
     Provider: DataProvider,
 {

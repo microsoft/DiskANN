@@ -54,7 +54,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
 impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopSearch<'b, DP::InternalId>
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
