@@ -549,17 +549,10 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             "Final prune input"
         );
 
-        let adj = if std::env::var("PIPNN_DISKANN_PRUNE").as_deref() == Ok("1") {
-            tracing::info!("PIPNN_DISKANN_PRUNE=1 → DiskANN-style iterative RobustPrune");
-            final_prune_diskann_style(
-                data, ndims, &candidates, max_degree, metric, config.alpha,
-            )
-        } else {
-            final_prune_from_candidates(
-                data, ndims, &candidates, max_degree, metric, config.alpha,
-                config.saturate_after_prune,
-            )
-        };
+        let adj = final_prune_from_candidates(
+            data, ndims, &candidates, max_degree, metric, config.alpha,
+            config.saturate_after_prune,
+        );
 
         // Log output stats after pruning.
         let total_edges: usize = adj.iter().map(|a| a.len()).sum();
@@ -732,98 +725,6 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 /// For L2 / Cosine metrics uses the triangle-inequality rule:
 ///   factor = max(factor, candidate_dist / dist_to_selected)
 /// and a candidate is occluded when factor > current_alpha.
-fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
-    data: &[T],
-    ndims: usize,
-    candidates_per_node: &[Vec<(u32, f32)>],
-    max_degree: usize,
-    metric: Metric,
-    alpha: f32,
-) -> Vec<Vec<u32>> {
-    let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
-
-    candidates_per_node
-        .par_iter()
-        .map(|candidates| {
-            if candidates.is_empty() {
-                return Vec::new();
-            }
-            let nc = candidates.len();
-            // Same as paper-style: do NOT early-return at nc <= max_degree.
-            // RobustPrune\u0027s occlusion strips candidates regardless of |E| vs R.
-
-            let mut cand_f32 = vec![0.0f32; nc * ndims];
-            for (ci, &(id, _)) in candidates.iter().enumerate() {
-                let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
-                T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                    .expect("f32 conversion");
-            }
-
-            let mut occlude_factor = vec![0.0f32; nc];
-            let mut last_checked = vec![0u32; nc];
-            // selected stores INDICES into `candidates` / `cand_f32`, in selection order.
-            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
-
-            let mut current_alpha = 1.0f32;
-            let increment_factor = alpha.min(1.2);
-
-            // Outer alpha-ramp loop, mirrors diskann/src/graph/index.rs:2833-2943.
-            loop {
-                for i in 0..nc {
-                    if selected.len() >= max_degree {
-                        break;
-                    }
-                    if occlude_factor[i] > current_alpha {
-                        continue;
-                    }
-                    let neighbor_distance = candidates[i].1;
-                    let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
-
-                    // Resume occlusion check from last_checked[i].
-                    let mut skip = false;
-                    while (last_checked[i] as usize) < selected.len() {
-                        let result_idx = selected[last_checked[i] as usize] as usize;
-                        last_checked[i] += 1;
-                        if result_idx >= i {
-                            // already past i in pool order — skip per diskann
-                            continue;
-                        }
-                        let r_f32 = &cand_f32[result_idx * ndims..(result_idx + 1) * ndims];
-                        let dist_jk = dist_fn.call(y_f32, r_f32);
-                        // TriangleInequality rule (L2, Cosine variants).
-                        if dist_jk == 0.0 {
-                            occlude_factor[i] = f32::MAX;
-                        } else {
-                            let new_factor = neighbor_distance / dist_jk;
-                            if new_factor > occlude_factor[i] {
-                                occlude_factor[i] = new_factor;
-                            }
-                        }
-                        if occlude_factor[i] > current_alpha {
-                            skip = true;
-                            break;
-                        }
-                    }
-                    if skip || occlude_factor[i] > current_alpha {
-                        continue;
-                    }
-                    // Mark this candidate selected for ALL future alpha iterations.
-                    occlude_factor[i] = f32::MAX;
-                    selected.push(i as u32);
-                }
-                if current_alpha >= alpha || selected.len() >= max_degree {
-                    break;
-                }
-                current_alpha = (current_alpha * increment_factor).min(alpha);
-            }
-
-            selected.iter()
-                .map(|&idx| candidates[idx as usize].0)
-                .collect()
-        })
-        .collect_installed()
-}
-
 /// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
 /// loop given pre-computed partition leaves and an initialized [`HashPrune`].
 ///
