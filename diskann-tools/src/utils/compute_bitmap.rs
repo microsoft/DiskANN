@@ -92,20 +92,9 @@ impl QueryAccelerator for InvertedIndexAccelerator {
                     .map_err(|e| anyhow::anyhow!("Failed to convert value for Eq: {e}"))?;
                 Ok(self.map.get(&attr_val).cloned().unwrap_or_default())
             }
-            CompareOp::Ne(v) => {
+            CompareOp::Ne(v) | CompareOp::SNe(v) => {
                 let attr_val = AttributeValue::try_from(v)
                     .map_err(|e| anyhow::anyhow!("Failed to convert value for Ne: {e}"))?;
-                let mut result = BitSet::new();
-                for (val, bits) in self.map.iter() {
-                    if val != &attr_val {
-                        result.extend(bits);
-                    }
-                }
-                Ok(result)
-            }
-            CompareOp::SNe(v) => {
-                let attr_val = AttributeValue::try_from(v)
-                    .map_err(|e| anyhow::anyhow!("Failed to convert value for SNe: {e}"))?;
                 let mut result = BitSet::new();
                 for (val, bits) in self.map.iter() {
                     if val != &attr_val {
@@ -169,6 +158,11 @@ impl QueryAccelerator for BTreeAccelerator {
                         bitset.extend(ids.iter().cloned());
                     }
                 }
+                // SNe also includes docs whose field is absent; those are not present in
+                // any posting list entry, so they are included via the universe complement
+                // at the call site (compute_query_bitmaps). The accelerator itself returns
+                // only the subset that does have the field but with a different value.
+                // The absent-field docs are handled in eval_query_using_accelerators.
                 Ok(bitset)
             }
             CompareOp::Lt(num) => {

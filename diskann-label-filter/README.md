@@ -105,8 +105,8 @@ The `CompareOp` enum uses type-safe representations for different comparison ope
 ```rust
 pub enum CompareOp {
     Eq(Value),       // Equal to any JSON value
-    Ne(Value),       // Not equal to any JSON value
-    SNe(Value),      // Not equal to any JSON value, including if the field is not present at all
+    Ne(Value),       // Not equal to any JSON value, will evaluate to false if field is not present
+    SNe(Value),      // Not equal to any JSON value, will evaluate to true if field is not present
     Lt(f64),         // Less than (numeric only)
     Lte(f64),        // Less than or equal (numeric only)
     Gt(f64),         // Greater than (numeric only)
