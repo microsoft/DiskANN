@@ -13,6 +13,8 @@
 
 #include "aligned_file_reader.h"
 #include "abstract_scratch.h"
+
+#include "parallel_hashmap/phmap.h"
 #include "neighbor.h"
 #include "defaults.h"
 #include "concurrent_queue.h"
@@ -73,7 +75,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _candidate_pick_flags;
     }
-    inline tsl::robin_set<uint32_t> &inserted_into_pool_rs()
+    inline phmap::flat_hash_set<uint32_t> &inserted_into_pool_rs()
     {
         return _inserted_into_pool_rs;
     }
@@ -133,7 +135,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     std::vector<bool> _candidate_pick_flags;
 
     // Capacity initialized to 20L
-    tsl::robin_set<uint32_t> _inserted_into_pool_rs;
+    phmap::flat_hash_set<uint32_t> _inserted_into_pool_rs;
 
     // Use a pointer here to allow for forward declaration of dynamic_bitset
     // in public headers to avoid making boost a dependency for clients

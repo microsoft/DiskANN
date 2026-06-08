@@ -160,17 +160,129 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
 #endif
 }
 
+// Helper macro: process 32 uint8 elements into an int32 accumulator
+#define L2_UINT8_BLOCK32(a_ptr, b_ptr, offset, acc) \
+    { \
+        __m256i va = _mm256_loadu_si256((__m256i *)((a_ptr) + (offset))); \
+        __m256i vb = _mm256_loadu_si256((__m256i *)((b_ptr) + (offset))); \
+        __m256i d_lo = _mm256_sub_epi16( \
+            _mm256_cvtepu8_epi16(_mm256_castsi256_si128(va)), \
+            _mm256_cvtepu8_epi16(_mm256_castsi256_si128(vb))); \
+        __m256i d_hi = _mm256_sub_epi16( \
+            _mm256_cvtepu8_epi16(_mm256_extracti128_si256(va, 1)), \
+            _mm256_cvtepu8_epi16(_mm256_extracti128_si256(vb, 1))); \
+        (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_lo, d_lo)); \
+        (acc) = _mm256_add_epi32((acc), _mm256_madd_epi16(d_hi, d_hi)); \
+    }
+
+// Fully-unrolled dim=64 specialization: 2 x 32-byte loads, no loop overhead
+static inline float l2_uint8_avx2_dim64(const uint8_t *a, const uint8_t *b)
+{
+    __m256i acc0 = _mm256_setzero_si256();
+    __m256i acc1 = _mm256_setzero_si256();
+    L2_UINT8_BLOCK32(a, b, 0, acc0)
+    L2_UINT8_BLOCK32(a, b, 32, acc1)
+    __m256i acc = _mm256_add_epi32(acc0, acc1);
+    return _mm256_reduce_add_ps(_mm256_cvtepi32_ps(acc));
+}
+
+// Fully-unrolled dim=128 specialization: 4 x 32-byte loads with 4 accumulators
+static inline float l2_uint8_avx2_dim128(const uint8_t *a, const uint8_t *b)
+{
+    __m256i acc0 = _mm256_setzero_si256();
+    __m256i acc1 = _mm256_setzero_si256();
+    __m256i acc2 = _mm256_setzero_si256();
+    __m256i acc3 = _mm256_setzero_si256();
+    L2_UINT8_BLOCK32(a, b, 0, acc0)
+    L2_UINT8_BLOCK32(a, b, 32, acc1)
+    L2_UINT8_BLOCK32(a, b, 64, acc2)
+    L2_UINT8_BLOCK32(a, b, 96, acc3)
+    __m256i acc = _mm256_add_epi32(_mm256_add_epi32(acc0, acc1),
+                                    _mm256_add_epi32(acc2, acc3));
+    return _mm256_reduce_add_ps(_mm256_cvtepi32_ps(acc));
+}
+
 float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size) const
 {
+#ifdef _WINDOWS
+#ifdef USE_AVX2
+    // Dispatch to fully-unrolled kernels for common dimensions
+    if (size == 64) return l2_uint8_avx2_dim64(a, b);
+    if (size == 128) return l2_uint8_avx2_dim128(a, b);
+
+    // Generic path: 4 independent int32 accumulators to hide _mm256_madd_epi16
+    // latency (5 cycles on Zen 3, 0.5 CPI throughput)
+    __m256i acc0 = _mm256_setzero_si256();
+    __m256i acc1 = _mm256_setzero_si256();
+    __m256i acc2 = _mm256_setzero_si256();
+    __m256i acc3 = _mm256_setzero_si256();
+
+    while (size >= 128)
+    {
+        L2_UINT8_BLOCK32(a, b, 0, acc0)
+        L2_UINT8_BLOCK32(a, b, 32, acc1)
+        L2_UINT8_BLOCK32(a, b, 64, acc2)
+        L2_UINT8_BLOCK32(a, b, 96, acc3)
+        a += 128;
+        b += 128;
+        size -= 128;
+    }
+    // Merge accumulators (still int32 — no precision loss)
+    __m256i acc = _mm256_add_epi32(_mm256_add_epi32(acc0, acc1),
+                                    _mm256_add_epi32(acc2, acc3));
+    // Tail: 32 bytes at a time
+    while (size >= 32)
+    {
+        L2_UINT8_BLOCK32(a, b, 0, acc)
+        a += 32;
+        b += 32;
+        size -= 32;
+    }
+    // Convert to float for final reduction
+    __m256 sum_ps = _mm256_cvtepi32_ps(acc);
+    if (size >= 16)
+    {
+        __m256i va16 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i *)a));
+        __m256i vb16 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i *)b));
+        __m256i diff = _mm256_sub_epi16(va16, vb16);
+        __m256i sq = _mm256_madd_epi16(diff, diff);
+        sum_ps = _mm256_add_ps(sum_ps, _mm256_cvtepi32_ps(sq));
+        a += 16;
+        b += 16;
+        size -= 16;
+    }
+    // Horizontal reduction
+    __m128 hi128 = _mm256_extractf128_ps(sum_ps, 1);
+    __m128 lo128 = _mm256_castps256_ps128(sum_ps);
+    __m128 sum128 = _mm_add_ps(lo128, hi128);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    float result = _mm_cvtss_f32(sum128);
+    // Scalar tail
+    for (uint32_t i = 0; i < size; i++)
+    {
+        int32_t diff = (int32_t)a[i] - (int32_t)b[i];
+        result += (float)(diff * diff);
+    }
+    return result;
+#undef L2_UINT8_BLOCK32
+#else
     uint32_t result = 0;
-#ifndef _WINDOWS
-#pragma omp simd reduction(+ : result) aligned(a, b : 8)
-#endif
     for (int32_t i = 0; i < (int32_t)size; i++)
     {
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
     return (float)result;
+#endif
+#else
+    uint32_t result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+    for (int32_t i = 0; i < (int32_t)size; i++)
+    {
+        result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
+    }
+    return (float)result;
+#endif
 }
 
 #ifndef _WINDOWS
@@ -688,12 +800,8 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
 {
     if (m == diskann::Metric::L2)
     {
-#ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
-                         "Using "
-                         "slow version. "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
+#if defined(_WINDOWS) && defined(USE_AVX2)
+        diskann::cout << "L2: Using AVX2 distance computation DistanceL2UInt8" << std::endl;
 #endif
         return new diskann::DistanceL2UInt8();
     }
