@@ -245,6 +245,82 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Decision<I> {
+    Accept(I),
+    Reject(I),
+}
+
+impl<I> Decision<I> {
+    pub fn into_inner(self) -> I {
+        match self {
+            Self::Accept(i) => i,
+            Self::Reject(i) => i,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExpansionHint {
+    All,
+    AcceptOnly,
+}
+
+pub trait FilteredAccessor: HasId + Send + Sync {
+    fn starting_points(
+        &self,
+    ) -> impl std::future::Future<Output = ANNResult<Vec<Decision<Self::Id>>>> + Send;
+
+    fn start_point_distances<F>(
+        &mut self,
+        f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(Decision<Self::Id>, f32) + Send;
+
+    fn expand_beam_filtered<Itr, P, F>(
+        &mut self,
+        hint: ExpansionHint,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Decision<Self::Id>, f32) + Send;
+
+    //////////////////////
+    // Provided methods //
+    //////////////////////
+
+    fn terminate_early(&mut self) -> bool {
+        false
+    }
+
+    fn is_not_start_point(
+        &self,
+    ) -> impl std::future::Future<
+        Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
+    > + Send {
+        async move {
+            let set: std::collections::HashSet<_> = self
+                .starting_points()
+                .await?
+                .into_iter()
+                .map(|v| v.into_inner())
+                .collect();
+
+            Ok(move |id| !set.contains(&id))
+        }
+    }
+
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+        self.starting_points()
+            .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
+    }
+}
+
 /// An predicate evaluating `item`.
 pub trait Predicate<T> {
     fn eval(&self, item: &T) -> bool;
