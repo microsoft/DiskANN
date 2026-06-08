@@ -48,7 +48,12 @@ pub(crate) fn tier() -> SimdTier {
 fn detect_tier() -> SimdTier {
     #[cfg(target_arch = "x86_64")]
     {
-        if std::is_x86_feature_detected!("avx512f") {
+        // AVX-512 tier requires both F (foundation) AND BW (byte/word ops) so
+        // every SIMD kernel in the crate can rely on `vpcmpeqw` (16-bit lane
+        // compare, used by hash_prune::find_hash). F-without-BW only shipped on
+        // Knights Landing / Knights Mill (Xeon Phi 72xx), which is not a
+        // deployment target. Skylake-X and later, plus AMD Zen 4, ship both.
+        if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw") {
             return SimdTier::Avx512;
         }
         if std::is_x86_feature_detected!("avx2")
