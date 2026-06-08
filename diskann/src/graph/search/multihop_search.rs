@@ -6,17 +6,13 @@
 //! Label-filtered search using multi-hop expansion.
 
 use diskann_utils::future::SendFuture;
-use hashbrown::HashSet;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{
-            self, FilteredAccessor, HybridPredicate, Predicate, PredicateMut, SearchPostProcess,
-            SearchStrategy,
-        },
+        glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,

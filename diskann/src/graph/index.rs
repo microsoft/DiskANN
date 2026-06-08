@@ -49,7 +49,7 @@ use crate::{
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
-        IntoUsize, TryIntoVectorId, VectorId,
+        IntoUsize, TryIntoVectorId,
         async_tools::{self, DynamicBalancer},
     },
 };
@@ -64,35 +64,6 @@ pub struct DiskANNIndex<DP: DataProvider> {
     pub data_provider: DP,
     scratch_pool: ObjectPool<SearchScratch<DP::InternalId>>,
 }
-
-// /// Decision returned by [`QueryLabelProvider::on_visit`] to control search traversal.
-// #[derive(Debug, Clone, Copy, PartialEq)]
-// pub enum QueryVisitDecision<I: VectorId> {
-//     /// Accept this node into the frontier for further traversal.
-//     Accept(Neighbor<I>),
-//     /// Reject this node; do not add it to the frontier.
-//     Reject,
-//     /// Stop the search immediately without accepting this node.
-//     Terminate,
-// }
-//
-// pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
-//     /// This is a query scoped provider
-//     /// Check if the vec_id's label match the query label
-//     fn is_match(&self, vec_id: V) -> bool;
-//
-//     /// Inspect a candidate before it is inserted into the frontier.
-//     /// Implementations can tweak the distance, reject the candidate, or
-//     /// request early termination. The default implementation accepts if
-//     /// `is_match` returns true, rejects otherwise.
-//     fn on_visit(&self, neighbor: Neighbor<V>) -> QueryVisitDecision<V> {
-//         if self.is_match(neighbor.id) {
-//             QueryVisitDecision::Accept(neighbor)
-//         } else {
-//             QueryVisitDecision::Reject
-//         }
-//     }
-// }
 
 #[derive(Debug, Clone, Copy)]
 pub struct DegreeStats {

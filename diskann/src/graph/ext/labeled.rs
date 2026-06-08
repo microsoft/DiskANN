@@ -104,6 +104,7 @@ impl<'a, A> FilteredAccessor<'a, A>
 where
     A: HasId,
 {
+    #[cfg(test)]
     pub(crate) fn new(inner: A, labels: &'a dyn QueryLabelProvider<A::Id>) -> Self {
         Self { inner, labels }
     }
@@ -209,7 +210,6 @@ where
         B: crate::graph::SearchOutputBuffer<O> + Send + ?Sized,
         Next: glue::SearchPostProcess<Self::NextAccessor, T, O> + Sync,
     {
-        use glue::SearchPostProcess;
         next.post_process(&mut accessor.inner, query, candidates, output)
     }
 }

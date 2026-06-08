@@ -163,11 +163,11 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
+            ext::labeled::QueryLabelProvider,
             glue::{
                 self, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
                 MultiInsertStrategy, SearchStrategy,
             },
-            index::QueryLabelProvider,
             search::Range,
             search_output_buffer,
         },

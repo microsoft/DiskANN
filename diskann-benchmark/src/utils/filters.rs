@@ -6,7 +6,7 @@
 use bit_set::BitSet;
 use std::fmt::Debug;
 
-use diskann::{graph::index::QueryLabelProvider, utils::VectorId};
+use diskann::{graph::ext::labeled::QueryLabelProvider, utils::VectorId};
 use diskann_benchmark_runner::files::InputFile;
 use diskann_label_filter::{
     kv_index::GenericIndex,
