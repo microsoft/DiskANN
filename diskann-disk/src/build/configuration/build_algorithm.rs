@@ -83,6 +83,7 @@ mod tests {
                 final_prune: false,
                 alpha: 1.2,
                 leader_cap: 1000,
+                saturate_after_prune: false,
             }
         }
 

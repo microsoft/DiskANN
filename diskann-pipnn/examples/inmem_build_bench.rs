@@ -83,6 +83,7 @@ fn main() {
         alpha: 1.2,
         num_threads: 16,
         leader_cap: 1000,
+        saturate_after_prune: false,
     };
     println!("config: {:?}", config);
     let rss_pre = read_rss_kb();

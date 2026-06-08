@@ -536,6 +536,10 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         } else {
             total_candidates as f64 / candidates.len() as f64
         };
+        println!(
+            "  Final prune input: {} nodes, avg candidates={:.1}, max={}, nodes_over_max_degree={}",
+            candidates.len(), avg_cand, max_cand, nodes_over_degree
+        );
         tracing::info!(
             nodes = candidates.len(),
             avg_candidates = avg_cand,
@@ -553,6 +557,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         } else {
             final_prune_from_candidates(
                 data, ndims, &candidates, max_degree, metric, config.alpha,
+                config.saturate_after_prune,
             )
         };
 
@@ -620,9 +625,9 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
     Ok(graph)
 }
 
-/// PiPNN paper's single-pass diversity prune (Algorithm 2):
-/// for each candidate in distance-sorted order, select if no earlier selection
 /// occludes it (dist_to_selected < alpha * dist_to_query), else mark occluded.
+/// Optionally saturate the result with occluded candidates until `max_degree`
+/// is filled (controlled by `saturate`).
 ///
 /// Candidates are pre-sorted ascending by HashPrune output.
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
@@ -632,111 +637,92 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
+    saturate: bool,
 ) -> Vec<Vec<u32>> {
     // Dimension-specialized distance kernel — enables SIMD target features AND
     // compile-time loop unrolling for the known dimension. dispatch2 (not no_features)
     // applies #[target_feature] for AVX2/AVX-512 based on runtime CPU detection.
     let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
-    // Per-node body, factored so the parallel strategy can be swapped at the
-    // bottom via PIPNN_PRUNE_PARALLEL.
-    let process_node = |candidates: &Vec<(u32, f32)>| -> Vec<u32> {
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-        let nc = candidates.len();
-        if nc <= max_degree {
-            return candidates.iter().map(|&(id, _)| id).collect();
-        }
-        let mut cand_f32 = vec![0.0f32; nc * ndims];
-        for (ci, &(id, _)) in candidates.iter().enumerate() {
-            let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
-            T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                .expect("f32 conversion");
-        }
-        const UNVISITED: u8 = 0;
-        const SELECTED: u8 = 1;
-        const OCCLUDED: u8 = 2;
-        let mut state = vec![UNVISITED; nc];
-        let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
-        for i in 0..nc {
-            if selected.len() >= max_degree { break; }
-            if state[i] != UNVISITED { continue; }
-            selected.push(candidates[i].0);
-            state[i] = SELECTED;
-            let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
-            for j in (i + 1)..nc {
-                if state[j] != UNVISITED { continue; }
-                let dist_x_z = candidates[j].1;
-                let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
-                let dist_y_z = dist_fn.call(y_f32, z_f32);
-                if alpha * dist_y_z < dist_x_z {
-                    state[j] = OCCLUDED;
-                }
+    candidates_per_node
+        .par_iter()
+        .map(|candidates| {
+            if candidates.is_empty() {
+                return Vec::new();
             }
-        }
-        // Saturation: if Algorithm 2 left us under max_degree, refill from the
-        // distance-sorted candidate list (skipping already-SELECTED). Restores
-        // graph quality on hub/medoid neighborhoods whose candidates align along
-        // one ray — without saturation those nodes lose ~6 edges/avg and R@10
-        // L=10 drops 1.6pp (measured BigANN 10M, c=512/f[9,3]). Matches the
-        // canonical DiskANN behavior (diskann/src/graph/index.rs:2949).
-        if selected.len() < max_degree {
-            for i in 0..nc {
-                if selected.len() >= max_degree { break; }
-                if state[i] != SELECTED {
-                    selected.push(candidates[i].0);
-                }
-            }
-        }
-        selected
-    };
 
-    // SPOT-CHECK: choose parallel strategy by env var.
-    //   unset / "rayon"  -> rayon par_iter (production)
-    //   "chunks"         -> rayon par_chunks(PIPNN_PRUNE_CHUNK, default 8192)
-    //   "native"         -> std::thread::scope, 48-way contiguous chunks
-    match std::env::var("PIPNN_PRUNE_PARALLEL").ok().as_deref() {
-        Some("chunks") => {
-            let chunk_sz: usize = std::env::var("PIPNN_PRUNE_CHUNK")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(8192);
-            candidates_per_node
-                .par_chunks(chunk_sz)
-                .flat_map(|chunk| {
-                    chunk.iter().map(|c| process_node(c)).collect::<Vec<_>>()
-                })
-                .collect_installed()
-        }
-        Some("native") => {
-            let n = candidates_per_node.len();
-            let n_threads: usize = std::env::var("PIPNN_PRUNE_NATIVE_THREADS")
-                .ok().and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| std::thread::available_parallelism().map(|p| p.get()).unwrap_or(48));
-            let chunk_sz = (n + n_threads - 1) / n_threads;
-            let process_node = &process_node;
-            std::thread::scope(|s| {
-                let handles: Vec<_> = (0..n_threads).map(|t| {
-                    let start = t * chunk_sz;
-                    let end = (start + chunk_sz).min(n);
-                    s.spawn(move || {
-                        (start..end).map(|node_id| {
-                            process_node(&candidates_per_node[node_id])
-                        }).collect::<Vec<_>>()
-                    })
-                }).collect();
-                let mut out: Vec<Vec<u32>> = Vec::with_capacity(n);
-                for h in handles { out.extend(h.join().unwrap()); }
-                out
-            })
-        }
-        _ => {
-            candidates_per_node
-                .par_iter()
-                .map(|c| process_node(c))
-                .collect_installed()
-        }
-    }
+            let nc = candidates.len();
+
+            // Note: do NOT short-circuit when nc <= max_degree. Paper Algorithm 2\u0027s
+            // occlusion clause (alpha * d(y,z) < d(x,z)) deletes z without selecting it
+            // and runs every outer iteration regardless of |E| < R. Early-returning
+            // here defeats the sparsification on the most common candidate-pool size
+            // for our config (avg ~45-50 at f[5,3] k=3 hp=14).
+            //
+            // Precompute f32 data for all candidates once, instead of converting
+            // Pre-converting once is O(nc × ndims); per-comparison conversion
+            // was O(l_max × max_degree × ndims) — quadratic in l_max.
+            let mut cand_f32 = vec![0.0f32; nc * ndims];
+            for (ci, &(id, _)) in candidates.iter().enumerate() {
+                let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
+                T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
+                    .expect("f32 conversion");
+            }
+
+            // Paper's Algorithm 2: greedy selection with occlusion removal.
+            // Track selected vs occluded separately for saturation.
+            const UNVISITED: u8 = 0;
+            const SELECTED: u8 = 1;
+            const OCCLUDED: u8 = 2;
+            let mut state = vec![UNVISITED; nc];
+            let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
+
+            for i in 0..nc {
+                if selected.len() >= max_degree {
+                    break;
+                }
+                if state[i] != UNVISITED {
+                    continue;
+                }
+
+                selected.push(candidates[i].0);
+                state[i] = SELECTED;
+
+                let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+
+                for j in (i + 1)..nc {
+                    if state[j] != UNVISITED {
+                        continue;
+                    }
+                    let dist_x_z = candidates[j].1;
+                    let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
+                    let dist_y_z = dist_fn.call(y_f32, z_f32);
+
+                    if alpha * dist_y_z < dist_x_z {
+                        state[j] = OCCLUDED;
+                    }
+                }
+            }
+
+            // Saturation: fill remaining degree slots with any non-selected candidate,
+            // closest-first (candidates are distance-sorted). Matches DiskANN's behavior:
+            // iterate pool in distance order, add any candidate not already selected.
+            if saturate && selected.len() < max_degree {
+                for i in 0..nc {
+                    if selected.len() >= max_degree {
+                        break;
+                    }
+                    if state[i] != SELECTED {
+                        selected.push(candidates[i].0);
+                    }
+                }
+            }
+
+            selected
+        })
+        .collect_installed()
 }
+
 
 /// DiskANN-style iterative RobustPrune. Ramps `current_alpha` from 1.0 up to
 /// the target `alpha` in `min(alpha, 1.2)` increments, resuming each candidate's
@@ -763,9 +749,8 @@ fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
                 return Vec::new();
             }
             let nc = candidates.len();
-            if nc <= max_degree {
-                return candidates.iter().map(|&(id, _)| id).collect();
-            }
+            // Same as paper-style: do NOT early-return at nc <= max_degree.
+            // RobustPrune\u0027s occlusion strips candidates regardless of |E| vs R.
 
             let mut cand_f32 = vec![0.0f32; nc * ndims];
             for (ci, &(id, _)) in candidates.iter().enumerate() {
@@ -1782,7 +1767,7 @@ mod tests {
             vec![],
         ];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2, true);
         let node0 = &result[0];
         // With alpha=1.2, point 3 should be selected first (closest).
         // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
@@ -1800,7 +1785,7 @@ mod tests {
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
         let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
 
@@ -1808,7 +1793,7 @@ mod tests {
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
         let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
     }
