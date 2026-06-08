@@ -42,7 +42,8 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
     seed: u64,
 ) -> LshSketches {
     LshSketches::new(npoints, ndims, num_planes, seed, |i, out| {
-        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out).expect("f32 conversion");
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], out)
+            .unwrap_or_else(|e| panic!("VectorRepr::as_f32_into failed during LSH sketches: {}", e));
     })
 }
 

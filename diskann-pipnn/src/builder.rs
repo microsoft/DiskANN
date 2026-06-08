@@ -271,8 +271,7 @@ impl PiPNNGraph {
 /// [`diskann_providers::utils::find_medoid_with_sampling`].
 fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNNResult<usize> {
     let dist_fn = make_dist_fn(Metric::L2, ndims);
-    let convert_err =
-        |e: T::Error| PiPNNError::Config(format!("find_medoid: vector conversion failed: {}", e));
+    let convert_err = |e: T::Error| PiPNNError::Conversion(format!("find_medoid: {}", e));
 
     let stride = npoints.div_ceil(MAX_MEDOID_SAMPLE_SIZE).max(1);
     let mut centroid = vec![0.0f32; ndims];
@@ -308,9 +307,9 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
         .reduce(|| (usize::MAX, f32::MAX), |a, b| if a.1 <= b.1 { a } else { b });
 
     if best_idx == usize::MAX {
-        return Err(PiPNNError::Config(
+        return Err(PiPNNError::Conversion(
             "find_medoid: no point produced a valid distance to the centroid \
-             (likely all-NaN or every per-point conversion failed)"
+             (likely all-NaN data or every per-point conversion failed)"
                 .into(),
         ));
     }
@@ -415,7 +414,7 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let seed = 1000 + replica as u64 * 7919;
 
         let t1 = Instant::now();
-        let partition_config = PartitionConfig::new(
+        let mut partition_config = PartitionConfig::new(
             config.c_max,
             config.c_min,
             config.p_samp,
@@ -423,6 +422,9 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             metric,
             config.leader_cap,
         )?;
+        partition_config.max_partition_iter = config.max_partition_iter;
+        partition_config.deep_fanout_last = config.deep_fanout_last;
+        partition_config.l2_size_override = config.l2_size_override;
 
         let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
@@ -802,7 +804,9 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                 for (ci, &(id, _)) in candidates.iter().enumerate() {
                     let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
                     T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                        .expect("f32 conversion");
+                        .unwrap_or_else(|e| {
+                            panic!("VectorRepr::as_f32_into failed during final_prune: {}", e)
+                        });
                 }
 
                 // Lazy RobustPrune (paper "Optimizing RobustPrune" section).
@@ -891,6 +895,10 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 ///
 /// Used by isolation benches/perf profiles to attribute cycles strictly to
 /// leaf+HP without partition / LSH-init / extract / final-prune contamination.
+///
+/// Gated behind the `bench` feature so it is not part of the production API
+/// surface; callers exercising it must opt in.
+#[cfg(any(test, feature = "bench"))]
 pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
     data: &[T],
     ndims: usize,
