@@ -108,6 +108,14 @@ impl PiPNNConfig {
         if self.l_max == 0 {
             return Err(PiPNNError::Config("l_max must be > 0".into()));
         }
+        if self.l_max > hash_prune::L_MAX_MAX {
+            return Err(PiPNNError::Config(format!(
+                "l_max ({}) exceeds compile-time bound L_MAX_MAX = {}; \
+                 raise the constant in diskann-pipnn::hash_prune to support larger reservoirs",
+                self.l_max,
+                hash_prune::L_MAX_MAX,
+            )));
+        }
         if self.num_hash_planes == 0 || self.num_hash_planes > 16 {
             return Err(PiPNNError::Config(format!(
                 "num_hash_planes ({}) must be in [1, 16]",
