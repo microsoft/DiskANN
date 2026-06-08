@@ -547,6 +547,8 @@ impl HashPrune {
                             let cold_p = self.cold.as_ptr().add(nxt_global) as *const i8;
                             _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p);
                             _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p.add(64));
+                            _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p.add(128));
+                            _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p.add(192));
                         }
                     }
                 }
