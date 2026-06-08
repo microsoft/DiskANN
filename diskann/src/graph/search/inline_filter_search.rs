@@ -240,13 +240,13 @@ where
             let decision = query_label_evaluator.on_visit(neighbor);
 
             match decision {
-QueryVisitDecision::Accept(accepted) => {
-    // All nodes go into scratch.best for navigation,
-    // matched nodes also go into matched_results for final output.
-    scratch.best.insert(accepted);
-    matched_results.push(accepted);
-    sample_matched += 1;
-}
+                QueryVisitDecision::Accept(accepted) => {
+                    // All nodes go into scratch.best for navigation,
+                    // matched nodes also go into matched_results for final output.
+                    scratch.best.insert(accepted);
+                    matched_results.push(accepted);
+                    sample_matched += 1;
+
                     sample_matched += 1;
                 }
                 QueryVisitDecision::Reject => {
