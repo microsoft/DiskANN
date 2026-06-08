@@ -765,14 +765,29 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                         .expect("f32 conversion");
                 }
 
-                // Algorithm 2 state.
-                const UNVISITED: u8 = 0;
-                const SELECTED: u8 = 1;
-                const OCCLUDED: u8 = 2;
-                let mut st = st_cell.borrow_mut();
-                st.clear();
-                st.resize(nc, UNVISITED);
-                let state = &mut st[..];
+                // Lazy RobustPrune (paper "Optimizing RobustPrune" section).
+                // Standard form admits the closest unvisited neighbor and
+                // then scans ALL remaining candidates to mark occluded ones —
+                // O(R·N) per node where R=max_degree, N=nc. With nc averaging
+                // ~67 on this workload and R=64, that's ~1300 distance
+                // computes per node × 10M nodes = the dominant final_prune
+                // cost.
+                //
+                // Lazy form: walk candidates in ascending-distance-to-x
+                // order; for each candidate c, check against the already-
+                // admitted neighbors and EARLY-EXIT on the first occluder.
+                // Output is identical (same admission order, same admission
+                // rule) — only the work distribution differs. Most rejects
+                // are occluded by one of the first few admitted neighbors,
+                // so the early-exit collapses the inner-loop cost on
+                // average.
+                //
+                // `selected_local` holds local candidate indices (not global
+                // neighbor IDs) so the next candidate can be compared against
+                // each admitted neighbor's f32 row by indexing `cand_f32`.
+                let mut sel_local = st_cell.borrow_mut();
+                sel_local.clear();
+                sel_local.reserve(max_degree);
 
                 let mut sel = sel_cell.borrow_mut();
                 sel.clear();
@@ -780,27 +795,42 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
                 for i in 0..nc {
                     if sel.len() >= max_degree { break; }
-                    if state[i] != UNVISITED { continue; }
-                    sel.push(candidates[i].0);
-                    state[i] = SELECTED;
+                    let dist_x_z = candidates[i].1;
+                    let z_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
 
-                    let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
-
-                    for j in (i + 1)..nc {
-                        if state[j] != UNVISITED { continue; }
-                        let dist_x_z = candidates[j].1;
-                        let z_f32 = &cand_f32[j * ndims..(j + 1) * ndims];
+                    let mut occluded = false;
+                    // SAFETY: sel_local stores u8 candidate indices in [0,nc);
+                    // cand_f32 has nc*ndims rows so the slice index is in
+                    // bounds.
+                    for &local in sel_local.iter() {
+                        let li = local as usize;
+                        let y_f32 = &cand_f32[li * ndims..(li + 1) * ndims];
                         let dist_y_z = kernel.call(y_f32, z_f32);
                         if alpha * dist_y_z < dist_x_z {
-                            state[j] = OCCLUDED;
+                            occluded = true;
+                            break;
                         }
+                    }
+
+                    if !occluded {
+                        sel_local.push(i as u8);
+                        sel.push(candidates[i].0);
                     }
                 }
 
                 if saturate && sel.len() < max_degree {
+                    // Pad with closest-to-x candidates not already admitted.
+                    // sel_local is monotonic in candidate distance (admitted
+                    // in sorted order), so a two-pointer walk catches the
+                    // gaps.
+                    let mut next_admitted = 0usize;
                     for i in 0..nc {
                         if sel.len() >= max_degree { break; }
-                        if state[i] != SELECTED {
+                        let is_admitted = next_admitted < sel_local.len()
+                            && sel_local[next_admitted] as usize == i;
+                        if is_admitted {
+                            next_admitted += 1;
+                        } else {
                             sel.push(candidates[i].0);
                         }
                     }
