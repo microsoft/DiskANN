@@ -66,7 +66,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
     /// The data slice here must be aligned to `T` or this will panic.
     fn insert(&self, context: &Context, id: &GarnetId, data: &[u8]) -> ANNResult<()> {
         self.insert(
-            DynamicQuantization,
+            &DynamicQuantization,
             context,
             id,
             bytemuck::cast_slice::<u8, T>(data),

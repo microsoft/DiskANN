@@ -282,6 +282,26 @@ impl FastMemoryQuantVectorProviderAsync {
         self.save_pivots(provider, pivots)?;
         storage::bin::save_to_bin(self, provider, data)
     }
+
+    #[cfg(test)]
+    pub(crate) fn compare_data(&self, other: &Self) {
+        assert_eq!(self.max_vectors, other.max_vectors);
+        assert_eq!(
+            self.pq_chunk_table.view_pivots(),
+            other.pq_chunk_table.view_pivots()
+        );
+
+        for i in 0..self.max_vectors {
+            // SAFETY: The usual statement that this is not actually sound.
+            unsafe {
+                assert_eq!(
+                    self.get_vector_sync(i),
+                    other.get_vector_sync(i),
+                    "mismatch at entry {i}",
+                );
+            }
+        }
+    }
 }
 
 /// This is an adaptor for compatibility with the async index serialization.

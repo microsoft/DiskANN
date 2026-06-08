@@ -2,18 +2,18 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-use thiserror::Error;
 
-use diskann_utils::Reborrow;
+//! Label-filtered search using multi-hop expansion.
+
 use diskann_utils::future::SendFuture;
-use diskann_vector::PreprocessedDistanceFunction;
+use thiserror::Error;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
-    error::{ErrorExt, IntoANNResult},
+    error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{self, SearchAccessor, SearchPostProcess, SearchStrategy},
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
         },
@@ -21,10 +21,9 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
     utils::VectorId,
 };
-
 /// Error type for [`Knn`] parameter validation.
 #[derive(Debug, Error)]
 pub enum AdaptiveLSearchError {
@@ -104,33 +103,32 @@ impl<'q, InternalId> InlineSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T> Search<DP, S, T> for InlineSearch<'q, DP::InternalId>
+impl<'a, 'q, DP, S, T> Search<'a, DP, S, T> for InlineSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    S: SearchStrategy<'a, DP, T>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
 
             let start_ids = accessor.starting_points().await?;
 
@@ -140,7 +138,6 @@ where
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
-                &computer,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 self.label_evaluator,
@@ -152,7 +149,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     matched_results.into_iter().take(self.inner.l_value().get()),
                     output,
                 )
@@ -165,11 +161,10 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn inline_filter_search_internal<I, A, T, SR>(
+pub(crate) async fn inline_filter_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
-    computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
@@ -177,7 +172,7 @@ pub(crate) async fn inline_filter_search_internal<I, A, T, SR>(
 ) -> ANNResult<(InternalSearchStats, Vec<Neighbor<I>>)>
 where
     I: VectorId,
-    A: ExpandBeam<T, Id = I> + SearchExt,
+    A: SearchAccessor<Id = I>,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
@@ -190,18 +185,12 @@ where
         range_search_second_round: false,
     };
 
-    // initialize the search with starting points
-    let start_ids = accessor.starting_points().await?;
-
-    for id in start_ids {
-        scratch.visited.insert(id);
-        let element = accessor
-            .get_element(id)
-            .await
-            .escalate("start point retrieval must succeed")?;
-        let dist = computer.evaluate_similarity(element.reborrow());
-        scratch.best.insert(Neighbor::new(id, dist));
-    }
+    accessor
+        .start_point_distances(|id, distance| {
+            scratch.visited.insert(id);
+            scratch.best.insert(Neighbor::new(id, distance));
+        })
+        .await?;
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
@@ -241,9 +230,8 @@ where
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
-                computer,
                 glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| one_hop_neighbors.push(Neighbor::new(id, distance)),
             )
             .await?;
 

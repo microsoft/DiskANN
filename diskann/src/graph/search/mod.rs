@@ -67,10 +67,10 @@ pub(crate) mod scratch;
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
 /// - [`InlineSearch`] - Inline filtered search with adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<DP, S, T>
+pub trait Search<'a, DP, S, T>
 where
     DP: DataProvider,
-    S: graph::glue::SearchStrategy<DP, T>,
+    S: graph::glue::SearchStrategy<'a, DP, T>,
 {
     /// The result type returned by this search.
     type Output;
@@ -99,16 +99,16 @@ where
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> graph::glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: graph::glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
