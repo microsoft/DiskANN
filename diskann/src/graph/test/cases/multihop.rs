@@ -28,7 +28,6 @@ use crate::{
         test::provider as test_provider,
     },
     neighbor::Neighbor,
-    provider::BuildQueryComputer,
     test::{
         TestRoot,
         cmp::{assert_eq_verbose, verbose_eq},
@@ -214,8 +213,7 @@ fn run_internal(
 ) -> (graph::index::InternalSearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
-        let mut accessor = test_provider::Accessor::new(provider);
-        let computer = accessor.build_query_computer(query).unwrap();
+        let mut accessor = test_provider::Accessor::new(provider, query).unwrap();
 
         let mut scratch = SearchScratch::new(PriorityQueueConfiguration::Fixed(l), Some(l));
 
@@ -223,7 +221,6 @@ fn run_internal(
             max_degree,
             &Knn::new_default(k, l).unwrap(),
             &mut accessor,
-            &computer,
             &mut scratch,
             &mut NoopSearchRecord::new(),
             filter,
