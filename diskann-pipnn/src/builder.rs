@@ -655,6 +655,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                 .expect("f32 conversion");
         }
         const UNVISITED: u8 = 0;
+        const SELECTED: u8 = 1;
         const OCCLUDED: u8 = 2;
         let mut state = vec![UNVISITED; nc];
         let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
@@ -662,6 +663,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             if selected.len() >= max_degree { break; }
             if state[i] != UNVISITED { continue; }
             selected.push(candidates[i].0);
+            state[i] = SELECTED;
             let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
             for j in (i + 1)..nc {
                 if state[j] != UNVISITED { continue; }
@@ -670,6 +672,20 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                 let dist_y_z = dist_fn.call(y_f32, z_f32);
                 if alpha * dist_y_z < dist_x_z {
                     state[j] = OCCLUDED;
+                }
+            }
+        }
+        // Saturation: if Algorithm 2 left us under max_degree, refill from the
+        // distance-sorted candidate list (skipping already-SELECTED). Restores
+        // graph quality on hub/medoid neighborhoods whose candidates align along
+        // one ray — without saturation those nodes lose ~6 edges/avg and R@10
+        // L=10 drops 1.6pp (measured BigANN 10M, c=512/f[9,3]). Matches the
+        // canonical DiskANN behavior (diskann/src/graph/index.rs:2949).
+        if selected.len() < max_degree {
+            for i in 0..nc {
+                if selected.len() >= max_degree { break; }
+                if state[i] != SELECTED {
+                    selected.push(candidates[i].0);
                 }
             }
         }
@@ -1766,7 +1782,7 @@ mod tests {
             vec![],
         ];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
         let node0 = &result[0];
         // With alpha=1.2, point 3 should be selected first (closest).
         // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
@@ -1784,7 +1800,7 @@ mod tests {
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
         let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
 
@@ -1792,7 +1808,7 @@ mod tests {
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
         let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
     }

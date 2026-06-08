@@ -393,6 +393,11 @@ unsafe fn fused_dual_topk_avx512<K: MetricKernel>(
                     let lane = m.trailing_zeros() as usize;
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
+                    // Re-check against the LIVE local_worst_i: earlier lanes in this
+                    // chunk may have already tightened the threshold. Without this,
+                    // a strictly-worse lane displaces the genuine k-th best because
+                    // insert_topk_linear writes unconditionally to slot k-1.
+                    if d >= local_worst_i { continue; }
                     let j_abs = (j + lane) as u32;
                     local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
                 }
@@ -470,6 +475,11 @@ unsafe fn fused_dual_topk_avx2<K: MetricKernel>(
                     let lane = m.trailing_zeros() as usize;
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
+                    // Re-check against the LIVE local_worst_i: earlier lanes in this
+                    // chunk may have already tightened the threshold. Without this,
+                    // a strictly-worse lane displaces the genuine k-th best because
+                    // insert_topk_linear writes unconditionally to slot k-1.
+                    if d >= local_worst_i { continue; }
                     let j_abs = (j + lane) as u32;
                     local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
                 }
