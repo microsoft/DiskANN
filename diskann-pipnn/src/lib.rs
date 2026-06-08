@@ -81,9 +81,6 @@ pub struct PiPNNConfig {
     pub alpha: f32,
     /// Maximum leaders per partition level. Default: 1000 (paper recommendation).
     pub leader_cap: usize,
-    /// Whether to saturate after final prune (fill remaining degree slots with
-    /// closest non-selected candidates). Default: true.
-    pub saturate_after_prune: bool,
 }
 
 impl PiPNNConfig {
@@ -139,7 +136,6 @@ impl Default for PiPNNConfig {
             final_prune: false,
             alpha: 1.2,
             leader_cap: 1000,
-            saturate_after_prune: true,
         }
     }
 }

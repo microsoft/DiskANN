@@ -542,13 +542,11 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         let adj = if std::env::var("PIPNN_DISKANN_PRUNE").as_deref() == Ok("1") {
             tracing::info!("PIPNN_DISKANN_PRUNE=1 → DiskANN-style iterative RobustPrune");
             final_prune_diskann_style(
-                data, ndims, &candidates, max_degree, metric,
-                config.alpha, config.saturate_after_prune,
+                data, ndims, &candidates, max_degree, metric, config.alpha,
             )
         } else {
             final_prune_from_candidates(
-                data, ndims, &candidates, max_degree, metric,
-                config.alpha, config.saturate_after_prune,
+                data, ndims, &candidates, max_degree, metric, config.alpha,
             )
         };
 
@@ -619,8 +617,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 /// PiPNN paper's single-pass diversity prune (Algorithm 2):
 /// for each candidate in distance-sorted order, select if no earlier selection
 /// occludes it (dist_to_selected < alpha * dist_to_query), else mark occluded.
-/// Optionally saturate the result with occluded candidates until `max_degree`
-/// is filled (controlled by `saturate`).
 ///
 /// Candidates are pre-sorted ascending by HashPrune output.
 fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
@@ -630,7 +626,6 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
-    saturate: bool,
 ) -> Vec<Vec<u32>> {
     // Dimension-specialized distance kernel — enables SIMD target features AND
     // compile-time loop unrolling for the known dimension. dispatch2 (not no_features)
@@ -662,9 +657,7 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             }
 
             // Paper's Algorithm 2: greedy selection with occlusion removal.
-            // Track selected vs occluded separately for saturation.
             const UNVISITED: u8 = 0;
-            const SELECTED: u8 = 1;
             const OCCLUDED: u8 = 2;
             let mut state = vec![UNVISITED; nc];
             let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
@@ -678,7 +671,6 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                 }
 
                 selected.push(candidates[i].0);
-                state[i] = SELECTED;
 
                 let y_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
 
@@ -692,20 +684,6 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
                     if alpha * dist_y_z < dist_x_z {
                         state[j] = OCCLUDED;
-                    }
-                }
-            }
-
-            // Saturation: fill remaining degree slots with any non-selected candidate,
-            // closest-first (candidates are distance-sorted). Matches DiskANN's behavior:
-            // iterate pool in distance order, add any candidate not already selected.
-            if saturate && selected.len() < max_degree {
-                for i in 0..nc {
-                    if selected.len() >= max_degree {
-                        break;
-                    }
-                    if state[i] != SELECTED {
-                        selected.push(candidates[i].0);
                     }
                 }
             }
@@ -730,7 +708,6 @@ fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
-    saturate: bool,
 ) -> Vec<Vec<u32>> {
     let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
@@ -810,22 +787,9 @@ fn final_prune_diskann_style<T: VectorRepr + Send + Sync>(
                 current_alpha = (current_alpha * increment_factor).min(alpha);
             }
 
-            let mut result: Vec<u32> = selected.iter()
+            selected.iter()
                 .map(|&idx| candidates[idx as usize].0)
-                .collect();
-
-            if saturate && result.len() < max_degree {
-                for i in 0..nc {
-                    if result.len() >= max_degree {
-                        break;
-                    }
-                    if occlude_factor[i] != f32::MAX {
-                        // not selected
-                        result.push(candidates[i].0);
-                    }
-                }
-            }
-            result
+                .collect()
         })
         .collect_installed()
 }

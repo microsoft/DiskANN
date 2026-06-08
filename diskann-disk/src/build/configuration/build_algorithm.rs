@@ -82,7 +82,6 @@ mod tests {
                 num_hash_planes: 12,
                 final_prune: false,
                 alpha: 1.2,
-                saturate_after_prune: true,
                 leader_cap: 1000,
             }
         }
