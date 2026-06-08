@@ -1,0 +1,40 @@
+{
+    "search_directories": [
+      "/ssd1/data/caselaw/singlevec"
+    ],
+    "jobs": [
+      {
+        "type": "async-index-build",
+        "content": {
+          "source": {
+            "index-source": "Load",
+            "data_type": "float32",
+            "distance": "squared_l2",
+            "load_path": "/ssd1/data/caselaw/singlevec/graph_10M"
+          },
+          "search_phase": {
+            "search-type": "topk-two-queue-filter",
+            "queries": "low/query_full.bin",
+            "result_size_factor": 10,
+            "max_candidates": [20,50,100,200,500,1000,10000],
+            "groundtruth": "low/GT_full.bin",
+            "query_predicates": "low/query_filters_full.jsonl",
+            "data_labels": "caselaw_base_metadata.jsonl",
+            "reps": 5,
+            "num_threads": [
+              32
+            ],
+            "runs": [
+              {
+                "search_n": 20,
+                "search_l": [
+                  20
+                ],
+                "recall_k": 10
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }

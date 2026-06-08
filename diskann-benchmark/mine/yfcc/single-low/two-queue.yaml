@@ -1,0 +1,40 @@
+{
+    "search_directories": [
+      "/ssd1/data/yfcc"
+    ],
+    "jobs": [
+      {
+        "type": "async-index-build",
+        "content": {
+          "source": {
+            "index-source": "Load",
+            "data_type": "uint8",
+            "distance": "squared_l2",
+            "load_path": "/ssd1/data/yfcc/graph_10M"
+          },
+          "search_phase": {
+            "search-type": "topk-two-queue-filter",
+            "max_candidates": [100,250,500,1000,2000,5000,10000,50000],
+            "result_size_factor": 10,
+            "queries": "single-low/single_low_query_10k.u8bin",
+            "groundtruth": "single-low/GT_single_low_query_10k.rangeres.bin",
+            "query_predicates": "single-low/single_low_query_10k.label.jsonl",
+            "data_labels": "base.10M.label.jsonl",
+            "reps": 5,
+            "num_threads": [
+              32
+            ],
+            "runs": [
+              {
+                "search_n": 20,
+                "search_l": [
+                  20
+                ],
+                "recall_k": 10
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
