@@ -70,7 +70,7 @@ Next we provide advice for library users to choose a filtered algorithm based on
 
 1. Use inline filtered search when (a) you know that your query set has high specificity, or (b) if you have any other reason to want to control the $L_{search}$ parameter directly.
 2. Use the adaptive L feature of inline search when you have a query set with varied specificity across queries and you do not wish to configure the $L_{search}$ individually across queries, or you do not know the specificity of your queries.
-3. Use multi-hop filtering if you wish to trade off more predicate evaluations for fewer distance comparisons. This may be especially relevant for large vectors or for expensive distance functions such as Chamfer distance.
+3. Use multi-hop filtering if you wish to trade off more predicate evaluations and adjacency list fetches for fewer distance comparisons. This may be especially relevant for large vectors or for expensive distance functions such as Chamfer distance.
 
 Note that the question of whether or not to use a graph index for your specific filtered search is not addressed here. It may also be prudent to use a query planner and dispatch some low specificity searches to an inverted index or brute-force search on a pre-filtered subset. 
 
