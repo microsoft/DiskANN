@@ -53,6 +53,12 @@ pub enum PiPNNError {
     /// associated `T::Error` type is erased at the public boundary.
     #[error("vector conversion failed: {0}")]
     Conversion(String),
+
+    /// Persisting a built graph failed (writer / encoder error from the
+    /// storage backend). Distinct from `Io` so retry logic can target only
+    /// transient persistence failures.
+    #[error("persist failed: {0}")]
+    Persist(String),
 }
 
 /// Result type for PiPNN operations.
@@ -161,6 +167,10 @@ impl PiPNNConfig {
 }
 
 impl Default for PiPNNConfig {
+    /// Defaults are tuned for BigANN 10M 128d squared_l2. They are NOT a
+    /// universal best — high-dimensional embeddings (768d+), small datasets,
+    /// or non-Euclidean metrics typically need their own sweep. The CLAUDE.md
+    /// memory in this repo records measured-good parameter sets per dataset.
     fn default() -> Self {
         Self {
             num_hash_planes: 12,

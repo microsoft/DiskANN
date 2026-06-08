@@ -148,7 +148,7 @@ impl PiPNNGraph {
     pub fn save_graph(&self, path: &std::path::Path) -> PiPNNResult<()> {
         let file = std::fs::File::create(path)?;
         diskann_providers::storage::bin::save_graph_to_writer(self, self.medoid as u32, file)
-            .map_err(|e| PiPNNError::Config(format!("save_graph failed: {}", e)))?;
+            .map_err(|e| PiPNNError::Persist(format!("save_graph_to_writer: {}", e)))?;
 
         tracing::info!(
             path = %path.display(),
@@ -464,10 +464,12 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
         // Leaves processed in parallel via par_chunks. Each chunk shares one
         // thread-local buffer set, amortizing TLS + RefCell + Vec allocation
-        // overhead across multiple leaves.
-        const LEAF_BATCH: usize = 256;
+        // overhead across multiple leaves. Chunk size scales with leaf count
+        // and rayon pool size so every thread gets ~4 work-stealing units.
+        let nthreads = rayon::current_num_threads().max(1);
+        let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
         let num_planes = hash_prune.num_planes();
-        leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
+        leaves.par_chunks(leaf_batch).for_each_installed(|chunk| {
             leaf_build::LEAF_BUFFERS.with(|cell| {
                 let mut bufs = cell.borrow_mut();
                 for leaf in chunk {
@@ -908,11 +910,12 @@ pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
     metric: Metric,
 ) -> (f64, usize) {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    const LEAF_BATCH: usize = 256;
+    let nthreads = rayon::current_num_threads().max(1);
+    let leaf_batch = (leaves.len() / (nthreads * 4)).clamp(1, 256);
     let total_edges = AtomicUsize::new(0);
     let num_planes = hash_prune.num_planes();
     let t = Instant::now();
-    leaves.par_chunks(LEAF_BATCH).for_each_installed(|chunk| {
+    leaves.par_chunks(leaf_batch).for_each_installed(|chunk| {
         leaf_build::LEAF_BUFFERS.with(|cell| {
             let mut bufs = cell.borrow_mut();
             for leaf in chunk {
