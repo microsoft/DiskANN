@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 parking_lot = "0.12"
+libc = "0.2"
 
 [features]
 # Default ON: routes sgemm_aat_lower → OpenBLAS cblas_ssyrk (real 50% FLOP

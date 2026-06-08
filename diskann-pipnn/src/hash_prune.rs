@@ -5,27 +5,35 @@
 
 //! HashPrune: LSH-based online pruning for merging edges from overlapping partitions.
 //!
-//! Uses random hyperplanes to hash candidate neighbors relative to each point.
-//! Maintains a reservoir of l_max entries per point, keyed by hash bucket.
-//! Effectively order-independent: the hash-keyed eviction makes results stable regardless of insertion order, up to bf16 distance quantization ties (which are rare in practice).
+//! Storage is AoSoA hot/cold split:
+//! - `hot: Vec<HotSlot>` — one 16-byte slot per point (mutex + len + farthest).
+//!   Hot path early-reject and lock-acquire only touch this slab (~160 MB at 10M points).
+//! - `cold: Vec<ColdSlot>` — one 512-byte slot per point. Inside each ColdSlot,
+//!   hashes / distances / neighbors are split into three contiguous arrays, so
+//!   `find_hash` only walks 2 cache lines (128 B of u16) instead of 8 cache lines
+//!   of mixed AoS.
+//!
+//! Both slabs are one Vec each (contiguous in VA), so `madvise(HUGEPAGE)` is
+//! effective when the kernel actually backs THP.
+//!
+//! `L_MAX_MAX` is hard-coded at 64 — the production value. Configs with
+//! `l_max > 64` are rejected at construction time.
 
-use parking_lot::Mutex;
+use parking_lot::lock_api::RawMutex as RawMutexTrait;
 
-use crate::cpu_dispatch::{tier, SimdTier};
 use crate::rayon_util::ParIterInstalled;
 use diskann::utils::VectorRepr;
 use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
 use diskann_vector::lsh::LshSketches;
 use rayon::prelude::*;
 
-// LshSketches now lives in diskann-vector::lsh — see that module for the
-// random-hyperplane projection. PiPNN consumes it by passing a `fill_point`
-// closure that does the per-point f16/u8 → f32 conversion lazily, so we
-// don't need a full upfront f32 copy of the dataset.
+/// Fixed cap on reservoir size. Production benchmark (`l_max = 64`) is the
+/// tuned value; `find_hash_simd` is also 64-lane-optimal at 2 SIMD ops per
+/// scan. Tests that use `PiPNNConfig::default()` (`l_max = 128`) must override
+/// to `l_max = 64`.
+pub(crate) const L_MAX_MAX: usize = 128;
 
 /// Compute LSH sketches over `data` (row-major `npoints × ndims` of `T`).
-/// Convenience wrapper that wires `VectorRepr::as_f32_into` into
-/// [`LshSketches::new`]'s `fill_point` closure.
 fn sketches_from_data<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
@@ -38,599 +46,268 @@ fn sketches_from_data<T: VectorRepr + Send + Sync>(
     })
 }
 
-/// A single entry in the HashPrune reservoir.
-/// Packed to exactly 8 bytes: 4 (neighbor) + 2 (hash) + 2 (distance as bf16).
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-struct ReservoirEntry {
-    /// The candidate neighbor index.
-    neighbor: u32,
-    /// Hash bucket (16-bit).
-    hash: u16,
-    /// Distance stored as bf16 (raw u16 bits). Non-negative bf16 values
-    /// are monotonically ordered as u16, enabling integer comparison.
-    distance: u16,
-}
+// ─── HotSlot: 16-byte per-point mutex + cached fields ─────────────────────────
 
-/// Scalar fallback for `find_hash`. Linear scan, no SIMD.
-#[inline(always)]
-fn find_hash_scalar(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
-    for (i, e) in entries.iter().enumerate() {
-        if e.hash == hash {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// AoSoA-packed AVX-512 `find_hash`: scans `&[u16]` 32 hashes per
-/// `_mm512_cmpeq_epi16_mask`. Microbench shows 1.6-2× speedup over the
-/// 8-byte-stride scan of [`find_hash_avx512`] (3.95ns vs 6.16ns at l_max=64;
-/// 4.55ns vs 9.32ns at l_max=128).
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX-512F + AVX-512BW.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f", enable = "avx512bw")]
-unsafe fn find_hash_packed_avx512(hashes: &[u16], target_hash: u16) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let n = hashes.len();
-    let target = _mm512_set1_epi16(target_hash as i16);
-    let chunks = n / 32;
-    // Fast path for n <= 64 (the designed l_max range): the per-chunk 32-bit
-    // cmpeq masks fit one u64 with no shift overflow -> branch-free accumulate,
-    // byte-identical to the original hot path (no regression at l_max <= 64).
-    if n <= 64 {
-        let mut found: u64 = 0;
-        for chunk in 0..chunks {
-            let base = chunk * 32;
-            let data = _mm512_loadu_si512(hashes.as_ptr().add(base) as *const __m512i);
-            let cmp = _mm512_cmpeq_epi16_mask(data, target);
-            found |= (cmp as u64) << (chunk * 32);
-        }
-        let tail = n - chunks * 32;
-        if tail > 0 {
-            let kmask: u32 = (1u32 << tail) - 1;
-            let base = chunks * 32;
-            let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(base) as *const i16);
-            let cmp = _mm512_cmpeq_epi16_mask(data, target) & kmask;
-            found |= (cmp as u64) << base;
-        }
-        return if found != 0 {
-            Some(found.trailing_zeros() as usize)
-        } else {
-            None
-        };
-    }
-    // n > 64: a single u64 accumulator would overflow `<< (chunk*32)` (the old
-    // bug mis-indexed any match past entry 64). Use a branch-free running-min
-    // first-match instead. Correct for any n.
-    let mut result: u32 = u32::MAX;
-    for chunk in 0..chunks {
-        let base = (chunk * 32) as u32;
-        let data = _mm512_loadu_si512(hashes.as_ptr().add(chunk * 32) as *const __m512i);
-        let cmp = _mm512_cmpeq_epi16_mask(data, target);
-        let cand = if cmp != 0 { base + cmp.trailing_zeros() } else { u32::MAX };
-        result = result.min(cand);
-    }
-    let tail = n - chunks * 32;
-    if tail > 0 {
-        let kmask: u32 = (1u32 << tail) - 1;
-        let base = (chunks * 32) as u32;
-        let data = _mm512_maskz_loadu_epi16(kmask, hashes.as_ptr().add(chunks * 32) as *const i16);
-        let cmp = _mm512_cmpeq_epi16_mask(data, target) & kmask;
-        let cand = if cmp != 0 { base + cmp.trailing_zeros() } else { u32::MAX };
-        result = result.min(cand);
-    }
-    if result != u32::MAX {
-        Some(result as usize)
-    } else {
-        None
-    }
-}
-
-/// AoSoA-packed AVX-2 `find_hash`: scans `&[u16]` 16 hashes per `_mm256_cmpeq_epi16`.
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn find_hash_packed_avx2(hashes: &[u16], target_hash: u16) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let n = hashes.len();
-    let target = _mm256_set1_epi16(target_hash as i16);
-    let chunks = n / 16;
-    // Branch-free first-match: cmov-record the lowest matching absolute index.
-    // The previous `found |= bits << (chunk*16)` / `1u64 << i` overflowed the u64
-    // accumulator for n > 64 (l_max=128), mis-indexing any match past entry 64.
-    let mut result: u32 = u32::MAX;
-    for chunk in 0..chunks {
-        let base = (chunk * 16) as u32;
-        let data = _mm256_loadu_si256(hashes.as_ptr().add(chunk * 16) as *const __m256i);
-        let cmp = _mm256_cmpeq_epi16(data, target);
-        let bytes = _mm256_movemask_epi8(cmp) as u32;
-        let mut bits: u32 = 0;
-        let mut i = 0usize;
-        while i < 16 {
-            bits |= ((bytes >> (i * 2)) & 1) << i;
-            i += 1;
-        }
-        let cand = if bits != 0 { base + bits.trailing_zeros() } else { u32::MAX };
-        result = result.min(cand);
-    }
-    // Scalar tail
-    for i in (chunks * 16)..n {
-        if *hashes.get_unchecked(i) == target_hash {
-            result = result.min(i as u32);
-        }
-    }
-    if result != u32::MAX {
-        Some(result as usize)
-    } else {
-        None
-    }
-}
-
-/// AoSoA-packed scalar `find_hash`.
-#[inline(always)]
-fn find_hash_packed_scalar(hashes: &[u16], target_hash: u16) -> Option<usize> {
-    hashes.iter().position(|&h| h == target_hash)
-}
-
-/// AVX-512 `find_hash`: 8 entries per cmpeq mask, branch-free OR over all chunks.
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX-512F. The `#[target_feature]`
-/// attribute promises the compiler we are running with that feature set.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[allow(dead_code)]
-unsafe fn find_hash_avx512(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let n = entries.len();
-    if n >= 8 {
-        // SAFETY: AVX-512F enabled by target_feature. ReservoirEntry is
-        // `#[repr(C)]` with size 8 = sizeof(u64), so the u64 cast aliases bytes
-        // legally. `ptr.add(base)` stays within `entries` since `base + 8 ≤ n`.
-        //
-        // Branch-free: scan ALL chunks unconditionally, OR the per-chunk
-        // 8-bit cmpeq masks into a single 64-bit "found" mask (8 bits per
-        // chunk × up to 8 chunks for l_max=64). Then trailing_zeros() of
-        // the 64-bit value gives the absolute lane index.
-        //
-        // Eliminates the data-dependent `if cmp != 0 { return }` per chunk —
-        // that branch was the dominant source of HP's 19% bad-spec slots
-        // (per c4-48 PMU profile). Cost: scan all chunks even when an early
-        // chunk matches; benefit: zero misprediction.
-        let ptr = entries.as_ptr() as *const u64;
-        let target = _mm512_set1_epi64(((hash as u64) << 32) as i64);
-        let mask = _mm512_set1_epi64(0x0000FFFF00000000u64 as i64);
-        let chunks = n / 8;
-        let mut found: u64 = 0;
-        for chunk in 0..chunks {
-            let base = chunk * 8;
-            let data = _mm512_loadu_si512(ptr.add(base) as *const __m512i);
-            let masked = _mm512_and_si512(data, mask);
-            let cmp = _mm512_cmpeq_epi64_mask(masked, target);
-            found |= (cmp as u64) << (chunk * 8);
-        }
-        // Tail (n % 8 entries): use a final masked load to fold into `found`.
-        let tail = n - chunks * 8;
-        if tail > 0 {
-            let kmask: u8 = (1u8 << tail) - 1;
-            let base = chunks * 8;
-            let data = _mm512_maskz_loadu_epi64(kmask, ptr.add(base) as *const i64);
-            let masked = _mm512_and_si512(data, mask);
-            let cmp = _mm512_cmpeq_epi64_mask(masked, target) & kmask;
-            found |= (cmp as u64) << base;
-        }
-        if found != 0 {
-            return Some(found.trailing_zeros() as usize);
-        }
-        return None;
-    }
-    // Small-n path: scalar.
-    find_hash_scalar(entries, hash)
-}
-
-/// AVX2 `find_hash`: 4 entries per cmpeq mask, branch-free OR over all chunks.
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn find_hash_avx2(entries: &[ReservoirEntry], hash: u16) -> Option<usize> {
-    use std::arch::x86_64::*;
-    let n = entries.len();
-    if n >= 4 {
-        // SAFETY: AVX2 enabled by target_feature; ReservoirEntry is `#[repr(C)]`
-        // size 8, so the u64 cast aliases legally. `ptr.add(base)` stays in
-        // bounds by `base + 4 ≤ n`. Tail `get_unchecked(i)` has `i < n`.
-        let ptr = entries.as_ptr() as *const u64;
-        let target = _mm256_set1_epi64x(((hash as u64) << 32) as i64);
-        let mask = _mm256_set1_epi64x(0x0000FFFF00000000u64 as i64);
-        let chunks = n / 4;
-        let mut found: u64 = 0;
-        for chunk in 0..chunks {
-            let base = chunk * 4;
-            let data = _mm256_loadu_si256(ptr.add(base) as *const __m256i);
-            let masked = _mm256_and_si256(data, mask);
-            let cmp = _mm256_cmpeq_epi64(masked, target);
-            // movemask_pd: 4 bits, one per 64-bit lane.
-            let bits = _mm256_movemask_pd(_mm256_castsi256_pd(cmp)) as u64;
-            found |= bits << (chunk * 4);
-        }
-        for i in (chunks * 4)..n {
-            if entries.get_unchecked(i).hash == hash {
-                found |= 1u64 << i;
-            }
-        }
-        if found != 0 {
-            return Some(found.trailing_zeros() as usize);
-        }
-        return None;
-    }
-    find_hash_scalar(entries, hash)
-}
-
-/// Scalar relative_hash on local f32 sketches.
-///
-/// `relative_hash`: bit j = (dst[j] - src[j] >= 0). Branch-free: sign bit is 0
-/// when diff >= 0 (incl +0). `m` is the number of planes (up to 16).
-#[inline(always)]
-fn relative_hash_local_scalar(dst: &[f32], src: &[f32], m: usize) -> u16 {
-    let mut h: u16 = 0;
-    for j in 0..m {
-        let diff = dst[j] - src[j];
-        let bit = ((!diff.is_sign_negative()) as u16) << j;
-        h |= bit;
-    }
-    h
-}
-
-/// AVX-512 relative_hash: one masked sub + cmp_ge_mask gives the bit pattern
-/// directly.
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX-512F. `dst` and `src` must each
-/// have at least `m.min(16)` valid f32 lanes.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-unsafe fn relative_hash_local_avx512(dst: &[f32], src: &[f32], m: usize) -> u16 {
-    use std::arch::x86_64::*;
-    // SAFETY: AVX-512F enabled. We bound the load to `m` lanes via kmask;
-    // planes is validated 1..=16 by PiPNNConfig.
-    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
-    let dst_v = _mm512_maskz_loadu_ps(kmask, dst.as_ptr());
-    let src_v = _mm512_maskz_loadu_ps(kmask, src.as_ptr());
-    let diff = _mm512_sub_ps(dst_v, src_v);
-    let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
-    mask & kmask
-}
-
-/// AVX2 relative_hash: 8-lane SIMD via `_mm256_maskload_ps` +
-/// `_mm256_movemask_ps`. Splits up-to-16 planes into low-8 and optional
-/// high-(m-8) halves.
-///
-/// # Safety
-/// Caller must ensure the CPU supports AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-#[inline]
-unsafe fn relative_hash_local_avx2(dst: &[f32], src: &[f32], m: usize) -> u16 {
-    use std::arch::x86_64::*;
-    // SAFETY: AVX2 enabled; maskload returns 0 for masked-off lanes so reading
-    // past the end is safe.
-    let make_mask = |count: usize| -> __m256i {
-        // -1 for active lanes, 0 for inactive.
-        let m_arr: [i32; 8] = std::array::from_fn(|k| if k < count { -1 } else { 0 });
-        _mm256_loadu_si256(m_arr.as_ptr() as *const __m256i)
-    };
-    let lo_count = m.min(8);
-    let mask_lo = make_mask(lo_count);
-    let dst_lo = _mm256_maskload_ps(dst.as_ptr(), mask_lo);
-    let src_lo = _mm256_maskload_ps(src.as_ptr(), mask_lo);
-    let diff_lo = _mm256_sub_ps(dst_lo, src_lo);
-    let cmp_lo = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_lo, _mm256_setzero_ps());
-    let bits_lo = _mm256_movemask_ps(cmp_lo) as u16;
-    let lo_kmask: u16 = (1u16 << lo_count) - 1;
-    let mut h = bits_lo & lo_kmask;
-    if m > 8 {
-        let hi_count = m - 8;
-        let mask_hi = make_mask(hi_count);
-        let dst_hi = _mm256_maskload_ps(dst.as_ptr().add(8), mask_hi);
-        let src_hi = _mm256_maskload_ps(src.as_ptr().add(8), mask_hi);
-        let diff_hi = _mm256_sub_ps(dst_hi, src_hi);
-        let cmp_hi = _mm256_cmp_ps::<_CMP_GE_OQ>(diff_hi, _mm256_setzero_ps());
-        let bits_hi = _mm256_movemask_ps(cmp_hi) as u16;
-        let hi_kmask: u16 = (1u16 << hi_count) - 1;
-        h |= (bits_hi & hi_kmask) << 8;
-    }
-    h
-}
-
-/// HashPrune reservoir for a single point.
-///
-/// Stores at most `l_max` entries keyed by their hash bucket. Insertion is O(1)
-/// (push or swap_remove); lookups are O(l_max) linear scan, vectorised by
-/// [`find_hash`] (AVX-512 8-way / AVX2 4-way / scalar fallback). The farthest
-/// entry is cached so a full-reservoir reject path is O(1).
-///
-/// AoSoA hot slab: `hashes` is a parallel `Vec<u16>` kept in sync with
-/// `entries`. find_hash scans this packed array via 32-way AVX-512 SIMD
-/// (1.6-2× faster than scanning the 8-byte `entries` Vec, per microbench).
-/// The hash field in `ReservoirEntry` is now redundant but kept for now to
-/// minimise downstream churn.
-pub(crate) struct HashPruneReservoir {
-    entries: Vec<ReservoirEntry>,
-    hashes: Vec<u16>,
-    /// Maximum reservoir size.
-    l_max: usize,
-    /// Cached farthest distance (bf16) and its index in entries.
+#[repr(C, align(16))]
+pub(crate) struct HotSlot {
+    lock: parking_lot::RawMutex,
+    len: u8,
+    farthest_idx: u8,
+    _pad0: u8,
     farthest_dist: u16,
-    farthest_idx: usize,
+    _pad1: [u8; 10],
 }
 
-impl HashPruneReservoir {
-    /// Eagerly pre-allocate capacity for `l_max` entries (test-only — production
-    /// uses [`HashPruneReservoir::new_lazy`] to avoid the upfront RSS spike).
-    #[cfg(test)]
-    pub(crate) fn new(l_max: usize) -> Self {
+impl HotSlot {
+    const fn new_empty() -> Self {
         Self {
-            entries: Vec::with_capacity(l_max),
-            hashes: Vec::with_capacity(l_max),
-            l_max,
-            farthest_dist: 0,
+            lock: <parking_lot::RawMutex as RawMutexTrait>::INIT,
+            len: 0,
             farthest_idx: 0,
-        }
-    }
-
-    /// Create a reservoir without pre-allocating capacity.
-    pub(crate) fn new_lazy(l_max: usize) -> Self {
-        Self {
-            entries: Vec::new(),
-            hashes: Vec::new(),
-            l_max,
+            _pad0: 0,
             farthest_dist: 0,
-            farthest_idx: 0,
+            _pad1: [0; 10],
         }
     }
+}
 
-    /// Update the cached farthest entry.
-    #[inline]
-    fn update_farthest(&mut self) {
-        if self.entries.is_empty() {
-            self.farthest_dist = 0;
-            self.farthest_idx = 0;
-            return;
-        }
-        #[cfg(target_arch = "x86_64")]
-        if matches!(tier(), SimdTier::Avx512) {
-            unsafe { self.update_farthest_avx512() };
-            return;
-        }
-        let mut max_dist: u16 = 0;
-        let mut max_idx = 0;
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.distance > max_dist {
-                max_dist = entry.distance;
-                max_idx = idx;
-            }
-        }
-        self.farthest_dist = max_dist;
-        self.farthest_idx = max_idx;
+const _: () = assert!(std::mem::size_of::<HotSlot>() == 16);
+
+// ─── ColdSlot: AoSoA entries ──────────────────────────────────────────────────
+
+#[repr(C, align(64))]
+pub(crate) struct ColdSlot {
+    pub(crate) hashes: [u16; L_MAX_MAX],
+    pub(crate) distances: [u16; L_MAX_MAX],
+    pub(crate) neighbors: [u32; L_MAX_MAX],
+}
+
+const _: () = assert!(std::mem::size_of::<ColdSlot>() == 1024);
+
+// ─── find_hash SIMD: 32-way u16 compare ───────────────────────────────────────
+
+#[inline(always)]
+fn find_hash_simd(hashes: &[u16; L_MAX_MAX], len: u8, target: u16) -> Option<usize> {
+    let len = len as usize;
+    if len == 0 {
+        return None;
     }
-
-    /// SIMD argmax of the reservoir's farthest (max) distance + its index.
-    /// `distance` is bits 48..64 of each 8-byte ReservoirEntry, so we load 8
-    /// entries per zmm as u64 and shift. Replaces the O(l_max) scalar rescan
-    /// that runs on every full-reservoir eviction (the per-eviction cost that
-    /// scales linearly with l_max).
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx512f")]
-    unsafe fn update_farthest_avx512(&mut self) {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
+    {
         use std::arch::x86_64::*;
-        let n = self.entries.len();
-        let ptr = self.entries.as_ptr() as *const u64;
-        let chunks = n / 8;
-        let mut vmax = _mm512_setzero_si512();
-        for c in 0..chunks {
-            let v = _mm512_loadu_si512(ptr.add(c * 8) as *const __m512i);
-            vmax = _mm512_max_epu64(vmax, _mm512_srli_epi64::<48>(v));
-        }
-        let mut max_dist = _mm512_reduce_max_epu64(vmax) as u16;
-        for i in (chunks * 8)..n {
-            let d = self.entries.get_unchecked(i).distance;
-            if d > max_dist {
-                max_dist = d;
+        // SAFETY: AVX-512 BW cfg-gated. Iterate L_MAX_MAX/32 chunks of 32 u16
+        // each. Compute per-chunk eq mask, accumulate into a u128, mask by
+        // `len`, then trailing_zeros. Works for L_MAX_MAX = 32, 64, 128, 256.
+        unsafe {
+            let t = _mm512_set1_epi16(target as i16);
+            const CHUNKS: usize = L_MAX_MAX / 32;
+            let mut combined: u128 = 0;
+            for chunk in 0..CHUNKS {
+                let v = _mm512_loadu_si512(hashes.as_ptr().add(chunk * 32) as *const __m512i);
+                let m = _mm512_cmpeq_epi16_mask(v, t) as u128;
+                combined |= m << (chunk * 32);
+            }
+            let len_mask: u128 = if len >= 128 { u128::MAX } else { (1u128 << len) - 1 };
+            let valid = combined & len_mask;
+            if valid != 0 {
+                Some(valid.trailing_zeros() as usize)
+            } else {
+                None
             }
         }
-        let tgt = _mm512_set1_epi64(max_dist as i64);
-        let mut max_idx = 0usize;
-        'find: {
-            for c in 0..chunks {
-                let v = _mm512_loadu_si512(ptr.add(c * 8) as *const __m512i);
-                let m = _mm512_cmpeq_epi64_mask(_mm512_srli_epi64::<48>(v), tgt);
-                if m != 0 {
-                    max_idx = c * 8 + m.trailing_zeros() as usize;
-                    break 'find;
+    }
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(target_feature = "avx512bw")
+    ))]
+    {
+        use std::arch::x86_64::*;
+        // SAFETY: AVX2 cfg-gated; CHUNKS = L_MAX_MAX/16 chunks × 16 u16.
+        unsafe {
+            let t = _mm256_set1_epi16(target as i16);
+            const CHUNKS: usize = L_MAX_MAX / 16;
+            for chunk in 0..CHUNKS {
+                let v = _mm256_loadu_si256(hashes.as_ptr().add(chunk * 16) as *const __m256i);
+                let m = _mm256_cmpeq_epi16(v, t);
+                let bits = _mm256_movemask_epi8(m) as u32;
+                if bits != 0 {
+                    let lane = chunk * 16 + (bits.trailing_zeros() as usize) / 2;
+                    if lane < len {
+                        return Some(lane);
+                    }
                 }
             }
-            for i in (chunks * 8)..n {
-                if self.entries.get_unchecked(i).distance == max_dist {
-                    max_idx = i;
-                    break 'find;
-                }
+            None
+        }
+    }
+    #[cfg(not(any(target_feature = "avx512bw", target_feature = "avx2")))]
+    {
+        for i in 0..len {
+            if hashes[i] == target {
+                return Some(i);
             }
         }
-        self.farthest_dist = max_dist;
-        self.farthest_idx = max_idx;
-    }
-
-    /// Generic insert parameterized by the `find_hash` strategy.
-    /// Tier-specialized wrappers (`insert_avx512`, `insert_avx2`, `insert_scalar`)
-    /// pass the matching SIMD `find_hash` so the call inlines without a runtime
-    /// tier check.
-    ///
-    /// Unsorted storage: find_hash is O(l_max) linear scan but insert/evict
-    /// are O(1) via push/swap_remove.
-    ///
-    /// Perf: `farthest_dist` / `farthest_idx` are hoisted into locals to keep
-    /// them in registers across the `find` call. The `&mut self.entries`
-    /// borrow inside `find` previously invalidated their liveness, causing a
-    /// stack-spill that perf annotate showed as 24% of HP cycles.
-    #[inline(always)]
-    fn insert_with<F: FnOnce(&[u16], u16) -> Option<usize>>(
-        &mut self,
-        hash: u16,
-        neighbor: u32,
-        distance: f32,
-        find: F,
-    ) -> bool {
-        let dist_bf16 = f32_to_bf16(distance);
-
-        let mut local_far_dist = self.farthest_dist;
-        let mut local_far_idx = self.farthest_idx;
-
-        if self.entries.len() >= self.l_max && dist_bf16 >= local_far_dist {
-            return false;
-        }
-
-        // find() now scans the AoSoA hot `hashes` slab (1.6-2× faster).
-        if let Some(idx) = find(&self.hashes, hash) {
-            if dist_bf16 < self.entries[idx].distance {
-                let was_farthest = idx == local_far_idx;
-                self.entries[idx].neighbor = neighbor;
-                self.entries[idx].distance = dist_bf16;
-                // self.hashes[idx] stays the same (hash bucket unchanged).
-                if was_farthest {
-                    self.update_farthest();
-                }
-                return true;
-            }
-            return false;
-        }
-
-        if self.entries.len() < self.l_max {
-            if self.entries.is_empty() {
-                self.entries.reserve_exact(self.l_max);
-                self.hashes.reserve_exact(self.l_max);
-            }
-            let new_idx = self.entries.len();
-            self.entries.push(ReservoirEntry {
-                neighbor,
-                distance: dist_bf16,
-                hash,
-            });
-            self.hashes.push(hash);
-            if dist_bf16 >= local_far_dist {
-                local_far_dist = dist_bf16;
-                local_far_idx = new_idx;
-            }
-            self.farthest_dist = local_far_dist;
-            self.farthest_idx = local_far_idx;
-            return true;
-        }
-
-        if dist_bf16 < local_far_dist {
-            self.entries[local_far_idx] = ReservoirEntry {
-                neighbor,
-                distance: dist_bf16,
-                hash,
-            };
-            self.hashes[local_far_idx] = hash;
-            self.update_farthest();
-            return true;
-        }
-
-        false
-    }
-
-    /// Insert with runtime-dispatched find_hash. Convenience API for callers
-    /// that don't already know the SIMD tier (tests, single-edge add_edge).
-    /// Hot per-edge paths in `add_edges_*` use `insert_with` with a
-    /// tier-specialized `find_hash` to hoist the dispatch out of the inner
-    /// loop.
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => self
-                .insert_with(hash, neighbor, distance, |h, t| unsafe {
-                    find_hash_packed_avx512(h, t)
-                }),
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => self
-                .insert_with(hash, neighbor, distance, |h, t| unsafe {
-                    find_hash_packed_avx2(h, t)
-                }),
-            _ => self.insert_with(hash, neighbor, distance, find_hash_packed_scalar),
-        }
-    }
-
-
-    /// Get all neighbors sorted by distance, truncated to `max_degree`.
-    pub fn get_neighbors_saturated(&self, max_degree: usize) -> Vec<(u32, f32)> {
-        let mut neighbors: Vec<(u32, u16)> = self
-            .entries
-            .iter()
-            .map(|e| (e.neighbor, e.distance))
-            .collect();
-        neighbors.sort_unstable_by_key(|&(_, d)| d);
-        neighbors.truncate(max_degree);
-        neighbors
-            .into_iter()
-            .map(|(id, d)| (id, bf16_to_f32(d)))
-            .collect()
-    }
-
-    /// Get all neighbors in the reservoir, sorted by distance (no truncation).
-    /// Test-only — production calls [`get_neighbors_saturated`] which truncates
-    /// to `max_degree`.
-    #[cfg(test)]
-    pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
-        let mut neighbors: Vec<(u32, u16)> = self
-            .entries
-            .iter()
-            .map(|e| (e.neighbor, e.distance))
-            .collect();
-        neighbors.sort_unstable_by_key(|&(_, d)| d);
-        neighbors
-            .into_iter()
-            .map(|(id, d)| (id, bf16_to_f32(d)))
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        None
     }
 }
 
-/// The global HashPrune state managing reservoirs for all points.
-/// Uses per-point Mutex for thread-safe parallel edge insertion.
+// ─── Per-reservoir mutation helpers (caller holds lock) ───────────────────────
+
+#[inline]
+fn update_farthest(hot: &mut HotSlot, cold: &ColdSlot) {
+    if hot.len == 0 {
+        hot.farthest_dist = 0;
+        hot.farthest_idx = 0;
+        return;
+    }
+    let mut max_dist: u16 = 0;
+    let mut max_idx: u8 = 0;
+    for i in 0..hot.len as usize {
+        let d = cold.distances[i];
+        if d > max_dist {
+            max_dist = d;
+            max_idx = i as u8;
+        }
+    }
+    hot.farthest_dist = max_dist;
+    hot.farthest_idx = max_idx;
+}
+
+#[inline(always)]
+fn insert_locked(
+    hot: &mut HotSlot,
+    cold: &mut ColdSlot,
+    hash: u16,
+    neighbor: u32,
+    distance: f32,
+    l_max: u8,
+) -> bool {
+    let dist_bf16 = f32_to_bf16(distance);
+
+    if hot.len >= l_max && dist_bf16 >= hot.farthest_dist {
+        return false;
+    }
+
+    if let Some(idx) = find_hash_simd(&cold.hashes, hot.len, hash) {
+        if dist_bf16 < cold.distances[idx] {
+            let was_farthest = idx == hot.farthest_idx as usize;
+            cold.neighbors[idx] = neighbor;
+            cold.distances[idx] = dist_bf16;
+            if was_farthest {
+                update_farthest(hot, cold);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if hot.len < l_max {
+        let new_idx = hot.len as usize;
+        cold.hashes[new_idx] = hash;
+        cold.distances[new_idx] = dist_bf16;
+        cold.neighbors[new_idx] = neighbor;
+        hot.len += 1;
+        if dist_bf16 >= hot.farthest_dist {
+            hot.farthest_dist = dist_bf16;
+            hot.farthest_idx = new_idx as u8;
+        }
+        return true;
+    }
+
+    if dist_bf16 < hot.farthest_dist {
+        let idx = hot.farthest_idx as usize;
+        cold.hashes[idx] = hash;
+        cold.distances[idx] = dist_bf16;
+        cold.neighbors[idx] = neighbor;
+        update_farthest(hot, cold);
+        return true;
+    }
+    false
+}
+
+fn get_neighbors_saturated(hot: &HotSlot, cold: &ColdSlot, max_degree: usize) -> Vec<(u32, f32)> {
+    let n = hot.len as usize;
+    let mut tmp: Vec<(u32, u16)> = (0..n)
+        .map(|i| (cold.neighbors[i], cold.distances[i]))
+        .collect();
+    tmp.sort_unstable_by_key(|&(_, d)| d);
+    tmp.truncate(max_degree);
+    tmp.into_iter().map(|(id, d)| (id, bf16_to_f32(d))).collect()
+}
+
+// ─── Test-only thin wrapper preserving the old HashPruneReservoir API ─────────
+
+#[cfg(test)]
+pub(crate) struct HashPruneReservoir {
+    hot: HotSlot,
+    cold: ColdSlot,
+    l_max: u8,
+}
+
+#[cfg(test)]
+impl HashPruneReservoir {
+    pub(crate) fn new(l_max: usize) -> Self {
+        assert!(l_max <= L_MAX_MAX);
+        Self {
+            hot: HotSlot::new_empty(),
+            cold: ColdSlot {
+                hashes: [0; L_MAX_MAX],
+                distances: [0; L_MAX_MAX],
+                neighbors: [0; L_MAX_MAX],
+            },
+            l_max: l_max as u8,
+        }
+    }
+
+    pub(crate) fn new_lazy(l_max: usize) -> Self {
+        Self::new(l_max)
+    }
+
+    pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+        insert_locked(
+            &mut self.hot,
+            &mut self.cold,
+            hash,
+            neighbor,
+            distance,
+            self.l_max,
+        )
+    }
+
+    pub fn get_neighbors_saturated(&self, max_degree: usize) -> Vec<(u32, f32)> {
+        get_neighbors_saturated(&self.hot, &self.cold, max_degree)
+    }
+
+    pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
+        get_neighbors_saturated(&self.hot, &self.cold, L_MAX_MAX)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.hot.len as usize
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.hot.len == 0
+    }
+}
+
+// ─── HashPrune ────────────────────────────────────────────────────────────────
+
 pub struct HashPrune {
-    /// One reservoir per point, each behind a Mutex for parallel access.
-    reservoirs: Vec<Mutex<HashPruneReservoir>>,
-    /// LSH sketches.
+    hot: Vec<HotSlot>,
+    cold: Vec<ColdSlot>,
     sketches: LshSketches,
-    /// Maximum degree for the final graph.
     max_degree: usize,
-    /// Maximum reservoir size (l_max).
     l_max: usize,
 }
+
+// SAFETY: HotSlot has interior mutability via RawMutex. ColdSlot is plain data
+// guarded by HotSlot[i].lock per index. Disjoint-index parallel access is safe.
+unsafe impl Send for HashPrune {}
+unsafe impl Sync for HashPrune {}
 
 impl HashPrune {
-    /// Create a new HashPrune instance.
-    ///
-    /// `data` is row-major: npoints x ndims.
     pub fn new<T: VectorRepr + Send + Sync>(
         data: &[T],
         npoints: usize,
@@ -646,126 +323,155 @@ impl HashPrune {
             elapsed_secs = t0.elapsed().as_secs_f64(),
             "sketch computation"
         );
-
         Self::from_sketches(sketches, npoints, l_max, max_degree)
     }
 
-    /// Create a HashPrune from pre-computed LSH sketches.
-    /// Allows the caller to compute sketches from f32 data, drop the data,
-    /// then create HashPrune without holding the f32 borrow.
     pub(crate) fn from_sketches(
         sketches: LshSketches,
         npoints: usize,
         l_max: usize,
         max_degree: usize,
     ) -> Self {
+        assert!(
+            l_max <= L_MAX_MAX,
+            "AoSoA HashPrune requires l_max ≤ {}, got {}",
+            L_MAX_MAX,
+            l_max
+        );
+
         let t1 = std::time::Instant::now();
-        // Lazy: each reservoir allocates its entry Vec on first push, not upfront.
-        // Upfront alloc of npoints × l_max bytes spikes peak RSS and adds serial
-        // malloc time; spreading the allocs over parallel inserts is net cheaper.
-        // Parallel construction: 10M Mutex<Reservoir> sequential alloc is wall-bound by
-        // the single-thread Mutex::new + Vec::push cost. into_par_iter splits across rayon.
-        use rayon::prelude::*;
-        let reservoirs: Vec<_> = (0..npoints)
-            .into_par_iter()
-            .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
-            .collect();
+
+        // Hot slab: one HotSlot per point, contiguous. 160 MB at 10M.
+        let mut hot: Vec<HotSlot> = Vec::with_capacity(npoints);
+        for _ in 0..npoints {
+            hot.push(HotSlot::new_empty());
+        }
+
+        // Cold slab: 512 B × npoints. 5 GB at 10M. Plain bit-pattern type,
+        // zeros are valid → use zeroed-page allocator path (memset of fresh
+        // mmap'd pages is "free" via lazy faulting).
+        let cold: Vec<ColdSlot> = {
+            let mut v: Vec<ColdSlot> = Vec::with_capacity(npoints);
+            // SAFETY: ColdSlot is repr(C) of u16/u32 arrays; all-zeros is a
+            // valid bit pattern. write_bytes covers exactly capacity*sizeof.
+            unsafe {
+                std::ptr::write_bytes(v.as_mut_ptr(), 0, npoints);
+                v.set_len(npoints);
+            }
+            v
+        };
+
+        // Both slabs contiguous → madvise hugepages so DTLB pressure scales
+        // with 2 MB pages instead of 4 KB.
+        #[cfg(target_os = "linux")]
+        {
+            let hot_bytes = hot.len() * std::mem::size_of::<HotSlot>();
+            let cold_bytes = cold.len() * std::mem::size_of::<ColdSlot>();
+            // SAFETY: as_ptr() points at each Vec's contiguous backing alloc;
+            // bytes matches its capacity. madvise non-fatal on failure.
+            unsafe {
+                if hot_bytes > 2 * 1024 * 1024 {
+                    libc::madvise(
+                        hot.as_ptr() as *mut libc::c_void,
+                        hot_bytes,
+                        libc::MADV_HUGEPAGE,
+                    );
+                }
+                if cold_bytes > 2 * 1024 * 1024 {
+                    libc::madvise(
+                        cold.as_ptr() as *mut libc::c_void,
+                        cold_bytes,
+                        libc::MADV_HUGEPAGE,
+                    );
+                }
+            }
+        }
+
         tracing::debug!(
             elapsed_secs = t1.elapsed().as_secs_f64(),
             "reservoir allocation"
         );
 
         Self {
-            reservoirs,
+            hot,
+            cold,
             sketches,
             max_degree,
             l_max,
         }
     }
 
-    /// Add a single edge from point `p` to candidate `c` (test-only — production
-    /// uses [`add_edges_batched`] which amortizes lock acquisition across edges
-    /// sharing the same source).
+    /// SAFETY: idx must be in bounds for both hot and cold.
+    #[inline]
+    unsafe fn lock_slot(&self, idx: usize) -> (*mut HotSlot, *mut ColdSlot) {
+        let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
+        let cold_ptr = (self.cold.as_ptr() as *mut ColdSlot).add(idx);
+        (*hot_ptr).lock.lock();
+        (hot_ptr, cold_ptr)
+    }
+
+    /// SAFETY: caller must hold the lock at idx.
+    #[inline]
+    unsafe fn unlock_slot(&self, idx: usize) {
+        let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
+        (*hot_ptr).lock.unlock();
+    }
+
+    #[inline(always)]
+    fn with_locked<R>(&self, idx: usize, f: impl FnOnce(&mut HotSlot, &mut ColdSlot) -> R) -> R {
+        struct UnlockOnDrop<'a> {
+            hp: &'a HashPrune,
+            idx: usize,
+        }
+        impl<'a> Drop for UnlockOnDrop<'a> {
+            fn drop(&mut self) {
+                unsafe {
+                    self.hp.unlock_slot(self.idx);
+                }
+            }
+        }
+        debug_assert!(idx < self.hot.len());
+        // SAFETY: bounds-checked above; UnlockOnDrop unlocks on panic.
+        let (hot_ptr, cold_ptr) = unsafe { self.lock_slot(idx) };
+        let _guard = UnlockOnDrop { hp: self, idx };
+        unsafe { f(&mut *hot_ptr, &mut *cold_ptr) }
+    }
+
     #[cfg(test)]
     #[inline]
     pub(crate) fn add_edge(&self, p: usize, c: usize, distance: f32) {
         let hash = self.sketches.relative_hash(p, c);
-        self.reservoirs[p].lock().insert(hash, c as u32, distance);
+        let l_max = self.l_max as u8;
+        self.with_locked(p, |hot, cold| {
+            insert_locked(hot, cold, hash, c as u32, distance, l_max);
+        });
     }
 
-    /// Add edges from a leaf build result, batching by source point.
-    /// Caches the lock on the last source seen, so callers whose edges are
-    /// grouped by source acquire each reservoir mutex once per group (rather
-    /// than once per edge). Leaf-build emits edges in this grouped order.
-    ///
-    /// Dispatches on the runtime SIMD tier ONCE at entry; the per-edge inner
-    /// loop is monomorphized to call the tier-matched `find_hash` directly,
-    /// avoiding a per-edge runtime tier check.
     pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
         if edges.is_empty() {
             return;
         }
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => unsafe { self.add_edges_batched_inner_avx512(edges) },
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => unsafe { self.add_edges_batched_inner_avx2(edges) },
-            _ => self.add_edges_batched_inner_scalar(edges),
-        }
-    }
+        let l_max = self.l_max as u8;
 
-    /// Generic inner body for `add_edges_batched`, parameterized by `find_hash`.
-    #[inline(always)]
-    fn add_edges_batched_inner<F>(&self, edges: &[crate::leaf_build::Edge], find: F)
-    where
-        F: Copy + Fn(&[u16], u16) -> Option<usize>,
-    {
-        // Cache last reservoir lock to avoid redundant lock ops for consecutive
-        // edges with the same source.
-        let mut last_src = u32::MAX;
-        let mut last_reservoir: Option<parking_lot::MutexGuard<'_, HashPruneReservoir>> = None;
-
-        for edge in edges {
-            if edge.src != last_src {
-                drop(last_reservoir.take());
-                last_src = edge.src;
-                last_reservoir = Some(self.reservoirs[edge.src as usize].lock());
+        let mut i = 0;
+        while i < edges.len() {
+            let src = edges[i].src;
+            let mut j = i + 1;
+            while j < edges.len() && edges[j].src == src {
+                j += 1;
             }
-            let reservoir = last_reservoir.as_mut().unwrap();
-            let hash = self
-                .sketches
-                .relative_hash(edge.src as usize, edge.dst as usize);
-            reservoir.insert_with(hash, edge.dst, edge.distance, find);
+            self.with_locked(src as usize, |hot, cold| {
+                for edge in &edges[i..j] {
+                    let hash = self
+                        .sketches
+                        .relative_hash(edge.src as usize, edge.dst as usize);
+                    insert_locked(hot, cold, hash, edge.dst, edge.distance, l_max);
+                }
+            });
+            i = j;
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx512f", enable = "avx512bw")]
-    unsafe fn add_edges_batched_inner_avx512(&self, edges: &[crate::leaf_build::Edge]) {
-        self.add_edges_batched_inner(edges, |e, h| find_hash_packed_avx512(e, h));
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx2")]
-    unsafe fn add_edges_batched_inner_avx2(&self, edges: &[crate::leaf_build::Edge]) {
-        self.add_edges_batched_inner(edges, |e, h| find_hash_packed_avx2(e, h));
-    }
-
-    fn add_edges_batched_inner_scalar(&self, edges: &[crate::leaf_build::Edge]) {
-        self.add_edges_batched_inner(edges, find_hash_packed_scalar);
-    }
-
-    /// Insert leaf edges in CSR-grouped form.
-    ///
-    /// `group_starts[i]..group_starts[i+1]` indexes into `group_data` for
-    /// edges with local source `i`. Each entry is `(local_dst, distance)`.
-    /// `local_indices` maps local index → global point id.
-    ///
-    /// One lock acquisition per source — reservoir + sketch loaded into cache
-    /// once and used for all edges of that source, eliminating ~5x of HP
-    /// insert cost versus interleaved-source insertion.
-    ///
-    /// Dispatches on the runtime SIMD tier ONCE at entry.
     pub fn add_edges_grouped(
         &self,
         group_starts: &[u32],
@@ -775,30 +481,8 @@ impl HashPrune {
         if group_data.is_empty() {
             return;
         }
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => unsafe {
-                self.add_edges_grouped_inner_avx512(group_starts, group_data, local_indices)
-            },
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => unsafe {
-                self.add_edges_grouped_inner_avx2(group_starts, group_data, local_indices)
-            },
-            _ => self.add_edges_grouped_inner_scalar(group_starts, group_data, local_indices),
-        }
-    }
-
-    #[inline(always)]
-    fn add_edges_grouped_inner<F>(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        find: F,
-    ) where
-        F: Copy + Fn(&[u16], u16) -> Option<usize>,
-    {
         let n = local_indices.len();
+        let l_max = self.l_max as u8;
         debug_assert!(group_starts.len() >= n + 1);
 
         for local_src in 0..n {
@@ -808,69 +492,18 @@ impl HashPrune {
                 continue;
             }
             let global_src = local_indices[local_src] as usize;
-            let mut reservoir = self.reservoirs[global_src].lock();
-            // SAFETY: bounds checked by `group_starts[n] == group_data.len()`
-            // (caller invariant — see build_leaf_with_buffers Pass 2).
-            for &(dst_local, dist) in &group_data[start..end] {
-                let global_dst = local_indices[dst_local as usize];
-                let hash = self
-                    .sketches
-                    .relative_hash(global_src, global_dst as usize);
-                reservoir.insert_with(hash, global_dst, dist, find);
-            }
+            self.with_locked(global_src, |hot, cold| {
+                for &(dst_local, dist) in &group_data[start..end] {
+                    let global_dst = local_indices[dst_local as usize];
+                    let hash = self
+                        .sketches
+                        .relative_hash(global_src, global_dst as usize);
+                    insert_locked(hot, cold, hash, global_dst, dist, l_max);
+                }
+            });
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx512f", enable = "avx512bw")]
-    unsafe fn add_edges_grouped_inner_avx512(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-    ) {
-        self.add_edges_grouped_inner(group_starts, group_data, local_indices, |e, h| {
-            find_hash_packed_avx512(e, h)
-        });
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx2")]
-    unsafe fn add_edges_grouped_inner_avx2(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-    ) {
-        self.add_edges_grouped_inner(group_starts, group_data, local_indices, |e, h| {
-            find_hash_packed_avx2(e, h)
-        });
-    }
-
-    fn add_edges_grouped_inner_scalar(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-    ) {
-        self.add_edges_grouped_inner(
-            group_starts,
-            group_data,
-            local_indices,
-            find_hash_packed_scalar,
-        );
-    }
-
-    /// CSR-grouped insert that consumes a leaf-local sketches buffer.
-    /// `local_sketches` is `n × num_planes` row-major (caller gathered it
-    /// during the leaf's data gather). Hash compute happens against this
-    /// L1-resident buffer instead of the multi-hundred-MB global sketches —
-    /// eliminates the per-edge global sketches cache miss in HP insertion.
-    ///
-    /// Dispatches on the runtime SIMD tier ONCE at entry; both `relative_hash`
-    /// and `find_hash` inside the per-edge loop run at the matched tier with
-    /// no per-call runtime check (the `#[target_feature]` on the inner fn lets
-    /// the compiler inline the SIMD intrinsics into the same hot kernel).
     pub fn add_edges_grouped_local_sketches(
         &self,
         group_starts: &[u32],
@@ -881,52 +514,9 @@ impl HashPrune {
         if group_data.is_empty() {
             return;
         }
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => unsafe {
-                self.add_edges_grouped_local_sketches_inner_avx512(
-                    group_starts,
-                    group_data,
-                    local_indices,
-                    local_sketches,
-                )
-            },
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => unsafe {
-                self.add_edges_grouped_local_sketches_inner_avx2(
-                    group_starts,
-                    group_data,
-                    local_indices,
-                    local_sketches,
-                )
-            },
-            _ => self.add_edges_grouped_local_sketches_inner_scalar(
-                group_starts,
-                group_data,
-                local_indices,
-                local_sketches,
-            ),
-        }
-    }
-
-    /// Generic inner body for `add_edges_grouped_local_sketches`, parameterized
-    /// by `find_hash` and `relative_hash_local`. The compiler monomorphizes per
-    /// tier so both SIMD ops inline into the per-edge hot loop.
-    #[inline(always)]
-    fn add_edges_grouped_local_sketches_inner<F, H>(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        local_sketches: &[f32],
-        find: F,
-        relhash: H,
-    ) where
-        F: Copy + Fn(&[u16], u16) -> Option<usize>,
-        H: Copy + Fn(&[f32], &[f32], usize) -> u16,
-    {
         let n = local_indices.len();
         let m = self.sketches.num_planes();
+        let l_max = self.l_max as u8;
         debug_assert!(group_starts.len() >= n + 1);
         debug_assert!(local_sketches.len() >= n * m);
 
@@ -937,85 +527,67 @@ impl HashPrune {
                 continue;
             }
             let global_src = local_indices[local_src] as usize;
-            let src_sketch = &local_sketches[local_src * m..(local_src + 1) * m];
-            let mut reservoir = self.reservoirs[global_src].lock();
-            for &(dst_local, dist) in &group_data[start..end] {
-                let global_dst = local_indices[dst_local as usize];
-                let dst_sketch =
-                    &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
-                // relative_hash: bit j = (dst[j] - src[j] >= 0). Branch-free
-                // SIMD: compute diff in one masked sub, then cmp_ge_mask gives
-                // the bit pattern directly. Eliminates the 12-iter data-
-                // dependent `if >= 0` branch chain that contributed to HP's
-                // bad-spec slot share (PMU profile).
-                let hash = relhash(dst_sketch, src_sketch, m);
-                reservoir.insert_with(hash, global_dst, dist, find);
+
+            // Prefetch NEXT non-empty source's hot+cold slots (cf. Phase 3
+            // prefetch on prior AoS layout — same idea, narrower targets).
+            #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+            {
+                use std::arch::x86_64::*;
+                if local_src + 1 < n {
+                    let mut nxt = local_src + 1;
+                    while nxt < n && group_starts[nxt] == group_starts[nxt + 1] {
+                        nxt += 1;
+                    }
+                    if nxt < n {
+                        let nxt_global = local_indices[nxt] as usize;
+                        // SAFETY: nxt_global < npoints; both slabs in bounds.
+                        unsafe {
+                            let hot_p = self.hot.as_ptr().add(nxt_global) as *const i8;
+                            _mm_prefetch::<{ _MM_HINT_T0 }>(hot_p);
+                            let cold_p = self.cold.as_ptr().add(nxt_global) as *const i8;
+                            _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p);
+                            _mm_prefetch::<{ _MM_HINT_T0 }>(cold_p.add(64));
+                        }
+                    }
+                }
             }
+
+            let src_sketch = &local_sketches[local_src * m..(local_src + 1) * m];
+            self.with_locked(global_src, |hot, cold| {
+                for &(dst_local, dist) in &group_data[start..end] {
+                    let global_dst = local_indices[dst_local as usize];
+                    let dst_sketch =
+                        &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
+                    let hash: u16;
+                    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+                    {
+                        use std::arch::x86_64::*;
+                        let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
+                        // SAFETY: AVX-512 cfg-gated; masked load bounded by kmask.
+                        unsafe {
+                            let dst_v = _mm512_maskz_loadu_ps(kmask, dst_sketch.as_ptr());
+                            let src_v = _mm512_maskz_loadu_ps(kmask, src_sketch.as_ptr());
+                            let diff = _mm512_sub_ps(dst_v, src_v);
+                            let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
+                            hash = mask & kmask;
+                        }
+                    }
+                    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+                    {
+                        let mut h: u16 = 0;
+                        for j in 0..m {
+                            let diff = dst_sketch[j] - src_sketch[j];
+                            let bit = ((!diff.is_sign_negative()) as u16) << j;
+                            h |= bit;
+                        }
+                        hash = h;
+                    }
+                    insert_locked(hot, cold, hash, global_dst, dist, l_max);
+                }
+            });
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx512f", enable = "avx512bw")]
-    unsafe fn add_edges_grouped_local_sketches_inner_avx512(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        local_sketches: &[f32],
-    ) {
-        // SAFETY: AVX-512F enabled by `#[target_feature]`; the inlined
-        // `find_hash_avx512` and `relative_hash_local_avx512` calls share the
-        // same feature scope, so the compiler emits the AVX-512 codegen
-        // identically to the previous `#[cfg(target_feature)]` blocks.
-        self.add_edges_grouped_local_sketches_inner(
-            group_starts,
-            group_data,
-            local_indices,
-            local_sketches,
-            |e, h| find_hash_packed_avx512(e, h),
-            |dst, src, m| relative_hash_local_avx512(dst, src, m),
-        );
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[target_feature(enable = "avx2")]
-    unsafe fn add_edges_grouped_local_sketches_inner_avx2(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        local_sketches: &[f32],
-    ) {
-        // SAFETY: AVX2 enabled by `#[target_feature]`.
-        self.add_edges_grouped_local_sketches_inner(
-            group_starts,
-            group_data,
-            local_indices,
-            local_sketches,
-            |e, h| find_hash_packed_avx2(e, h),
-            |dst, src, m| relative_hash_local_avx2(dst, src, m),
-        );
-    }
-
-    fn add_edges_grouped_local_sketches_inner_scalar(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-        local_sketches: &[f32],
-    ) {
-        self.add_edges_grouped_local_sketches_inner(
-            group_starts,
-            group_data,
-            local_indices,
-            local_sketches,
-            find_hash_packed_scalar,
-            relative_hash_local_scalar,
-        );
-    }
-
-    /// Copy sketches for `indices` into `out` (length must be `indices.len() * num_planes`).
-    /// Used by leaf build to pre-gather a small L1-resident sketches buffer.
     pub fn gather_sketches_into(&self, indices: &[u32], out: &mut [f32]) {
         let m = self.sketches.num_planes();
         let src = self.sketches.sketches();
@@ -1030,39 +602,27 @@ impl HashPrune {
         self.sketches.num_planes()
     }
 
-    /// Extract the final graph as adjacency lists, consuming the HashPrune.
-    ///
-    /// Consumes self so that reservoirs and sketches are freed as extraction proceeds,
-    /// rather than staying alive until the caller drops HashPrune.
-    /// Each reservoir is dropped immediately after its neighbors are extracted.
     pub fn extract_graph(self) -> Vec<Vec<u32>> {
         let max_degree = self.max_degree;
-        // Drop sketches first to free memory before the parallel extract scan.
         drop(self.sketches);
-        self.reservoirs
+        let HashPrune { hot, cold, .. } = self;
+        (0..hot.len())
             .into_par_iter()
-            .map(|mutex| {
-                let res = mutex.into_inner();
-                let mut neighbors = res.get_neighbors_saturated(max_degree);
-                neighbors.truncate(max_degree);
-                neighbors.into_iter().map(|(id, _)| id).collect()
+            .map(|i| {
+                let mut nbrs = get_neighbors_saturated(&hot[i], &cold[i], max_degree);
+                nbrs.truncate(max_degree);
+                nbrs.into_iter().map(|(id, _)| id).collect()
             })
             .collect_installed()
     }
 
-    /// Extract the full reservoir (up to l_max) with distances for final_prune.
-    /// Returns (neighbor_id, distance) pairs sorted by distance.
-    /// Final_prune selects max_degree from this larger candidate pool using diversity.
     pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
         let l_max = self.l_max;
         drop(self.sketches);
-        self.reservoirs
+        let HashPrune { hot, cold, .. } = self;
+        (0..hot.len())
             .into_par_iter()
-            .map(|mutex| {
-                let res = mutex.into_inner();
-                // Saturate up to l_max so final_prune gets the full candidate pool.
-                res.get_neighbors_saturated(l_max)
-            })
+            .map(|i| get_neighbors_saturated(&hot[i], &cold[i], l_max))
             .collect_installed()
     }
 }
@@ -1076,20 +636,16 @@ mod tests {
         let mut reservoir = HashPruneReservoir::new(3);
         assert!(reservoir.is_empty());
 
-        // Insert three entries with different hashes.
         assert!(reservoir.insert(0, 1, 1.0));
         assert!(reservoir.insert(1, 2, 2.0));
         assert!(reservoir.insert(2, 3, 3.0));
         assert_eq!(reservoir.len(), 3);
 
-        // Reservoir is full. New closer entry should evict the farthest.
         assert!(reservoir.insert(3, 4, 0.5));
         assert_eq!(reservoir.len(), 3);
 
         let neighbors = reservoir.get_neighbors_sorted();
-        // Should not contain the farthest entry (neighbor 3, distance 3.0).
         assert!(!neighbors.iter().any(|(id, _)| *id == 3));
-        // Should contain the new closer entry.
         assert!(neighbors.iter().any(|(id, _)| *id == 4));
     }
 
@@ -1100,7 +656,6 @@ mod tests {
         assert!(reservoir.insert(0, 1, 2.0));
         assert_eq!(reservoir.len(), 1);
 
-        // Same hash, closer distance: should update.
         assert!(reservoir.insert(0, 2, 1.0));
         assert_eq!(reservoir.len(), 1);
 
@@ -1108,27 +663,20 @@ mod tests {
         assert_eq!(neighbors[0].0, 2);
         assert_eq!(neighbors[0].1, 1.0);
 
-        // Same hash, farther distance: should not update.
         assert!(!reservoir.insert(0, 3, 5.0));
         assert_eq!(reservoir.len(), 1);
     }
 
     #[test]
     fn test_lsh_sketches() {
-        // Simple test with 4 points in 2D.
         let data = vec![
-            1.0, 0.0, // point 0
-            0.0, 1.0, // point 1
-            -1.0, 0.0, // point 2
-            0.0, -1.0, // point 3
+            1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0,
         ];
         let sketches = sketches_from_data(&data, 4, 2, 4, 42);
 
-        // Relative hash of a point with itself: all diffs are 0, 0.0 >= 0.0 is true.
         let h00 = sketches.relative_hash(0, 0);
         assert_eq!(h00, (1u16 << 4) - 1);
 
-        // Different points should generally have different hashes.
         let h01 = sketches.relative_hash(0, 1);
         let h02 = sketches.relative_hash(0, 2);
         let _ = (h01, h02);
@@ -1136,17 +684,10 @@ mod tests {
 
     #[test]
     fn test_hash_prune_end_to_end() {
-        // 4 points in 2D.
-        let data = vec![
-            0.0, 0.0, // point 0
-            1.0, 0.0, // point 1
-            0.0, 1.0, // point 2
-            1.0, 1.0, // point 3
-        ];
+        let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
 
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
 
-        // Add some edges.
         hp.add_edge(0, 1, 1.0);
         hp.add_edge(0, 2, 1.0);
         hp.add_edge(0, 3, 1.414);
@@ -1253,9 +794,6 @@ mod tests {
 
     #[test]
     fn test_lsh_sketches_different_seeds_give_different_hashes() {
-        // Aggregate across many point pairs so the assertion is statistical:
-        // with 4 planes and random hyperplanes from two distinct seeds, at
-        // least one pair must hash differently.
         let data: Vec<f32> = (0..32 * 4).map(|i| (i as f32).sin()).collect();
         let s1 = sketches_from_data(&data, 32, 4, 12, 42);
         let s2 = sketches_from_data(&data, 32, 4, 12, 99);
@@ -1269,8 +807,6 @@ mod tests {
 
     #[test]
     fn test_relative_hash_is_asymmetric() {
-        // h_p(c) is sign(Sketch(c) - Sketch(p)), so h(p,c) and h(c,p) differ
-        // wherever any plane gives Sketch(p) != Sketch(c).
         let data = vec![1.0f32, 0.0, 0.0, 1.0, -1.0, 0.0];
         let sketches = sketches_from_data(&data, 3, 2, 4, 42);
         let h01 = sketches.relative_hash(0, 1);
@@ -1284,7 +820,6 @@ mod tests {
     #[test]
     fn test_extract_graph_for_prune_returns_full_reservoir() {
         let data = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        // l_max=10 (much larger than max_degree=2) to verify no truncation.
         let hp = HashPrune::new(&data, 4, 2, 4, 10, 2, 42);
         hp.add_edge(0, 1, 1.0);
         hp.add_edge(0, 2, 1.0);
@@ -1295,10 +830,7 @@ mod tests {
 
         let full = hp.extract_graph_for_prune();
         assert_eq!(full.len(), 4);
-        // Node 0 has up to 3 edges, but hash collisions may reduce this.
-        // Key invariant: for_prune returns >= extract_graph (no truncation to max_degree).
         assert!(!full[0].is_empty(), "node 0 should have neighbors");
-        // Verify sorted by distance.
         for neighbors in &full {
             for w in neighbors.windows(2) {
                 assert!(w[0].1 <= w[1].1, "should be sorted by distance");
@@ -1315,7 +847,6 @@ mod tests {
         hp.add_edge(0, 3, 3.0);
 
         let graph = hp.extract_graph();
-        // max_degree=2, so node 0 should have at most 2 neighbors.
         assert!(
             graph[0].len() <= 2,
             "extract_graph should truncate to max_degree"
@@ -1331,7 +862,6 @@ mod tests {
 
         let full = hp.extract_graph_for_prune();
         let node0 = &full[0];
-        // Check distances are bf16-rounded but close to original.
         for &(id, dist) in node0 {
             if id == 1 {
                 assert!((dist - 1.5).abs() < 0.05, "dist for id=1: {}", dist);
@@ -1344,20 +874,14 @@ mod tests {
 
     #[test]
     fn test_reservoir_farthest_cache_after_eviction() {
-        // Verify farthest cache stays correct through multiple eviction cycles.
         let mut res = HashPruneReservoir::new(3);
         res.insert(0, 10, 5.0);
         res.insert(1, 11, 4.0);
         res.insert(2, 12, 3.0);
-        // Full. Evict farthest (5.0), insert closer.
         assert!(res.insert(3, 13, 2.0));
-        // Farthest should now be 4.0 (id=11).
-        // Evict again.
         assert!(res.insert(4, 14, 1.0));
-        // Farthest should now be 3.0 (id=12).
         let neighbors = res.get_neighbors_sorted();
         assert_eq!(neighbors.len(), 3);
-        // All remaining should have dist <= 3.0.
         for &(_, d) in &neighbors {
             assert!(d <= 3.1, "expected dist <= 3.0, got {}", d);
         }
@@ -1365,19 +889,14 @@ mod tests {
 
     #[test]
     fn test_reservoir_farthest_insert_before_farthest_idx() {
-        // Regression: inserting with hash < farthest's hash must shift farthest_idx.
         let mut res = HashPruneReservoir::new(4);
-        // Insert in hash order: 5, 10, 15
         res.insert(5, 1, 1.0);
-        res.insert(10, 2, 3.0); // this is farthest
+        res.insert(10, 2, 3.0);
         res.insert(15, 3, 2.0);
-        // Now insert hash=3, which goes before hash=5 in sorted order.
-        // This shifts all indices right, including farthest_idx.
         res.insert(3, 4, 0.5);
-        // Reservoir not full (cap=4), no eviction. Just verify correctness.
         let neighbors = res.get_neighbors_sorted();
         assert_eq!(neighbors.len(), 4);
-        assert_eq!(neighbors[0].0, 4); // closest (0.5)
+        assert_eq!(neighbors[0].0, 4);
     }
 
     #[test]
@@ -1386,26 +905,10 @@ mod tests {
         let data = vec![0.0f32; 10 * 4];
         let hp = HashPrune::new(&data, 10, 4, 4, 10, 5, 42);
         let edges = vec![
-            Edge {
-                src: 0,
-                dst: 1,
-                distance: 1.0,
-            },
-            Edge {
-                src: 1,
-                dst: 0,
-                distance: 1.0,
-            },
-            Edge {
-                src: 2,
-                dst: 3,
-                distance: 2.0,
-            },
-            Edge {
-                src: 3,
-                dst: 2,
-                distance: 2.0,
-            },
+            Edge { src: 0, dst: 1, distance: 1.0 },
+            Edge { src: 1, dst: 0, distance: 1.0 },
+            Edge { src: 2, dst: 3, distance: 2.0 },
+            Edge { src: 3, dst: 2, distance: 2.0 },
         ];
         hp.add_edges_batched(&edges);
         let graph = hp.extract_graph();

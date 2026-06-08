@@ -831,6 +831,7 @@ dependencies = [
  "diskann-providers",
  "diskann-vector",
  "half",
+ "libc",
  "mimalloc",
  "parking_lot",
  "rand 0.9.2",
