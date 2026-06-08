@@ -46,7 +46,7 @@ The code for two-queue search is found in [this PR](https://github.com/microsoft
 
 Adaptive L search runs a filtered search in the following way: for each query, it runs a standard search until the search has performed 1000 distance computations. Then, it computes what fraction of the points seen so far satisfy the filter predicate, and scales the L_search parameter up accordingly. See [these lines](https://github.com/microsoft/DiskANN/pull/977/changes#diff-0ed5dd0ab0fa4906e3aa6e0c77d6b381f2a364b4d64df85d81224f609104388eR274-R285) for the exact scaling parameters. It only performs the adaptive scaling at one point during the search, so L_search is capped at 16 times the original value. In the future PR which integrates Adaptive L search into main, we will make the number of samples and the maximum scaling factor configurable parameters. Whether to also allow the specificity cutoffs for scaling to be configurable is deferred to future experiments.
 
-The code for adaptive L search was originally contributed in [this PR](https://github.com/microsoft/DiskANN/pull/977). [This branch](https://github.com/microsoft/DiskANN/tree/users/magdalen/two-queue-adaptive-l) integrates it into benchmark and keeps up-to-date with the main branch.
+The code for adaptive L search was originally contributed in [this PR](https://github.com/microsoft/DiskANN/pull/977). [This branch](https://github.com/microsoft/DiskANN/tree/users/magdalen/inline-with-adaptive-l/) integrates it into benchmark and keeps up-to-date with the main branch.
 
 ### Goals
 
