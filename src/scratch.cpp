@@ -50,18 +50,31 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
 
 template <typename T> void InMemQueryScratch<T>::clear()
 {
+    // Clear vectors - std::vector::clear() is O(1) for POD types (just resets size)
     _pool.clear();
     _best_l_nodes.clear();
     _occlude_factor.clear();
     _candidate_pick_flags.clear();
 
-    _inserted_into_pool_rs.clear();
-    _inserted_into_pool_bs->reset();
+    // SwissHashSet::clear() is O(occupied_slots), only clear if non-empty
+    if (!_inserted_into_pool_rs.empty())
+    {
+        _inserted_into_pool_rs.clear();
+    }
+    // dynamic_bitset::reset() is O(n) where n is bitset size, only reset if has bits set
+    if (_inserted_into_pool_bs->size() > 0 && _inserted_into_pool_bs->any())
+    {
+        _inserted_into_pool_bs->reset();
+    }
 
     _id_scratch.clear();
     _dist_scratch.clear();
 
-    _expanded_nodes_set.clear();
+    // These are typically only used during indexing, not search - skip if empty
+    if (!_expanded_nodes_set.empty())
+    {
+        _expanded_nodes_set.clear();
+    }
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
     _query_label_bitmask.clear();
@@ -78,7 +91,7 @@ template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l
         _pool.reserve(3 * _L + _R);
         _best_l_nodes.reserve(_L);
 
-        _inserted_into_pool_rs.reserve(20 * _L);
+        _inserted_into_pool_rs.reserve((size_t)std::ceil(1.5 * _R * _L));
     }
 }
 
