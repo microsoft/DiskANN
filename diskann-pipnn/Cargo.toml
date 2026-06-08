@@ -22,11 +22,10 @@ parking_lot = "0.12"
 libc = "0.2"
 
 [features]
-# Default ON: routes sgemm_aat_lower → OpenBLAS cblas_ssyrk (real 50% FLOP
-# savings). Without it, the faer triangular fallback is ~60% slower than full
-# GEMM on our shapes — a silent regression. OpenBLAS preferred over MKL (no
-# anti-AMD CPUID dispatch). Disable with `--no-default-features` if needed.
-default = ["openblas"]
+# OpenBLAS routes sgemm_aat_lower → cblas_ssyrk for the triangular leaf GEMM.
+# Off by default so downstream consumers choose their BLAS backend; the
+# benchmark crate opts in explicitly.
+default = []
 openblas = ["diskann-linalg/openblas"]
 
 [dev-dependencies]
