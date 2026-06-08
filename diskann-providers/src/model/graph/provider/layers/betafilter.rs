@@ -20,16 +20,13 @@ use diskann::{
     error::StandardError,
     graph::{
         SearchOutputBuffer,
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcessStep, SearchStrategy},
+        glue::{self, SearchPostProcessStep, SearchStrategy},
         index::QueryLabelProvider,
     },
     neighbor::Neighbor,
-    provider::{Accessor, AsNeighbor, BuildQueryComputer, DataProvider, DelegateNeighbor, HasId},
+    provider::{DataProvider, HasId},
     utils::VectorId,
 };
-use diskann_utils::Reborrow;
-use diskann_vector::PreprocessedDistanceFunction;
-use futures_util::FutureExt;
 
 /// A [`SearchStrategy`] type that composes the inner distance computer with beta filtering.
 ///
@@ -70,7 +67,7 @@ pub struct Unwrap;
 /// Delegate post-processing to the inner strategy's post-processing routine.
 impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     type Error<NextError>
         = NextError
@@ -84,7 +81,6 @@ where
         next: &Next,
         accessor: &mut BetaAccessor<A>,
         query: T,
-        computer: &BetaComputer<A::QueryComputer, A::Id>,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Next::Error>> + Send
@@ -93,13 +89,7 @@ where
         B: SearchOutputBuffer<O> + Send + ?Sized,
         Next: glue::SearchPostProcess<Self::NextAccessor, T, O>,
     {
-        next.post_process(
-            &mut accessor.inner,
-            query,
-            computer.inner(),
-            candidates,
-            output,
-        )
+        next.post_process(&mut accessor.inner, query, candidates, output)
     }
 }
 
@@ -111,49 +101,48 @@ where
 ///
 /// The [`BetaComputer`] then uses this ID to consult the filter predicate and adjust the
 /// distance accordingly.
-impl<Provider, Strategy, T, I> SearchStrategy<Provider, T> for BetaFilter<Strategy, I>
+impl<'a, Provider, Strategy, T, I> SearchStrategy<'a, Provider, T> for BetaFilter<Strategy, I>
 where
     I: VectorId,
     Provider: DataProvider<InternalId = I>,
-    Strategy: SearchStrategy<Provider, T>,
+    Strategy: SearchStrategy<'a, Provider, T>,
 {
     /// An accessor that returns the ID in addition to the element yielded by the inner
     /// accessor.
-    type SearchAccessor<'a> = BetaAccessor<Strategy::SearchAccessor<'a>>;
-
-    /// A [`PreprocessedDistanceFunction`] that combines applies the beta filtering factor
-    /// if the vector ID portion of `Element` satisfies the filter predicate.
-    type QueryComputer = BetaComputer<Strategy::QueryComputer, I>;
+    type SearchAccessor = BetaAccessor<Strategy::SearchAccessor>;
 
     type SearchAccessorError = Strategy::SearchAccessorError;
 
     /// Compose the [`BetaAccessor`] with the inner search strategy's [`Accessor`].
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        query: T,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         Ok(BetaAccessor {
-            inner: self.strategy.search_accessor(provider, context)?,
-            labels: self.labels.clone(),
-            beta: self.beta,
+            inner: self.strategy.search_accessor(provider, context, query)?,
+            filter: Filter {
+                labels: self.labels.clone(),
+                beta: self.beta,
+            },
         })
     }
 }
 
 /// [`DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<Provider, Strategy, T, I, O> glue::DefaultPostProcessor<Provider, T, O>
+impl<'a, Provider, Strategy, T, I, O> glue::DefaultPostProcessor<'a, Provider, T, O>
     for BetaFilter<Strategy, I>
 where
     I: VectorId,
     O: Send,
     Provider: DataProvider<InternalId = I>,
-    Strategy: glue::DefaultPostProcessor<Provider, T, O>,
+    Strategy: glue::DefaultPostProcessor<'a, Provider, T, O>,
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
-    fn default_post_processor(&self) -> Self::Processor {
+    fn default_post_processor(&'a self) -> Self::Processor {
         glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
@@ -162,61 +151,30 @@ where
 // Helpers //
 /////////////
 
-/// The `Element` and `ElementRef` types used by the [`BetaAccessor`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct Pair<I, E> {
-    id: I,
-    element: E,
-}
-
-impl<I, E> Pair<I, E> {
-    fn new(id: I, element: E) -> Self {
-        Self { id, element }
-    }
-}
-
-/// `Reborrow` is implemented in terms of a full `Reborrow` of `E` while leaving the id
-/// untouched.
-impl<'a, I, E> Reborrow<'a> for Pair<I, E>
-where
-    E: Reborrow<'a>,
-    I: Copy,
-{
-    type Target = Pair<I, E::Target>;
-    fn reborrow(&'a self) -> Self::Target {
-        Pair {
-            id: self.id,
-            element: self.element.reborrow(),
-        }
-    }
-}
-
 /// An [`Accessor`] that composes with an `Inner` accessor to provide beta-filtering.
 pub struct BetaAccessor<Inner>
 where
     Inner: HasId,
 {
     inner: Inner,
-    labels: Arc<dyn QueryLabelProvider<Inner::Id>>,
+    filter: Filter<Inner::Id>,
+}
+
+struct Filter<I> {
+    labels: Arc<dyn QueryLabelProvider<I>>,
     beta: f32,
 }
 
-impl<Inner> SearchExt for BetaAccessor<Inner>
+impl<I> Filter<I>
 where
-    Inner: SearchExt,
+    I: VectorId,
 {
-    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<Inner::Id>>> + Send {
-        self.inner.starting_points()
-    }
-}
-
-impl<'a, Inner> DelegateNeighbor<'a> for BetaAccessor<Inner>
-where
-    Inner: DelegateNeighbor<'a>,
-{
-    type Delegate = Inner::Delegate;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.inner.delegate_neighbor()
+    fn apply(&self, id: I, distance: f32) -> f32 {
+        if self.labels.is_match(id) {
+            distance * self.beta
+        } else {
+            distance
+        }
     }
 }
 
@@ -227,297 +185,57 @@ where
     type Id = Inner::Id;
 }
 
-impl<Inner> Accessor for BetaAccessor<Inner>
+impl<Inner> glue::SearchAccessor for BetaAccessor<Inner>
 where
-    Inner: Accessor,
+    Inner: glue::SearchAccessor,
 {
-    /// Modify `Element` to retain the vector ID.
-    type Element<'a>
-        = Pair<Self::Id, Inner::Element<'a>>
-    where
-        Self: 'a;
-    type ElementRef<'a> = Pair<Self::Id, Inner::ElementRef<'a>>;
-
-    /// Use the same error type as `Inner`.
-    type GetError = Inner::GetError;
-
-    /// Invoke `get_element` on the inner accessor and return a tuple consisting of the
-    /// retrieved element and `id`.
-    #[inline(always)]
-    fn get_element(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        // The first `map` applies to `Future`.
-        // The second `map` applies to the `Result`.
-        self.inner
-            .get_element(id)
-            .map(move |result| result.map(move |v| Pair::new(id, v)))
+    fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<Inner::Id>>> + Send {
+        self.inner.starting_points()
     }
 
-    /// Method `on_elements_unordered` is implemented by invoking
-    /// `inner.on_elements_unordered` with a decorated version of `f`.
-    async fn on_elements_unordered<Itr, F>(
+    fn start_point_distances<F>(
         &mut self,
-        itr: Itr,
         mut f: F,
-    ) -> Result<(), Self::GetError>
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'a> FnMut(Self::ElementRef<'a>, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        self.inner
-            .on_elements_unordered(
-                itr,
-                #[inline]
-                move |element, id| f(Pair::new(id, element), id),
-            )
-            .await
-    }
-}
-
-impl<Inner, T> BuildQueryComputer<T> for BetaAccessor<Inner>
-where
-    Inner: BuildQueryComputer<T>,
-{
-    /// Use a [`BetaComputer`] to apply filtering.
-    type QueryComputer = BetaComputer<Inner::QueryComputer, Self::Id>;
-    /// Use the same error as `Inner`.
-    type QueryComputerError = Inner::QueryComputerError;
-
-    fn build_query_computer(
-        &self,
-        from: T,
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        self.inner
-            .build_query_computer(from)
-            .map(|computer| BetaComputer::new(computer, self.labels.clone(), self.beta))
-    }
-}
-
-impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + AsNeighbor {}
-
-/// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
-pub struct BetaComputer<Inner, I: VectorId> {
-    inner: Inner,
-    labels: Arc<dyn QueryLabelProvider<I>>,
-    beta: f32,
-}
-
-impl<Inner, I> BetaComputer<Inner, I>
-where
-    I: VectorId,
-{
-    /// Construct a new `BetaComputer` around `Inner`.
-    pub fn new(inner: Inner, labels: Arc<dyn QueryLabelProvider<I>>, beta: f32) -> Self {
-        Self {
-            inner,
-            labels,
-            beta,
-        }
+        let filter = &self.filter;
+        self.inner.start_point_distances(move |id, distance| {
+            f(id, filter.apply(id, distance));
+        })
     }
 
-    /// Return a reference to the inner computer.
-    pub fn inner(&self) -> &Inner {
-        &self.inner
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        mut on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let filter = &self.filter;
+        self.inner.expand_beam(ids, pred, move |id, distance| {
+            on_neighbors(id, filter.apply(id, distance))
+        })
     }
 }
-
-impl<T, Inner, I> PreprocessedDistanceFunction<Pair<I, T>, f32> for BetaComputer<Inner, I>
-where
-    I: VectorId,
-    Inner: PreprocessedDistanceFunction<T, f32>,
-{
-    /// Check whether the ID satisfied the predicate computed by the label provider.
-    ///
-    /// If so, multiply the distance computed by `Inner` by `beta`.
-    #[inline(always)]
-    fn evaluate_similarity(&self, x: Pair<I, T>) -> f32 {
-        // Inner distance computation.
-        let distance = self.inner.evaluate_similarity(x.element);
-        // Check beta.
-        if self.labels.is_match(x.id) {
-            distance * self.beta
-        } else {
-            distance
-        }
-    }
-}
-
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use diskann::{
-        ANNError, ANNResult, always_escalate,
-        graph::AdjacencyList,
-        graph::glue::CopyIds,
-        provider::{DefaultContext, NeighborAccessor, NoopGuard},
-    };
-    use futures_util::future;
-    use thiserror::Error;
-
     use super::*;
 
-    /// A very simple data provider.
-    struct SimpleProvider;
-    impl DataProvider for SimpleProvider {
-        type Context = DefaultContext;
-        type InternalId = u32;
-        type ExternalId = u64;
-        type Guard = NoopGuard<u32>;
-
-        type Error = ANNError;
-
-        fn to_internal_id(&self, _context: &DefaultContext, gid: &u64) -> ANNResult<u32> {
-            Ok((*gid).try_into()?)
-        }
-
-        fn to_external_id(&self, _context: &DefaultContext, id: u32) -> ANNResult<u64> {
-            Ok(id.into())
-        }
-    }
-
-    /// An `Accessor` that doubles its input ID as its output element.
-    ///
-    /// This also tracks the number of calls made to `get_element` and
-    /// `on_elements_unordered` to ensure that `BetaFilter` correctly forwards these methods.
-    #[derive(Debug, Default, Clone, Copy)]
-    struct Doubler {
-        get_element: usize,
-        on_elements_unordered: usize,
-    }
-
-    impl SearchExt for Doubler {
-        async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-            Ok(vec![0])
-        }
-    }
-
-    impl Doubler {
-        fn reset(&mut self) {
-            *self = Self::default();
-        }
-    }
-
-    /// A simple error type to test error forwarding.
-    #[derive(Debug, Error)]
-    #[error("the value {0} is not allowed")]
-    pub struct NotAllowed(u32);
-
-    impl From<NotAllowed> for ANNError {
-        #[inline(never)]
-        fn from(value: NotAllowed) -> Self {
-            ANNError::log_async_error(value)
-        }
-    }
-
-    impl HasId for Doubler {
-        type Id = u32;
-    }
-
-    impl NeighborAccessor for Doubler {
-        fn get_neighbors(
-            self,
-            _id: Self::Id,
-            neighbors: &mut AdjacencyList<Self::Id>,
-        ) -> impl Future<Output = ANNResult<Self>> + Send {
-            neighbors.clear();
-            future::ok(self)
-        }
-    }
-
-    always_escalate!(NotAllowed);
-
-    impl Accessor for Doubler {
-        type Element<'a>
-            = u64
-        where
-            Self: 'a;
-        type ElementRef<'a> = u64;
-
-        type GetError = NotAllowed;
-
-        fn get_element(
-            &mut self,
-            id: u32,
-        ) -> impl std::future::Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send
-        {
-            self.get_element += 1;
-            let is_err = (100..200).contains(&id);
-
-            async move {
-                if is_err {
-                    Err(NotAllowed(id))
-                } else {
-                    let id: u64 = id.into();
-                    Ok(2 * id)
-                }
-            }
-        }
-
-        async fn on_elements_unordered<Itr, F>(
-            &mut self,
-            itr: Itr,
-            mut f: F,
-        ) -> Result<(), Self::GetError>
-        where
-            Self: Sync,
-            Itr: Iterator<Item = Self::Id> + Send,
-            F: Send + for<'a> FnMut(Self::ElementRef<'a>, Self::Id),
-        {
-            self.on_elements_unordered += 1;
-            for i in itr {
-                f(self.get_element(i).await?, i);
-            }
-            Ok(())
-        }
-    }
-
-    struct AddingComputer(u64);
-    impl PreprocessedDistanceFunction<u64, f32> for AddingComputer {
-        fn evaluate_similarity(&self, x: u64) -> f32 {
-            (self.0 + x) as f32
-        }
-    }
-
-    impl BuildQueryComputer<u64> for Doubler {
-        type QueryComputer = AddingComputer;
-        type QueryComputerError = ANNError;
-
-        fn build_query_computer(
-            &self,
-            from: u64,
-        ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-            Ok(AddingComputer(from))
-        }
-    }
-
-    impl ExpandBeam<u64> for Doubler {}
-
-    #[derive(Debug)]
-    struct SimpleStrategy;
-
-    impl SearchStrategy<SimpleProvider, u64> for SimpleStrategy {
-        type SearchAccessor<'a> = Doubler;
-        type QueryComputer = AddingComputer;
-        type SearchAccessorError = ANNError;
-
-        fn search_accessor<'a>(
-            &'a self,
-            _provider: &'a SimpleProvider,
-            _context: &'a DefaultContext,
-        ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-            Ok(Doubler::default())
-        }
-    }
-
-    impl glue::DefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
-        diskann::default_post_processor!(CopyIds);
-    }
+    use diskann::graph::{
+        glue::{HybridPredicate, Predicate, PredicateMut, SearchAccessor},
+        test::{provider as test_provider, synthetic::Grid},
+    };
+    use std::collections::HashSet;
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.
     #[derive(Debug)]
@@ -529,86 +247,102 @@ mod tests {
         }
     }
 
+    struct NotIn<'a>(&'a mut HashSet<u32>);
+
+    impl Predicate<u32> for NotIn<'_> {
+        fn eval(&self, item: &u32) -> bool {
+            !self.0.contains(item)
+        }
+    }
+
+    impl PredicateMut<u32> for NotIn<'_> {
+        fn eval_mut(&mut self, item: &u32) -> bool {
+            self.0.insert(*item)
+        }
+    }
+
+    impl HybridPredicate<u32> for NotIn<'_> {}
+
     #[tokio::test]
     async fn test_beta_filter() {
-        let provider = SimpleProvider;
-        let context = &DefaultContext;
+        // The grid of 4x4 will look like this:
+        //
+        // |             16
+        // | 3  7 11 15
+        // | 2  6 10 14
+        // | 1  5  9 13
+        // | 0  4  8 12
+        // +---------------
+        //
+        let provider = test_provider::Provider::grid(Grid::Two, 4).unwrap();
+        let context = test_provider::Context::new();
+
         let beta: f32 = 0.25;
 
-        let strategy = BetaFilter::new(SimpleStrategy, Arc::new(ThreeFilter), beta);
+        let strategy = BetaFilter::new(test_provider::Strategy::new(), Arc::new(ThreeFilter), beta);
 
-        let mut accessor: BetaAccessor<_> = strategy.search_accessor(&provider, context).unwrap();
-        assert_eq!(accessor.inner.get_element, 0);
-        assert_eq!(accessor.inner.on_elements_unordered, 0);
-
-        // Test non-erroring path.
-        let v = accessor.get_element(1).await.unwrap();
-        assert_eq!(v, Pair::new(1, 2));
-
-        let v = accessor.get_element(2).await.unwrap();
-        assert_eq!(v, Pair::new(2, 4));
-
-        // Test erroring path.
-        assert!(accessor.get_element(100).await.is_err());
-        assert!(accessor.get_element(101).await.is_err());
-
-        assert_eq!(accessor.inner.get_element, 4);
-        assert_eq!(accessor.inner.on_elements_unordered, 0);
-        accessor.inner.reset();
-
-        // On elements unordered.
-        {
-            let mut v = Vec::new();
-            accessor
-                .on_elements_unordered([1, 2, 3, 4, 5].into_iter(), |element, id| {
-                    v.push((element, id));
-                })
-                .await
-                .unwrap();
-
-            assert_eq!(accessor.inner.get_element, 5);
-            assert_eq!(accessor.inner.on_elements_unordered, 1);
-            assert_eq!(
-                v,
-                &[
-                    (Pair::new(1, 2), 1),
-                    (Pair::new(2, 4), 2),
-                    (Pair::new(3, 6), 3),
-                    (Pair::new(4, 8), 4),
-                    (Pair::new(5, 10), 5)
-                ]
-            );
-            accessor.inner.reset();
-        }
-
-        // On-elements-unordered propagates errors.
-        assert!(
-            accessor
-                .on_elements_unordered([1, 2, 3, 100, 4].into_iter(), |_, _| {})
-                .await
-                .is_err()
+        let start_point_ids: Vec<_> = provider.start_point_ids().collect();
+        assert_eq!(
+            start_point_ids.len(),
+            1,
+            "grid should only have a single start point"
+        );
+        let start_point = start_point_ids[0];
+        assert_eq!(
+            start_point,
+            u32::MAX,
+            "`Provider::grid` is documented to use `u32::MAX` as its start point",
         );
 
-        // Computation.
-        let query = 10;
-        let computer = accessor.build_query_computer(query).unwrap();
+        let mut visited = HashSet::new();
+        let mut buf = Vec::new();
+
+        let mut accessor = strategy
+            .search_accessor(&provider, &context, &[0.0, 0.0])
+            .unwrap();
 
         assert_eq!(
-            computer.evaluate_similarity(accessor.get_element(10).await.unwrap()),
-            (10 * 2 + query) as f32
-        );
-        assert_eq!(
-            computer.evaluate_similarity(accessor.get_element(11).await.unwrap()),
-            (11 * 2 + query) as f32
-        );
-        assert_eq!(
-            computer.evaluate_similarity(accessor.get_element(12).await.unwrap()),
-            beta * ((12 * 2 + query) as f32)
+            &*accessor.starting_points().await.unwrap(),
+            &*start_point_ids,
+            "the underlying start points should match",
         );
 
-        // Test dummy implementation of `get_neighbors` for code coverage.
-        let mut neighbors = AdjacencyList::new();
-        accessor.get_neighbors(0, &mut neighbors).await.unwrap();
-        assert_eq!(neighbors.len(), 0);
+        accessor
+            .expand_beam(
+                [0, 5, 10, 15].into_iter(),
+                NotIn(&mut visited),
+                |id, distance| buf.push((id, distance)),
+            )
+            .await
+            .unwrap();
+
+        // The expansion order is unknown, but we know from the structure of the grid what
+        // the result should be.
+        //
+        // Since each entry in the beam is connected
+        buf.sort_by_key(|(id, _)| *id);
+        assert_eq!(
+            &*buf,
+            [
+                (1, 1.0),
+                (4, 1.0),
+                (6, 5.0 * beta),
+                (9, 5.0 * beta),
+                (11, 13.0),
+                (14, 13.0),
+            ]
+        );
+
+        buf.clear();
+        accessor
+            .start_point_distances(|id, distance| buf.push((id, distance)))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            &*buf,
+            [(start_point, 32.0 * beta)],
+            "u32::MAX is a multiple of 3"
+        );
     }
 }

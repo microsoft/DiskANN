@@ -154,14 +154,10 @@ fn basic_paged_search() {
     let search_l = 32;
     let page_size = 4;
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
@@ -197,14 +193,10 @@ fn single_page() {
     let search_l = 200;
     let page_size = 200; // larger than total points (125)
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let results = rt.block_on(search.next_page(page_size)).unwrap();
@@ -240,14 +232,10 @@ fn small_page_size() {
     let search_l = 32;
     let page_size = 1; // one result per page, maximum iterations
     let ctx = test_provider::Context::new();
+    let strategy = test_provider::Strategy::new();
 
     let mut search = rt
-        .block_on(index.paged_search(
-            test_provider::Strategy::new(),
-            &ctx,
-            query.as_slice(),
-            search_l,
-        ))
+        .block_on(index.paged_search(&strategy, &ctx, query.as_slice(), search_l))
         .unwrap();
 
     let mut pages: Vec<Vec<Neighbor<u32>>> = Vec::new();
