@@ -636,14 +636,17 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 // the actual vfmadd231ps loop). Inlining a d=128 const-generic kernel right
 // in the inner loop avoids the call boundary entirely.
 
+/// AVX-512 squared-L2 for any `d`. Two-accumulator FMA chain over 32-wide
+/// pairs (2 ZMM per iter) to hide FMA latency; tail handled with a 16-wide
+/// pass and a masked load. Generic over `d` — no bench-specific dim baked in.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
-unsafe fn final_prune_sql2_d128_avx512(a: *const f32, b: *const f32) -> f32 {
+unsafe fn final_prune_sql2_avx512(a: *const f32, b: *const f32, d: usize) -> f32 {
     use std::arch::x86_64::*;
     let mut acc0 = _mm512_setzero_ps();
     let mut acc1 = _mm512_setzero_ps();
-    // d=128 = 4 × 32 = 8 × 16 lanes; unrolled in 4 chunks × 2 zmm each.
-    for c in 0..4 {
+    let pairs = d / 32;
+    for c in 0..pairs {
         let va = _mm512_loadu_ps(a.add(c * 32));
         let vb = _mm512_loadu_ps(b.add(c * 32));
         let dif = _mm512_sub_ps(va, vb);
@@ -653,17 +656,36 @@ unsafe fn final_prune_sql2_d128_avx512(a: *const f32, b: *const f32) -> f32 {
         let dif = _mm512_sub_ps(va, vb);
         acc1 = _mm512_fmadd_ps(dif, dif, acc1);
     }
+    let mut off = pairs * 32;
+    if d - off >= 16 {
+        let va = _mm512_loadu_ps(a.add(off));
+        let vb = _mm512_loadu_ps(b.add(off));
+        let dif = _mm512_sub_ps(va, vb);
+        acc0 = _mm512_fmadd_ps(dif, dif, acc0);
+        off += 16;
+    }
+    let tail = d - off;
+    if tail > 0 {
+        let mask: u16 = ((1u32 << tail) - 1) as u16;
+        let va = _mm512_maskz_loadu_ps(mask, a.add(off));
+        let vb = _mm512_maskz_loadu_ps(mask, b.add(off));
+        let dif = _mm512_sub_ps(va, vb);
+        acc1 = _mm512_fmadd_ps(dif, dif, acc1);
+    }
     _mm512_reduce_add_ps(_mm512_add_ps(acc0, acc1))
 }
 
+/// AVX-2 squared-L2 for any `d`. Two-accumulator FMA chain over 16-wide
+/// pairs (2 YMM per iter); tail handled with an 8-wide pass and a scalar
+/// loop. Generic over `d`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn final_prune_sql2_d128_avx2(a: *const f32, b: *const f32) -> f32 {
+unsafe fn final_prune_sql2_avx2(a: *const f32, b: *const f32, d: usize) -> f32 {
     use std::arch::x86_64::*;
     let mut acc0 = _mm256_setzero_ps();
     let mut acc1 = _mm256_setzero_ps();
-    // d=128 = 8 × 16 = 16 × 8 lanes; unrolled in 8 chunks × 2 ymm each.
-    for c in 0..8 {
+    let pairs = d / 16;
+    for c in 0..pairs {
         let va = _mm256_loadu_ps(a.add(c * 16));
         let vb = _mm256_loadu_ps(b.add(c * 16));
         let dif = _mm256_sub_ps(va, vb);
@@ -673,20 +695,35 @@ unsafe fn final_prune_sql2_d128_avx2(a: *const f32, b: *const f32) -> f32 {
         let dif = _mm256_sub_ps(va, vb);
         acc1 = _mm256_fmadd_ps(dif, dif, acc1);
     }
+    let mut off = pairs * 16;
+    if d - off >= 8 {
+        let va = _mm256_loadu_ps(a.add(off));
+        let vb = _mm256_loadu_ps(b.add(off));
+        let dif = _mm256_sub_ps(va, vb);
+        acc0 = _mm256_fmadd_ps(dif, dif, acc0);
+        off += 8;
+    }
     let sum = _mm256_add_ps(acc0, acc1);
     let lo = _mm256_castps256_ps128(sum);
     let hi = _mm256_extractf128_ps::<1>(sum);
     let s = _mm_add_ps(lo, hi);
     let s = _mm_hadd_ps(s, s);
     let s = _mm_hadd_ps(s, s);
-    _mm_cvtss_f32(s)
+    let mut acc = _mm_cvtss_f32(s);
+    while off < d {
+        let v = *a.add(off) - *b.add(off);
+        acc += v * v;
+        off += 1;
+    }
+    acc
 }
 
-/// Dispatch the d=128 squared-L2 to the best available inline kernel, falling
-/// back to the DistanceProvider path for other dimensions / metrics.
+/// Dispatch squared-L2 to the inline tier-specific kernel (now dim-generic),
+/// falling back to the DistanceProvider path for non-L2 metrics. `ndims` is
+/// the runtime dim threaded through `call` to the inline kernel.
 enum FinalPruneKernel {
-    DispatchL2D128Avx512,
-    DispatchL2D128Avx2,
+    InlineL2Avx512 { ndims: usize },
+    InlineL2Avx2 { ndims: usize },
     Generic(diskann_vector::distance::Distance<f32, f32>),
 }
 
@@ -695,12 +732,12 @@ impl FinalPruneKernel {
     fn call(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
             #[cfg(target_arch = "x86_64")]
-            FinalPruneKernel::DispatchL2D128Avx512 => unsafe {
-                final_prune_sql2_d128_avx512(a.as_ptr(), b.as_ptr())
+            FinalPruneKernel::InlineL2Avx512 { ndims } => unsafe {
+                final_prune_sql2_avx512(a.as_ptr(), b.as_ptr(), *ndims)
             },
             #[cfg(target_arch = "x86_64")]
-            FinalPruneKernel::DispatchL2D128Avx2 => unsafe {
-                final_prune_sql2_d128_avx2(a.as_ptr(), b.as_ptr())
+            FinalPruneKernel::InlineL2Avx2 { ndims } => unsafe {
+                final_prune_sql2_avx2(a.as_ptr(), b.as_ptr(), *ndims)
             },
             FinalPruneKernel::Generic(d) => d.call(a, b),
             #[cfg(not(target_arch = "x86_64"))]
@@ -731,8 +768,8 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     // Tier selection once per phase. d=128 L2 hits the inline AVX-512 path
     // (the BigANN production shape); everything else falls back to the
     // DistanceProvider dispatch.
-    let use_inline_d128_l2 = ndims == 128 && matches!(metric, Metric::L2);
-    let inline_tier = if use_inline_d128_l2 { tier() } else { SimdTier::Scalar };
+    let use_inline_l2 = matches!(metric, Metric::L2);
+    let inline_tier = if use_inline_l2 { tier() } else { SimdTier::Scalar };
     let generic_dist = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
     candidates_per_node
@@ -745,11 +782,11 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
             // Per-thread tier-specialised inline kernel; generic fallback owns
             // the comparer for cross-thread safety (closure is Send/Sync).
-            let kernel = match (use_inline_d128_l2, inline_tier) {
+            let kernel = match (use_inline_l2, inline_tier) {
                 #[cfg(target_arch = "x86_64")]
-                (true, SimdTier::Avx512) => FinalPruneKernel::DispatchL2D128Avx512,
+                (true, SimdTier::Avx512) => FinalPruneKernel::InlineL2Avx512 { ndims },
                 #[cfg(target_arch = "x86_64")]
-                (true, SimdTier::Avx2) => FinalPruneKernel::DispatchL2D128Avx2,
+                (true, SimdTier::Avx2) => FinalPruneKernel::InlineL2Avx2 { ndims },
                 _ => FinalPruneKernel::Generic(generic_dist.clone()),
             };
 
