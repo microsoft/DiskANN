@@ -307,6 +307,13 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
         )
         .reduce(|| (usize::MAX, f32::MAX), |a, b| if a.1 <= b.1 { a } else { b });
 
+    if best_idx == usize::MAX {
+        return Err(PiPNNError::Config(
+            "find_medoid: no point produced a valid distance to the centroid \
+             (likely all-NaN or every per-point conversion failed)"
+                .into(),
+        ));
+    }
     Ok(best_idx)
 }
 
@@ -537,10 +544,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
         } else {
             total_candidates as f64 / candidates.len() as f64
         };
-        println!(
-            "  Final prune input: {} nodes, avg candidates={:.1}, max={}, nodes_over_max_degree={}",
-            candidates.len(), avg_cand, max_cand, nodes_over_degree
-        );
         tracing::info!(
             nodes = candidates.len(),
             avg_candidates = avg_cand,
