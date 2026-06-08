@@ -5,7 +5,8 @@
 
 //! The [`DataProvider`] trait encompasses the following concepts:
 //!
-//! * Storage for arbitrary data that is contextually accessed through the [`Accessor`] trait.
+//! * Storage for arbitrary data that is contextually accessed through accessors constructed
+//!   by [strategies](crate::graph::glue).
 //!
 //! * Mapping between an "external id" (a unique external identifier for an entry in data
 //!   store) and an "internal id", which is a simple typed used as a handle to vector data
@@ -49,56 +50,42 @@
 //!   implementations may allow internal IDs to be reused immediately following the deletion
 //!   of the external ID while others may wait for a "release".
 //!
-//! * [`HasId`]: Traits such as [`Accessor`], [`NeighborAccessor`] and [`DelegateNeighbors`]
-//!   all need to interact with the underlying [`DataProvider`] using an internal ID type.
+//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`DelegateNeighbors`] all need to
+//!   interact with the underlying [`DataProvider`] using an internal ID type.
 //!
 //!   The [`HasId`] trait provides a common base-trait for these related concepts, which
 //!   ensures implementers only need to define and constrain it once.
 //!
-//! * [`Accessor`]: A contextual proxy object for retrieving data from the [`DataProvider`].
-//!   The key idea behind an accessor is that data to be retrieved from a data store
-//!   is contextual. In other words, in some contexts, we may retrieve one kind of data
-//!   (for example, full precision vectors), while in other contexts we may want to
-//!   retrieve another kind (such as quantized vectors).
-//!
-//!   Accessors can be implemented as simple handles to a provider, or can have local
-//!   scratch to assist in bulk operations.
-//!
-//!   Finally, one handy feature of accessors is that they can carry a lifetime, which
-//!   surprisingly can make writing algorithms involving borrows easier than trying to
-//!   manage a lifetime strictly through associated types with lifetimes.
-//!
-//! * [`BuildDistanceComputer`]: A sub-trait of [`Accessor`] that allows for random-access
-//!   distance computations on the retrieved elements.
-//!
-//! * [`BuildQueryComputer`]: A sub-trait of [`Accessor`] that allows for specialized query
-//!   based computations. This allows a query to be pre-processed in a way that allows
-//!   faster computations.
+//! * [`BuildDistanceComputer`]: A sub-trait of [`HasElementRef`] that allows for
+//!   random-access distance computations on the retrieved elements.
 //!
 //! # Neighbor Delegation
 //!
-//! Index search requires that accessor types implement both the data-centric [`Accessor`]
-//! trait and the graph retrieval [`NeighborAccessor`]/[`NeighborAccessorMut`] traits.
+//! Graph operations require both data access (distances, elements) and graph
+//! access (neighbor retrieval and mutation). These concerns are typically served
+//! by different backing stores and need not vary together.
 //!
-//! While having multiple implementations of [`Accessor`] is common to support different
-//! kinds of searches in the quantized space, neighbor retrieval commonly need not vary.
-//! Instead of requiring all implementations of [`Accessor`] to manually forward the methods
-//! (both required and provided) in the [`NeighborAccesosr`] traits, we use a delegation
-//! technique supplied by the [`DelegateNeighbor`] trait.
+//! For example, search and pruning use different data accessors (optimized for
+//! query distances vs. pairwise element distances), but both share the same
+//! graph topology.
 //!
-//! [`Accessor`] types should implement [`DelegateNeighbor`] to return a [`NeighborAccessor`].
-//! Implementation of [`DelegateNeighbors`] will automatically implement [`AsNeighbor`] and
-//! [`AsNeighborMut`] (the latter is only applicable if the returned type implements
-//! [`NeighborAccessorMut`].
+//! Rather than requiring every data accessor to manually forward
+//! [`NeighborAccessor`] methods, the [`DelegateNeighbor`] trait routes neighbor
+//! access to a single shared implementation.
 //!
-//! Similarly, algorithms requiring graph access should accept `&mut T` where
-//! `T: AsNeighbor` or `T: AsNeighborMut`. This provides access to blanket implementations
-//! of [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
+//! Data accessor types should implement [`DelegateNeighbor`] to return a
+//! [`NeighborAccessor`]. This automatically provides [`AsNeighbor`] and
+//! [`AsNeighborMut`] (the latter when the delegate implements
+//! [`NeighborAccessorMut`]).
+//!
+//! Algorithms requiring graph access should accept `&mut T` where
+//! `T: AsNeighbor` or `T: AsNeighborMut`, which provides blanket
+//! implementations of [`NeighborAccessor`] and [`NeighborAccessorMut`]
+//! for `&mut T`.
 
 use std::ops::Deref;
 
-use diskann_utils::Reborrow;
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+use diskann_vector::DistanceFunction;
 use sealed::{BoundTo, Sealed};
 
 use crate::{ANNError, ANNResult, error::ToRanked, graph::AdjacencyList, utils::VectorId};
@@ -144,10 +131,8 @@ pub trait ExecutionContext: Send + Sync + Clone + 'static {
 /// through derived and related traits, namely
 ///
 /// * [`SetElement`]: An overloadable version of `set_vector`.
-/// * [`Accessor`]: An overloadable, contextual class for retrieving data elements from
-///   the data provider.
 ///
-/// Indexing algorithms explose overloadable "strategies" that allow data provider to
+/// Indexing algorithms expose overloadable "strategies" that allow data providers to
 /// select the accessor.
 ///
 /// Example strategies include:
@@ -381,108 +366,29 @@ where
     }
 }
 
-//////////////
-// Accessor //
-//////////////
+///////////////////
+// HasElementRef //
+///////////////////
 
-/// A lens through which [`DataProvider`]s contextually viewed.
-///
-/// Accessors are **not** required to be `'static` and almost always contain a scoped
-/// reference to their parent provider.
-///
-/// # Element Relationship
-///
-/// Accessors are expected to define two associated element types:
-///
-/// * `Element<'_>`: The type returned by `get_element`. This is scoped to the borrow
-///   of the accessor at the `get_element` call site. As a consequence, there may only
-///   be one such `Element` active at a time.
-///
-/// * `ElementRef<'_>`: A generalized borrowed form of `Element` obtainable via
-///   `Reborrow`. This is the type on which distance computations are defined and is the
-///   element type provided to the `on_element_unordered` bulk operation.
-///
-/// The below diagram summarizes the relationship.
-///
-/// ```text
-/// Element<'_> ------ Reborrow ----> ElementRef<'_>
-///        ~~~~                                 ~~~~
-///         ^                                    ^
-///         |                                    |
-///   Lifetime tied                       Arbitrarily short
-///  to the Accessor                     lifetime decoupled
-///                                       from the Accessor
-/// ```
-///
-/// ## Technical Details
-///
-/// The need for `ElementRef` arises to allow HRTB bounds to distance computers without
-/// inducing a `'static` bound on `Self`. In traits like [`BuildQueryComputer`], attempting
-/// to use `Element` directly will result in such a requirement on the implementing Accessor.
-pub trait Accessor: HasId + Send + Sync {
-    /// A generalized reference type used for distance computations.
-    ///
-    /// Note that the lifetime of `ElementRef` is unconstrained and thus using it in a
-    /// [HRTB](https://doc.rust-lang.org/nomicon/hrtb.html) will not induce a `'static`
-    /// requirement on `Self`.
+/// An association between a data accessor and the element it yields.
+pub trait HasElementRef {
     type ElementRef<'a>;
-
-    /// The concrete type of the data element associated with this accessor.
-    ///
-    /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
-    /// `Self::ElementRef`.
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
-    where
-        Self: 'a;
-
-    /// The error (if any) returned by [`Self::get_element`].
-    type GetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
-
-    /// Return the value associated with the key `id`.
-    ///
-    /// It is expected that index algorithms will only invoke `get_element` on valid IDs,
-    /// that can be derived from [`SetElement::set_element`] or by some other means.
-    ///
-    /// Implementations are suggested to return an error if this invariant is broken, but
-    /// may also panic if that is an acceptable error mode.
-    fn get_element(
-        &mut self,
-        id: Self::Id,
-    ) -> impl std::future::Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send;
-
-    /// A bulk interface for invoking [`Self::get_element`] on each item in an iterator and
-    /// invoking the closure with the reborrowed element.
-    ///
-    /// Algorithms are encouraged to use this interface if appropriate as accessor
-    /// implementations may specialize the implementation for better performance.
-    fn on_elements_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl std::future::Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + for<'a> FnMut(Self::ElementRef<'a>, Self::Id),
-    {
-        async move {
-            for i in itr {
-                f(self.get_element(i).await?.reborrow(), i);
-            }
-            Ok(())
-        }
-    }
 }
 
-/// A specialized [`Accessor`] that provides random-access distance computations.
-pub trait BuildDistanceComputer: Accessor {
+/////////////////////////////
+// Build Distance Computer //
+/////////////////////////////
+
+/// A trait that provides random-access distance computations over elements
+/// identified by [`HasElementRef`].
+pub trait BuildDistanceComputer: HasElementRef {
     /// The error type (if any) associated with distance computer construction.
     ///
     /// Implementations are encouraged to make distance computer construction infallible.
     type DistanceComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
     /// The concrete type of the distance computer, which must be applicable to all pairs
-    /// of elements yielded by the [`Accessor`].
+    /// of elements identified by [`HasElementRef::ElementRef`].
     type DistanceComputer: for<'a, 'b> DistanceFunction<Self::ElementRef<'a>, Self::ElementRef<'b>>
         + Send
         + Sync;
@@ -496,51 +402,6 @@ pub trait BuildDistanceComputer: Accessor {
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError>;
 }
 
-/// A specialized [`Accessor`] that provides query computations for a query type `T`.
-///
-/// Query computers are allowed to preprocess the query to enable more efficient distance
-/// computations.
-pub trait BuildQueryComputer<T>: Accessor {
-    /// The error type (if any) associated with distance computer construction.
-    type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
-
-    /// The concrete type of the distance computer, which must be applicable for all
-    /// elements yielded by the [`Accessor`].
-    type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
-        + Send
-        + Sync;
-
-    /// Build the query computer for this accessor.
-    ///
-    /// This method is encouraged to be as fast as possible, but will generally only be
-    /// invoked once per search or graph insert.
-    fn build_query_computer(
-        &self,
-        from: T,
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
-
-    /// Compute the distances for the elements in the iterator `itr` using the
-    /// `computer` and apply the closure `f` to each distance and ID. The default
-    /// implementation uses on_elements_unordered to iterate over the elements
-    /// and compute the distances using `computer` parameter.
-    fn distances_unordered<Itr, F>(
-        &mut self,
-        vec_id_itr: Itr,
-        computer: &Self::QueryComputer,
-        mut f: F,
-    ) -> impl std::future::Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(f32, Self::Id),
-    {
-        self.on_elements_unordered(vec_id_itr, move |element, i| {
-            // Default is to use the computer to evaluate the similarity.
-            let distance = computer.evaluate_similarity(element);
-            f(distance, i);
-        })
-    }
-}
-
 /////////////////////////
 // Neighbor Delegation //
 /////////////////////////
@@ -551,10 +412,10 @@ pub trait BuildQueryComputer<T>: Accessor {
 /// different stores. However, there are situations where data and neighbors are
 /// interleaved in the underlying storage medium.
 ///
-/// As such, [`Accessors`] used in congunction with graph operations need to additionally
+/// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
 ///
-/// To avoid repeating implementations for every [`Accessor`] flavor, the trait
+/// To avoid repeating implementations for every accessor flavor, the trait
 /// [`DelegateNeighbor`] should be used instead to route the implementation of
 /// [`NeighborAccessor`] to a single type if applicable.
 ///
@@ -579,7 +440,7 @@ pub trait NeighborAccessor: HasId + Sized + Send + Sync {
 /// A mutable extension of [`NeighborAccessor`] that enables the underlying graph to be
 /// mutated.
 ///
-/// Generally, [`Accessors`] should implement [`DelegateNeighbor`] instead of extending this
+/// Generally, data accessors should implement [`DelegateNeighbor`] instead of extending this
 /// trait if graph and data access are naturally decoupled.
 pub trait NeighborAccessorMut: NeighborAccessor {
     /// Overwrite the neighbor list for the node associated with `id`.
@@ -671,8 +532,8 @@ where
 /// Accessor may delegate the responsibility of being a [`NeighborAccessor`] to an auxiliary
 /// type by implementing this trait.
 ///
-/// If the implementation of a [`NeighborAccessor`]/[`NeighborAccessorMut`] are coupled with
-/// the [`Accessor`] itself (meaning that no delegation can take place), then implementations
+/// If the implementation of a [`NeighborAccessor`]/[`NeighborAccessorMut`] is coupled with
+/// the data accessor itself (meaning that no delegation can take place), then implementations
 /// may do the following. Assume the accessor has type `T`. Then:
 ///
 /// 1. Implement [`NeighborAccessor`]/[`NeighborAccessorMut`] for a thin wrapper around
@@ -773,11 +634,10 @@ mod sealed {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
         future::Future,
         pin::Pin,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicUsize, Ordering},
         },
         task,
@@ -786,7 +646,6 @@ mod tests {
     use pin_project::{pin_project, pinned_drop};
 
     use super::*;
-    use crate::{always_escalate, error::Infallible};
 
     ////////////////////
     // DefaultContext //
@@ -985,444 +844,5 @@ mod tests {
         let deleted = ElementStatus::Deleted;
         assert!(!deleted.is_valid());
         assert!(deleted.is_deleted());
-    }
-
-    /// A simple data provider that contains values consisting of floats and strings.
-    ///
-    /// The start point for this provider is as `u32::MAX`.
-    struct SimpleProvider {
-        data: Mutex<HashMap<u32, (f32, String)>>,
-    }
-
-    impl SimpleProvider {
-        fn new(v: f32, st: String) -> Self {
-            let mut data = HashMap::new();
-            data.insert(u32::MAX, (v, st));
-            Self {
-                data: Mutex::new(data),
-            }
-        }
-    }
-
-    impl DataProvider for SimpleProvider {
-        type Context = DefaultContext;
-        // Use the identity mapping for IDs.
-        type InternalId = u32;
-        type ExternalId = u32;
-        type Error = ANNError;
-        type Guard = NoopGuard<u32>;
-
-        fn to_internal_id(&self, _context: &DefaultContext, gid: &u32) -> Result<u32, ANNError> {
-            Ok(*gid)
-        }
-
-        fn to_external_id(&self, _context: &DefaultContext, id: u32) -> Result<u32, ANNError> {
-            Ok(id)
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Missing;
-
-    impl std::fmt::Display for Missing {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "key is missing")
-        }
-    }
-
-    impl std::error::Error for Missing {}
-    impl From<Missing> for ANNError {
-        #[cold]
-        fn from(missing: Missing) -> ANNError {
-            ANNError::log_async_error(missing)
-        }
-    }
-
-    always_escalate!(Missing);
-
-    // An accessor for the `f32` portion of the data stored in the SimpleProvider.
-    struct FloatAccessor<'a>(&'a SimpleProvider);
-    impl HasId for FloatAccessor<'_> {
-        type Id = u32;
-    }
-    impl Accessor for FloatAccessor<'_> {
-        type Element<'a>
-            = f32
-        where
-            Self: 'a;
-        type ElementRef<'a> = f32;
-
-        type GetError = Missing;
-
-        fn get_element(
-            &mut self,
-            id: u32,
-        ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-            let guard = self.0.data.lock().unwrap();
-            let v = match guard.get(&id) {
-                None => Err(Missing),
-                Some(v) => Ok(v.0),
-            };
-            std::future::ready(v)
-        }
-
-        // Implement `on_elements_unordered` by only acquiring the lock once.
-        //
-        // Real implementations will need to take care to avoid deadlocks.
-        async fn on_elements_unordered<Itr, F>(
-            &mut self,
-            itr: Itr,
-            mut f: F,
-        ) -> Result<(), Self::GetError>
-        where
-            Self: Sync,
-            Itr: Iterator<Item = u32>,
-            F: Send + FnMut(f32, u32),
-        {
-            let guard = self.0.data.lock().unwrap();
-            for i in itr {
-                match guard.get(&i) {
-                    None => return Err(Missing),
-                    Some(v) => f(v.0, i),
-                }
-            }
-            Ok(())
-        }
-    }
-
-    // An accessor for the `String` portion of the data stored in the SimpleProvider.
-    //
-    // We keep a local buffer `buf` into which the contents of the string are copied.
-    // This allows us to elide allocating on `get_element` calls.
-    struct StringAccessor<'a> {
-        provider: &'a SimpleProvider,
-        buf: String,
-    }
-
-    impl<'a> StringAccessor<'a> {
-        fn new(provider: &'a SimpleProvider) -> Self {
-            Self {
-                provider,
-                buf: String::new(),
-            }
-        }
-    }
-
-    impl HasId for StringAccessor<'_> {
-        type Id = u32;
-    }
-    impl Accessor for StringAccessor<'_> {
-        type Element<'a>
-            = &'a str
-        where
-            Self: 'a;
-        type ElementRef<'a> = &'a str;
-
-        type GetError = Missing;
-
-        fn get_element(
-            &mut self,
-            id: u32,
-        ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-            let guard = self.provider.data.lock().unwrap();
-            let v = match guard.get(&id) {
-                None => Err(Missing),
-                Some(v) => {
-                    self.buf.clone_from(&v.1);
-                    Ok(&*self.buf)
-                }
-            };
-            std::future::ready(v)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_default_implementations() {
-        let provider = SimpleProvider::new(-1.0, "hello".to_string());
-        {
-            let mut data = provider.data.lock().unwrap();
-            data.insert(0, (0.0, "world".to_string()));
-            data.insert(1, (1.0, "foo".to_string()));
-            data.insert(2, (2.0, "bar".to_string()));
-        }
-
-        // Float accessor
-        {
-            let mut accessor = FloatAccessor(&provider);
-            assert_eq!(accessor.get_element(0).await.unwrap(), 0.0);
-            assert_eq!(accessor.get_element(1).await.unwrap(), 1.0);
-            assert_eq!(accessor.get_element(u32::MAX).await.unwrap(), -1.0);
-
-            let mut v = Vec::new();
-            accessor
-                .on_elements_unordered([2, 1, 0].into_iter(), |element, id| v.push((element, id)))
-                .await
-                .unwrap();
-
-            assert_eq!(&v, &[(2.0, 2), (1.0, 1), (0.0, 0)]);
-
-            // Test error propagation.
-            // Trying to access element 3 will result in an error, which should be propagated
-            // up.
-            let err = accessor
-                .on_elements_unordered([2, 1, 0, 3].into_iter(), |element, id| {
-                    v.push((element, id))
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(err, Missing);
-        }
-
-        // String accessor
-        {
-            let mut accessor = StringAccessor::new(&provider);
-            assert_eq!(accessor.get_element(0).await.unwrap(), "world");
-            assert_eq!(accessor.get_element(1).await.unwrap(), "foo");
-            assert_eq!(accessor.get_element(u32::MAX).await.unwrap(), "hello");
-
-            // This method tests the provided implementation of `on_elements_unordered`.
-            let expected = [("bar", 2), ("foo", 1), ("world", 0)];
-
-            let mut expected_iter = expected.into_iter();
-            accessor
-                .on_elements_unordered([2, 1, 0].into_iter(), |element, id| {
-                    assert_eq!((element, id), expected_iter.next().unwrap());
-                })
-                .await
-                .unwrap();
-            assert!(expected_iter.next().is_none());
-
-            // Test error propagation.
-            // Trying to access element 3 will result in an error, which should be propagated
-            // up.
-            let mut expected_iter = expected.into_iter();
-            let err = accessor
-                .on_elements_unordered([2, 1, 0, 3].into_iter(), |element, id| {
-                    assert_eq!((element, id), expected_iter.next().unwrap());
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(err, Missing);
-            assert!(expected_iter.next().is_none());
-        }
-    }
-
-    /////////////////////////////////
-    // Supported Accessor Patterns //
-    /////////////////////////////////
-
-    // This suite of tests ensure that patterns we want out of the `Accessor` associated
-    // trait hierarchy are all supported.
-    //
-    // These include:
-    //
-    // * Accessors that always allocate.
-    // * Accessors that simply reference the underlying store directly.
-    // * Accessors that use a local buffer.
-
-    #[derive(Debug)]
-    struct Store {
-        data: Box<[u8]>,
-    }
-
-    impl Store {
-        fn new() -> Self {
-            Self {
-                data: Box::from([1, 2, 3, 4]),
-            }
-        }
-
-        fn dim(&self) -> usize {
-            self.data.len()
-        }
-    }
-
-    macro_rules! common_test_accessor {
-        ($T:ty) => {
-            impl HasId for $T {
-                type Id = u32;
-            }
-
-            impl BuildDistanceComputer for $T {
-                type DistanceComputerError = Infallible;
-                type DistanceComputer = <u8 as crate::utils::VectorRepr>::Distance;
-
-                fn build_distance_computer(&self) -> Result<Self::DistanceComputer, Infallible> {
-                    Ok(<u8 as crate::utils::VectorRepr>::distance(
-                        diskann_vector::distance::Metric::L2,
-                        None,
-                    ))
-                }
-            }
-        };
-    }
-
-    // An accessor that always allocates.
-    struct Allocating<'a> {
-        store: &'a Store,
-    }
-
-    impl<'a> Allocating<'a> {
-        fn new(store: &'a Store) -> Self {
-            Self { store }
-        }
-    }
-
-    common_test_accessor!(Allocating<'_>);
-
-    impl Accessor for Allocating<'_> {
-        type Element<'a>
-            = Box<[u8]>
-        where
-            Self: 'a;
-        type ElementRef<'a> = &'a [u8];
-        type GetError = Infallible;
-
-        async fn get_element(&mut self, _: u32) -> Result<Box<[u8]>, Infallible> {
-            Ok(self.store.data.clone())
-        }
-    }
-
-    // An accessor that forwards - returning references directly into the underlying
-    // store without reallocation or copying.
-    struct Forwarding<'a> {
-        store: &'a Store,
-    }
-
-    impl<'a> Forwarding<'a> {
-        fn new(store: &'a Store) -> Self {
-            Self { store }
-        }
-    }
-
-    common_test_accessor!(Forwarding<'_>);
-
-    impl<'provider> Accessor for Forwarding<'provider> {
-        // NOTE: The lifetime of `Element` is `'provider` - not `'a`. This is what makes
-        // it a forwarding accessor.
-        type Element<'a>
-            = &'provider [u8]
-        where
-            Self: 'a;
-        type ElementRef<'a> = &'a [u8];
-        type GetError = Infallible;
-
-        async fn get_element(&mut self, _: u32) -> Result<&'provider [u8], Infallible> {
-            Ok(&*self.store.data)
-        }
-    }
-
-    // An accessor that returns a non-reference type with a lifetime.
-    struct Wrapping<'a> {
-        store: &'a Store,
-    }
-
-    impl<'a> Wrapping<'a> {
-        fn new(store: &'a Store) -> Self {
-            Self { store }
-        }
-    }
-
-    #[derive(Debug)]
-    struct Wrapped<'a>(&'a [u8]);
-
-    impl<'a> Reborrow<'a> for Wrapped<'_> {
-        type Target = &'a [u8];
-        fn reborrow(&'a self) -> Self::Target {
-            self.0
-        }
-    }
-
-    impl From<Wrapped<'_>> for Box<[u8]> {
-        fn from(wrapped: Wrapped<'_>) -> Self {
-            wrapped.0.into()
-        }
-    }
-
-    common_test_accessor!(Wrapping<'_>);
-
-    impl Accessor for Wrapping<'_> {
-        type Element<'a>
-            = Wrapped<'a>
-        where
-            Self: 'a;
-        type ElementRef<'a> = &'a [u8];
-        type GetError = Infallible;
-
-        async fn get_element(&mut self, _: u32) -> Result<Wrapped<'_>, Infallible> {
-            Ok(Wrapped(&self.store.data))
-        }
-    }
-
-    // An accessor that shares local state.
-    #[derive(Debug)]
-    struct Sharing<'a> {
-        store: &'a Store,
-        local: Box<[u8]>,
-    }
-
-    impl<'a> Sharing<'a> {
-        fn new(store: &'a Store) -> Self {
-            Self {
-                store,
-                local: (0..store.dim()).map(|_| 0).collect(),
-            }
-        }
-    }
-
-    common_test_accessor!(Sharing<'_>);
-
-    impl Accessor for Sharing<'_> {
-        type Element<'a>
-            = &'a [u8]
-        where
-            Self: 'a;
-        type ElementRef<'a> = &'a [u8];
-        type GetError = Infallible;
-
-        async fn get_element(&mut self, _: u32) -> Result<&[u8], Infallible> {
-            self.local.copy_from_slice(&self.store.data);
-            Ok(&self.local)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_accessor_patterns() {
-        let store = Store::new();
-
-        // A slice against which we compute distances.
-        let base: &[u8] = &[2, 3, 4, 5];
-
-        {
-            let mut accessor = Allocating::new(&store);
-            let computer = accessor.build_distance_computer().unwrap();
-
-            let element = accessor.get_element(0).await.unwrap();
-            assert_eq!(computer.evaluate_similarity(base, element.reborrow()), 4.0);
-        }
-
-        {
-            let mut accessor = Forwarding::new(&store);
-            let computer = accessor.build_distance_computer().unwrap();
-
-            let element = accessor.get_element(0).await.unwrap();
-            assert_eq!(computer.evaluate_similarity(base, element.reborrow()), 4.0);
-        }
-
-        {
-            let mut accessor = Wrapping::new(&store);
-            let computer = accessor.build_distance_computer().unwrap();
-
-            let element = accessor.get_element(0).await.unwrap();
-            assert_eq!(computer.evaluate_similarity(base, element.reborrow()), 4.0);
-        }
-
-        {
-            let mut accessor = Sharing::new(&store);
-            let computer = accessor.build_distance_computer().unwrap();
-
-            let element = accessor.get_element(0).await.unwrap();
-            assert_eq!(computer.evaluate_similarity(base, element.reborrow()), 4.0);
-        }
     }
 }
