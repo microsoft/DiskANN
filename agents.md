@@ -219,11 +219,11 @@ Less is more. Documentation goes out of date; rustdoc-generated output doesn't. 
 **DO**:
 - Document non-obvious behavior, errors, safety, and design intent
 - Use `# Errors`, `# Safety`, `# Panics`, `# Example` sections
+- Keep documentation for internal `pub(crate)` / `pub(super)` items concise and additive; critical items should still receive full documentation
 
 **DON'T**:
 - Maintain explicit lists of types/functions in module-level docs
 - Restate what the signature already shows (e.g. "owns an `Arc<T>`" on a struct whose only field is `Arc<T>`)
-- Document internal `pub(crate)` / `pub(super)` items unless intent isn't obvious from usage
 
 ---
 
