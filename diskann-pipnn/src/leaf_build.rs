@@ -145,158 +145,434 @@ pub(crate) fn release_thread_buffers() {
     });
 }
 
-/// Fused dual-end top-k scan over the STRICTLY LOWER triangle of `dot`.
-///
-/// For each (i, j) with j < i, computes d = (norms[i] + norms[j] - 2·dot[i*n+j]).max(0).
-/// That single distance is the (i, j) edge weight AND the (j, i) edge weight by
-/// symmetry — so we update tracker[i] AND tracker[j] in one pass without ever
-/// materialising the upper triangle.
-///
-/// The scan is 16-wide AVX-512: for each chunk of 16 lower-triangle entries in
-/// row i, compute 16 distances, compare against the broadcast worst[i] AND a
-/// contiguous load of worst[j..j+16]. Both masks are typically near-zero after
-/// the k-th smallest threshold tightens, so the SIMD fast-path is just two
-/// vector compares per chunk — no scalar work.
-///
-/// Diagonal (j == i, self) is naturally skipped since the inner loop runs j < i.
-///
-/// Replaces the (symmetrize + convert + topk) trio with a single 1.5× memory-cost
-/// pass: reads only N²/2 distinct dot entries (half the matrix), and writes only
-/// the k-NN trackers (O(N·k)) + worst[] (O(N)).
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn fused_dual_topk_l2_avx512(
-    dot: &[f32],          // n*n; only strictly-lower triangle is valid (from sgemm_aat_lower)
-    norms: &[f32],        // n: dot[i*n + i] diagonal extracted earlier
-    knn_result: &mut [(u32, f32)], // n * actual_k
-    worst: &mut [f32],    // n (+16 tail pad to allow OOB loads, see ensure_capacity)
-    n: usize,
-    actual_k: usize,
-) {
-    use std::arch::x86_64::*;
-    debug_assert!(actual_k == 3, "fused path supports k=3 only; fall back otherwise");
+// ───── Metric kernels for the fused dual-end scan ─────
+//
+// One trait, four implementations. The trait's three methods each return the
+// distance (smaller-is-better) for the metric, given the raw dot product and
+// optional per-row scalar (`ni`, `nj`). The norms-meaning depends on metric:
+//   L2:                norms[i] = ‖x_i‖²
+//   CosineNormalized:  ignored (data is unit-norm; dist = max(1 − dot, 0))
+//   Cosine:            norms[i] = ‖x_i‖ (precomputed sqrt of L2 norm-sq)
+//   InnerProduct:      ignored (dist = −dot, smaller-is-better)
+//
+// The fused scan calls `K::dist_avx512` / `K::dist_avx2` / `K::dist_scalar`
+// inside the hot loop; monomorphization inlines the formula at compile time.
 
-    // Init worst[] and knn_result for this leaf.
+trait MetricKernel {
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn dist_avx512(
+        dot: std::arch::x86_64::__m512,
+        ni: std::arch::x86_64::__m512,
+        nj: std::arch::x86_64::__m512,
+    ) -> std::arch::x86_64::__m512;
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn dist_avx2(
+        dot: std::arch::x86_64::__m256,
+        ni: std::arch::x86_64::__m256,
+        nj: std::arch::x86_64::__m256,
+    ) -> std::arch::x86_64::__m256;
+    fn dist_scalar(dot: f32, ni: f32, nj: f32) -> f32;
+}
+
+struct KL2;
+impl MetricKernel for KL2 {
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx512(
+        dot: std::arch::x86_64::__m512,
+        ni: std::arch::x86_64::__m512,
+        nj: std::arch::x86_64::__m512,
+    ) -> std::arch::x86_64::__m512 {
+        use std::arch::x86_64::*;
+        let two = _mm512_set1_ps(2.0);
+        let sum_norms = _mm512_add_ps(ni, nj);
+        let two_dot = _mm512_mul_ps(two, dot);
+        _mm512_max_ps(_mm512_sub_ps(sum_norms, two_dot), _mm512_setzero_ps())
+    }
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx2(
+        dot: std::arch::x86_64::__m256,
+        ni: std::arch::x86_64::__m256,
+        nj: std::arch::x86_64::__m256,
+    ) -> std::arch::x86_64::__m256 {
+        use std::arch::x86_64::*;
+        let two = _mm256_set1_ps(2.0);
+        let sum_norms = _mm256_add_ps(ni, nj);
+        let two_dot = _mm256_mul_ps(two, dot);
+        _mm256_max_ps(_mm256_sub_ps(sum_norms, two_dot), _mm256_setzero_ps())
+    }
+    #[inline(always)]
+    fn dist_scalar(dot: f32, ni: f32, nj: f32) -> f32 {
+        (ni + nj - 2.0 * dot).max(0.0)
+    }
+}
+
+struct KCosNorm;
+impl MetricKernel for KCosNorm {
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx512(
+        dot: std::arch::x86_64::__m512,
+        _ni: std::arch::x86_64::__m512,
+        _nj: std::arch::x86_64::__m512,
+    ) -> std::arch::x86_64::__m512 {
+        use std::arch::x86_64::*;
+        _mm512_max_ps(_mm512_sub_ps(_mm512_set1_ps(1.0), dot), _mm512_setzero_ps())
+    }
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx2(
+        dot: std::arch::x86_64::__m256,
+        _ni: std::arch::x86_64::__m256,
+        _nj: std::arch::x86_64::__m256,
+    ) -> std::arch::x86_64::__m256 {
+        use std::arch::x86_64::*;
+        _mm256_max_ps(_mm256_sub_ps(_mm256_set1_ps(1.0), dot), _mm256_setzero_ps())
+    }
+    #[inline(always)]
+    fn dist_scalar(dot: f32, _ni: f32, _nj: f32) -> f32 {
+        (1.0 - dot).max(0.0)
+    }
+}
+
+struct KCosine;
+impl MetricKernel for KCosine {
+    // norms = sqrt(‖x‖²). For ni·nj == 0 we fall to cos = 0 → dist = 1.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx512(
+        dot: std::arch::x86_64::__m512,
+        ni: std::arch::x86_64::__m512,
+        nj: std::arch::x86_64::__m512,
+    ) -> std::arch::x86_64::__m512 {
+        use std::arch::x86_64::*;
+        let denom = _mm512_mul_ps(ni, nj);
+        let zero_mask = _mm512_cmp_ps_mask::<_CMP_EQ_OQ>(denom, _mm512_setzero_ps());
+        let safe_denom = _mm512_mask_blend_ps(zero_mask, denom, _mm512_set1_ps(1.0));
+        let cos = _mm512_div_ps(dot, safe_denom);
+        // Force cos to 0 in zero-denom lanes → dist = 1.
+        let cos = _mm512_mask_blend_ps(zero_mask, cos, _mm512_setzero_ps());
+        _mm512_max_ps(_mm512_sub_ps(_mm512_set1_ps(1.0), cos), _mm512_setzero_ps())
+    }
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx2(
+        dot: std::arch::x86_64::__m256,
+        ni: std::arch::x86_64::__m256,
+        nj: std::arch::x86_64::__m256,
+    ) -> std::arch::x86_64::__m256 {
+        use std::arch::x86_64::*;
+        let denom = _mm256_mul_ps(ni, nj);
+        let zero_mask = _mm256_cmp_ps::<_CMP_EQ_OQ>(denom, _mm256_setzero_ps());
+        let safe_denom = _mm256_blendv_ps(denom, _mm256_set1_ps(1.0), zero_mask);
+        let cos = _mm256_div_ps(dot, safe_denom);
+        let cos = _mm256_blendv_ps(cos, _mm256_setzero_ps(), zero_mask);
+        _mm256_max_ps(_mm256_sub_ps(_mm256_set1_ps(1.0), cos), _mm256_setzero_ps())
+    }
+    #[inline(always)]
+    fn dist_scalar(dot: f32, ni: f32, nj: f32) -> f32 {
+        let denom = ni * nj;
+        let cos = if denom > 0.0 { dot / denom } else { 0.0 };
+        (1.0 - cos).max(0.0)
+    }
+}
+
+struct KIp;
+impl MetricKernel for KIp {
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx512(
+        dot: std::arch::x86_64::__m512,
+        _ni: std::arch::x86_64::__m512,
+        _nj: std::arch::x86_64::__m512,
+    ) -> std::arch::x86_64::__m512 {
+        use std::arch::x86_64::*;
+        _mm512_sub_ps(_mm512_setzero_ps(), dot)
+    }
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn dist_avx2(
+        dot: std::arch::x86_64::__m256,
+        _ni: std::arch::x86_64::__m256,
+        _nj: std::arch::x86_64::__m256,
+    ) -> std::arch::x86_64::__m256 {
+        use std::arch::x86_64::*;
+        _mm256_sub_ps(_mm256_setzero_ps(), dot)
+    }
+    #[inline(always)]
+    fn dist_scalar(dot: f32, _ni: f32, _nj: f32) -> f32 {
+        -dot
+    }
+}
+
+/// Generic small-k insert into `knn_result[base..base+k]` (sorted ascending by
+/// `.1`). Caller has already verified `d < knn_result[base+k-1].1`. Bubble-up
+/// with branchless cmov, `k − 1` iterations. Returns the new worst (largest).
+#[inline(always)]
+unsafe fn insert_topk_linear(
+    knn_result: &mut [(u32, f32)],
+    base: usize,
+    k: usize,
+    idx: u32,
+    d: f32,
+) -> f32 {
+    debug_assert!(k >= 1);
+    *knn_result.get_unchecked_mut(base + k - 1) = (idx, d);
+    let mut pos = base + k - 1;
+    while pos > base {
+        let cur = *knn_result.get_unchecked(pos);
+        let prev = *knn_result.get_unchecked(pos - 1);
+        let swap = cur.1 < prev.1;
+        *knn_result.get_unchecked_mut(pos) = if swap { prev } else { cur };
+        *knn_result.get_unchecked_mut(pos - 1) = if swap { cur } else { prev };
+        pos -= 1;
+    }
+    (*knn_result.get_unchecked(base + k - 1)).1
+}
+
+/// Init `worst[..n+16]` and `knn_result[..n*k]` to sentinels. Shared init for
+/// all three tier-specific fused scans below.
+#[inline(always)]
+unsafe fn fused_init(knn_result: &mut [(u32, f32)], worst: &mut [f32], n: usize, k: usize) {
     for i in 0..n {
-        worst[i] = f32::MAX;
-        let off = i * actual_k;
-        for k in 0..actual_k {
-            *knn_result.get_unchecked_mut(off + k) = (u32::MAX, f32::MAX);
+        *worst.get_unchecked_mut(i) = f32::MAX;
+        let off = i * k;
+        for t in 0..k {
+            *knn_result.get_unchecked_mut(off + t) = (u32::MAX, f32::MAX);
         }
     }
-    // Tail pad so a 16-wide load at index n-15..n is in-bounds.
-    for k in n..(n + 16) {
-        worst[k] = f32::MAX;
+    // OOB pad so a 16-wide load at j..j+16 with j up to n-1 is in-bounds.
+    let pad_end = n + 16;
+    if worst.len() >= pad_end {
+        for t in n..pad_end {
+            *worst.get_unchecked_mut(t) = f32::MAX;
+        }
     }
+}
 
-    let two_v = _mm512_set1_ps(2.0);
+/// 16-wide AVX-512 fused dual-end top-k scan. See `KL2` etc. for the metric
+/// kernel. Symmetric metrics only (all four PiPNN metrics qualify).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn fused_dual_topk_avx512<K: MetricKernel>(
+    dot: &[f32],
+    norms: &[f32],
+    knn_result: &mut [(u32, f32)],
+    worst: &mut [f32],
+    n: usize,
+    k: usize,
+) {
+    use std::arch::x86_64::*;
+    fused_init(knn_result, worst, n, k);
 
     for i in 1..n {
         let ni = *norms.get_unchecked(i);
         let ni_v = _mm512_set1_ps(ni);
-        let mut local_worst_i = worst[i];
+        let mut local_worst_i = *worst.get_unchecked(i);
         let row_base = i * n;
-        let knn_i_base = i * actual_k;
+        let knn_i_base = i * k;
 
         let mut j = 0usize;
         while j + 16 <= i {
-            // Load 16 dot[i, j..j+16] (lower triangle row prefix).
             let dot_v = _mm512_loadu_ps(dot.as_ptr().add(row_base + j));
-            let norms_j = _mm512_loadu_ps(norms.as_ptr().add(j));
-            // d = max(0, ni + nj - 2 * dot)
-            let sum_norms = _mm512_add_ps(ni_v, norms_j);
-            let two_dot = _mm512_mul_ps(two_v, dot_v);
-            let d_v = _mm512_max_ps(_mm512_sub_ps(sum_norms, two_dot), _mm512_setzero_ps());
+            let nj_v = _mm512_loadu_ps(norms.as_ptr().add(j));
+            let d_v = K::dist_avx512(dot_v, ni_v, nj_v);
 
-            // Row-side: d < worst[i] (broadcast).
             let thresh_i_v = _mm512_set1_ps(local_worst_i);
             let mask_row = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d_v, thresh_i_v);
-
-            // Column-side: d < worst[j..j+16] (contig load).
             let worst_col_v = _mm512_loadu_ps(worst.as_ptr().add(j));
             let mask_col = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(d_v, worst_col_v);
 
-            // Materialise 16 distances only if at least one side has a hit.
             if (mask_row | mask_col) != 0 {
                 let mut d_arr = [0.0f32; 16];
                 _mm512_storeu_ps(d_arr.as_mut_ptr(), d_v);
 
-                // Row-side: update tracker[i] for each set lane.
                 let mut m = mask_row;
                 while m != 0 {
                     let lane = m.trailing_zeros() as usize;
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
                     let j_abs = (j + lane) as u32;
-                    local_worst_i = insert3_branchless(knn_result, knn_i_base, j_abs, d);
+                    local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
                 }
-
-                // Column-side: update tracker[j+lane] for each set lane.
                 let mut m = mask_col;
                 while m != 0 {
                     let lane = m.trailing_zeros() as usize;
                     m &= m - 1;
                     let d = *d_arr.get_unchecked(lane);
                     let j_target = j + lane;
-                    let new_worst = insert3_branchless(knn_result, j_target * actual_k, i as u32, d);
+                    let new_worst =
+                        insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
                     *worst.get_unchecked_mut(j_target) = new_worst;
                 }
             }
             j += 16;
         }
-        // Scalar tail (j..i, where j + 16 > i).
         while j < i {
             let dot_ij = *dot.get_unchecked(row_base + j);
             let nj = *norms.get_unchecked(j);
-            let d = (ni + nj - 2.0 * dot_ij).max(0.0);
+            let d = K::dist_scalar(dot_ij, ni, nj);
             if d < local_worst_i {
-                local_worst_i = insert3_branchless(knn_result, knn_i_base, j as u32, d);
+                local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j as u32, d);
             }
             if d < *worst.get_unchecked(j) {
-                let new_worst = insert3_branchless(knn_result, j * actual_k, i as u32, d);
+                let new_worst = insert_topk_linear(knn_result, j * k, k, i as u32, d);
                 *worst.get_unchecked_mut(j) = new_worst;
             }
             j += 1;
         }
-        worst[i] = local_worst_i;
+        *worst.get_unchecked_mut(i) = local_worst_i;
     }
 }
 
-/// Branchless heap-3 insert into `knn_result[base..base+3]`. Returns the new
-/// worst (knn_result[base+2].1). Same recipe as topk_row_small's per-lane
-/// insert: 3 cmov-style conditional swaps, zero branches in the body.
-#[inline(always)]
-unsafe fn insert3_branchless(
+/// 8-wide AVX-2 fused dual-end top-k scan. Mirror of the AVX-512 variant with
+/// `_mm256` ops and `movemask_ps`-based mask extraction.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn fused_dual_topk_avx2<K: MetricKernel>(
+    dot: &[f32],
+    norms: &[f32],
     knn_result: &mut [(u32, f32)],
-    base: usize,
-    idx: u32,
-    d: f32,
-) -> f32 {
-    let e0 = *knn_result.get_unchecked(base);
-    let e1 = *knn_result.get_unchecked(base + 1);
-    let mut e2 = *knn_result.get_unchecked(base + 2);
+    worst: &mut [f32],
+    n: usize,
+    k: usize,
+) {
+    use std::arch::x86_64::*;
+    fused_init(knn_result, worst, n, k);
 
-    // d already known to be < e2.1 by caller; replace e2.
-    if d < e2.1 {
-        e2 = (idx, d);
+    for i in 1..n {
+        let ni = *norms.get_unchecked(i);
+        let ni_v = _mm256_set1_ps(ni);
+        let mut local_worst_i = *worst.get_unchecked(i);
+        let row_base = i * n;
+        let knn_i_base = i * k;
+
+        let mut j = 0usize;
+        while j + 8 <= i {
+            let dot_v = _mm256_loadu_ps(dot.as_ptr().add(row_base + j));
+            let nj_v = _mm256_loadu_ps(norms.as_ptr().add(j));
+            let d_v = K::dist_avx2(dot_v, ni_v, nj_v);
+
+            let thresh_i_v = _mm256_set1_ps(local_worst_i);
+            let cmp_row = _mm256_cmp_ps::<_CMP_LT_OQ>(d_v, thresh_i_v);
+            let worst_col_v = _mm256_loadu_ps(worst.as_ptr().add(j));
+            let cmp_col = _mm256_cmp_ps::<_CMP_LT_OQ>(d_v, worst_col_v);
+            let mask_row = _mm256_movemask_ps(cmp_row) as u32;
+            let mask_col = _mm256_movemask_ps(cmp_col) as u32;
+
+            if (mask_row | mask_col) != 0 {
+                let mut d_arr = [0.0f32; 8];
+                _mm256_storeu_ps(d_arr.as_mut_ptr(), d_v);
+
+                let mut m = mask_row;
+                while m != 0 {
+                    let lane = m.trailing_zeros() as usize;
+                    m &= m - 1;
+                    let d = *d_arr.get_unchecked(lane);
+                    let j_abs = (j + lane) as u32;
+                    local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j_abs, d);
+                }
+                let mut m = mask_col;
+                while m != 0 {
+                    let lane = m.trailing_zeros() as usize;
+                    m &= m - 1;
+                    let d = *d_arr.get_unchecked(lane);
+                    let j_target = j + lane;
+                    let new_worst =
+                        insert_topk_linear(knn_result, j_target * k, k, i as u32, d);
+                    *worst.get_unchecked_mut(j_target) = new_worst;
+                }
+            }
+            j += 8;
+        }
+        while j < i {
+            let dot_ij = *dot.get_unchecked(row_base + j);
+            let nj = *norms.get_unchecked(j);
+            let d = K::dist_scalar(dot_ij, ni, nj);
+            if d < local_worst_i {
+                local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j as u32, d);
+            }
+            if d < *worst.get_unchecked(j) {
+                let new_worst = insert_topk_linear(knn_result, j * k, k, i as u32, d);
+                *worst.get_unchecked_mut(j) = new_worst;
+            }
+            j += 1;
+        }
+        *worst.get_unchecked_mut(i) = local_worst_i;
     }
-    // Bubble up.
-    let sw = e2.1 < e1.1;
-    let new_e1 = if sw { e2 } else { e1 };
-    let new_e2 = if sw { e1 } else { e2 };
-    let e1 = new_e1;
-    let e2 = new_e2;
+}
 
-    let sw = e1.1 < e0.1;
-    let new_e0 = if sw { e1 } else { e0 };
-    let new_e1 = if sw { e0 } else { e1 };
-    let e0 = new_e0;
-    let e1 = new_e1;
+/// Scalar fallback fused dual-end scan. Same logic, one lane at a time.
+unsafe fn fused_dual_topk_scalar<K: MetricKernel>(
+    dot: &[f32],
+    norms: &[f32],
+    knn_result: &mut [(u32, f32)],
+    worst: &mut [f32],
+    n: usize,
+    k: usize,
+) {
+    fused_init(knn_result, worst, n, k);
+    for i in 1..n {
+        let ni = *norms.get_unchecked(i);
+        let mut local_worst_i = *worst.get_unchecked(i);
+        let row_base = i * n;
+        let knn_i_base = i * k;
+        for j in 0..i {
+            let dot_ij = *dot.get_unchecked(row_base + j);
+            let nj = *norms.get_unchecked(j);
+            let d = K::dist_scalar(dot_ij, ni, nj);
+            if d < local_worst_i {
+                local_worst_i = insert_topk_linear(knn_result, knn_i_base, k, j as u32, d);
+            }
+            if d < *worst.get_unchecked(j) {
+                let new_worst = insert_topk_linear(knn_result, j * k, k, i as u32, d);
+                *worst.get_unchecked_mut(j) = new_worst;
+            }
+        }
+        *worst.get_unchecked_mut(i) = local_worst_i;
+    }
+}
 
-    *knn_result.get_unchecked_mut(base) = e0;
-    *knn_result.get_unchecked_mut(base + 1) = e1;
-    *knn_result.get_unchecked_mut(base + 2) = e2;
-    e2.1
+/// Tier × metric dispatch for the fused dual-end scan. Caller has already
+/// filled `norms` per the metric's requirement (see `MetricKernel` doc).
+#[inline]
+fn fused_dual_topk(
+    metric: diskann_vector::distance::Metric,
+    dot: &[f32],
+    norms: &[f32],
+    knn_result: &mut [(u32, f32)],
+    worst: &mut [f32],
+    n: usize,
+    k: usize,
+) {
+    use diskann_vector::distance::Metric;
+    // SAFETY: each AVX-tier branch is only entered when the matching feature
+    // was confirmed at startup by `cpu_dispatch::tier()`.
+    unsafe {
+        match (tier(), metric) {
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx512, Metric::L2) => fused_dual_topk_avx512::<KL2>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx512, Metric::CosineNormalized) => fused_dual_topk_avx512::<KCosNorm>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx512, Metric::Cosine) => fused_dual_topk_avx512::<KCosine>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx512, Metric::InnerProduct) => fused_dual_topk_avx512::<KIp>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx2, Metric::L2) => fused_dual_topk_avx2::<KL2>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx2, Metric::CosineNormalized) => fused_dual_topk_avx2::<KCosNorm>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx2, Metric::Cosine) => fused_dual_topk_avx2::<KCosine>(dot, norms, knn_result, worst, n, k),
+            #[cfg(target_arch = "x86_64")]
+            (SimdTier::Avx2, Metric::InnerProduct) => fused_dual_topk_avx2::<KIp>(dot, norms, knn_result, worst, n, k),
+            (_, Metric::L2) => fused_dual_topk_scalar::<KL2>(dot, norms, knn_result, worst, n, k),
+            (_, Metric::CosineNormalized) => fused_dual_topk_scalar::<KCosNorm>(dot, norms, knn_result, worst, n, k),
+            (_, Metric::Cosine) => fused_dual_topk_scalar::<KCosine>(dot, norms, knn_result, worst, n, k),
+            (_, Metric::InnerProduct) => fused_dual_topk_scalar::<KIp>(dot, norms, knn_result, worst, n, k),
+        }
+    }
 }
 
 /// An edge produced by leaf building: `(source, destination, distance)`.
@@ -337,496 +613,6 @@ pub fn build_leaf<T: VectorRepr + 'static>(
 /// Fused per-row top-k for k<=3. Dispatches to the AVX-512, AVX-2, or scalar
 /// implementation based on the runtime CPU tier. Writes `actual_k` entries
 /// into `out[..actual_k]`.
-#[inline]
-fn topk_row_small(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    // SAFETY: each tier-specialized variant is dispatched only when the
-    // matching runtime feature was detected by `cpu_dispatch::tier()`.
-    unsafe {
-        match tier() {
-            SimdTier::Avx512 => topk_row_small_dispatch_avx512(dist_row, n, self_idx, actual_k, out),
-            SimdTier::Avx2 => topk_row_small_dispatch_avx2(dist_row, n, self_idx, actual_k, out),
-            SimdTier::Scalar => topk_row_small_scalar(dist_row, n, self_idx, actual_k, out),
-        }
-    }
-}
-
-/// AVX-512 variant of `topk_row_small`. 16-wide scan, branchless heap insert.
-///
-/// The heap-3 bubble-up is rewritten as 3 cmov-style conditional swaps with no
-/// data-dependent branches: every accepted candidate goes through exactly the
-/// same code path. This eliminates the source of HP's 79% branch-mispredict
-/// concentration on topk_row_small per PMU profile.
-///
-/// `dist_row` is taken `&mut` so we can stamp `self_idx` to `f32::MAX` once at
-/// entry, removing the per-iteration self-check branch from the hot loop.
-///
-/// SAFETY: caller MUST ensure the CPU supports AVX-512F.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn topk_row_small_dispatch_avx512(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    debug_assert!(actual_k <= 3);
-    debug_assert!(self_idx < n);
-    // Stamp self ineligible. One store; removes the per-iter self_idx check.
-    *dist_row.get_unchecked_mut(self_idx) = f32::MAX;
-
-    // Three running top entries kept in separate scalar slots (helps the
-    // compiler keep them in registers; tuple swaps were preventing cmov
-    // emission). Invariant after each insert: d0 ≤ d1 ≤ d2.
-    let mut d0 = f32::MAX;
-    let mut i0 = u32::MAX;
-    let mut d1 = f32::MAX;
-    let mut i1 = u32::MAX;
-    let mut d2 = f32::MAX;
-    let mut i2 = u32::MAX;
-
-    use std::arch::x86_64::*;
-    let chunks = n / 16;
-    for chunk in 0..chunks {
-        let base = chunk * 16;
-        let thresh = _mm512_set1_ps(d2);
-        let dists = _mm512_loadu_ps(dist_row.as_ptr().add(base));
-        let mask = _mm512_cmp_ps_mask::<_CMP_LT_OQ>(dists, thresh);
-        if mask != 0 {
-            let mut d_arr = [0.0f32; 16];
-            _mm512_storeu_ps(d_arr.as_mut_ptr(), dists);
-            let mut m = mask;
-            while m != 0 {
-                let lane = m.trailing_zeros() as usize;
-                m &= m - 1;
-                let j = (base + lane) as u32;
-                let d = d_arr[lane];
-                // Branchless 3-slot insert.
-                let take = d < d2;
-                d2 = if take { d } else { d2 };
-                i2 = if take { j } else { i2 };
-                let sw = d2 < d1;
-                let nd1 = if sw { d2 } else { d1 };
-                let nd2 = if sw { d1 } else { d2 };
-                let ni1 = if sw { i2 } else { i1 };
-                let ni2 = if sw { i1 } else { i2 };
-                d1 = nd1;
-                d2 = nd2;
-                i1 = ni1;
-                i2 = ni2;
-                let sw = d1 < d0;
-                let nd0 = if sw { d1 } else { d0 };
-                let nd1 = if sw { d0 } else { d1 };
-                let ni0 = if sw { i1 } else { i0 };
-                let ni1 = if sw { i0 } else { i1 };
-                d0 = nd0;
-                d1 = nd1;
-                i0 = ni0;
-                i1 = ni1;
-            }
-        }
-    }
-    // Tail: scalar branchless insert for the n % 16 leftover.
-    for j in (chunks * 16)..n {
-        let d = *dist_row.get_unchecked(j);
-        let j_u32 = j as u32;
-        let take = d < d2;
-        d2 = if take { d } else { d2 };
-        i2 = if take { j_u32 } else { i2 };
-        let sw = d2 < d1;
-        let nd1 = if sw { d2 } else { d1 };
-        let nd2 = if sw { d1 } else { d2 };
-        let ni1 = if sw { i2 } else { i1 };
-        let ni2 = if sw { i1 } else { i2 };
-        d1 = nd1;
-        d2 = nd2;
-        i1 = ni1;
-        i2 = ni2;
-        let sw = d1 < d0;
-        let nd0 = if sw { d1 } else { d0 };
-        let nd1 = if sw { d0 } else { d1 };
-        let ni0 = if sw { i1 } else { i0 };
-        let ni1 = if sw { i0 } else { i1 };
-        d0 = nd0;
-        d1 = nd1;
-        i0 = ni0;
-        i1 = ni1;
-    }
-
-    let final_top: [(u32, f32); 3] = [(i0, d0), (i1, d1), (i2, d2)];
-    out[..actual_k].copy_from_slice(&final_top[..actual_k]);
-}
-
-/// AVX-2 variant of `topk_row_small`. 8-wide scan, branchless heap insert.
-///
-/// Same branchless treatment as the AVX-512 variant: stamp self once,
-/// run 3 cmov-style conditional swaps per accepted candidate.
-///
-/// SAFETY: caller MUST ensure the CPU supports AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn topk_row_small_dispatch_avx2(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    debug_assert!(actual_k <= 3);
-    debug_assert!(self_idx < n);
-    *dist_row.get_unchecked_mut(self_idx) = f32::MAX;
-
-    let mut d0 = f32::MAX;
-    let mut i0 = u32::MAX;
-    let mut d1 = f32::MAX;
-    let mut i1 = u32::MAX;
-    let mut d2 = f32::MAX;
-    let mut i2 = u32::MAX;
-
-    use std::arch::x86_64::*;
-    let chunks = n / 8;
-    for chunk in 0..chunks {
-        let base = chunk * 8;
-        let thresh = _mm256_set1_ps(d2);
-        let dists = _mm256_loadu_ps(dist_row.as_ptr().add(base));
-        let mask = _mm256_movemask_ps(_mm256_cmp_ps::<_CMP_LT_OQ>(dists, thresh)) as u32;
-        if mask != 0 {
-            let mut d_arr = [0.0f32; 8];
-            _mm256_storeu_ps(d_arr.as_mut_ptr(), dists);
-            let mut m = mask;
-            while m != 0 {
-                let lane = m.trailing_zeros() as usize;
-                m &= m - 1;
-                let j = (base + lane) as u32;
-                let d = d_arr[lane];
-                let take = d < d2;
-                d2 = if take { d } else { d2 };
-                i2 = if take { j } else { i2 };
-                let sw = d2 < d1;
-                let nd1 = if sw { d2 } else { d1 };
-                let nd2 = if sw { d1 } else { d2 };
-                let ni1 = if sw { i2 } else { i1 };
-                let ni2 = if sw { i1 } else { i2 };
-                d1 = nd1;
-                d2 = nd2;
-                i1 = ni1;
-                i2 = ni2;
-                let sw = d1 < d0;
-                let nd0 = if sw { d1 } else { d0 };
-                let nd1 = if sw { d0 } else { d1 };
-                let ni0 = if sw { i1 } else { i0 };
-                let ni1 = if sw { i0 } else { i1 };
-                d0 = nd0;
-                d1 = nd1;
-                i0 = ni0;
-                i1 = ni1;
-            }
-        }
-    }
-    for j in (chunks * 8)..n {
-        let d = *dist_row.get_unchecked(j);
-        let j_u32 = j as u32;
-        let take = d < d2;
-        d2 = if take { d } else { d2 };
-        i2 = if take { j_u32 } else { i2 };
-        let sw = d2 < d1;
-        let nd1 = if sw { d2 } else { d1 };
-        let nd2 = if sw { d1 } else { d2 };
-        let ni1 = if sw { i2 } else { i1 };
-        let ni2 = if sw { i1 } else { i2 };
-        d1 = nd1;
-        d2 = nd2;
-        i1 = ni1;
-        i2 = ni2;
-        let sw = d1 < d0;
-        let nd0 = if sw { d1 } else { d0 };
-        let nd1 = if sw { d0 } else { d1 };
-        let ni0 = if sw { i1 } else { i0 };
-        let ni1 = if sw { i0 } else { i1 };
-        d0 = nd0;
-        d1 = nd1;
-        i0 = ni0;
-        i1 = ni1;
-    }
-
-    let final_top: [(u32, f32); 3] = [(i0, d0), (i1, d1), (i2, d2)];
-    out[..actual_k].copy_from_slice(&final_top[..actual_k]);
-}
-
-/// Scalar variant of `topk_row_small`. Used on non-x86 or when neither AVX-2
-/// nor AVX-512 is present at runtime. Branchless 3-slot insert.
-unsafe fn topk_row_small_scalar(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    debug_assert!(actual_k <= 3);
-    debug_assert!(self_idx < n);
-    *dist_row.get_unchecked_mut(self_idx) = f32::MAX;
-
-    let mut d0 = f32::MAX;
-    let mut i0 = u32::MAX;
-    let mut d1 = f32::MAX;
-    let mut i1 = u32::MAX;
-    let mut d2 = f32::MAX;
-    let mut i2 = u32::MAX;
-
-    for (j, &d) in dist_row.iter().enumerate().take(n) {
-        let j_u32 = j as u32;
-        let take = d < d2;
-        d2 = if take { d } else { d2 };
-        i2 = if take { j_u32 } else { i2 };
-        let sw = d2 < d1;
-        let nd1 = if sw { d2 } else { d1 };
-        let nd2 = if sw { d1 } else { d2 };
-        let ni1 = if sw { i2 } else { i1 };
-        let ni2 = if sw { i1 } else { i2 };
-        d1 = nd1;
-        d2 = nd2;
-        i1 = ni1;
-        i2 = ni2;
-        let sw = d1 < d0;
-        let nd0 = if sw { d1 } else { d0 };
-        let nd1 = if sw { d0 } else { d1 };
-        let ni0 = if sw { i1 } else { i0 };
-        let ni1 = if sw { i0 } else { i1 };
-        d0 = nd0;
-        d1 = nd1;
-        i0 = ni0;
-        i1 = ni1;
-    }
-
-    let final_top: [(u32, f32); 3] = [(i0, d0), (i1, d1), (i2, d2)];
-    out[..actual_k].copy_from_slice(&final_top[..actual_k]);
-}
-
-// On non-x86 hosts the AVX dispatch arms are unreachable; provide stub
-// variants so the dispatch `match` is exhaustive without a separate cfg
-// branch. The runtime tier on non-x86 is always `Scalar`, so these stubs
-// are never called.
-#[cfg(not(target_arch = "x86_64"))]
-#[allow(dead_code)]
-unsafe fn topk_row_small_dispatch_avx512(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    topk_row_small_scalar(dist_row, n, self_idx, actual_k, out)
-}
-#[cfg(not(target_arch = "x86_64"))]
-#[allow(dead_code)]
-unsafe fn topk_row_small_dispatch_avx2(
-    dist_row: &mut [f32],
-    n: usize,
-    self_idx: usize,
-    actual_k: usize,
-    out: &mut [(u32, f32)],
-) {
-    topk_row_small_scalar(dist_row, n, self_idx, actual_k, out)
-}
-
-// ───── Per-row dist conversion kernels (CosineNormalized / L2 / InnerProduct) ─────
-//
-// Each metric has three tier-specialized variants (AVX-512, AVX-2, scalar) and
-// a public `convert_<metric>` dispatcher. The dispatcher takes the row in
-// place and (for L2) the `ni = norms_sq[global_i]` scalar plus a pointer to
-// the per-row `norms_sq` for the column term. The bodies are byte-for-byte
-// copies of the original `#[cfg(target_feature)]` blocks; only the gating
-// has changed from compile-time to runtime.
-
-/// CosineNormalized: row[j] = max(1 - row[j], 0).
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn convert_cosnorm_avx512(row: &mut [f32], n: usize) {
-    use std::arch::x86_64::*;
-    let one = _mm512_set1_ps(1.0);
-    let zero = _mm512_setzero_ps();
-    let chunks = n / 16;
-    for c in 0..chunks {
-        let base = c * 16;
-        let d = _mm512_loadu_ps(row.as_ptr().add(base));
-        let v = _mm512_max_ps(_mm512_sub_ps(one, d), zero);
-        _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 16)..n {
-        row[j] = (1.0 - row[j]).max(0.0);
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn convert_cosnorm_avx2(row: &mut [f32], n: usize) {
-    use std::arch::x86_64::*;
-    let one = _mm256_set1_ps(1.0);
-    let zero = _mm256_setzero_ps();
-    let chunks = n / 8;
-    for c in 0..chunks {
-        let base = c * 8;
-        let d = _mm256_loadu_ps(row.as_ptr().add(base));
-        let v = _mm256_max_ps(_mm256_sub_ps(one, d), zero);
-        _mm256_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 8)..n {
-        row[j] = (1.0 - row[j]).max(0.0);
-    }
-}
-
-fn convert_cosnorm_scalar(row: &mut [f32], _n: usize) {
-    for val in row.iter_mut() {
-        *val = (1.0 - *val).max(0.0);
-    }
-}
-
-#[inline]
-fn convert_cosnorm(row: &mut [f32], n: usize) {
-    // SAFETY: dispatched on cached `tier()`; SIMD variants are only invoked
-    // when the matching feature was detected at startup.
-    unsafe {
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => convert_cosnorm_avx512(row, n),
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => convert_cosnorm_avx2(row, n),
-            _ => convert_cosnorm_scalar(row, n),
-        }
-    }
-}
-
-/// L2: row[j] = max(ni + norms_sq[j] - 2*row[j], 0).
-///
-/// SAFETY: caller MUST ensure `norms_sq_ptr` points to at least `n` valid
-/// f32 elements and `row.len() >= n`.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn convert_l2_avx512(row: &mut [f32], n: usize, ni: f32, norms_sq_ptr: *const f32) {
-    use std::arch::x86_64::*;
-    let ni_v = _mm512_set1_ps(ni);
-    let two = _mm512_set1_ps(2.0);
-    let zero = _mm512_setzero_ps();
-    let chunks = n / 16;
-    for c in 0..chunks {
-        let base = c * 16;
-        let dot = _mm512_loadu_ps(row.as_ptr().add(base));
-        let norm = _mm512_loadu_ps(norms_sq_ptr.add(base));
-        // d = ni + norm - 2*dot  (fnmadd: -2*dot + norm + ni)
-        let d = _mm512_add_ps(ni_v, _mm512_fnmadd_ps(two, dot, norm));
-        let v = _mm512_max_ps(d, zero);
-        _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 16)..n {
-        let nj = *norms_sq_ptr.add(j);
-        row[j] = (ni + nj - 2.0 * row[j]).max(0.0);
-    }
-}
-
-/// SAFETY: see `convert_l2_avx512`.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,fma")]
-unsafe fn convert_l2_avx2(row: &mut [f32], n: usize, ni: f32, norms_sq_ptr: *const f32) {
-    use std::arch::x86_64::*;
-    let ni_v = _mm256_set1_ps(ni);
-    let two = _mm256_set1_ps(2.0);
-    let zero = _mm256_setzero_ps();
-    let chunks = n / 8;
-    for c in 0..chunks {
-        let base = c * 8;
-        let dot = _mm256_loadu_ps(row.as_ptr().add(base));
-        let norm = _mm256_loadu_ps(norms_sq_ptr.add(base));
-        let d = _mm256_add_ps(ni_v, _mm256_fnmadd_ps(two, dot, norm));
-        let v = _mm256_max_ps(d, zero);
-        _mm256_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 8)..n {
-        let nj = *norms_sq_ptr.add(j);
-        row[j] = (ni + nj - 2.0 * row[j]).max(0.0);
-    }
-}
-
-/// SAFETY: caller MUST ensure `norms_sq_ptr` points to at least `n` valid
-/// f32 elements.
-unsafe fn convert_l2_scalar(row: &mut [f32], n: usize, ni: f32, norms_sq_ptr: *const f32) {
-    for (j, val) in row.iter_mut().enumerate().take(n) {
-        let nj = *norms_sq_ptr.add(j);
-        *val = (ni + nj - 2.0 * *val).max(0.0);
-    }
-}
-
-/// SAFETY: caller MUST ensure `norms_sq_ptr` is valid for at least `n` reads.
-#[inline]
-unsafe fn convert_l2(row: &mut [f32], n: usize, ni: f32, norms_sq_ptr: *const f32) {
-    match tier() {
-        #[cfg(target_arch = "x86_64")]
-        SimdTier::Avx512 => convert_l2_avx512(row, n, ni, norms_sq_ptr),
-        #[cfg(target_arch = "x86_64")]
-        SimdTier::Avx2 => convert_l2_avx2(row, n, ni, norms_sq_ptr),
-        _ => convert_l2_scalar(row, n, ni, norms_sq_ptr),
-    }
-}
-
-/// InnerProduct: row[j] = -row[j].
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-unsafe fn convert_ip_avx512(row: &mut [f32], n: usize) {
-    use std::arch::x86_64::*;
-    let sign = _mm512_set1_ps(-0.0f32);
-    let chunks = n / 16;
-    for c in 0..chunks {
-        let base = c * 16;
-        let d = _mm512_loadu_ps(row.as_ptr().add(base));
-        let v = _mm512_xor_ps(d, sign);
-        _mm512_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 16)..n {
-        row[j] = -row[j];
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn convert_ip_avx2(row: &mut [f32], n: usize) {
-    use std::arch::x86_64::*;
-    let sign = _mm256_set1_ps(-0.0f32);
-    let chunks = n / 8;
-    for c in 0..chunks {
-        let base = c * 8;
-        let d = _mm256_loadu_ps(row.as_ptr().add(base));
-        let v = _mm256_xor_ps(d, sign);
-        _mm256_storeu_ps(row.as_mut_ptr().add(base), v);
-    }
-    for j in (chunks * 8)..n {
-        row[j] = -row[j];
-    }
-}
-
-fn convert_ip_scalar(row: &mut [f32], _n: usize) {
-    for val in row.iter_mut() {
-        *val = -*val;
-    }
-}
-
-#[inline]
-fn convert_ip(row: &mut [f32], n: usize) {
-    // SAFETY: dispatched on cached `tier()`.
-    unsafe {
-        match tier() {
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx512 => convert_ip_avx512(row, n),
-            #[cfg(target_arch = "x86_64")]
-            SimdTier::Avx2 => convert_ip_avx2(row, n),
-            _ => convert_ip_scalar(row, n),
-        }
-    }
-}
 
 /// Materialize `bufs.edges` from the CSR (`group_starts`, `group_data`) layout.
 /// Called from `build_leaf_with_buffers` for back-compat — the public `Vec<Edge>`
@@ -867,121 +653,6 @@ pub(crate) fn build_leaf_into<T: VectorRepr + 'static>(
     bufs.group_starts[indices.len()] as usize
 }
 
-/// Symmetrize the lower triangle of a `n × n` row-major matrix into the upper
-/// triangle. After this, `dot[i*n + j] == dot[j*n + i]` for all i, j.
-/// Diagonal is left untouched (already correct from the GEMM).
-///
-/// AVX-2 8×8 block transpose: for each strictly-lower 8×8 block, transpose
-/// in-register (8 loads + 24 shuffles + 8 stores) and store to mirrored upper
-/// position. The 8×8 shuffle recipe is the standard one from Intel's optim
-/// guide. Diagonal blocks fall back to scalar (small count: only n/8).
-#[inline]
-fn symmetrize_lower_to_upper(dot: &mut [f32], n: usize) {
-    debug_assert!(dot.len() >= n * n);
-    match tier() {
-        #[cfg(target_arch = "x86_64")]
-        SimdTier::Avx2 | SimdTier::Avx512 => unsafe { symmetrize_avx2_block8(dot, n) },
-        _ => symmetrize_scalar(dot, n),
-    }
-}
-
-fn symmetrize_scalar(dot: &mut [f32], n: usize) {
-    for i in 0..n {
-        for j in (i + 1)..n {
-            unsafe {
-                let src = *dot.get_unchecked(j * n + i);
-                *dot.get_unchecked_mut(i * n + j) = src;
-            }
-        }
-    }
-}
-
-/// 8×8 in-register transpose using AVX-2 + permute2f128. Standard recipe from
-/// Intel optim guide. Reads block at lower (br, bc) — row range `br..br+8`,
-/// col range `bc..bc+8` — and writes the transposed block to upper position
-/// (bc, br).
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn symmetrize_avx2_block8(dot: &mut [f32], n: usize) {
-    use std::arch::x86_64::*;
-    const B: usize = 8;
-    let nblocks = n / B;
-    let p = dot.as_mut_ptr();
-
-    // Strictly-lower 8×8 blocks: (br, bc) with bc < br.
-    for br in 0..nblocks {
-        for bc in 0..br {
-            let row_off = br * B;
-            let col_off = bc * B;
-            // Load 8 rows of 8 cols from lower block.
-            let r0 = _mm256_loadu_ps(p.add((row_off + 0) * n + col_off));
-            let r1 = _mm256_loadu_ps(p.add((row_off + 1) * n + col_off));
-            let r2 = _mm256_loadu_ps(p.add((row_off + 2) * n + col_off));
-            let r3 = _mm256_loadu_ps(p.add((row_off + 3) * n + col_off));
-            let r4 = _mm256_loadu_ps(p.add((row_off + 4) * n + col_off));
-            let r5 = _mm256_loadu_ps(p.add((row_off + 5) * n + col_off));
-            let r6 = _mm256_loadu_ps(p.add((row_off + 6) * n + col_off));
-            let r7 = _mm256_loadu_ps(p.add((row_off + 7) * n + col_off));
-            // Stage 1: pairwise unpack within 128-bit lanes.
-            let t0 = _mm256_unpacklo_ps(r0, r1);
-            let t1 = _mm256_unpackhi_ps(r0, r1);
-            let t2 = _mm256_unpacklo_ps(r2, r3);
-            let t3 = _mm256_unpackhi_ps(r2, r3);
-            let t4 = _mm256_unpacklo_ps(r4, r5);
-            let t5 = _mm256_unpackhi_ps(r4, r5);
-            let t6 = _mm256_unpacklo_ps(r6, r7);
-            let t7 = _mm256_unpackhi_ps(r6, r7);
-            // Stage 2: 64-bit-pair shuffle within 128-bit lanes.
-            let s0 = _mm256_shuffle_ps::<0x44>(t0, t2);
-            let s1 = _mm256_shuffle_ps::<0xEE>(t0, t2);
-            let s2 = _mm256_shuffle_ps::<0x44>(t1, t3);
-            let s3 = _mm256_shuffle_ps::<0xEE>(t1, t3);
-            let s4 = _mm256_shuffle_ps::<0x44>(t4, t6);
-            let s5 = _mm256_shuffle_ps::<0xEE>(t4, t6);
-            let s6 = _mm256_shuffle_ps::<0x44>(t5, t7);
-            let s7 = _mm256_shuffle_ps::<0xEE>(t5, t7);
-            // Stage 3: 128-bit lane permute.
-            let q0 = _mm256_permute2f128_ps::<0x20>(s0, s4);
-            let q1 = _mm256_permute2f128_ps::<0x20>(s1, s5);
-            let q2 = _mm256_permute2f128_ps::<0x20>(s2, s6);
-            let q3 = _mm256_permute2f128_ps::<0x20>(s3, s7);
-            let q4 = _mm256_permute2f128_ps::<0x31>(s0, s4);
-            let q5 = _mm256_permute2f128_ps::<0x31>(s1, s5);
-            let q6 = _mm256_permute2f128_ps::<0x31>(s2, s6);
-            let q7 = _mm256_permute2f128_ps::<0x31>(s3, s7);
-            // Store transposed to upper position (col_off, row_off).
-            _mm256_storeu_ps(p.add((col_off + 0) * n + row_off), q0);
-            _mm256_storeu_ps(p.add((col_off + 1) * n + row_off), q1);
-            _mm256_storeu_ps(p.add((col_off + 2) * n + row_off), q2);
-            _mm256_storeu_ps(p.add((col_off + 3) * n + row_off), q3);
-            _mm256_storeu_ps(p.add((col_off + 4) * n + row_off), q4);
-            _mm256_storeu_ps(p.add((col_off + 5) * n + row_off), q5);
-            _mm256_storeu_ps(p.add((col_off + 6) * n + row_off), q6);
-            _mm256_storeu_ps(p.add((col_off + 7) * n + row_off), q7);
-        }
-    }
-    // Diagonal blocks (br == bc): scalar within block (only nblocks of them,
-    // ~28 ops each at B=8 vs 256 in a transpose; not worth SIMD).
-    for b in 0..nblocks {
-        let base = b * B;
-        for i in 0..B {
-            for j in (i + 1)..B {
-                let row = base + i;
-                let col = base + j;
-                *dot.get_unchecked_mut(row * n + col) =
-                    *dot.get_unchecked(col * n + row);
-            }
-        }
-    }
-    // Tail (rows/cols >= nblocks * B): scalar fallback.
-    let tail = nblocks * B;
-    for i in 0..n {
-        let j_start = if i >= tail { i + 1 } else { tail };
-        for j in j_start..n {
-            *dot.get_unchecked_mut(i * n + j) = *dot.get_unchecked(j * n + i);
-        }
-    }
-}
 
 /// Build a leaf using caller-provided buffers, bypassing thread-local access.
 ///
@@ -1034,9 +705,12 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             diskann_linalg::sgemm_aat_lower(a_full, n, ndims, dot);
         }
 
-        // ───── Step 2: extract norms from the SYRK diagonal ─────
-        let needs_norms = matches!(metric, Metric::L2 | Metric::Cosine);
-        if needs_norms {
+        // ───── Step 2: extract per-row scalar from the SYRK diagonal ─────
+        // L2 needs ‖x‖² directly (read off `dot[i*n+i]`).
+        // Cosine needs ‖x‖ (sqrt of the SYRK diagonal).
+        // CosineNormalized and InnerProduct ignore the norms array, so we still
+        // populate `norms_sq` with the diagonal as a harmless filler.
+        let norms_target: &[f32] = {
             let dot = &bufs.dot_matrix[..n * n];
             let norms_sq = &mut bufs.norms_sq[..n];
             for i in 0..n {
@@ -1050,76 +724,25 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
                 for i in 0..n {
                     bufs.cosine_denoms[i] = bufs.norms_sq[i].sqrt();
                 }
-            }
-        }
-
-        // ───── Step 3 (fused path for L2 + k=3 on AVX-512) ─────
-        // Walks the strictly-lower triangle once, updates both row and column
-        // top-k trackers in one pass. No upper-triangle materialisation, no
-        // separate convert pass. Other metrics / k≠3 / non-AVX-512 fall back
-        // to symmetrize + per-row convert + top-k below.
-        let fused_eligible = matches!(metric, Metric::L2)
-            && actual_k == 3
-            && matches!(tier(), SimdTier::Avx512);
-        if fused_eligible {
-            unsafe {
-                fused_dual_topk_l2_avx512(
-                    &bufs.dot_matrix[..n * n],
-                    &bufs.norms_sq[..n],
-                    &mut bufs.knn_result[..n * actual_k],
-                    &mut bufs.worst[..n + 16],
-                    n,
-                    actual_k,
-                );
-            }
-        } else {
-        // ───── Step 3: symmetrize lower → upper ─────
-        symmetrize_lower_to_upper(&mut bufs.dot_matrix[..n * n], n);
-
-        // ───── Step 4: per-row distance convert + top-k ─────
-        let norms_sq_ptr = bufs.norms_sq.as_ptr();
-        let cosine_denoms_ptr = bufs.cosine_denoms.as_ptr();
-        for global_i in 0..n {
-            let row = &mut bufs.dot_matrix[global_i * n..(global_i + 1) * n];
-
-            match metric {
-                Metric::CosineNormalized => convert_cosnorm(row, n),
-                Metric::L2 => {
-                    // SAFETY: norms_sq_ptr spans n floats; global_i < n.
-                    let ni = unsafe { *norms_sq_ptr.add(global_i) };
-                    unsafe { convert_l2(row, n, ni, norms_sq_ptr) };
-                }
-                Metric::Cosine => {
-                    let ni_sqrt = unsafe { *cosine_denoms_ptr.add(global_i) };
-                    for (j, val) in row.iter_mut().enumerate() {
-                        let nj = unsafe { *cosine_denoms_ptr.add(j) };
-                        let denom = ni_sqrt * nj;
-                        let cos = if denom > 0.0 { *val / denom } else { 0.0 };
-                        *val = (1.0 - cos).max(0.0);
-                    }
-                }
-                Metric::InnerProduct => convert_ip(row, n),
-            }
-
-            if actual_k <= 3 {
-                let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
-                topk_row_small(row, n, global_i, actual_k, out);
+                &bufs.cosine_denoms[..n]
             } else {
-                row[global_i] = f32::MAX;
-                let mut idxs: Vec<u32> = (0..n as u32).collect();
-                idxs.sort_unstable_by(|&a, &b| {
-                    row[a as usize]
-                        .partial_cmp(&row[b as usize])
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                let out = &mut bufs.knn_result[global_i * actual_k..(global_i + 1) * actual_k];
-                for t in 0..actual_k {
-                    let j = idxs[t] as usize;
-                    out[t] = (j as u32, row[j]);
-                }
+                &bufs.norms_sq[..n]
             }
-        }
-        }
+        };
+
+        // ───── Step 3: fused dual-end top-k scan ─────
+        // Walks the strictly-lower triangle once; one distance updates BOTH
+        // tracker[i] AND tracker[j] (all four PiPNN metrics are symmetric).
+        // Dispatches per (SIMD tier, metric); no upper-triangle materialisation.
+        fused_dual_topk(
+            metric,
+            &bufs.dot_matrix[..n * n],
+            norms_target,
+            &mut bufs.knn_result[..n * actual_k],
+            &mut bufs.worst[..n + 16],
+            n,
+            actual_k,
+        );
     }
 
     // ───── CSR build (bidirected edges, dedup against `seen`) ─────
