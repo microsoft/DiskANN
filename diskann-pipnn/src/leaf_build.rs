@@ -318,17 +318,54 @@ unsafe fn insert_topk_linear(
     d: f32,
 ) -> f32 {
     debug_assert!(k >= 1);
-    *knn_result.get_unchecked_mut(base + k - 1) = (idx, d);
-    let mut pos = base + k - 1;
-    while pos > base {
-        let cur = *knn_result.get_unchecked(pos);
-        let prev = *knn_result.get_unchecked(pos - 1);
-        let swap = cur.1 < prev.1;
-        *knn_result.get_unchecked_mut(pos) = if swap { prev } else { cur };
-        *knn_result.get_unchecked_mut(pos - 1) = if swap { cur } else { prev };
-        pos -= 1;
+    let new_e = (idx, d);
+    match k {
+        1 => {
+            *knn_result.get_unchecked_mut(base) = new_e;
+            d
+        }
+        2 => {
+            let a = *knn_result.get_unchecked(base);
+            if d < a.1 {
+                *knn_result.get_unchecked_mut(base) = new_e;
+                *knn_result.get_unchecked_mut(base + 1) = a;
+                a.1
+            } else {
+                *knn_result.get_unchecked_mut(base + 1) = new_e;
+                d
+            }
+        }
+        3 => {
+            let a = *knn_result.get_unchecked(base);
+            let b = *knn_result.get_unchecked(base + 1);
+            if d < a.1 {
+                *knn_result.get_unchecked_mut(base) = new_e;
+                *knn_result.get_unchecked_mut(base + 1) = a;
+                *knn_result.get_unchecked_mut(base + 2) = b;
+                b.1
+            } else if d < b.1 {
+                *knn_result.get_unchecked_mut(base + 1) = new_e;
+                *knn_result.get_unchecked_mut(base + 2) = b;
+                b.1
+            } else {
+                *knn_result.get_unchecked_mut(base + 2) = new_e;
+                d
+            }
+        }
+        _ => {
+            *knn_result.get_unchecked_mut(base + k - 1) = new_e;
+            let mut pos = base + k - 1;
+            while pos > base {
+                let cur = *knn_result.get_unchecked(pos);
+                let prev = *knn_result.get_unchecked(pos - 1);
+                let swap = cur.1 < prev.1;
+                *knn_result.get_unchecked_mut(pos) = if swap { prev } else { cur };
+                *knn_result.get_unchecked_mut(pos - 1) = if swap { cur } else { prev };
+                pos -= 1;
+            }
+            (*knn_result.get_unchecked(base + k - 1)).1
+        }
     }
-    (*knn_result.get_unchecked(base + k - 1)).1
 }
 
 /// Init `worst[..n+16]` and `knn_result[..n*k]` to sentinels. Shared init for
