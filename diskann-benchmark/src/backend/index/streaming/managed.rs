@@ -15,6 +15,22 @@ use diskann_utils::views::{Matrix, MatrixView};
 
 use crate::utils::streaming::TagSlotManager;
 
+/// Determines how deleted slots are reclaimed.
+///
+/// Hard-delete providers (e.g., bf-tree) can recycle slots immediately during delete,
+/// while soft-delete providers need a deferred consolidation pass.
+#[derive(Debug, Clone)]
+pub(crate) enum SlotReclaim {
+    /// Slots are recycled to `empty_slots` immediately during delete.
+    /// No maintenance pass is needed.
+    #[cfg(feature = "bftree")]
+    Immediate,
+
+    /// Slots are held in `deleted_slots` until maintenance fires.
+    /// Maintenance triggers when `num_deleted > num_active * threshold`.
+    Deferred(f32),
+}
+
 /// A layer trait for inter-operating with the [`Managed`] index.
 ///
 /// The [`Managed`] layer is responsible for mapping external IDs (tags) to internal slots
@@ -53,9 +69,8 @@ pub(crate) struct Managed<T, O> {
     /// Buffer for storing ground truth IDs that have been translated to internal slot IDs.
     translated: Vec<Vec<u32>>,
 
-    /// Perform maintenance when the nubmer of deleted entries is greather than `threshold`
-    /// times the number of active slots.
-    threshold: f32,
+    /// Strategy for reclaiming deleted slots.
+    reclaim: SlotReclaim,
 
     /// The underlying managed stream.
     stream: Box<dyn ManagedStream<T, Output = O>>,
@@ -63,18 +78,15 @@ pub(crate) struct Managed<T, O> {
 
 impl<T, O> Managed<T, O> {
     /// Construct a new [`Managed`] layer capable of managing up to `max` points.
-    ///
-    /// When the number of deleted elements exceeds `threshold` times the number of active
-    /// elements, consolidation will be triggered.
     pub(crate) fn new(
         max: usize,
-        threshold: f32,
+        reclaim: SlotReclaim,
         stream: impl ManagedStream<T, Output = O> + 'static,
     ) -> Self {
         Self {
             book_keeping: TagSlotManager::new(max),
             translated: Vec::new(),
-            threshold,
+            reclaim,
             stream: Box::new(stream),
         }
     }
@@ -135,8 +147,12 @@ where
     fn delete(&mut self, tags: Range<usize>) -> anyhow::Result<Self::Output> {
         let (overhead_slots, slots) = timed!(self.book_keeping.find_slots_by_tags(tags.clone())?);
         let output = self.stream.delete(&slots)?;
-        let (overhead_mark, _) = timed!(self.book_keeping.mark_tags_deleted(tags)?);
-        Ok(Stats::new(overhead_slots + overhead_mark, output))
+        let (overhead_reclaim, _) = timed!(match &self.reclaim {
+            #[cfg(feature = "bftree")]
+            SlotReclaim::Immediate => self.book_keeping.recycle_tags(tags)?,
+            SlotReclaim::Deferred(_) => self.book_keeping.mark_tags_deleted(tags)?,
+        });
+        Ok(Stats::new(overhead_slots + overhead_reclaim, output))
     }
 
     fn maintain(&mut self, _: ()) -> anyhow::Result<Self::Output> {
@@ -146,9 +162,15 @@ where
     }
 
     fn needs_maintenance(&mut self) -> bool {
-        let num_active = self.book_keeping.num_active();
-        let threshold = (num_active as f32 * self.threshold) as usize;
-        self.book_keeping.num_deleted() > threshold
+        match &self.reclaim {
+            #[cfg(feature = "bftree")]
+            SlotReclaim::Immediate => false,
+            SlotReclaim::Deferred(threshold) => {
+                let num_active = self.book_keeping.num_active();
+                let limit = (num_active as f32 * threshold) as usize;
+                self.book_keeping.num_deleted() > limit
+            }
+        }
     }
 }
 
