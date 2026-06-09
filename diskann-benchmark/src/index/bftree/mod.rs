@@ -15,14 +15,14 @@
 //! - `graph-index-build-bftree-spherical-quantization` — static spherical (1/2/4-bit)
 //! - `graph-index-stream-bftree-spherical-quantization` — streaming spherical (1/2/4-bit)
 
-use crate::backend::index::search::plugins::Topk;
 use diskann_benchmark_runner::Registry;
+
+use super::search::plugins::Topk;
 
 mod full_precision;
 mod full_precision_streaming;
 mod spherical;
 mod spherical_streaming;
-mod streaming_utils;
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     registry.register(
@@ -36,7 +36,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
 
     registry.register(
-        "graph-index-bftree-spherical-quantization",
+        "graph-index-build-bftree-spherical-quantization",
         spherical::BfTreeSpherical::new().search(Topk),
     )?;
 

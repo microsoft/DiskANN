@@ -25,7 +25,7 @@ use diskann_utils::views::Matrix;
 use rand::SeedableRng;
 
 use crate::{
-    backend::index::{
+    index::{
         benchmarks::{QueryType, Strategy},
         build::single_or_multi_insert,
         result::BuildResult,

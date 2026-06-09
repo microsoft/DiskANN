@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use diskann_benchmark_runner::utils::{fmt::Table, percentiles, MicroSeconds};
 
 use crate::{
-    backend::index::{build::BuildStats, result::SearchResults},
+    index::{build::BuildStats, result::SearchResults},
     utils::DisplayWrapper,
 };
 

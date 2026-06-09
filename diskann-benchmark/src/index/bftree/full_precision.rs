@@ -19,7 +19,7 @@ use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_utils::sampling::WithApproximateNorm;
 
 use crate::{
-    backend::index::{
+    index::{
         benchmarks::{run_build, QueryType, Strategy},
         build::single_or_multi_insert,
         result::BuildResult,

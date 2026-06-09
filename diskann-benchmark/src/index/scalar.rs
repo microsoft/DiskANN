@@ -11,7 +11,7 @@ crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOper
 pub(super) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
-        use crate::backend::index::search::plugins::Topk;
+        use crate::index::search::plugins::Topk;
 
         // NOTE: This benchmark is heavily monomorphized. Each `(NBITS, T)` pair
         // generates a full `Benchmark` impl/build path for
@@ -72,7 +72,7 @@ mod imp {
     use diskann_utils::views::{Matrix, MatrixView};
 
     use crate::{
-        backend::index::{
+        index::{
             benchmarks::{run_build, QueryType, Strategy},
             build::{self, load_index, only_single_insert, save_index, BuildStats},
             result::{BuildResult, QuantBuildResult},
@@ -142,25 +142,25 @@ mod imp {
 
                 fn try_match(&self, input: &IndexSQOperation) -> Result<MatchScore, FailureScore> {
                     let mut failure_score: Option<u32> = None;
-                    match input.index_operation.source {
+                    match input.index_operation().source() {
                         IndexSource::Load(_) => {}
-                        IndexSource::Build(ref build) => {
+                        IndexSource::Build(build) => {
                             if build.multi_insert().is_some() {
                                 failure_score = Some(1);
                             }
                         }
                     }
 
-                    if !<$T>::is_match(*input.index_operation.source.data_type()) {
+                    if !<$T>::is_match(*input.index_operation().source().data_type()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    if !self.quant_search.is_match(&input.index_operation.search_phase) {
+                    if !self.quant_search.is_match(input.index_operation().search_phase()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    if input.num_bits != $N {
-                        *failure_score.get_or_insert(0) += 10 + ($N as usize).abs_diff(input.num_bits) as u32;
+                    if input.num_bits() != $N {
+                        *failure_score.get_or_insert(0) += 10 + ($N as usize).abs_diff(input.num_bits()) as u32;
                     }
 
                     match failure_score {
@@ -191,16 +191,16 @@ mod imp {
                             writeln!(f, "- Search Kinds: {}", self.quant_search.format_kinds())?;
                         }
                         Some(input) => {
-                            if input.num_bits != $N {
+                            if input.num_bits() != $N {
                                 writeln!(
                                     f,
                                     "- Expected {} bits, instead got {}",
                                     $N,
-                                    input.num_bits
+                                    input.num_bits()
                                 )?;
                             }
 
-                            let data_type = *input.index_operation.source.data_type();
+                            let data_type = *input.index_operation().source().data_type();
                             if !<$T>::is_match(data_type) {
                                 writeln!(
                                     f,
@@ -210,7 +210,7 @@ mod imp {
                                 )?;
                             }
 
-                            if let IndexSource::Build(ref build) = input.index_operation.source {
+                            if let IndexSource::Build(build) = input.index_operation().source() {
                                 if build.multi_insert().is_some() {
                                     writeln!(
                                         f,
@@ -219,11 +219,11 @@ mod imp {
                                 }
                             }
 
-                            if !self.quant_search.is_match(&input.index_operation.search_phase) {
+                            if !self.quant_search.is_match(input.index_operation().search_phase()) {
                                 writeln!(
                                     f,
                                     "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.index_operation.search_phase.kind(),
+                                    input.index_operation().search_phase().kind(),
                                     self.quant_search.format_kinds(),
                                 )?;
                             }
@@ -239,14 +239,14 @@ mod imp {
                     mut output: &mut dyn Output,
                 ) -> anyhow::Result<QuantBuildResult> {
                     assert_eq!(
-                        input.num_bits,
+                        input.num_bits(),
                         $N,
                         "INTERNAL ERROR: this should not have passed the match check"
                     );
 
                     writeln!(output, "{}", input)?;
 
-                    let (index, build_stats, quant_training_time) = match &input.index_operation.source {
+                    let (index, build_stats, quant_training_time) = match input.index_operation().source() {
                         IndexSource::Load(load) => {
                             let index_config: &IndexConfiguration = &load.to_config()?;
 
@@ -263,7 +263,7 @@ mod imp {
 
                         let start = std::time::Instant::now();
                         let quantizer = diskann_quantization::scalar::train::ScalarQuantizationParameters::new(
-                            diskann_quantization::num::Positive::new(input.standard_deviations).context(
+                            diskann_quantization::num::Positive::new(input.standard_deviations()).context(
                                 "please file a bug report, this should not have made it past the\
                                     front end",
                             )?,
@@ -305,16 +305,16 @@ mod imp {
                     // Save construction stats before running queries.
                     checkpoint.checkpoint(&build_stats)?;
 
-                    let search = if input.use_fp_for_search {
+                    let search = if input.use_fp_for_search() {
                         self.full_search.run(
                             index,
-                            &input.index_operation.search_phase,
+                            input.index_operation().search_phase(),
                             &Strategy::new(common::FullPrecision),
                         )?
                     } else {
                         self.quant_search.run(
                             index,
-                            &input.index_operation.search_phase,
+                            input.index_operation().search_phase(),
                             &Strategy::new(common::Quantized),
                         )?
                     };

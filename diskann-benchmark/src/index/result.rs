@@ -8,7 +8,7 @@ use diskann_benchmark_runner::utils::{percentiles, MicroSeconds};
 use serde::Serialize;
 
 use crate::{
-    backend::index::build::BuildStats,
+    index::build::BuildStats,
     utils::{self, DisplayWrapper, MaybeDisplay},
 };
 
