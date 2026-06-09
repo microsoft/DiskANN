@@ -196,7 +196,9 @@ where
             // Check if the start point matches the filter
             // Note that we don't allow termination on start points. This is mostly a moot point
             // as we're planning to get rid of the termination option for `on_visit` anyway
-            if query_label_evaluator.on_visit(Neighbor::new(id, distance)) == QueryVisitDecision::Accept(Neighbor::new(id, distance)) {
+            if query_label_evaluator.on_visit(Neighbor::new(id, distance))
+                == QueryVisitDecision::Accept(Neighbor::new(id, distance))
+            {
                 matched_results.push(Neighbor::new(id, distance));
             }
         })
