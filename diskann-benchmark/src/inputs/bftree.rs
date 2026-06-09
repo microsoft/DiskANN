@@ -58,16 +58,23 @@ pub(crate) struct BfTreeStoreConfig {
 }
 
 impl BfTreeStoreConfig {
-    /// Minimum circular buffer size in bytes found in bf-tree's example configs.
-    /// bf-tree's default cb_size_byte is 32MB.
-    const MIN_CB_SIZE_BYTE: usize = 8192;
-
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        // bf-tree requires:
+        //   cache-only mode:     cb_size_byte >= 4 * leaf_page_size
+        //   non cache-only mode: cb_size_byte >= 2 * leaf_page_size
+        let multiplier = if self.cache_only.unwrap_or(false) {
+            4
+        } else {
+            2
+        };
+        let min_cb = multiplier * self.leaf_page_size;
         anyhow::ensure!(
-            self.cb_size_byte >= Self::MIN_CB_SIZE_BYTE,
-            "cb_size_byte ({}) must be at least {} bytes",
+            self.cb_size_byte >= min_cb,
+            "cb_size_byte ({}) must be at least {} * leaf_page_size ({}) = {} bytes",
             self.cb_size_byte,
-            Self::MIN_CB_SIZE_BYTE,
+            multiplier,
+            self.leaf_page_size,
+            min_cb,
         );
         Ok(())
     }

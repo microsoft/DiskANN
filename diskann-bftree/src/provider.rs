@@ -220,8 +220,10 @@ pub struct BfTreeProviderParameters {
     pub max_degree: u32,
 
     // bf-tree config for vector provider.
-    // Note: bf-tree requires a minimum circular buffer size of 8192 bytes;
-    // the default is 32MB. Values below the minimum will cause bf-tree errors.
+    // bf-tree requires a minimum circular buffer size relative to leaf_page_size:
+    //   - Cache-only mode: cb_size_byte >= 4 * leaf_page_size
+    //   - Non cache-only mode: cb_size_byte >= 2 * leaf_page_size
+    // The default leaf_page_size is 4096 and default cb_size_byte is 32MB.
     pub vector_provider_config: Config,
 
     // bf-tree config for quant vector provider.
