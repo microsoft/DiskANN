@@ -120,8 +120,7 @@ impl<I: VectorId> NeighborProvider<I> {
                     }
 
                     // The last entry in the retrieved data stores the neighbor count as u32
-                    let count_slot_offset =
-                        (read_size as usize) - std::mem::size_of::<I>();
+                    let count_slot_offset = (read_size as usize) - std::mem::size_of::<I>();
                     let nbr_count = *from_bytes::<u32>(
                         &cast_slice::<I, u8>(&guard)[count_slot_offset..count_slot_offset + 4],
                     ) as usize;
