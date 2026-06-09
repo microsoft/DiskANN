@@ -26,7 +26,7 @@
 //! 2. Neighbor pruning to compute new adjacency lists.
 //!
 //! Like search, there is a primary trait for extending this behavior: [`PruneAccessor`].
-//! Neighbor manipulation is done via [`PruneAccessor::neighbors`] where-as pruning is
+//! Neighbor manipulation is done via [`PruneAccessor::neighbors`] whereas pruning is
 //! facilitated with [`PruneAccessor::fill`].
 //!
 //! A single [`PruneAccessor`] can be used for multiple rounds of pruning during a single
@@ -634,8 +634,8 @@ pub trait PruneAccessor: HasId + Send + Sync {
     ///
     /// ## Reuse
     ///
-    /// This method may be called multiple times through-out the lifetime of `Self`, providing
-    /// an opportunity to cache previously return results withing `Self`.
+    /// This method may be called multiple times throughout the lifetime of `Self`, providing
+    /// an opportunity to cache previously returned results within `Self`.
     ///
     /// Trade offs include:
     ///
@@ -699,7 +699,7 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
-    /// The concrete type of the [`PruenAccessor`] that is used during index construction.
+    /// The concrete type of the [`PruneAccessor`] that is used during index construction.
     type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
 
     /// An error that can occur when getting the prune accessor.

@@ -786,7 +786,7 @@ where
 /// Builder for [`Map`]-backed working sets.
 ///
 /// Doubles as the `Seed` type for
-/// [`MultiInserStrategy::Seed`](crate::graph::glue::MultiInsertStrategy::Seed): strategies
+/// [`MultiInsertStrategy::Seed`](crate::graph::glue::MultiInsertStrategy::Seed): strategies
 /// return a `Builder` from
 /// [`MultiInsertStrategy::finish`](crate::graph::glue::MultiInsertStrategy::finish),
 /// and later provide it to

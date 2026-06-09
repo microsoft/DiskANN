@@ -2401,13 +2401,13 @@ where
     ///
     /// All other fields of `scratch` are clobbered.
     ///
-    /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`Fill`] and then computing distances to populate the candidate pool.
+    /// This works by first retrieving `location` and all ids in `list` via
+    /// [`PruneAccessor::fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
     /// Forwards errors from [`PruneAccessor::fill`]. If `location` was not made available
-    /// during [`PruneAccessor::Fill`], [`prune::ListError::FailedVectorRetrieval`] is
+    /// during [`PruneAccessor::fill`], [`prune::ListError::FailedVectorRetrieval`] is
     /// returned to delegate escalation to the caller.
     fn robust_prune_list<A>(
         &self,
@@ -2486,8 +2486,8 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved
-    /// from the, [`prune::ListError::FailedVectorRetrieval`] is returned.
+    /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved,
+    /// [`prune::ListError::FailedVectorRetrieval`] is returned.
     fn robust_prune_with<A, Itr>(
         &self,
         accessor: &mut A,

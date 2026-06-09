@@ -16,11 +16,12 @@ pub use map::Map;
 // Traits //
 ////////////
 
-/// Read-only view into a [`PruneAccessor`].
+/// Read-only view into a [`PruneAccessor`](crate::graph::glue::PruneAccessor).
 ///
 /// Used by `occlude_list` and distance computations.
 ///
-/// See Also: [`PruneAccessor::fill`], [`Map`], [`map::View`].
+/// See Also: [`PruneAccessor::fill`](crate::graph::glue::PruneAccessor::fill), [`Map`],
+/// [`map::View`].
 pub trait View<I> {
     /// The reborrowed element with an arbitrarily short lifetime.
     ///
