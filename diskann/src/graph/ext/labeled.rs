@@ -212,14 +212,6 @@ where
         self.inner.terminate_early()
     }
 
-    fn is_not_start_point(
-        &self,
-    ) -> impl std::future::Future<
-        Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
-    > + Send {
-        self.inner.is_not_start_point()
-    }
-
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.inner.num_starting_points()
     }
@@ -372,14 +364,6 @@ mod tests {
             .unwrap();
         assert_eq!(start_results.len(), 1);
         assert!(start_results[0].0.is_reject());
-
-        // -- `is_not_start_point`.
-        let is_not_start_point = accessor.is_not_start_point().await.unwrap();
-        assert!(
-            !is_not_start_point(starts[0].into_inner()),
-            "the start point is in fact a start point"
-        );
-        assert!(is_not_start_point(0));
 
         // -- expand_beam_filtered with ExpansionKind::All --
         let count_before = accessor.inner.get_vector_count();

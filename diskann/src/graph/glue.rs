@@ -400,27 +400,6 @@ pub trait FilteredAccessor: HasId + Send + Sync {
         false
     }
 
-    /// Return a closure to evaluate whether or not an ID is associated with a start point.
-    ///
-    /// The closure returned by the provided implementation has complexity `O(1)` and takes
-    /// `O(num_starting_points)` time to construct.
-    fn is_not_start_point(
-        &self,
-    ) -> impl std::future::Future<
-        Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
-    > + Send {
-        async move {
-            let set: std::collections::HashSet<_> = self
-                .starting_points()
-                .await?
-                .into_iter()
-                .map(|v| v.into_inner())
-                .collect();
-
-            Ok(move |id| !set.contains(&id))
-        }
-    }
-
     /// Return the number of starting points.
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.starting_points()

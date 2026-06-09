@@ -5,6 +5,8 @@
 
 //! Filtered search using multi-hop expansion.
 
+use std::collections::HashSet;
+
 use diskann_utils::future::SendFuture;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
@@ -13,7 +15,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
-        index::{DiskANNIndex, InternalSearchStats, SearchStats},
+        index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
@@ -71,7 +73,7 @@ where
 
             let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
-            let stats = multihop_search_internal(
+            let ret = multihop_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
@@ -80,17 +82,30 @@ where
             )
             .await?;
 
+            // NOTE: The start point filter here filters out start points that were
+            // explicitly rejected by the FilteredAccessor - not start points in general.
             let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    scratch.best.iter().take(self.inner.l_value().get()),
+                    scratch
+                        .best
+                        .iter()
+                        .filter(|n| !ret.rejected_start_points.contains(&n.id))
+                        .take(self.inner.l_value().get()),
                     output,
                 )
                 .await
                 .into_ann_result()?;
 
-            Ok(stats.finish(result_count as u32))
+            let stats = SearchStats {
+                cmps: ret.cmps,
+                hops: ret.hops,
+                result_count: result_count as u32,
+                range_search_second_round: false,
+            };
+
+            Ok(stats)
         }
     }
 }
@@ -99,17 +114,24 @@ where
 // Internal Implementation //
 /////////////////////////////
 
+#[derive(Debug)]
+struct Ret<I> {
+    cmps: u32,
+    hops: u32,
+    rejected_start_points: HashSet<I>,
+}
+
 /// Internal multihop search implementation.
 ///
 /// Performs filtered search by expanding through non-matching nodes to find matching
 /// neighbors within two hops.
-pub(crate) async fn multihop_search_internal<I, A, SR>(
+async fn multihop_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
-) -> ANNResult<InternalSearchStats>
+) -> ANNResult<Ret<I>>
 where
     I: VectorId,
     A: FilteredAccessor<Id = I>,
@@ -117,33 +139,37 @@ where
 {
     let beam_width = search_params.beam_width().get();
 
+    // It's possible for start points to be rejected by the `FilteredAccessor`. To deal with
+    // this, we still use them as standard graph entry points, but track the rejection in
+    // this hash set for later filtering.
+    let mut rejected_start_points = HashSet::new();
+
+    accessor
+        .start_point_distances(|id, distance| {
+            if id.is_reject() {
+                rejected_start_points.insert(id.into_inner());
+            }
+
+            scratch.visited.insert(id.into_inner());
+            scratch
+                .best
+                .insert(Neighbor::new(id.into_inner(), distance));
+        })
+        .await?;
+
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut two_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
     let mut candidates_two_hop_expansion = Vec::with_capacity(max_degree_with_slack);
 
-    // It's possible that no start points satisfied the predicate. In that case, all
-    // rejected start points will be present in `candidates_two_hop_expansion` and we
-    // rely on the two hop algorithm to do the initial exploration.
-    //
-    // As such, we always want to execute the loop body at least once.
-    accessor
-        .start_point_distances(|id, distance| {
-            scratch.visited.insert(id.into_inner());
-            match id {
-                glue::Decision::Accept(id) => {
-                    scratch.best.insert(Neighbor::new(id, distance));
-                }
-                glue::Decision::Reject(id) => {
-                    candidates_two_hop_expansion.push(Neighbor::new(id, distance));
-                }
-            }
-        })
-        .await?;
+    while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
+        scratch.beam_nodes.clear();
+        one_hop_neighbors.clear();
+        candidates_two_hop_expansion.clear();
+        two_hop_neighbors.clear();
 
-    loop {
-        // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-        // Each of these nodes will be a frontier node.
+        // In this loop we are going to find the beam_width number of nodes that are closest
+        // to the query. Each of these nodes will be a frontier node.
         while scratch.beam_nodes.len() < beam_width
             && let Some(closest_node) = scratch.best.closest_notvisited()
         {
@@ -152,36 +178,31 @@ where
         }
 
         // compute distances from query to one-hop neighbors, and mark them visited
-        if !scratch.beam_nodes.is_empty() {
-            accessor
-                .expand_beam_filtered(
-                    glue::ExpansionKind::All,
-                    scratch.beam_nodes.iter().copied(),
-                    glue::NotInMut::new(&mut scratch.visited),
-                    |id, distance| one_hop_neighbors.push((id, distance)),
-                )
-                .await?;
+        accessor
+            .expand_beam_filtered(
+                glue::ExpansionKind::All,
+                scratch.beam_nodes.iter().copied(),
+                glue::NotInMut::new(&mut scratch.visited),
+                |id, distance| one_hop_neighbors.push((id, distance)),
+            )
+            .await?;
 
-            // Process one-hop neighbors based on on_visit() decision
-            for (choice, distance) in one_hop_neighbors.iter().copied() {
-                match choice {
-                    glue::Decision::Accept(id) => {
-                        scratch.best.insert(Neighbor::new(id, distance));
-                    }
-                    glue::Decision::Reject(id) => {
-                        candidates_two_hop_expansion.push(Neighbor::new(id, distance));
-                    }
+        // Process one-hop neighbors based on on_visit() decision
+        for (choice, distance) in one_hop_neighbors.iter().copied() {
+            match choice {
+                glue::Decision::Accept(id) => {
+                    scratch.best.insert(Neighbor::new(id, distance));
+                }
+                glue::Decision::Reject(id) => {
+                    candidates_two_hop_expansion.push(Neighbor::new(id, distance));
                 }
             }
-
-            scratch.cmps += one_hop_neighbors.len() as u32;
-            scratch.hops += scratch.beam_nodes.len() as u32;
         }
 
+        scratch.cmps += one_hop_neighbors.len() as u32;
+        scratch.hops += scratch.beam_nodes.len() as u32;
+
         // sort the candidates for two-hop expansion by distance to query point
-        //
-        // NOTE: We can hit this path even if we skipped the call to `expand_beam_filtered`
-        // if no start points are accepted by the predicate.
         candidates_two_hop_expansion.sort_unstable_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
@@ -217,22 +238,11 @@ where
 
         scratch.cmps += two_hop_neighbors.len() as u32;
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
-
-        // Exit loop.
-        if !scratch.best.has_notvisited_node() || accessor.terminate_early() {
-            break;
-        }
-
-        // Prepare for next iteration.
-        scratch.beam_nodes.clear();
-        one_hop_neighbors.clear();
-        candidates_two_hop_expansion.clear();
-        two_hop_neighbors.clear();
     }
 
-    Ok(InternalSearchStats {
+    Ok(Ret {
         cmps: scratch.cmps,
         hops: scratch.hops,
-        range_search_second_round: false,
+        rejected_start_points,
     })
 }

@@ -19,11 +19,7 @@ use crate::{
     graph::{
         self, AdjacencyList, DiskANNIndex,
         ext::labeled,
-        search::{
-            Knn, MultihopSearch,
-            record::NoopSearchRecord,
-            scratch::{PriorityQueueConfiguration, SearchScratch},
-        },
+        search::{Knn, MultihopSearch},
         search_output_buffer,
         test::provider as test_provider,
     },
@@ -81,13 +77,13 @@ impl labeled::QueryLabelProvider<u32> for RejectAll {
 /// Build a 1D provider with the given points and adjacency lists.
 ///
 /// `start_pos` is the 1D position of the start node (id = `start_id`).
-fn build_1d_provider(
+fn build_1d_index(
     start_id: u32,
     start_pos: f32,
     start_neighbors: AdjacencyList<u32>,
     points: Vec<(u32, Vec<f32>, AdjacencyList<u32>)>,
     max_degree: usize,
-) -> test_provider::Provider {
+) -> DiskANNIndex<test_provider::Provider> {
     let config = test_provider::Config::new(
         Metric::L2,
         max_degree,
@@ -95,49 +91,50 @@ fn build_1d_provider(
     )
     .unwrap();
 
-    test_provider::Provider::new_from(config, std::iter::once((start_id, start_neighbors)), points)
-        .unwrap()
+    let provider = test_provider::Provider::new_from(
+        config,
+        std::iter::once((start_id, start_neighbors)),
+        points,
+    )
+    .unwrap();
+
+    let index_config = graph::config::Builder::new(
+        max_degree,
+        graph::config::MaxDegree::Same,
+        100,
+        (Metric::L2).into(),
+    )
+    .build()
+    .unwrap();
+
+    DiskANNIndex::new(index_config, provider, None)
 }
 
-/// Call `multihop_search_internal` directly on a provider, bypassing the Search trait.
-///
-/// Returns (internal_stats, best_neighbors) where best_neighbors is the contents
-/// of the scratch priority queue sorted by distance (nearest first).
-fn run_internal(
-    provider: &test_provider::Provider,
+fn run(
+    index: &DiskANNIndex<test_provider::Provider>,
     query: &[f32],
     k: usize,
     l: usize,
-    max_degree: usize,
     filter: &dyn labeled::QueryLabelProvider<u32>,
-) -> (graph::index::InternalSearchStats, Vec<Neighbor<u32>>) {
+) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
-        let mut accessor = labeled::FilteredAccessor::new(
-            test_provider::Accessor::new(provider, query).unwrap(),
-            filter,
-        );
+        let multihop = MultihopSearch::new(Knn::new_default(k, l).unwrap());
+        let mut neighbors = Vec::<Neighbor<u32>>::new();
 
-        let mut scratch = SearchScratch::new(PriorityQueueConfiguration::Fixed(l), Some(l));
+        let stats = index
+            .search_with(
+                multihop,
+                &labeled::Filtered::new(test_provider::Strategy::new(), filter),
+                graph::glue::CopyIds,
+                &test_provider::Context::new(),
+                query,
+                &mut neighbors,
+            )
+            .await
+            .unwrap();
 
-        let stats = crate::graph::search::multihop_search::multihop_search_internal(
-            max_degree,
-            &Knn::new_default(k, l).unwrap(),
-            &mut accessor,
-            &mut scratch,
-            &mut NoopSearchRecord::new(),
-        )
-        .await
-        .unwrap();
-
-        let mut results: Vec<_> = scratch.best.iter().collect();
-        results.sort_unstable_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        (stats, results)
+        (stats, neighbors)
     })
 }
 
@@ -150,7 +147,7 @@ fn run_internal(
 #[test]
 fn accept_all_finds_all_nodes() {
     let start_id = 10u32;
-    let provider = build_1d_provider(
+    let index = build_1d_index(
         start_id,
         5.0,
         AdjacencyList::from_iter_untrusted([0, 1, 2]),
@@ -166,7 +163,7 @@ fn accept_all_finds_all_nodes() {
         3,
     );
 
-    let (stats, results) = run_internal(&provider, &[1.5], 3, 10, 3, &AcceptAll);
+    let (stats, results) = run(&index, &[1.5], 3, 10, &AcceptAll);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
     assert!(ids.contains(&0), "node 0 should be found");
@@ -180,7 +177,7 @@ fn accept_all_finds_all_nodes() {
 #[test]
 fn reject_triggers_two_hop_expansion() {
     let start_id = 10u32;
-    let provider = build_1d_provider(
+    let index = build_1d_index(
         start_id,
         5.0,
         AdjacencyList::from_iter_untrusted([0, 1, 3]),
@@ -207,7 +204,7 @@ fn reject_triggers_two_hop_expansion() {
     );
 
     let filter = EvenFilter;
-    let (stats, results) = run_internal(&provider, &[2.0], 5, 20, 4, &filter);
+    let (stats, results) = run(&index, &[2.0], 5, 20, &filter);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
 
@@ -240,7 +237,7 @@ fn reject_triggers_two_hop_expansion() {
 #[test]
 fn reject_all_yields_nothing() {
     let start_id = 10u32;
-    let provider = build_1d_provider(
+    let index = build_1d_index(
         start_id,
         0.0,
         AdjacencyList::from_iter_untrusted([0, 1]),
@@ -255,7 +252,7 @@ fn reject_all_yields_nothing() {
         2,
     );
 
-    let (_stats, results) = run_internal(&provider, &[0.5], 5, 10, 2, &RejectAll);
+    let (_stats, results) = run(&index, &[0.5], 5, 10, &RejectAll);
 
     // Nothing should be present in the result, not even the start point since it does not
     // satisfy the predicate.
@@ -321,7 +318,7 @@ fn two_hop_reaches_through_non_matching() {
     let name = path.push("two_hop_reaches_through_non_matching");
 
     let start_id = 10u32;
-    let provider = build_1d_provider(
+    let index = build_1d_index(
         start_id,
         5.0,
         AdjacencyList::from_iter_untrusted([0, 1, 3]),
@@ -347,12 +344,6 @@ fn two_hop_reaches_through_non_matching() {
         4,
     );
 
-    let index_config =
-        graph::config::Builder::new(4, graph::config::MaxDegree::same(), 100, Metric::L2.into())
-            .build()
-            .unwrap();
-
-    let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
     let filter = EvenFilter;
     let query = vec![2.0f32];
     let k = 5;
