@@ -6,33 +6,13 @@
 use std::future::Future;
 
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
-use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::Accessor};
+use diskann::utils::IntoUsize;
+use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
 use diskann_providers::model::graph::provider::async_::{
-    determinant_diversity_post_process, inmem,
+    determinant_diversity_post_process,
+    inmem::{self, GetFullPrecision},
 };
 use diskann_quantization::num::Positive;
-use diskann_utils::future::AsyncFriendly;
-
-pub(crate) trait FullPrecisionVectorAccessor: Accessor + Send {
-    fn get_full_precision_vector(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Vec<f32>, ANNError>> + Send;
-}
-
-impl<Q, D, Ctx> FullPrecisionVectorAccessor for inmem::FullAccessor<'_, f32, Q, D, Ctx>
-where
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: diskann::provider::ExecutionContext,
-{
-    async fn get_full_precision_vector(&mut self, id: Self::Id) -> Result<Vec<f32>, ANNError> {
-        self.get_element(id)
-            .await
-            .map(|vector| vector.to_vec())
-            .map_err(Into::into)
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
@@ -46,44 +26,42 @@ impl DeterminantDiversity {
     }
 }
 
-impl<A, T> glue::SearchPostProcess<A, T, A::Id> for DeterminantDiversity
+impl<'a, A> glue::SearchPostProcess<A, &'a [f32], A::Id> for DeterminantDiversity
 where
-    A: FullPrecisionVectorAccessor + diskann::provider::BuildQueryComputer<T> + Send,
-    T: AsRef<[f32]> + Send + Sync,
+    A: HasId<Id = u32> + GetFullPrecision<Repr = f32> + Send + Sync,
 {
     type Error = ANNError;
 
-    async fn post_process<I, B>(
+    fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: T,
-        _computer: &<A as diskann::provider::BuildQueryComputer<T>>::QueryComputer,
+        query: &'a [f32],
         candidates: I,
         output: &mut B,
-    ) -> Result<usize, Self::Error>
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
     where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
+        let store: &inmem::FullPrecisionStore<f32> = accessor.as_full_precision();
         let mut embedded = Vec::with_capacity(candidates.len());
 
         for candidate in &candidates {
-            embedded.push((
-                candidate.id,
-                candidate.distance,
-                accessor.get_full_precision_vector(candidate.id).await?,
-            ));
+            // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
+            // pattern used by `Rerank` in `inmem::full_precision`.
+            let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
+            embedded.push((candidate.id, candidate.distance, vector.to_vec()));
         }
 
         let reranked = determinant_diversity_post_process(
             embedded,
-            query.as_ref(),
+            query,
             candidates.len(),
             self.eta,
             Positive::new(self.power).expect("power must be > 0"),
         );
 
-        Ok(output.extend(reranked))
+        std::future::ready(Ok(output.extend(reranked)))
     }
 }

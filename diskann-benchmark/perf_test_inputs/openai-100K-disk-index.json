@@ -18,7 +18,7 @@
                     "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 384,
                     "quantization_type": "SQ_1_2.0",
-                    "save_path": "openai_100k_benchmark_index"
+                    "save_path": "target/tmp/openai_100k_benchmark_index"
                 },
                 "search_phase": {
                     "queries": "OpenAIArXiv/openai_query.bin",

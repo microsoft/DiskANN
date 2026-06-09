@@ -51,6 +51,7 @@ mod fsm;
 mod garnet;
 mod labels;
 mod provider;
+mod quantization;
 #[cfg(test)]
 mod test_utils;
 
@@ -71,7 +72,7 @@ impl From<usize> for IndexState {
     }
 }
 
-pub struct Index {
+pub(crate) struct Index {
     inner: Box<dyn DynIndex>,
     quant_type: VectorQuantType,
     state: AtomicUsize,
@@ -92,7 +93,10 @@ pub enum VectorQuantType {
     NoQuant,
     Bin,
     Q8,
-    XPreQ8,
+    XNoQuantU8,
+    XNoQuantI8,
+    XBinI8,
+    XBinU8,
 }
 
 struct SearchResults<'a> {
@@ -175,7 +179,14 @@ fn create_index_impl<T: VectorRepr>(
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
-    let provider = GarnetProvider::<T>::new(dim, metric_type, max_degree, callbacks, context)?;
+    let provider = GarnetProvider::<T>::new(
+        dim,
+        quant_type,
+        metric_type,
+        max_degree,
+        callbacks,
+        &context,
+    )?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
     } else {
@@ -213,11 +224,12 @@ pub unsafe extern "C" fn create_index(
     };
 
     let target_degree = (max_degree as f32 / GRAPH_SLACK_FACTOR) as usize;
+
     let config = if let Ok(config) = config::Builder::new(
         target_degree,
         config::MaxDegree::Value(max_degree as usize),
         l_build as usize,
-        config::PruneKind::TriangleInequality,
+        metric_type.into(),
     )
     .build()
     {
@@ -226,11 +238,12 @@ pub unsafe extern "C" fn create_index(
         return ptr::null();
     };
 
-    let context = Context(ctx);
+    let context = Context::new(ctx);
     let callbacks = Callbacks::new(read_callback, write_callback, delete_callback, rmw_callback);
 
     match quant_type {
-        VectorQuantType::XPreQ8 => {
+        VectorQuantType::Invalid => ptr::null(),
+        VectorQuantType::XNoQuantU8 | VectorQuantType::XBinU8 => {
             if let Ok(index) = create_index_impl::<u8>(
                 quant_type,
                 config,
@@ -245,7 +258,22 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        VectorQuantType::NoQuant => {
+        VectorQuantType::XNoQuantI8 | VectorQuantType::XBinI8 => {
+            if let Ok(index) = create_index_impl::<i8>(
+                quant_type,
+                config,
+                dim as usize,
+                metric_type,
+                max_degree as usize,
+                callbacks,
+                context,
+            ) {
+                Arc::into_raw(index).cast::<c_void>()
+            } else {
+                ptr::null()
+            }
+        }
+        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
             if let Ok(index) = create_index_impl::<f32>(
                 quant_type,
                 config,
@@ -260,7 +288,6 @@ pub unsafe extern "C" fn create_index(
                 ptr::null()
             }
         }
-        _ => ptr::null(),
     }
 }
 
@@ -303,40 +330,27 @@ impl<'a> From<Poly<[u8], AlignToEight>> for PolyCow<'a> {
 
 fn interpret_vector<'a>(
     quant_type: VectorQuantType,
-    vector_value_type: VectorValueType,
     vector_data: &'a *const u8,
     vector_len: usize,
 ) -> Option<PolyCow<'a>> {
-    let vector_len_bytes = match vector_value_type {
-        VectorValueType::FP32 => vector_len * 4,
-        VectorValueType::XB8 => vector_len,
-        VectorValueType::Invalid => return None,
+    let vector_len_bytes = match quant_type {
+        VectorQuantType::Invalid => return None,
+        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => vector_len * 4,
+        VectorQuantType::XNoQuantU8
+        | VectorQuantType::XNoQuantI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XBinI8 => vector_len,
     };
 
     let v = unsafe { slice::from_raw_parts(*vector_data, vector_len_bytes) };
 
-    let v = match vector_value_type {
-        VectorValueType::Invalid => return None,
-        VectorValueType::FP32 => match quant_type {
-            VectorQuantType::XPreQ8 => {
-                let mut bp = if let Ok(bp) = Poly::broadcast(0u8, vector_len, AlignToEight) {
-                    bp
-                } else {
-                    return None;
-                };
-                for (idx, e) in bp.iter_mut().enumerate() {
-                    let el_size = mem::size_of::<f32>();
-                    *e = f32::from_le_bytes(
-                        v[idx * el_size..(idx + 1) * el_size].try_into().unwrap(),
-                    ) as u8;
-                }
-                PolyCow::from(bp)
-            }
-            VectorQuantType::NoQuant if v.as_ptr().align_offset(4) == 0 => {
+    let v = match quant_type {
+        VectorQuantType::Invalid => return None,
+        VectorQuantType::NoQuant | VectorQuantType::Bin | VectorQuantType::Q8 => {
+            if v.as_ptr().align_offset(mem::align_of::<f32>()) == 0 {
                 // pointer is correctly aligned to interpret as f32
                 PolyCow::from(v)
-            }
-            VectorQuantType::NoQuant => {
+            } else {
                 // need to copy f32 data as it is unaligned
                 let mut fp = if let Ok(fp) = Poly::broadcast(0u8, vector_len_bytes, AlignToEight) {
                     fp
@@ -346,35 +360,38 @@ fn interpret_vector<'a>(
                 fp.copy_from_slice(v);
                 PolyCow::from(fp)
             }
-            _ => {
-                return None;
-            }
-        },
-        VectorValueType::XB8 => match quant_type {
-            VectorQuantType::XPreQ8 => PolyCow::from(v),
-            VectorQuantType::NoQuant => {
-                let mut fp = if let Ok(p) =
-                    Poly::broadcast(0u8, vector_len_bytes * mem::size_of::<f32>(), AlignToEight)
-                {
-                    p
-                } else {
-                    return None;
-                };
-                for (fe, be) in bytemuck::cast_slice_mut::<u8, f32>(&mut fp)
-                    .iter_mut()
-                    .zip(v)
-                {
-                    *fe = *be as f32;
-                }
-                PolyCow::from(fp)
-            }
-            _ => return None,
-        },
+        }
+        VectorQuantType::XNoQuantU8
+        | VectorQuantType::XNoQuantI8
+        | VectorQuantType::XBinU8
+        | VectorQuantType::XBinI8 => PolyCow::from(v),
     };
 
     Some(v)
 }
 
+enum InsertResult {
+    Fail,
+    Success,
+    SuccessStartTraining,
+}
+
+impl From<InsertResult> for u8 {
+    fn from(value: InsertResult) -> Self {
+        match value {
+            InsertResult::Fail => 0,
+            InsertResult::Success => 1,
+            InsertResult::SuccessStartTraining => 2,
+        }
+    }
+}
+
+/// Insert a vector into the index.
+///
+/// Returns a status corresponding to the `InsertResult` enum. Aside from failure and success,
+/// there is a third value that signals that the completed insert has reached the threshold to
+/// begin quantization.
+///
 /// # Safety
 ///
 /// FFI
@@ -384,33 +401,27 @@ pub unsafe extern "C" fn insert(
     index_ptr: *const c_void,
     id_data: *const u8,
     id_len: usize,
-    vector_value_type: VectorValueType,
     vector_data: *const u8,
     vector_len: usize,
     attribute_data: *const u8,
     attribute_len: usize,
-) -> bool {
+) -> u8 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
-    let v = if let Some(v) = interpret_vector(
-        index.quant_type,
-        vector_value_type,
-        &vector_data,
-        vector_len,
-    ) {
+    let v = if let Some(v) = interpret_vector(index.quant_type, &vector_data, vector_len) {
         v
     } else {
-        return false;
+        return InsertResult::Fail.into();
     };
 
     if let Some(_err) =
         ensure_index_ready_or_init(index, || index.inner.maybe_set_start_point(&ctx, &v).err())
     {
-        return false;
+        return InsertResult::Fail.into();
     };
 
     // Write attributes to garnet
@@ -420,11 +431,22 @@ pub unsafe extern "C" fn insert(
         &[]
     };
     if index.inner.set_attributes(&ctx, &id, attr_data).is_err() {
-        return false;
+        return InsertResult::Fail.into();
     }
 
+    let old_ready = ctx.quantizer_ready();
+
     // Insert the vector
-    index.inner.insert(&ctx, &id, &v).is_ok()
+    if index.inner.insert(&ctx, &id, &v).is_ok() {
+        let ready = ctx.quantizer_ready();
+        if !old_ready && ready {
+            InsertResult::SuccessStartTraining.into()
+        } else {
+            InsertResult::Success.into()
+        }
+    } else {
+        InsertResult::Fail.into()
+    }
 }
 
 fn ensure_index_ready_or_init<F, E>(index: &Index, init: F) -> Option<E>
@@ -466,6 +488,45 @@ where
     None
 }
 
+/// Trigger building quantization tables. Garnet will call this once per `insert()` call that
+/// returns `InsertResult::SuccessStartTraining`. Due to concurrency, it is possible this gets
+/// invoked multiple times, and must ensure that quantization tables are only built once.
+///
+/// Once this function returns `true`, Garnet will invoke several `backfill_quant_vectors()`
+/// calls from a thread pool. If it returns false, it may be re-invoked to try again.
+///
+///  # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn build_quant_table(context: u64, index_ptr: *const c_void) -> bool {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(context);
+
+    index.inner.train_quantizer(&ctx)
+}
+
+/// Once quantization tables are successfully built, Garnet invokes this an arbitrary number of
+/// times from a thread pool. Each invocation is told its index and the total number of
+/// invocations so that each invocation can correctly pick and size its work.
+///
+/// # Safety
+///
+/// FFI
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn backfill_quant_vectors(
+    context: u64,
+    index_ptr: *const c_void,
+    task_index: usize,
+    task_count: usize,
+) {
+    let index = unsafe { &*index_ptr.cast::<Index>() };
+    let ctx = Context::new(context);
+    index
+        .inner
+        .backfill_quant_vectors(&ctx, task_index, task_count);
+}
+
 /// # Safety
 ///
 /// FFI
@@ -479,7 +540,7 @@ pub unsafe extern "C" fn set_attribute(
     attribute_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(context);
+    let ctx = Context::new(context);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -505,7 +566,6 @@ pub unsafe extern "C" fn set_attribute(
 pub unsafe extern "C" fn search_vector(
     ctx: u64,
     index_ptr: *const c_void,
-    vector_value_type: VectorValueType,
     vector_data: *const u8,
     vector_len: usize,
     _delta: f32,
@@ -521,18 +581,13 @@ pub unsafe extern "C" fn search_vector(
 ) -> i32 {
     let index = unsafe { &*index_ptr.cast::<Index>() };
 
-    let v = if let Some(v) = interpret_vector(
-        index.quant_type,
-        vector_value_type,
-        &vector_data,
-        vector_len,
-    ) {
+    let v = if let Some(v) = interpret_vector(index.quant_type, &vector_data, vector_len) {
         v
     } else {
         return -1;
     };
 
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_ids,
@@ -597,7 +652,7 @@ pub unsafe extern "C" fn search_element(
     let index = unsafe { &*index_ptr.cast::<Index>() };
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
 
     let mut output = SearchResults::new(
         output_ids,
@@ -665,7 +720,7 @@ pub unsafe extern "C" fn remove(
     id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 
@@ -697,7 +752,7 @@ pub unsafe extern "C" fn check_internal_id_valid(
     internal_id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let internal_id_bytes = unsafe { slice::from_raw_parts(internal_id_data, internal_id_len) };
     if internal_id_bytes.len() != mem::size_of::<u32>() {
         return false;
@@ -720,7 +775,7 @@ pub unsafe extern "C" fn check_external_id_valid(
     id_len: usize,
 ) -> bool {
     let index = unsafe { &*index_ptr.cast::<Index>() };
-    let ctx = Context(ctx);
+    let ctx = Context::new(ctx);
     let id_bytes = unsafe { slice::from_raw_parts(id_data, id_len) };
     let id = GarnetId::from(id_bytes);
 

@@ -232,6 +232,26 @@ impl<T: VectorRepr> FastMemoryVectorProviderAsync<T> {
     pub(crate) fn prefetch_lookahead(&self) -> usize {
         self.prefetch_lookahead
     }
+
+    #[cfg(test)]
+    pub(crate) fn compare_data(&self, other: &Self)
+    where
+        T: PartialEq,
+    {
+        assert_eq!(self.dim, other.dim);
+        assert_eq!(self.max_vectors, other.max_vectors);
+
+        for i in 0..self.max_vectors {
+            // SAFETY: The usual statement that this is not actually sound.
+            unsafe {
+                assert_eq!(
+                    self.get_vector_sync(i),
+                    other.get_vector_sync(i),
+                    "mismatch at entry {i}",
+                );
+            }
+        }
+    }
 }
 
 impl<T> VectorStore for FastMemoryVectorProviderAsync<T>

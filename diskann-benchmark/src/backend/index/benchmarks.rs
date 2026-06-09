@@ -398,7 +398,7 @@ where
         + for<'a> provider::SetElement<&'a [T]>,
     CF: FnOnce(MatrixView<T>) -> anyhow::Result<Arc<DiskANNIndex<DP>>>,
     T: diskann::graph::SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    B: for<'a> glue::SearchStrategy<DP, &'a [T]> + Clone + Send + Sync,
+    B: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + Send + Sync,
     BF: FnOnce(
         Index<DP>,
         B,
@@ -449,12 +449,6 @@ impl benchmark_core::search::graph::knn::ConfiguredPostProcessor
 
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DeterminantDiversity
-where
-    common::FullPrecision: for<'a, 'b> glue::SearchStrategy<
-        FullPrecisionProvider<f32>,
-        &'a [f32],
-        SearchAccessor<'b>: post_processor::determinant_diversity::FullPrecisionVectorAccessor,
-    >,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::DeterminantDiversity::is_match(phase)
@@ -495,7 +489,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::Topk::is_match(phase)
@@ -542,7 +536,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::Range::is_match(phase)
@@ -586,7 +580,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::TopkBetaFilter::is_match(phase)
@@ -645,7 +639,7 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         plugins::TopkMultihopFilter::is_match(phase)

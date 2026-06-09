@@ -132,7 +132,7 @@ fn run_build(
         None => {
             for (id, vector) in data.row_iter().enumerate() {
                 runtime
-                    .block_on(index.insert(strategy.clone(), &context, &(id as u32), vector))
+                    .block_on(index.insert(&strategy, &context, &(id as u32), vector))
                     .unwrap();
             }
         }

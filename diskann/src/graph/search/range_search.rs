@@ -13,13 +13,13 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt, SearchStrategy},
+        glue::{self, SearchAccessor, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
     utils::IntoUsize,
 };
 
@@ -157,43 +157,39 @@ impl Range {
     }
 }
 
-impl<DP, S, T> Search<DP, S, T> for Range
+impl<'a, DP, S, T> Search<'a, DP, S, T> for Range
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    S: SearchStrategy<'a, DP, T>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: glue::SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.starting_l(), start_ids.len());
+            let num_start_ids = accessor.num_starting_points().await?;
+            let mut scratch = index.search_scratch(self.starting_l(), num_start_ids);
 
             let initial_stats = index
                 .search_internal(
                     self.beam_width(),
-                    &start_ids,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                     &mut NoopSearchRecord::new(),
                 )
@@ -222,7 +218,6 @@ where
                     index.max_degree_with_slack(),
                     &self,
                     &mut accessor,
-                    &computer,
                     &mut scratch,
                 )
                 .await?;
@@ -252,7 +247,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     scratch.in_range.iter().copied(),
                     &mut filtered,
                 )
@@ -323,16 +317,14 @@ where
 ///
 /// Expands the search frontier to find all points within the specified radius.
 /// Called after the initial graph search has identified starting candidates.
-pub(crate) async fn range_search_internal<I, A, T>(
+pub(crate) async fn range_search_internal<A>(
     max_degree_with_slack: usize,
     search_params: &Range,
     accessor: &mut A,
-    computer: &A::QueryComputer,
-    scratch: &mut SearchScratch<I>,
+    scratch: &mut SearchScratch<A::Id>,
 ) -> ANNResult<InternalSearchStats>
 where
-    I: crate::utils::VectorId,
-    A: ExpandBeam<T, Id = I> + SearchExt,
+    A: SearchAccessor,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 
@@ -360,9 +352,8 @@ where
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
-                computer,
                 glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| neighbors.push(Neighbor::new(id, distance)),
             )
             .await?;
 

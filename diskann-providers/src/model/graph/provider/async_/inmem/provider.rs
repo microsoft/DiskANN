@@ -6,8 +6,6 @@
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-#[cfg(test)]
-use diskann::neighbor::Neighbor;
 use diskann::{
     ANNError, ANNResult,
     graph::AdjacencyList,
@@ -321,14 +319,6 @@ impl<U, V, D, Ctx> DefaultProvider<U, V, D, Ctx> {
             start_points: StartPoints::new(params.max_points as u32, params.frozen_points)?,
             context: std::marker::PhantomData,
         })
-    }
-
-    /// Return a predicate that can be applied to `Iter::filter` to remove start points
-    /// from an iterator of neighbors.
-    #[cfg(test)]
-    pub(crate) fn is_not_start_point(&self) -> impl Fn(&Neighbor<u32>) -> bool {
-        let range = self.start_points.range();
-        move |neighbor| !range.contains(&neighbor.id)
     }
 
     /// Return a vector of starting points.

@@ -152,7 +152,7 @@ impl Metrics {
 impl<DP, T, S> Search for KNN<DP, T, S, ()>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -199,11 +199,11 @@ where
 impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'q> glue::SearchStrategy<DP, &'q [T]> + Clone + AsyncFriendly,
+    S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
     PP: ConfiguredPostProcessor
-        + for<'a, 'q> glue::SearchPostProcess<
-            <S as glue::SearchStrategy<DP, &'q [T]>>::SearchAccessor<'a>,
-            &'q [T],
+        + for<'a> glue::SearchPostProcess<
+            <S as glue::SearchStrategy<'a, DP, &'a [T]>>::SearchAccessor,
+            &'a [T],
             DP::ExternalId,
         > + Clone
         + Send
