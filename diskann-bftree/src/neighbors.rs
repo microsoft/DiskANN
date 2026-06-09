@@ -9,11 +9,11 @@ use std::marker::PhantomData;
 
 use crate::AsKey;
 use bf_tree::{BfTree, Config};
-use bytemuck::{bytes_of, cast_slice, cast_slice_mut};
+use bytemuck::{bytes_of, cast_slice, cast_slice_mut, from_bytes};
 use diskann::{
     graph::AdjacencyList,
-    provider::{HasId, NeighborAccessor, NeighborAccessorMut},
-    utils::{IntoUsize, TryIntoVectorId, VectorId},
+    provider::{self, HasId},
+    utils::{IntoUsize, VectorId},
     ANNError, ANNResult,
 };
 
@@ -119,9 +119,12 @@ impl<I: VectorId> NeighborProvider<I> {
                         ));
                     }
 
-                    // The last entry in the retrieved data is neighbor length
-                    let nbr_count =
-                        guard[(read_size as usize) / std::mem::size_of::<I>() - 1].into_usize();
+                    // The last entry in the retrieved data stores the neighbor count as u32
+                    let count_slot_offset =
+                        (read_size as usize) - std::mem::size_of::<I>();
+                    let nbr_count = *from_bytes::<u32>(
+                        &cast_slice::<I, u8>(&guard)[count_slot_offset..count_slot_offset + 4],
+                    ) as usize;
 
                     // The specified list length must be smaller than the retrieved data length
                     if (read_size as usize) < (std::mem::size_of::<I>() * (nbr_count + 1)) {
@@ -155,10 +158,9 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair
     /// K: vector id
-    /// V: |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
-    /// Where list length is the full list length and 'Invalid' indicates unfilled empty slots in the list
+    /// V: |VectorId|...|VectorId|Invalid|...|count (u32 LE)|
+    /// Where count is the neighbor list length and 'Invalid' indicates unfilled empty slots
     /// Note: assuming all neighbors in the input list, 'neighbors', are valid
-    #[allow(clippy::expect_used)]
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
@@ -174,19 +176,17 @@ impl<I: VectorId> NeighborProvider<I> {
         let key = i.as_key();
 
         // Serialize the value into the reusable buffer.
-        // Format: |VectorId|...|VectorId|VectorId (list length)|
+        // Format: |VectorId|...|VectorId|count (u32)|
         let neighbor_list_edges_in_byte = cast_slice::<I, u8>(neighbors);
-        let neighbor_list_len: I = neighbors
-            .len()
-            .try_into_vector_id()
-            .expect("Fail to convert #neighbors as neighbor vec Id");
-        let neighbor_list_len_in_byte = bytes_of::<I>(&neighbor_list_len);
+        let count: u32 = neighbors.len() as u32;
 
-        let total_len = neighbor_list_edges_in_byte.len() + neighbor_list_len_in_byte.len();
+        let total_len = neighbor_list_edges_in_byte.len() + std::mem::size_of::<I>();
 
         buf[..neighbor_list_edges_in_byte.len()].copy_from_slice(neighbor_list_edges_in_byte);
-        buf[neighbor_list_edges_in_byte.len()..total_len]
-            .copy_from_slice(neighbor_list_len_in_byte);
+        // Zero the count slot then write the u32 count into the low bytes
+        let count_offset = neighbor_list_edges_in_byte.len();
+        buf[count_offset..total_len].fill(0);
+        buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
 
         self.adjacency_list_index.insert(key, &buf[..total_len]);
 
@@ -196,7 +196,6 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Append unique vectors into a neighbor list
     /// The newly appended neighbor list will always be extended to 'dim' long to avoid frequent mem copy in bf-tree
     /// Note: assuming all neighbors in the input list, 'new_neighbor_ids', are valid
-    #[allow(clippy::expect_used)]
     pub fn append_vector(
         &self,
         vector_id: I,
@@ -234,11 +233,10 @@ impl<I: VectorId> NeighborProvider<I> {
             let neighbors_bytes = cast_slice::<I, u8>(&neighbor_list);
             buf[..neighbors_bytes.len()].copy_from_slice(neighbors_bytes);
 
-            // Write the count at the last position
-            let count_id: I = I::from_usize(nbr_count).expect("Fails to cast usize as VectorId");
-            let count_bytes = bytes_of::<I>(&count_id);
+            // Write the count at the last slot as a raw u32 (no VectorId round-trip needed)
+            let count: u32 = nbr_count as u32;
             let count_offset = (self.dim - 1) * id_size;
-            buf[count_offset..count_offset + id_size].copy_from_slice(count_bytes);
+            buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
 
             self.adjacency_list_index.insert(key, &buf[..total_len]);
         }
@@ -255,16 +253,16 @@ impl<I: VectorId> NeighborProvider<I> {
         Ok(())
     }
 
-    pub(crate) fn scratch(&self) -> NeighborScratch<'_, I> {
+    pub(crate) fn scratch(&self) -> NeighborAccessor<'_, I> {
         let buf_size = self.dim * std::mem::size_of::<I>();
-        NeighborScratch {
+        NeighborAccessor {
             provider: self,
             buf: vec![0u8; buf_size],
         }
     }
 }
 
-pub struct NeighborScratch<'a, I>
+pub struct NeighborAccessor<'a, I>
 where
     I: VectorId,
 {
@@ -272,7 +270,7 @@ where
     buf: Vec<u8>,
 }
 
-impl<'a, I> NeighborScratch<'a, I>
+impl<'a, I> NeighborAccessor<'a, I>
 where
     I: VectorId,
 {
@@ -284,14 +282,14 @@ where
     }
 }
 
-impl<'a, I> HasId for NeighborScratch<'a, I>
+impl<'a, I> HasId for NeighborAccessor<'a, I>
 where
     I: VectorId,
 {
     type Id = I;
 }
 
-impl<'a, I> NeighborAccessor for NeighborScratch<'a, I>
+impl<'a, I> provider::NeighborAccessor for NeighborAccessor<'a, I>
 where
     I: VectorId,
 {
@@ -305,7 +303,7 @@ where
     }
 }
 
-impl<'a, I> NeighborAccessorMut for NeighborScratch<'a, I>
+impl<'a, I> provider::NeighborAccessorMut for NeighborAccessor<'a, I>
 where
     I: VectorId,
 {

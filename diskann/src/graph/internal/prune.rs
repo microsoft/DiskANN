@@ -23,27 +23,6 @@ pub(crate) struct Options {
     /// maximum degree by greedily adding skipped neighbors from the original candidate
     /// pool.
     pub(in crate::graph) force_saturate: bool,
-    /// Handling of transient errors encountered during vector retrieval.
-    pub(in crate::graph) transient_handling: TransientHandling,
-}
-
-/// During prune operations we need to provide flexibility for whether or not we handle transient
-/// errors.
-/// In the primary prune (insert / multi-insert), we need it to succeed every time (escalate).
-/// In all other cases, i.e when dealing with hard deleted elements, allowing the transients is acceptable.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum TransientHandling {
-    Escalate,
-    Allow,
-}
-
-/// The result of the pruning algorithm — either successful completion or an allowed
-/// early exit due to the source vector being unavailable.
-pub(crate) enum Outcome {
-    /// Pruning complete
-    Pruned,
-    /// Source vector was unavailable and transient handling allowed the skip.
-    SourceUnavailable,
 }
 
 /// An aggregate of scratch space used by the pruning algorithm for allocation.

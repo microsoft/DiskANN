@@ -44,7 +44,7 @@ use diskann_utils::{
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 
-use crate::neighbors::NeighborScratch;
+use crate::neighbors::NeighborAccessor;
 
 use super::{
     neighbors::NeighborProvider, quant::QuantVectorProvider, vectors::VectorProvider, AccessError,
@@ -566,7 +566,7 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = NeighborScratch<'a, u32>;
+    type Delegate = NeighborAccessor<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.neighbors().scratch()
@@ -986,7 +986,7 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type Delegate = NeighborScratch<'a, u32>;
+    type Delegate = NeighborAccessor<'a, u32>;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.provider.neighbors().scratch()
@@ -1103,7 +1103,7 @@ impl<'a, T> DelegateNeighbor<'a> for QuantPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Delegate = NeighborScratch<'a, u32>;
+    type Delegate = NeighborAccessor<'a, u32>;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.provider.neighbors().scratch()
     }
