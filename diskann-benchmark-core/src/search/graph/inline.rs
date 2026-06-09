@@ -25,7 +25,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
-pub struct InlineSearch<DP, T, S>
+pub struct InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
@@ -36,11 +36,11 @@ where
     adaptive_l: Option<AdaptiveL>,
 }
 
-impl<DP, T, S> InlineSearch<DP, T, S>
+impl<DP, T, S> InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`InlineSearch`] searcher.
+    /// Construct a new [`InlineFilterSearch`] searcher.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -86,7 +86,7 @@ where
     }
 }
 
-impl<DP, T, S> Search for InlineSearch<DP, T, S>
+impl<DP, T, S> Search for InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
@@ -114,7 +114,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let inline_search = graph::search::InlineSearch::new(
+        let inline_search = graph::search::InlineFilterSearch::new(
             *parameters,
             &*self.labels[index],
             self.adaptive_l.clone(),
@@ -177,7 +177,7 @@ mod tests {
 
         let adaptive_l = graph::search::AdaptiveL::new(10, 16.0).unwrap();
 
-        let inline = InlineSearch::new(
+        let inline = InlineFilterSearch::new(
             index,
             queries.clone(),
             Strategy::broadcast(provider::Strategy::new()),
@@ -275,7 +275,7 @@ mod tests {
         let strategy = provider::Strategy::new();
 
         // Error for a mismatch between strategies and queries.
-        let err = InlineSearch::new(
+        let err = InlineFilterSearch::new(
             index.clone(),
             queries.clone(),
             Strategy::collection([strategy.clone()]),
@@ -290,7 +290,7 @@ mod tests {
         );
 
         // Error for a mismatch between label providers and queries.
-        let err = InlineSearch::new(
+        let err = InlineFilterSearch::new(
             index,
             queries.clone(),
             Strategy::broadcast(strategy.clone()),

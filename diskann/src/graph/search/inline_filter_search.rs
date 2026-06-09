@@ -79,7 +79,7 @@ impl AdaptiveL {
 ///     specificity = 0.1% (1/1000)   → 8× L
 ///   and so on up to a pre-set maximum multiplier
 #[derive(Debug)]
-pub struct InlineSearch<'q, InternalId> {
+pub struct InlineFilterSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: Knn,
     /// Label evaluator for determining node matches and early termination.
@@ -88,7 +88,7 @@ pub struct InlineSearch<'q, InternalId> {
     pub adaptive_l: Option<AdaptiveL>,
 }
 
-impl<'q, InternalId> InlineSearch<'q, InternalId> {
+impl<'q, InternalId> InlineFilterSearch<'q, InternalId> {
     /// Create new inline filter search parameters.
     pub fn new(
         inner: Knn,
@@ -103,7 +103,7 @@ impl<'q, InternalId> InlineSearch<'q, InternalId> {
     }
 }
 
-impl<'a, 'q, DP, S, T> Search<'a, DP, S, T> for InlineSearch<'q, DP::InternalId>
+impl<'a, 'q, DP, S, T> Search<'a, DP, S, T> for InlineFilterSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,
@@ -185,19 +185,25 @@ where
         range_search_second_round: false,
     };
 
+    // Matched results tracked separately — scratch.best contains all nodes
+    // for greedy navigation, matched_results contains only filter-matching nodes.
+    let mut matched_results = Vec::new();
+
     accessor
         .start_point_distances(|id, distance| {
             scratch.visited.insert(id);
             scratch.best.insert(Neighbor::new(id, distance));
+            // Check if the start point matches the filter
+            // Note that we don't allow termination on start points. This is mostly a moot point
+            // as we're planning to get rid of the termination option for `on_visit` anyway
+            if query_label_evaluator.on_visit(Neighbor::new(id, distance)) == QueryVisitDecision::Accept(Neighbor::new(id, distance)) {
+                matched_results.push(Neighbor::new(id, distance));
+            }
         })
         .await?;
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
-
-    // Matched results tracked separately — scratch.best contains all nodes
-    // for greedy navigation, matched_results contains only filter-matching nodes.
-    let mut matched_results = Vec::new();
 
     let mut sample_visited: usize = 0;
     let mut sample_matched: usize = 0;
@@ -245,8 +251,6 @@ where
                     // matched nodes also go into matched_results for final output.
                     scratch.best.insert(accepted);
                     matched_results.push(accepted);
-                    sample_matched += 1;
-
                     sample_matched += 1;
                 }
                 QueryVisitDecision::Reject => {

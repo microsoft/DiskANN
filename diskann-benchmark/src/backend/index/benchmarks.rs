@@ -675,7 +675,7 @@ where
 
         let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
 
-        let inline = benchmark_core::search::graph::InlineSearch::new(
+        let inline = benchmark_core::search::graph::InlineFilterSearch::new(
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),

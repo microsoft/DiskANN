@@ -19,7 +19,7 @@ use diskann_providers::{
     },
     utils::load_metadata_from_file,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -244,13 +244,6 @@ impl MultiHopSearchPhase {
     }
 }
 
-fn require_present_option<'de, D>(deserializer: D) -> Result<Option<AdaptiveL>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<AdaptiveL>::deserialize(deserializer)
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
@@ -274,7 +267,7 @@ pub(crate) struct InlineSearchPhase {
     pub(crate) data_labels: InputFile,
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
-    #[serde(deserialize_with = "require_present_option")]
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) adaptive_l: Option<AdaptiveL>,
 }
 

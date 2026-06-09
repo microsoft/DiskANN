@@ -587,7 +587,7 @@ mod imp {
                 .map(utils::filters::as_query_label_provider)
                 .collect();
 
-            let inline = benchmark_core::search::graph::InlineSearch::new(
+            let inline = benchmark_core::search::graph::InlineFilterSearch::new(
                 index.clone(),
                 queries.clone(),
                 benchmark_core::search::graph::Strategy::broadcast(

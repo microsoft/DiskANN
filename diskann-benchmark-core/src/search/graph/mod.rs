@@ -10,7 +10,7 @@ pub mod range;
 
 pub mod strategy;
 
-pub use inline::InlineSearch;
+pub use inline::InlineFilterSearch;
 pub use knn::KNN;
 pub use multihop::MultiHop;
 pub use range::Range;
