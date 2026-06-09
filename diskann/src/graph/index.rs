@@ -1218,17 +1218,13 @@ where
         id: DP::InternalId,
         l_value: usize,
         k_value: usize,
+        v: S::DeleteElementGuard,
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
-            let v = strategy
-                .get_delete_element(&self.data_provider, context, id)
-                .await
-                .into_ann_result()?;
-
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
                 .search_accessor(&self.data_provider, context, v.reborrow())
@@ -1647,6 +1643,20 @@ where
                 .data_provider
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
+
+            // For VisitedAndTopK, we must capture the delete element *before* erasing
+            // the vector data, since it uses the deleted vector as a search query.
+            // This is necessary in hard-delete providers.
+            let delete_element = match inplace_delete_method {
+                InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
+                    strategy
+                        .get_delete_element(&self.data_provider, context, vector_id)
+                        .await
+                        .into_ann_result()?,
+                ),
+                _ => None,
+            };
+
             self.data_provider
                 .delete(context, id)
                 .await
@@ -1665,8 +1675,14 @@ where
                     k_value: k,
                     l_value: l,
                 } => {
-                    self.get_candidates_using_visited_and_topk(strategy, context, vector_id, *l, *k)
-                        .await?
+                    // delete_element is always Some for VisitedAndTopK (set above).
+                    let Some(v) = delete_element else {
+                        unreachable!("delete_element is set for VisitedAndTopK");
+                    };
+                    self.get_candidates_using_visited_and_topk(
+                        strategy, context, vector_id, *l, *k, v,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
                     self.get_candidates_using_twohop_and_onehop(context, &mut accessor, vector_id)
@@ -2355,7 +2371,7 @@ where
                     options,
                 )
                 .await
-                .escalate("retrieving inserted vector must succeed")?;
+                .allow_transient("vector may already be unavailable in hard-delete providers")?;
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",

@@ -314,6 +314,31 @@ mod tests {
     }
 
     ////////////////////////////
+    //     BF-Tree Index      //
+    ////////////////////////////
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_spherical_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-spherical.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
     //  MinMax Quantization   //
     ////////////////////////////
 
