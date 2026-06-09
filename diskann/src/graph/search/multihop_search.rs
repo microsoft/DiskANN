@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Label-filtered search using multi-hop expansion.
+//! Filtered search using multi-hop expansion.
 
 use diskann_utils::future::SendFuture;
 
@@ -22,7 +22,7 @@ use crate::{
     utils::VectorId,
 };
 
-/// Parameters for label-filtered search using multi-hop expansion.
+/// Parameters for Filtered search using multi-hop expansion.
 ///
 /// This search extends standard graph search by expanding through non-matching
 /// nodes to find matching neighbors. More efficient than flat search when the
@@ -67,9 +67,9 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
+            let num_starting_points = accessor.num_starting_points().await?;
 
-            let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
+            let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
             let stats = multihop_search_internal(
                 index.max_degree_with_slack(),
@@ -101,15 +101,14 @@ where
 
 /// Internal multihop search implementation.
 ///
-/// Performs label-filtered search by expanding through non-matching nodes
-/// to find matching neighbors within two hops.
+/// Performs filtered search by expanding through non-matching nodes to find matching
+/// neighbors within two hops.
 pub(crate) async fn multihop_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
-    // query_label_evaluator: &dyn QueryLabelProvider<I>,
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
@@ -117,13 +116,6 @@ where
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
-
-    // Helper to build the final stats from scratch state.
-    let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
-        cmps: scratch.cmps,
-        hops: scratch.hops,
-        range_search_second_round: false,
-    };
 
     // Initialize search state if not already initialized.
     // This allows paged search to call multihop_search_internal multiple times
@@ -162,7 +154,7 @@ where
         // compute distances from query to one-hop neighbors, and mark them visited
         accessor
             .expand_beam_filtered(
-                glue::ExpansionHint::All,
+                glue::ExpansionKind::All,
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
                 |id, distance| one_hop_neighbors.push((id, distance)),
@@ -202,7 +194,7 @@ where
 
         accessor
             .expand_beam_filtered(
-                glue::ExpansionHint::AcceptOnly,
+                glue::ExpansionKind::AcceptOnly,
                 two_hop_expansion_candidate_ids.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
                 |id, distance| {
@@ -222,5 +214,9 @@ where
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
     }
 
-    Ok(make_stats(scratch))
+    Ok(InternalSearchStats {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        range_search_second_round: false,
+    })
 }

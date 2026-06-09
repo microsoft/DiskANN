@@ -114,6 +114,8 @@ use crate::{
 /// **Start Point Coherence**: The various methods regarding start points are expected to
 /// be coherent with one another. This means they agree on the number and IDs of the start
 /// points.
+///
+/// See also: [`FilteredAccessor`].
 pub trait SearchAccessor: HasId + Send + Sync {
     /// Return the starting points for this search.
     fn starting_points(&self)
@@ -245,32 +247,111 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 }
 
+/// Filter decision for [`FilteredAccessor`].
+///
+/// Both variants carry the item `T` since rejected items are useful for graph navigation.
 #[derive(Debug, Clone, Copy)]
-pub enum Decision<I> {
-    Accept(I),
-    Reject(I),
+pub enum Decision<T> {
+    /// The item satisfies the filter criteria.
+    Accept(T),
+    /// The item does not satisfy the filter criteria.
+    Reject(T),
 }
 
-impl<I> Decision<I> {
-    pub fn into_inner(self) -> I {
+impl<T> Decision<T> {
+    /// Consume `self`, returning the inner item regardless of acceptance.
+    ///
+    /// To view the inner item, use [`Self::as_ref`].
+    /// ```rust
+    /// use diskann::graph::glue::Decision;
+    ///
+    /// let x = Decision::Accept(vec![0usize, 1, 2]);
+    ///
+    /// let y: &[usize] = x.as_ref().into_inner();
+    /// assert_eq!(y, &[0, 1, 2]);
+    ///
+    /// let z: Vec<usize> = x.into_inner();
+    /// assert_eq!(z, &[0, 1, 2]);
+    /// ```
+    pub fn into_inner(self) -> T {
         match self {
             Self::Accept(i) => i,
             Self::Reject(i) => i,
         }
     }
+
+    /// Apply the closure `f` to the inner item regardless of acceptance.
+    pub fn map<F, R>(self, f: F) -> Decision<R>
+    where
+        F: FnOnce(T) -> R,
+    {
+        match self {
+            Self::Accept(i) => Decision::Accept(f(i)),
+            Self::Reject(i) => Decision::Reject(f(i)),
+        }
+    }
+
+    /// Borrow the inner item as a [`Decision`] of references.
+    pub fn as_ref(&self) -> Decision<&T> {
+        match self {
+            Self::Accept(i) => Decision::Accept(i),
+            Self::Reject(i) => Decision::Reject(i),
+        }
+    }
+
+    /// Mutably borrow the inner item as a [`Decision`] of mutable references.
+    pub fn as_mut(&mut self) -> Decision<&mut T> {
+        match self {
+            Self::Accept(i) => Decision::Accept(i),
+            Self::Reject(i) => Decision::Reject(i),
+        }
+    }
+
+    #[must_use = "this function is side-effect free"]
+    pub fn is_accept(&self) -> bool {
+        matches!(self, Self::Accept(_))
+    }
+
+    #[must_use = "this function is side-effect free"]
+    pub fn is_reject(&self) -> bool {
+        matches!(self, Self::Reject(_))
+    }
 }
 
+/// Semantic hint for [`FilteredAccessor::expand_beam_filtered`].
 #[derive(Debug, Clone, Copy)]
-pub enum ExpansionHint {
+pub enum ExpansionKind {
+    /// All visited items should be yielded whether they are accepted or rejected.
+    ///
+    /// The caller intends to navigate through rejected nodes.
     All,
+
+    /// Only items that are [`Decision::Accept`] are expected.
+    ///
+    /// Implementations are free to skip any items that would have been marked
+    /// [`Decision::Reject`].
     AcceptOnly,
 }
 
+/// The main extension point for filtered-graph search.
+///
+/// Filtered search is a best-first graph traversal with heuristics to direct the search
+/// depending on whether items are accepted or rejected.
+///
+/// [`Self::expand_beam_filtered`] is the primary extension point.
+///
+/// **Start Point Coherence**: The various methods regarding start points are expected to
+/// be coherent with one another. This means they agree on the number and IDs of the start
+/// points.
+///
+/// See also: [`SearchAccessor`].
 pub trait FilteredAccessor: HasId + Send + Sync {
+    /// Return the starting points for this search.
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Decision<Self::Id>>>> + Send;
 
+    /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,
         f: F,
@@ -278,9 +359,27 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     where
         F: FnMut(Decision<Self::Id>, f32) + Send;
 
+    /// This function has similar semantics to [`SearchAccessor::expand_beam`] with the
+    /// following additions:
+    ///
+    /// 1. The `on_neighbors` callback receives [`Decision`] rather than raw IDs. This is
+    ///    used to indicate whether or not the associated item is accepted or rejected by
+    ///    the filtered search.
+    ///
+    /// 2. An [`ExpansionKind`] enum which may be used to direct the implementation.
+    ///
+    ///    - [`ExpansionKind::All`]: All expanded items should be returned, whether they
+    ///      are accepted or rejected. The caller is doing an exploration that intends to
+    ///      navigate through rejected items.
+    ///
+    ///    - [`ExpansionKind::AcceptOnly`]: The provided `on_neighbors` callback will
+    ///      silently drop [`Decision::Reject`]. As such, implementations with cheap filter
+    ///      evaluation may check the filter decision first and skip rejected items entirely.
+    ///
+    /// See also: [`SearchAccessor::expand_beam`].
     fn expand_beam_filtered<Itr, P, F>(
         &mut self,
-        hint: ExpansionHint,
+        kind: ExpansionKind,
         ids: Itr,
         pred: P,
         on_neighbors: F,
@@ -294,10 +393,17 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     // Provided methods //
     //////////////////////
 
+    /// Indicate that search should terminate as soon as possible.
+    ///
+    /// The provided implementation always returns `false`.
     fn terminate_early(&mut self) -> bool {
         false
     }
 
+    /// Return a closure to evaluate whether or not an ID is associated with a start point.
+    ///
+    /// The closure returned by the provided implementation has complexity `O(1)` and takes
+    /// `O(num_starting_points)` time to construct.
     fn is_not_start_point(
         &self,
     ) -> impl std::future::Future<
@@ -315,13 +421,14 @@ pub trait FilteredAccessor: HasId + Send + Sync {
         }
     }
 
+    /// Return the number of starting points.
     fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
         self.starting_points()
             .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
     }
 }
 
-/// An predicate evaluating `item`.
+/// A predicate evaluating `item`.
 pub trait Predicate<T> {
     fn eval(&self, item: &T) -> bool;
 }
@@ -898,4 +1005,44 @@ where
         context: &'a Provider::Context,
         id: Provider::InternalId,
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decision() {
+        // into_inner extracts regardless of variant
+        assert_eq!(Decision::Accept(7).into_inner(), 7);
+        assert_eq!(Decision::Reject(7).into_inner(), 7);
+
+        // is_accept / is_reject
+        assert!(Decision::Accept(()).is_accept());
+        assert!(!Decision::Accept(()).is_reject());
+        assert!(Decision::Reject(()).is_reject());
+        assert!(!Decision::Reject(()).is_accept());
+
+        // map preserves variant
+        let a = Decision::Accept(3).map(|x| x * 2);
+        assert!(a.is_accept());
+        assert_eq!(a.into_inner(), 6);
+        let r = Decision::Reject(3).map(|x| x * 2);
+        assert!(r.is_reject());
+        assert_eq!(r.into_inner(), 6);
+
+        // as_ref borrows without consuming
+        let d = Decision::Accept(vec![1, 2, 3]);
+        assert_eq!(d.as_ref().into_inner(), &[1, 2, 3]);
+        drop(d); // original still valid
+
+        // as_mut allows in-place mutation
+        let mut d = Decision::Reject(10);
+        *d.as_mut().into_inner() = 20;
+        assert_eq!(d.into_inner(), 20);
+    }
 }
