@@ -8,8 +8,7 @@ use thiserror::Error;
 use super::SortedNeighbors;
 
 use crate::{
-    ANNError, ANNErrorKind, error, error::TransientError, graph::AdjacencyList, neighbor::Neighbor,
-    utils::VectorId,
+    ANNError, ANNErrorKind, error, graph::AdjacencyList, neighbor::Neighbor, utils::VectorId,
 };
 
 /// Options provided to prune. See the field-level documentation for more details.
@@ -150,21 +149,6 @@ where
 {
     fn from(err: ANNError) -> Self {
         Self::Other(err)
-    }
-}
-
-impl<I> From<ListError<I>> for ANNError
-where
-    I: VectorId,
-{
-    #[track_caller]
-    fn from(err: ListError<I>) -> Self {
-        match err {
-            ListError::FailedVectorRetrieval(fvr) => {
-                fvr.escalate("unexpected transient error during prune")
-            }
-            ListError::Other(e) => e,
-        }
     }
 }
 

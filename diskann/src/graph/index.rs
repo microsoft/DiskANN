@@ -1646,8 +1646,7 @@ where
 
             // For VisitedAndTopK, we must capture the delete element *before* erasing
             // the vector data, since it uses the deleted vector as a search query.
-            // This is especially necessary in hard-delete providers, such as the bf-tree.
-            // soft-delete providers, like in-mem don't mind the ordering as much.
+            // This is necessary in hard-delete providers.
             let delete_element = match inplace_delete_method {
                 InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
                     strategy
