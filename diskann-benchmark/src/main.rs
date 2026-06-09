@@ -337,6 +337,14 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_spherical_integration() {
+        let raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-spherical.json"));
+        run_integration_test(raw);
+    }
+
     ////////////////////////////
     //  MinMax Quantization   //
     ////////////////////////////

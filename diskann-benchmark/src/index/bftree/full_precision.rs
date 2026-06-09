@@ -25,7 +25,10 @@ use crate::{
         result::BuildResult,
         search::plugins::{Plugin, Plugins},
     },
-    inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
+    inputs::{
+        bftree::{BfTreeBuild, QuantConfig},
+        graph_index::SearchPhase,
+    },
     utils::{self},
 };
 
@@ -68,25 +71,32 @@ impl<T> Benchmark for BfTreeFullPrecision<T>
 where
     T: VectorRepr + AsDataType + SampleableForStart + WithApproximateNorm + 'static,
 {
-    type Input = BfTreeFullPrecisionBuild;
+    type Input = BfTreeBuild;
     type Output = BuildResult;
 
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
-        let score = utils::match_data_type::<T>(input.data_type());
-        if self.plugins.is_match(input.search_phase()) {
-            score
-        } else {
-            match score {
-                Ok(_) => Err(FailureScore(0)),
-                Err(s) => Err(s),
-            }
+        let mut failure_score: Option<u32> = None;
+
+        if !matches!(input.quantization(), QuantConfig::None) {
+            *failure_score.get_or_insert(0) += 1;
+        }
+        if let Err(s) = utils::match_data_type::<T>(input.data_type()) {
+            *failure_score.get_or_insert(0) += s.0;
+        }
+        if !self.plugins.is_match(input.search_phase()) {
+            *failure_score.get_or_insert(0) += 1;
+        }
+
+        match failure_score {
+            None => Ok(MatchScore(0)),
+            Some(score) => Err(FailureScore(score)),
         }
     }
 
     fn description(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Self::Input>,
+        input: Option<&BfTreeBuild>,
     ) -> std::fmt::Result {
         match input {
             Some(arg) => {
@@ -113,7 +123,7 @@ where
 
     fn run(
         &self,
-        input: &Self::Input,
+        input: &BfTreeBuild,
         checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {

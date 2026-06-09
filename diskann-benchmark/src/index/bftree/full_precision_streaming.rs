@@ -26,7 +26,10 @@ use crate::{
         stats::StreamStats,
         StreamRunner,
     },
-    inputs::{bftree::BfTreeStreamingRun, graph_index::SearchPhase},
+    inputs::{
+        bftree::{BfTreeStreamingRun, QuantConfig},
+        graph_index::SearchPhase,
+    },
     utils,
 };
 
@@ -57,10 +60,12 @@ where
     fn try_match(&self, input: &Self::Input) -> Result<MatchScore, FailureScore> {
         let mut failure_score: Option<u32> = None;
 
-        if let Err(s) = utils::match_data_type::<T>(input.data_type()) {
-            failure_score = Some(s.0);
+        if !matches!(input.quantization(), QuantConfig::None) {
+            *failure_score.get_or_insert(0) += 1;
         }
-
+        if let Err(s) = utils::match_data_type::<T>(input.data_type()) {
+            *failure_score.get_or_insert(0) += s.0;
+        }
         if !matches!(input.search_phase(), SearchPhase::Topk(_)) {
             *failure_score.get_or_insert(0) += 1;
         }

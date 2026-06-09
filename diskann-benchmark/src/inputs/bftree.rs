@@ -209,21 +209,59 @@ fn bftree_parameters_from(
     }
 }
 
-as_input!(BfTreeFullPrecisionBuild);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub(crate) enum QuantConfig {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "spherical")]
+    Spherical {
+        seed: u64,
+        transform_kind: exhaustive::TransformKind,
+        num_bits: NonZeroUsize,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        pre_scale: Option<exhaustive::PreScale>,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        quant_store_config: Option<BfTreeStoreConfig>,
+    },
+}
+
+impl QuantConfig {
+    pub(crate) fn validate(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::None => Ok(()),
+            Self::Spherical {
+                num_bits,
+                quant_store_config,
+                ..
+            } => {
+                match num_bits.get() {
+                    1 | 2 | 4 => {}
+                    n => anyhow::bail!("{n} bits are not supported for spherical quantization"),
+                }
+                if let Some(cfg) = quant_store_config {
+                    cfg.fill_defaults();
+                    cfg.validate()?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BfTreeFullPrecisionBuild {
+pub(crate) struct BfTreeBuild {
     build: IndexBuild,
     search_phase: SearchPhase,
+    quantization: QuantConfig,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     vector_store_config: Option<BfTreeStoreConfig>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     neighbor_store_config: Option<BfTreeStoreConfig>,
 }
-
-impl BfTreeFullPrecisionBuild {
+impl BfTreeBuild {
     pub(crate) const fn tag() -> &'static str {
-        "graph-index-build-bftree-full-precision"
+        "graph-index-bftree"
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
@@ -250,15 +288,22 @@ impl BfTreeFullPrecisionBuild {
         num_points: usize,
         dim: usize,
     ) -> BfTreeProviderParameters {
+        let quant_store_config = match &self.quantization {
+            QuantConfig::None => &None,
+            QuantConfig::Spherical {
+                quant_store_config, ..
+            } => quant_store_config,
+        };
         bftree_parameters_from(
             &self.build,
             num_points,
             dim,
             &self.vector_store_config,
             &self.neighbor_store_config,
-            &None,
+            quant_store_config,
         )
     }
+
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
@@ -270,30 +315,49 @@ impl BfTreeFullPrecisionBuild {
             cfg.fill_defaults();
             cfg.validate()?;
         }
+        self.quantization.validate()?;
         Ok(())
+    }
+
+    pub(crate) fn quantization(&self) -> &QuantConfig {
+        &self.quantization
     }
 }
 
-impl Example for BfTreeFullPrecisionBuild {
+impl Example for BfTreeBuild {
     fn example() -> Self {
-        let build = IndexBuild::example();
-
         Self {
-            build,
+            build: IndexBuild::example(),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
+            quantization: QuantConfig::None,
             vector_store_config: None,
             neighbor_store_config: None,
         }
     }
 }
 
-impl std::fmt::Display for BfTreeFullPrecisionBuild {
+impl std::fmt::Display for BfTreeBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Bf_Tree Full-Precision Build")?;
+        writeln!(f, "Graph Index Bf_Tree Build")?;
         if cfg!(not(feature = "bftree")) {
             writeln!(f, "Requires the `bftree` feature")?;
         }
         write_field!(f, "tag", Self::tag())?;
+
+        if let QuantConfig::Spherical {
+            seed,
+            transform_kind,
+            num_bits,
+            ..
+        } = &self.quantization
+        {
+            write_field!(f, "quantization", "spherical")?;
+            write_field!(f, "num_bits", num_bits)?;
+            write_field!(f, "seed", seed)?;
+            write_field!(f, "transform_kind", transform_kind)?;
+        } else {
+            write_field!(f, "quantization", "none")?;
+        }
 
         writeln!(f)?;
         self.build.summarize_fields(f)?;
@@ -306,11 +370,20 @@ impl std::fmt::Display for BfTreeFullPrecisionBuild {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
+        if let QuantConfig::Spherical {
+            quant_store_config: Some(ref cfg),
+            ..
+        } = self.quantization
+        {
+            writeln!(f, "\n  Quant Store:")?;
+            write!(f, "{}", cfg)?;
+        }
 
         Ok(())
     }
 }
 
+as_input!(BfTreeBuild);
 as_input!(BfTreeStreamingRun);
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -318,6 +391,7 @@ pub(crate) struct BfTreeStreamingRun {
     build: IndexBuild,
     search_phase: SearchPhase,
     runbook_params: StreamingRunbookParams,
+    quantization: QuantConfig,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     vector_store_config: Option<BfTreeStoreConfig>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
@@ -326,12 +400,10 @@ pub(crate) struct BfTreeStreamingRun {
 
 impl BfTreeStreamingRun {
     pub(crate) const fn tag() -> &'static str {
-        "graph-index-stream-bftree-full-precision"
+        "graph-index-stream-bftree"
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        // Delegate to IndexBuild's try_as_config which uses the default
-        // MaxDegree::Value(exact_max_degree) with 1.3x slack.
         self.build.try_as_config()
     }
 
@@ -351,21 +423,32 @@ impl BfTreeStreamingRun {
         &self.runbook_params
     }
 
+    pub(crate) fn quantization(&self) -> &QuantConfig {
+        &self.quantization
+    }
+
     pub(crate) fn bftree_parameters(
         &self,
         num_points: usize,
         dim: usize,
     ) -> BfTreeProviderParameters {
+        let quant_store_config = match &self.quantization {
+            QuantConfig::None => &None,
+            QuantConfig::Spherical {
+                quant_store_config, ..
+            } => quant_store_config,
+        };
         bftree_parameters_from(
             &self.build,
             num_points,
             dim,
             &self.vector_store_config,
             &self.neighbor_store_config,
-            &None,
+            quant_store_config,
         )
     }
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
         self.runbook_params.validate(checker)?;
@@ -377,18 +460,18 @@ impl BfTreeStreamingRun {
             cfg.fill_defaults();
             cfg.validate()?;
         }
+        self.quantization.validate()?;
         Ok(())
     }
 }
 
 impl Example for BfTreeStreamingRun {
     fn example() -> Self {
-        let build = IndexBuild::example();
-
         Self {
-            build,
+            build: IndexBuild::example(),
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
             runbook_params: StreamingRunbookParams::example_immediate(),
+            quantization: QuantConfig::None,
             vector_store_config: None,
             neighbor_store_config: None,
         }
@@ -397,11 +480,26 @@ impl Example for BfTreeStreamingRun {
 
 impl std::fmt::Display for BfTreeStreamingRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Bf_Tree Full-Precision Streaming")?;
+        writeln!(f, "Graph Index Bf_Tree Streaming")?;
         if cfg!(not(feature = "bftree")) {
             writeln!(f, "Requires the `bftree` feature")?;
         }
         write_field!(f, "tag", Self::tag())?;
+
+        if let QuantConfig::Spherical {
+            seed,
+            transform_kind,
+            num_bits,
+            ..
+        } = &self.quantization
+        {
+            write_field!(f, "quantization", "spherical")?;
+            write_field!(f, "num_bits", num_bits)?;
+            write_field!(f, "seed", seed)?;
+            write_field!(f, "transform_kind", transform_kind)?;
+        } else {
+            write_field!(f, "quantization", "none")?;
+        }
 
         writeln!(f)?;
         self.build.summarize_fields(f)?;
@@ -414,147 +512,11 @@ impl std::fmt::Display for BfTreeStreamingRun {
             writeln!(f, "\n  Neighbor Store:")?;
             write!(f, "{}", cfg)?;
         }
-
-        Ok(())
-    }
-}
-
-// ─── Spherical Quantization ───────────────────────────────────────────────────
-
-as_input!(BfTreeSphericalBuild);
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BfTreeSphericalBuild {
-    build: IndexBuild,
-    search_phase: SearchPhase,
-    seed: u64,
-    transform_kind: exhaustive::TransformKind,
-    num_bits: NonZeroUsize,
-    pre_scale: Option<exhaustive::PreScale>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    quant_store_config: Option<BfTreeStoreConfig>,
-}
-
-impl BfTreeSphericalBuild {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-bftree-spherical-quantization"
-    }
-
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        self.build.try_as_config()
-    }
-
-    pub(crate) fn bftree_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> BfTreeProviderParameters {
-        bftree_parameters_from(
-            &self.build,
-            num_points,
-            dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &self.quant_store_config,
-        )
-    }
-
-    pub(crate) fn data_type(&self) -> DataType {
-        self.build.data_type()
-    }
-
-    pub(crate) fn search_phase(&self) -> &SearchPhase {
-        &self.search_phase
-    }
-
-    pub(crate) fn build(&self) -> &IndexBuild {
-        &self.build
-    }
-
-    pub(crate) fn seed(&self) -> u64 {
-        self.seed
-    }
-
-    pub(crate) fn transform_kind(&self) -> &exhaustive::TransformKind {
-        &self.transform_kind
-    }
-
-    pub(crate) fn num_bits(&self) -> NonZeroUsize {
-        self.num_bits
-    }
-
-    pub(crate) fn pre_scale(&self) -> Option<&exhaustive::PreScale> {
-        self.pre_scale.as_ref()
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.validate(checker)?;
-        self.search_phase.validate(checker)?;
-        if let Some(cfg) = &mut self.vector_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-        if let Some(cfg) = &mut self.neighbor_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-        if let Some(cfg) = &mut self.quant_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-
-        match self.num_bits.get() {
-            1 | 2 | 4 => {}
-            n => anyhow::bail!("{n} bits are not supported for spherical quantization"),
-        }
-
-        Ok(())
-    }
-}
-
-impl Example for BfTreeSphericalBuild {
-    fn example() -> Self {
-        Self {
-            build: IndexBuild::example(),
-            search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            seed: 42,
-            transform_kind: exhaustive::TransformKind::Null,
-            num_bits: NonZeroUsize::new(1).unwrap(),
-            pre_scale: None,
-            vector_store_config: None,
-            neighbor_store_config: None,
-            quant_store_config: None,
-        }
-    }
-}
-
-impl std::fmt::Display for BfTreeSphericalBuild {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Bf_Tree Spherical Quantization Build")?;
-        if cfg!(not(feature = "bftree")) {
-            writeln!(f, "Requires the `bftree` feature")?;
-        }
-        write_field!(f, "tag", Self::tag())?;
-        write_field!(f, "num_bits", self.num_bits)?;
-        write_field!(f, "seed", self.seed)?;
-        write_field!(f, "transform_kind", self.transform_kind)?;
-
-        writeln!(f)?;
-        self.build.summarize_fields(f)?;
-
-        if let Some(ref cfg) = self.vector_store_config {
-            writeln!(f, "\n  Vector Store:")?;
-            write!(f, "{}", cfg)?;
-        }
-        if let Some(ref cfg) = self.neighbor_store_config {
-            writeln!(f, "\n  Neighbor Store:")?;
-            write!(f, "{}", cfg)?;
-        }
-        if let Some(ref cfg) = self.quant_store_config {
+        if let QuantConfig::Spherical {
+            quant_store_config: Some(ref cfg),
+            ..
+        } = self.quantization
+        {
             writeln!(f, "\n  Quant Store:")?;
             write!(f, "{}", cfg)?;
         }
@@ -563,153 +525,3 @@ impl std::fmt::Display for BfTreeSphericalBuild {
     }
 }
 
-// ─── Spherical Streaming ──────────────────────────────────────────────────────
-
-as_input!(BfTreeSphericalStreamingRun);
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct BfTreeSphericalStreamingRun {
-    build: IndexBuild,
-    search_phase: SearchPhase,
-    runbook_params: StreamingRunbookParams,
-    seed: u64,
-    transform_kind: exhaustive::TransformKind,
-    num_bits: NonZeroUsize,
-    pre_scale: Option<exhaustive::PreScale>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    vector_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    neighbor_store_config: Option<BfTreeStoreConfig>,
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    quant_store_config: Option<BfTreeStoreConfig>,
-}
-
-impl BfTreeSphericalStreamingRun {
-    pub(crate) const fn tag() -> &'static str {
-        "graph-index-stream-bftree-spherical-quantization"
-    }
-
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        self.build.try_as_config()
-    }
-
-    pub(crate) fn data_type(&self) -> DataType {
-        self.build.data_type()
-    }
-
-    pub(crate) fn search_phase(&self) -> &SearchPhase {
-        &self.search_phase
-    }
-
-    pub(crate) fn build(&self) -> &IndexBuild {
-        &self.build
-    }
-
-    pub(crate) fn runbook_params(&self) -> &StreamingRunbookParams {
-        &self.runbook_params
-    }
-
-    pub(crate) fn seed(&self) -> u64 {
-        self.seed
-    }
-
-    pub(crate) fn transform_kind(&self) -> &exhaustive::TransformKind {
-        &self.transform_kind
-    }
-
-    pub(crate) fn num_bits(&self) -> NonZeroUsize {
-        self.num_bits
-    }
-
-    pub(crate) fn pre_scale(&self) -> Option<&exhaustive::PreScale> {
-        self.pre_scale.as_ref()
-    }
-
-    pub(crate) fn bftree_parameters(
-        &self,
-        num_points: usize,
-        dim: usize,
-    ) -> BfTreeProviderParameters {
-        bftree_parameters_from(
-            &self.build,
-            num_points,
-            dim,
-            &self.vector_store_config,
-            &self.neighbor_store_config,
-            &self.quant_store_config,
-        )
-    }
-
-    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.validate(checker)?;
-        self.search_phase.validate(checker)?;
-        self.runbook_params.validate(checker)?;
-        if let Some(cfg) = &mut self.vector_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-        if let Some(cfg) = &mut self.neighbor_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-        if let Some(cfg) = &mut self.quant_store_config {
-            cfg.fill_defaults();
-            cfg.validate()?;
-        }
-
-        match self.num_bits.get() {
-            1 | 2 | 4 => {}
-            n => anyhow::bail!("{n} bits are not supported for spherical quantization"),
-        }
-
-        Ok(())
-    }
-}
-
-impl Example for BfTreeSphericalStreamingRun {
-    fn example() -> Self {
-        Self {
-            build: IndexBuild::example(),
-            search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: StreamingRunbookParams::example_immediate(),
-            seed: 42,
-            transform_kind: exhaustive::TransformKind::Null,
-            num_bits: NonZeroUsize::new(1).unwrap(),
-            pre_scale: None,
-            vector_store_config: None,
-            neighbor_store_config: None,
-            quant_store_config: None,
-        }
-    }
-}
-
-impl std::fmt::Display for BfTreeSphericalStreamingRun {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Bf_Tree Spherical Quantization Streaming")?;
-        if cfg!(not(feature = "bftree")) {
-            writeln!(f, "Requires the `bftree` feature")?;
-        }
-        write_field!(f, "tag", Self::tag())?;
-        write_field!(f, "num_bits", self.num_bits)?;
-        write_field!(f, "seed", self.seed)?;
-        write_field!(f, "transform_kind", self.transform_kind)?;
-
-        writeln!(f)?;
-        self.build.summarize_fields(f)?;
-
-        if let Some(ref cfg) = self.vector_store_config {
-            writeln!(f, "\n  Vector Store:")?;
-            write!(f, "{}", cfg)?;
-        }
-        if let Some(ref cfg) = self.neighbor_store_config {
-            writeln!(f, "\n  Neighbor Store:")?;
-            write!(f, "{}", cfg)?;
-        }
-        if let Some(ref cfg) = self.quant_store_config {
-            writeln!(f, "\n  Quant Store:")?;
-            write!(f, "{}", cfg)?;
-        }
-
-        Ok(())
-    }
-}
