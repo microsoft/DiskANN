@@ -291,19 +291,22 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
 
     // Parallel argmin: each thread converts its slice + finds local best, then reduce.
     use rayon::prelude::*;
+    // Fold init owns the per-thread buf; reuses across all items in that
+    // thread's chunk. Without this, every fold iteration allocates a fresh
+    // `vec![0.0f32; ndims]` — 10M allocs on BigANN.
     let (best_idx, _best_dist) = (0..npoints)
         .into_par_iter()
         .fold(
-            || (usize::MAX, f32::MAX),
-            |(bi, bd), i| {
-                let mut buf = vec![0.0f32; ndims];
+            || (usize::MAX, f32::MAX, vec![0.0f32; ndims]),
+            |(bi, bd, mut buf), i| {
                 if T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf).is_err() {
-                    return (bi, bd);
+                    return (bi, bd, buf);
                 }
                 let d = dist_fn.call(&buf, &centroid);
-                if d < bd { (i, d) } else { (bi, bd) }
+                if d < bd { (i, d, buf) } else { (bi, bd, buf) }
             },
         )
+        .map(|(bi, bd, _buf)| (bi, bd))
         .reduce(|| (usize::MAX, f32::MAX), |a, b| if a.1 <= b.1 { a } else { b });
 
     if best_idx == usize::MAX {
@@ -428,6 +431,15 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
         let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
+
+        // Free partition's per-thread stripe buffers (~20 MB/thread × 48 threads
+        // ≈ 1 GB) so peak RSS during leaf+HP is max-of-phases instead of
+        // sum-of-phases. Mirrors `release_thread_buffers` for leaf_build.
+        (0..rayon::current_num_threads())
+            .into_par_iter()
+            .for_each_installed(|_| {
+                crate::partition::release_thread_buffers();
+            });
 
         let total_pts: usize = leaves.iter().map(|l| l.indices.len()).sum();
         let leaf_sizes: Vec<usize> = leaves.iter().map(|l| l.indices.len()).collect();
@@ -633,15 +645,9 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 /// Candidates are pre-sorted ascending by HashPrune output.
 // ───── Inline distance kernels for final_prune's inner pair-loop ─────
 //
-// Microbench (BigANN 10M f[8,3] candidate shape, d=128, nc=67):
-//   DistanceProvider dispatch path: 6.10 ns/dist, 164 M dist/s
-//   Inline AVX-512 d=128:           3.69 ns/dist, 271 M dist/s  (1.66x faster)
-//   Inline AVX-2+FMA d=128:         4.91 ns/dist, 204 M dist/s  (1.24x faster)
-//
-// The DistanceProvider path's overhead is the indirect-fn-pointer call plus
-// the closure boundary, NOT the FMA work (perf annotate proved V4 contains
-// the actual vfmadd231ps loop). Inlining a d=128 const-generic kernel right
-// in the inner loop avoids the call boundary entirely.
+// The `DistanceProvider` path indirects through a fn pointer + closure on
+// every pair; the inline kernels below skip that boundary so the FMA chain
+// stays in the same basic block as the alpha-occlusion check.
 
 /// AVX-512 squared-L2 for any `d`. Two-accumulator FMA chain over 32-wide
 /// pairs (2 ZMM per iter) to hide FMA latency; tail handled with a 16-wide
@@ -754,7 +760,7 @@ impl FinalPruneKernel {
     }
 }
 
-fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
+pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     data: &[T],
     ndims: usize,
     candidates_per_node: &[Vec<(u32, f32)>],
@@ -890,13 +896,10 @@ fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 
 
 /// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
-/// loop given pre-computed partition leaves and an initialized [`HashPrune`].
-///
-/// Mirrors the inner block of [`build_internal_impl`] (the `par_chunks(LEAF_BATCH)`
-/// loop, lines around 460-492). Returns `(wall_secs, total_edges)`.
-///
-/// Used by isolation benches/perf profiles to attribute cycles strictly to
-/// leaf+HP without partition / LSH-init / extract / final-prune contamination.
+/// loop given pre-computed partition leaves and an initialised [`HashPrune`].
+/// Returns `(wall_secs, total_edges)`. Used by isolation benches/perf profiles
+/// to attribute cycles strictly to leaf+HP without partition / LSH-init /
+/// extract / final-prune contamination.
 ///
 /// Gated behind the `bench` feature so it is not part of the production API
 /// surface; callers exercising it must opt in.

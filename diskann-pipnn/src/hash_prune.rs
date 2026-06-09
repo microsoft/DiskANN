@@ -29,6 +29,120 @@ use diskann_vector::bf16::{bf16_to_f32, f32_to_bf16};
 use diskann_vector::lsh::LshSketches;
 use rayon::prelude::*;
 
+/// Owned slab allocated via direct `mmap(MAP_PRIVATE | MAP_ANONYMOUS)`. The
+/// kernel backs the range with its zero-page until first write, so we get
+/// true lazy faulting for the AoSoA cold slabs — mimalloc's `eager_commit`
+/// would otherwise pre-fault every page during construction (the +1.46 s
+/// LSH-init tax measured pre-fix).
+#[cfg(target_os = "linux")]
+struct MmapSlab<T> {
+    ptr: *mut T,
+    len: usize,
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl<T: Send> Send for MmapSlab<T> {}
+#[cfg(target_os = "linux")]
+unsafe impl<T: Sync> Sync for MmapSlab<T> {}
+
+#[cfg(target_os = "linux")]
+impl<T> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> Self {
+        if len == 0 {
+            return Self {
+                ptr: std::ptr::NonNull::<T>::dangling().as_ptr(),
+                len: 0,
+            };
+        }
+        let bytes = len * std::mem::size_of::<T>();
+        // SAFETY: MAP_ANONYMOUS gives a zero-backed VA region; PROT_RW makes
+        // it readable/writable. Pages allocate on first write only.
+        unsafe {
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                bytes,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(
+                ptr,
+                libc::MAP_FAILED,
+                "MmapSlab mmap failed for {} bytes",
+                bytes
+            );
+            Self {
+                ptr: ptr as *mut T,
+                len,
+            }
+        }
+    }
+
+    #[inline]
+    fn as_ptr(&self) -> *const T {
+        self.ptr
+    }
+
+    #[inline]
+    fn bytes(&self) -> usize {
+        self.len * std::mem::size_of::<T>()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<T> Drop for MmapSlab<T> {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            // SAFETY: ptr was returned by mmap with this byte count.
+            unsafe {
+                libc::munmap(self.ptr as *mut libc::c_void, self.bytes());
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<T> std::ops::Deref for MmapSlab<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        // SAFETY: ptr+len describe a valid initialized slice (zero-init).
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+/// Fallback slab for non-Linux: regular Vec. Eager-fault behavior tracks the
+/// host allocator. Only Linux gets the mmap fast path.
+#[cfg(not(target_os = "linux"))]
+struct MmapSlab<T>(Vec<T>);
+
+#[cfg(not(target_os = "linux"))]
+impl<T: Copy + Default> MmapSlab<T> {
+    fn new_zeroed(len: usize) -> Self {
+        Self(vec![T::default(); len])
+    }
+    #[inline]
+    fn as_ptr(&self) -> *const T {
+        self.0.as_ptr()
+    }
+    #[inline]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    #[inline]
+    fn bytes(&self) -> usize {
+        self.len() * std::mem::size_of::<T>()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl<T> std::ops::Deref for MmapSlab<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
 /// Compile-time bound on reservoir size. Equals `PiPNNConfig` default
 /// (l_max = 128). `find_hash_simd` scans L_MAX_MAX/32 = 4 AVX-512 chunks.
 pub(crate) const L_MAX_MAX: usize = 128;
@@ -207,6 +321,52 @@ unsafe fn find_hash_scalar(hashes: *const u16, len: usize, target: u16) -> Optio
     None
 }
 
+// ─── relative_hash_local: AoSoA-friendly per-pair sketch comparison ───────────
+//
+// `relative_hash_local(src, dst, m)` returns the `m`-bit pattern formed by
+// `sign(dst[j] - src[j])` for j in 0..m. Used as the in-leaf LSH bucket for HP
+// insertion (the "local sketch" cache hits L1).
+//
+// Runtime SIMD dispatch via `cpu_dispatch::tier()` — the previous
+// implementation cfg-gated the AVX-512 path on compile-time `target_feature =
+// "avx512f"`, which was DEAD CODE in shipped binaries because the workspace
+// pins x86-64-v3 (AVX-2). Switching to runtime dispatch via `#[target_feature]
+// unsafe fn` emits every tier in the binary regardless of build target.
+
+/// SAFETY: `src` / `dst` must point at `m` valid `f32` slots, `m <= 16`.
+#[inline]
+unsafe fn relative_hash_local(src: *const f32, dst: *const f32, m: usize) -> u16 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        match crate::cpu_dispatch::tier() {
+            crate::cpu_dispatch::SimdTier::Avx512 => {
+                return relative_hash_local_avx512(src, dst, m);
+            }
+            crate::cpu_dispatch::SimdTier::Avx2 | crate::cpu_dispatch::SimdTier::Scalar => {}
+        }
+    }
+    let mut h: u16 = 0;
+    for j in 0..m {
+        let diff = *dst.add(j) - *src.add(j);
+        let bit = ((!diff.is_sign_negative()) as u16) << j;
+        h |= bit;
+    }
+    h
+}
+
+/// SAFETY: caller guarantees AVX-512F at runtime. `m <= 16` enforced upstream.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn relative_hash_local_avx512(src: *const f32, dst: *const f32, m: usize) -> u16 {
+    use std::arch::x86_64::*;
+    let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
+    let dst_v = _mm512_maskz_loadu_ps(kmask, dst);
+    let src_v = _mm512_maskz_loadu_ps(kmask, src);
+    let diff = _mm512_sub_ps(dst_v, src_v);
+    let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
+    mask & kmask
+}
+
 // ─── Per-reservoir mutation helpers (caller holds lock) ───────────────────────
 
 /// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
@@ -285,6 +445,11 @@ unsafe fn insert_locked(
     false
 }
 
+/// Collect the reservoir's entries sorted by distance, truncated to
+/// `max_degree`. Uses a stack-allocated `[(u32, u16); L_MAX_MAX]` scratch
+/// instead of two heap Vec allocs per call — at 10M points this saves 20M
+/// short-lived heap allocations on the extract path.
+///
 /// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
 /// `scan_lanes` elements each.
 unsafe fn get_neighbors_saturated(
@@ -293,12 +458,19 @@ unsafe fn get_neighbors_saturated(
     max_degree: usize,
 ) -> Vec<(u32, f32)> {
     let n = hot.len as usize;
-    let mut tmp: Vec<(u32, u16)> = (0..n)
-        .map(|i| (*cold.neighbors.add(i), *cold.distances.add(i)))
-        .collect();
-    tmp.sort_unstable_by_key(|&(_, d)| d);
-    tmp.truncate(max_degree);
-    tmp.into_iter().map(|(id, d)| (id, bf16_to_f32(d))).collect()
+    debug_assert!(n <= L_MAX_MAX);
+
+    let mut scratch = [(0u32, 0u16); L_MAX_MAX];
+    for i in 0..n {
+        scratch[i] = (*cold.neighbors.add(i), *cold.distances.add(i));
+    }
+    scratch[..n].sort_unstable_by_key(|&(_, d)| d);
+    let out_len = n.min(max_degree);
+    let mut out = Vec::with_capacity(out_len);
+    for &(id, d) in &scratch[..out_len] {
+        out.push((id, bf16_to_f32(d)));
+    }
+    out
 }
 
 // ─── Test-only thin wrapper preserving the old HashPruneReservoir API ─────────
@@ -375,11 +547,11 @@ impl HashPruneReservoir {
 pub struct HashPrune {
     hot: Vec<HotSlot>,
     /// AoSoA hashes slab: `npoints * scan_lanes` u16.
-    cold_hashes: Vec<u16>,
+    cold_hashes: MmapSlab<u16>,
     /// AoSoA distances slab (bf16 in u16): `npoints * scan_lanes`.
-    cold_distances: Vec<u16>,
+    cold_distances: MmapSlab<u16>,
     /// AoSoA neighbors slab: `npoints * scan_lanes` u32.
-    cold_neighbors: Vec<u32>,
+    cold_neighbors: MmapSlab<u32>,
     /// Per-slot stride. Equals `round_up_to_32(l_max).max(32)`. Always a
     /// multiple of 32 so the AVX-512 / AVX-2 find_hash scan stays aligned.
     scan_lanes: usize,
@@ -435,33 +607,32 @@ impl HashPrune {
             hot.push(HotSlot::new_empty());
         }
 
-        // Three cold slabs, each `npoints * scan_lanes` elements. At
-        // scan_lanes = 64 (l_max = 33..=64) the total cold cost per point is
-        // 64 * 8 = 512 B; at scan_lanes = 128 (l_max = 97..=128) it is 1024 B.
-        // Zero-initialised so find_hash on an empty reservoir is a no-op.
+        // Three cold slabs, each `npoints * scan_lanes` elements, allocated
+        // via mmap so the kernel keeps them zero-backed (no physical pages
+        // until first write). At scan_lanes = 64 the per-point cold cost is
+        // 64 * 8 = 512 B; at scan_lanes = 128 it is 1024 B. Reservoirs that
+        // never fill past the avg fill don't touch the high pages.
         let total = npoints
             .checked_mul(scan_lanes)
             .expect("HashPrune slab size overflowed usize");
-        let cold_hashes = vec![0u16; total];
-        let cold_distances = vec![0u16; total];
-        let cold_neighbors = vec![0u32; total];
+        let cold_hashes = MmapSlab::<u16>::new_zeroed(total);
+        let cold_distances = MmapSlab::<u16>::new_zeroed(total);
+        let cold_neighbors = MmapSlab::<u32>::new_zeroed(total);
 
-        // All slabs contiguous → madvise hugepages so DTLB pressure scales
-        // with 2 MB pages instead of 4 KB. No-op on kernels without THP.
+        // Hint hugepages on slabs > 2 MB so DTLB pressure scales with 2 MB
+        // pages instead of 4 KB. Non-fatal on failure; no-op on kernels
+        // without THP.
         #[cfg(target_os = "linux")]
         {
             let hot_bytes = hot.len() * std::mem::size_of::<HotSlot>();
-            let hashes_bytes = cold_hashes.len() * std::mem::size_of::<u16>();
-            let distances_bytes = cold_distances.len() * std::mem::size_of::<u16>();
-            let neighbors_bytes = cold_neighbors.len() * std::mem::size_of::<u32>();
-            // SAFETY: each Vec backs a contiguous allocation of the indicated
+            // SAFETY: each slab backs a contiguous allocation of the indicated
             // byte length. madvise is non-fatal on failure.
             unsafe {
                 for (ptr, bytes) in [
                     (hot.as_ptr() as *mut libc::c_void, hot_bytes),
-                    (cold_hashes.as_ptr() as *mut libc::c_void, hashes_bytes),
-                    (cold_distances.as_ptr() as *mut libc::c_void, distances_bytes),
-                    (cold_neighbors.as_ptr() as *mut libc::c_void, neighbors_bytes),
+                    (cold_hashes.as_ptr() as *mut libc::c_void, cold_hashes.bytes()),
+                    (cold_distances.as_ptr() as *mut libc::c_void, cold_distances.bytes()),
+                    (cold_neighbors.as_ptr() as *mut libc::c_void, cold_neighbors.bytes()),
                 ] {
                     if bytes > 2 * 1024 * 1024 {
                         libc::madvise(ptr, bytes, libc::MADV_HUGEPAGE);
@@ -670,30 +841,10 @@ impl HashPrune {
                     let global_dst = local_indices[dst_local as usize];
                     let dst_sketch =
                         &local_sketches[dst_local as usize * m..(dst_local as usize + 1) * m];
-                    let hash: u16;
-                    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-                    {
-                        use std::arch::x86_64::*;
-                        let kmask: u16 = if m >= 16 { 0xFFFF } else { (1u16 << m) - 1 };
-                        // SAFETY: AVX-512 cfg-gated; masked load bounded by kmask.
-                        unsafe {
-                            let dst_v = _mm512_maskz_loadu_ps(kmask, dst_sketch.as_ptr());
-                            let src_v = _mm512_maskz_loadu_ps(kmask, src_sketch.as_ptr());
-                            let diff = _mm512_sub_ps(dst_v, src_v);
-                            let mask = _mm512_cmp_ps_mask::<_CMP_GE_OQ>(diff, _mm512_setzero_ps());
-                            hash = mask & kmask;
-                        }
-                    }
-                    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-                    {
-                        let mut h: u16 = 0;
-                        for j in 0..m {
-                            let diff = dst_sketch[j] - src_sketch[j];
-                            let bit = ((!diff.is_sign_negative()) as u16) << j;
-                            h |= bit;
-                        }
-                        hash = h;
-                    }
+                    debug_assert!(m <= 16, "num_planes <= 16 enforced by validate");
+                    // SAFETY: m <= 16, sketches are m-elt slices.
+                    let hash =
+                        unsafe { relative_hash_local(src_sketch.as_ptr(), dst_sketch.as_ptr(), m) };
                     // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
                     unsafe { insert_locked(hot, cold, hash, global_dst, dist, l_max) };
                 }
@@ -715,8 +866,14 @@ impl HashPrune {
         self.sketches.num_planes()
     }
 
-    pub fn extract_graph(self) -> Vec<Vec<u32>> {
-        let max_degree = self.max_degree;
+    /// Consume self and parallel-extract one per-point row from the cold slabs.
+    /// `cap` truncates each reservoir; `project` maps the sorted
+    /// `(neighbor, dist_f32)` pairs into the caller's output type.
+    fn extract_into<R, F>(self, cap: usize, project: F) -> Vec<Vec<R>>
+    where
+        R: Send,
+        F: Fn((u32, f32)) -> R + Sync,
+    {
         let scan_lanes = self.scan_lanes;
         drop(self.sketches);
         let HashPrune {
@@ -726,45 +883,31 @@ impl HashPrune {
             cold_neighbors,
             ..
         } = self;
-        let extract = |i: usize| -> Vec<u32> {
-            let off = i * scan_lanes;
-            let cold = ColdSlotPtrs {
-                hashes: (cold_hashes.as_ptr() as *mut u16).wrapping_add(off),
-                distances: (cold_distances.as_ptr() as *mut u16).wrapping_add(off),
-                neighbors: (cold_neighbors.as_ptr() as *mut u32).wrapping_add(off),
-                scan_lanes,
-            };
-            // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
-            let mut nbrs = unsafe { get_neighbors_saturated(&hot[i], cold, max_degree) };
-            nbrs.truncate(max_degree);
-            nbrs.into_iter().map(|(id, _)| id).collect()
-        };
-        (0..hot.len()).into_par_iter().map(extract).collect_installed()
+        (0..hot.len())
+            .into_par_iter()
+            .map(|i| {
+                let off = i * scan_lanes;
+                let cold = ColdSlotPtrs {
+                    hashes: (cold_hashes.as_ptr() as *mut u16).wrapping_add(off),
+                    distances: (cold_distances.as_ptr() as *mut u16).wrapping_add(off),
+                    neighbors: (cold_neighbors.as_ptr() as *mut u32).wrapping_add(off),
+                    scan_lanes,
+                };
+                // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
+                let nbrs = unsafe { get_neighbors_saturated(&hot[i], cold, cap) };
+                nbrs.into_iter().map(&project).collect()
+            })
+            .collect_installed()
+    }
+
+    pub fn extract_graph(self) -> Vec<Vec<u32>> {
+        let cap = self.max_degree;
+        self.extract_into(cap, |(id, _)| id)
     }
 
     pub fn extract_graph_for_prune(self) -> Vec<Vec<(u32, f32)>> {
-        let l_max = self.l_max;
-        let scan_lanes = self.scan_lanes;
-        drop(self.sketches);
-        let HashPrune {
-            hot,
-            cold_hashes,
-            cold_distances,
-            cold_neighbors,
-            ..
-        } = self;
-        let extract = |i: usize| -> Vec<(u32, f32)> {
-            let off = i * scan_lanes;
-            let cold = ColdSlotPtrs {
-                hashes: (cold_hashes.as_ptr() as *mut u16).wrapping_add(off),
-                distances: (cold_distances.as_ptr() as *mut u16).wrapping_add(off),
-                neighbors: (cold_neighbors.as_ptr() as *mut u32).wrapping_add(off),
-                scan_lanes,
-            };
-            // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
-            unsafe { get_neighbors_saturated(&hot[i], cold, l_max) }
-        };
-        (0..hot.len()).into_par_iter().map(extract).collect_installed()
+        let cap = self.l_max;
+        self.extract_into(cap, |pair| pair)
     }
 }
 

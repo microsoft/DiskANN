@@ -135,7 +135,6 @@ fn sample_num_leaders(n: usize, p_samp: f64, leader_cap: usize) -> usize {
         .min(n)
 }
 
-use diskann_vector::topk::topk_insert;
 
 /// A cluster that needs further partitioning.
 struct WorkItem {
@@ -344,12 +343,21 @@ thread_local! {
     static STRIPE_BUFS: RefCell<StripeBuffers> = RefCell::new(StripeBuffers::new());
 }
 
+/// Free this thread's partition stripe buffers (typically called after the
+/// partition phase finishes, so they don't sum into the leaf-build /
+/// HP-extract peak RSS). Mirror of [`crate::leaf_build::release_thread_buffers`].
+pub(crate) fn release_thread_buffers() {
+    STRIPE_BUFS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        bufs.p_data = Vec::new();
+        bufs.dots = Vec::new();
+    });
+}
+
 /// SIMD batch fp16 → fp32 gather. When `T` is `half::f16` (size 2, align 2),
 /// runtime-cast `&[T]` to `&[u16]` and use AVX-512 `vcvtph2ps` to convert
-/// 16 lanes per instruction. The generic `T::as_f32_into` path in
-/// `diskann::utils::vector_repr` defaults to a `.zip().map(.into())` loop
-/// that the compiler doesn't fully SIMD-batch, which surfaced as
-/// `Map::next` overhead in the c4-48 PMU profile after `||p||²` precompute.
+/// 16 lanes per instruction. Faster than the generic `T::as_f32_into` path
+/// for fp16 input.
 ///
 /// SAFETY: only enters the SIMD path when `size_of::<T>() == 2` and
 /// `align_of::<T>() == 2` — matches `half::f16`'s `repr(transparent) u16`
@@ -643,10 +651,9 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
                     &mut p_slice[i * ndims..(i + 1) * ndims]);
             }
             diskann_linalg::sgemm_abt(p_slice, np, ndims, &l_data, nl, dots_slice);
-            // Batch-precompute ||p||² for all rows in one tight SIMD loop.
-            // Previously process_row computed this per call via
-            //   `p_row.iter().map(|v| v*v).sum()` which showed up as 10% of
-            // partition cycles in the c4-48 PMU profile (Map::next).
+            // Batch-precompute ||p||² for all rows in one tight SIMD loop —
+            // hoisted out of `process_row` so the inner per-leader loop
+            // doesn't recompute it every call.
             let p_norm_sq = compute_p_norm_sq_batch(p_slice, np, ndims);
             for i in 0..np {
                 let dot_row = &dots_slice[i * nl..(i + 1) * nl];

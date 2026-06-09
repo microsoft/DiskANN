@@ -3,16 +3,13 @@
  * Licensed under the MIT license.
  */
 
-//! Per-row distance + top-K kernel, shared by v1 (`partition`) and v2
-//! (`partition_v2`). One row = one point's dot products vs all leaders →
-//! the row's `num_assign` nearest leaders, written into `out`.
+//! Per-row distance + top-K kernel used by `partition::assign_to_leaders`.
+//! One row = one point's dot products vs all leaders → the row's
+//! `num_assign` nearest leader indices, written into `out`.
 //!
-//! Extracted verbatim from the v1 inner closure: same SIMD codepaths
-//! (AVX-512, AVX2, scalar) per metric. The cfg-gated compile-time selection
-//! has been replaced with runtime dispatch via `cpu_dispatch::tier()` —
-//! each metric arm now matches on tier and calls a `#[target_feature]`
-//! `unsafe fn` whose body is byte-for-byte equivalent to the original
-//! cfg block. The match runs once per `process_row` call (per point).
+//! Runtime SIMD dispatch via `cpu_dispatch::tier()`: each metric arm matches
+//! on tier and calls a `#[target_feature]` `unsafe fn`. The tier match runs
+//! once per `process_row` call (per point).
 
 use diskann_vector::distance::Metric;
 use diskann_vector::topk::topk_insert;

@@ -41,13 +41,16 @@ pub(crate) struct LeafBuffers {
     /// HP. Sized by ensure_capacity to fit `n + 1` starts and `2 * n * k` entries.
     pub group_starts: Vec<u32>,
     pub group_data: Vec<(u32, f32)>,
+    /// Per-source write cursor used during the CSR pass-2 fill. Initialised
+    /// from `group_starts[..n]` at the start of each leaf's CSR build.
+    pub cursor: Vec<u32>,
     /// L1-resident per-leaf cache of LSH sketches for the leaf's local points.
     /// Sized `n × num_planes`. Populated alongside `local_data` in gather so HP
     /// insert reads from this buffer (cache-hot) instead of the global sketches
     /// array (multi-hundred-MB, cache-cold).
     pub local_sketches: Vec<f32>,
     /// Per-row top-k threshold (current k-th smallest distance) for the fused
-    /// dual-end scan path (v3). Sized `n`. Initialised to `f32::MAX`.
+    /// dual-end scan. Sized `n`. Initialised to `f32::MAX`.
     pub worst: Vec<f32>,
 }
 
@@ -69,6 +72,7 @@ impl LeafBuffers {
             cosine_denoms: Vec::new(),
             group_starts: Vec::new(),
             group_data: Vec::new(),
+            cursor: Vec::new(),
             local_sketches: Vec::new(),
             worst: Vec::new(),
         }
@@ -918,7 +922,8 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
     if bufs.group_data.len() < total_edges_n {
         bufs.group_data.resize(total_edges_n, (0, 0.0));
     }
-    let mut cursor: Vec<u32> = bufs.group_starts[..n].to_vec();
+    bufs.cursor.clear();
+    bufs.cursor.extend_from_slice(&bufs.group_starts[..n]);
     seen.fill(false);
     for i in 0..n {
         let row_knn = &bufs.knn_result[i * actual_k..(i + 1) * actual_k];
@@ -929,15 +934,15 @@ pub(crate) fn build_leaf_with_buffers<T: VectorRepr + 'static>(
             let dst = dst_local as usize;
             if !seen[i * n + dst] {
                 seen[i * n + dst] = true;
-                let pos = cursor[i] as usize;
+                let pos = bufs.cursor[i] as usize;
                 bufs.group_data[pos] = (dst_local, dist);
-                cursor[i] = (pos + 1) as u32;
+                bufs.cursor[i] = (pos + 1) as u32;
             }
             if !seen[dst * n + i] {
                 seen[dst * n + i] = true;
-                let pos = cursor[dst] as usize;
+                let pos = bufs.cursor[dst] as usize;
                 bufs.group_data[pos] = (i as u32, dist);
-                cursor[dst] = (pos + 1) as u32;
+                bufs.cursor[dst] = (pos + 1) as u32;
             }
         }
     }

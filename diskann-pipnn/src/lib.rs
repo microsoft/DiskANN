@@ -19,6 +19,7 @@ pub mod partition;
 pub(crate) mod partition_inner;
 pub(crate) mod rayon_util;
 
+
 use std::num::NonZeroUsize;
 
 use diskann_vector::distance::Metric;
@@ -167,21 +168,22 @@ impl PiPNNConfig {
 }
 
 impl Default for PiPNNConfig {
-    /// Defaults are tuned for BigANN 10M 128d squared_l2. They are NOT a
-    /// universal best — high-dimensional embeddings (768d+), small datasets,
-    /// or non-Euclidean metrics typically need their own sweep. The CLAUDE.md
-    /// memory in this repo records measured-good parameter sets per dataset.
+    /// Production-measured defaults: lighter `c_max`/`l_max` than the paper's
+    /// initial recommendation, but matched on recall in the project's
+    /// benchmark sweeps (see CLAUDE.md). Halves HP RSS vs the paper config at
+    /// equal quality. High-dimensional embeddings (768d+) or non-Euclidean
+    /// metrics may still want a workload-specific sweep.
     fn default() -> Self {
         Self {
-            num_hash_planes: 12,
-            c_max: 1024,
-            c_min: 256,
+            num_hash_planes: 14,
+            c_max: 256,
+            c_min: 16,
             p_samp: 0.005,
-            fanout: vec![10, 3],
-            k: 3,
+            fanout: vec![8, 3],
+            k: 2,
             replicas: 1,
-            l_max: 128,
-            final_prune: false,
+            l_max: 64,
+            final_prune: true,
             alpha: 1.2,
             leader_cap: 1000,
             saturate_after_prune: false,
