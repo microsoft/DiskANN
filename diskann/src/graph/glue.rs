@@ -1017,7 +1017,6 @@ mod tests {
         // as_ref borrows without consuming
         let d = Decision::Accept(vec![1, 2, 3]);
         assert_eq!(d.as_ref().into_inner(), &[1, 2, 3]);
-        drop(d); // original still valid
 
         // as_mut allows in-place mutation
         let mut d = Decision::Reject(10);

@@ -39,7 +39,7 @@ use crate::{
     utils::VectorId,
 };
 
-/// Decide whether or not a vector ID is accepted or reject for a filtered search.
+/// Decide whether or not a vector ID is accepted or rejected for a filtered search.
 pub trait QueryLabelProvider<I>: std::fmt::Debug + Send + Sync
 where
     I: VectorId,
