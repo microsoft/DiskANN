@@ -237,11 +237,8 @@ fn reject_triggers_two_hop_expansion() {
     assert!(stats.hops > 0, "should have expanded at least one hop");
 }
 
-/// RejectAll filter: on_visit rejects everything → only start point in best set,
-/// two-hop expansion tries but finds nothing matching (is_match returns true, but
-/// on_visit already rejected the one-hop node so two-hop candidates come from rejected).
 #[test]
-fn reject_all_yields_only_start() {
+fn reject_all_yields_nothing() {
     let start_id = 10u32;
     let provider = build_1d_provider(
         start_id,
@@ -260,14 +257,11 @@ fn reject_all_yields_only_start() {
 
     let (_stats, results) = run_internal(&provider, &[0.5], 5, 10, 2, &RejectAll);
 
-    // Only the start point should be in the best set — all one-hop neighbors
-    // were rejected. Two-hop expansion goes through rejected nodes but RejectAll's
-    // is_match returns true, so two-hop neighbors that pass NotInMutWithLabelCheck
-    // get inserted. Let's just verify the search completed without panic.
-    assert!(
-        !results.is_empty(),
-        "at least the start point should be present"
-    );
+    // Nothing should be present in the result, not even the start point since it does not
+    // satisfy the predicate.
+    //
+    // This mainly checks that search didn't explode.
+    assert!(results.is_empty(), "all points are rejected");
 }
 
 ///////////////////////////////

@@ -2,9 +2,9 @@
   "file": "diskann/src/graph/test/cases/multihop.rs",
   "test": "graph/test/cases/multihop/even_filtering_grid",
   "payload": {
-    "comparisons": 145,
+    "comparisons": 147,
     "grid_size": 7,
-    "hops": 101,
+    "hops": 103,
     "k": 20,
     "l": 40,
     "query": [
