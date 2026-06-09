@@ -441,7 +441,7 @@ pub(crate) struct BfTreeSphericalBuild {
 
 impl BfTreeSphericalBuild {
     pub(crate) const fn tag() -> &'static str {
-        "graph-index-build-bftree-spherical-quantization"
+        "graph-index-bftree-spherical-quantization"
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {

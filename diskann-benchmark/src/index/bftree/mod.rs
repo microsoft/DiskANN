@@ -12,7 +12,7 @@
 //! Registered tags:
 //! - `graph-index-bftree-full-precision-f32` — static FP build + search
 //! - `graph-index-bftree-stream-full-precision-f32` — streaming FP
-//! - `graph-index-build-bftree-spherical-quantization` — static spherical (1/2/4-bit)
+//! - `graph-index-build-spherical-quantization` — static spherical (1/2/4-bit)
 //! - `graph-index-stream-bftree-spherical-quantization` — streaming spherical (1/2/4-bit)
 
 use diskann_benchmark_runner::Registry;
@@ -36,7 +36,7 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     )?;
 
     registry.register(
-        "graph-index-build-bftree-spherical-quantization",
+        "graph-index-bftree-spherical-quantization",
         spherical::BfTreeSpherical::new().search(Topk),
     )?;
 
