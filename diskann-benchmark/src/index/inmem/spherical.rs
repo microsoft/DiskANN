@@ -11,7 +11,7 @@ crate::utils::stub_impl!(
     inputs::graph_index::SphericalQuantBuild
 );
 
-pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
     #[cfg(feature = "spherical-quantization")]

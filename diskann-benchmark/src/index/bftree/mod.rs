@@ -12,12 +12,11 @@
 //! Registered tags:
 //! - `graph-index-bftree-full-precision-f32` — static FP build + search
 //! - `graph-index-bftree-stream-full-precision-f32` — streaming FP
-//! - `graph-index-build-spherical-quantization` — static spherical (1/2/4-bit)
+//! - `graph-index-bftree-spherical-quantization` — static spherical (1/2/4-bit)
 //! - `graph-index-stream-bftree-spherical-quantization` — streaming spherical (1/2/4-bit)
 
-use diskann_benchmark_runner::Registry;
-
 use super::search::plugins::Topk;
+use diskann_benchmark_runner::Registry;
 
 mod full_precision;
 mod full_precision_streaming;

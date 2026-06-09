@@ -11,7 +11,7 @@ crate::utils::stub_impl!(
     inputs::graph_index::IndexPQOperation
 );
 
-pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "product-quantization")]
     {
         use crate::index::search::plugins;

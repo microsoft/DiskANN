@@ -21,7 +21,7 @@ use diskann_providers::model::graph::provider::async_::{
 use diskann_utils::future::AsyncFriendly;
 use tokio::runtime::Runtime;
 
-use super::{
+use crate::index::streaming::{
     runner::Maintainer,
     stats::{GenericStats, StreamStats},
 };

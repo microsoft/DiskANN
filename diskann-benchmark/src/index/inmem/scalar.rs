@@ -8,7 +8,7 @@ use diskann_benchmark_runner::Registry;
 // Create a stub-module if the "scalar-quantization" feature is disabled.
 crate::utils::stub_impl!("scalar-quantization", inputs::graph_index::IndexSQOperation);
 
-pub(super) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
+pub(crate) fn register_benchmarks(benchmarks: &mut Registry) -> anyhow::Result<()> {
     #[cfg(feature = "scalar-quantization")]
     {
         use crate::index::search::plugins::Topk;

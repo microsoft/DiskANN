@@ -10,12 +10,10 @@ use diskann_benchmark_core::streaming::{executors::bigann, Executor};
 use diskann_benchmark_runner::output::Output;
 use diskann_utils::views::Matrix;
 
-pub(crate) mod full_precision;
 pub(crate) mod managed;
 pub(crate) mod runner;
 pub(crate) mod stats;
 
-pub(crate) use full_precision::InmemMaintainer;
 pub(crate) use managed::{Managed, ManagedStream};
 #[cfg(feature = "bftree")]
 pub(crate) use runner::BfTreeMaintainer;

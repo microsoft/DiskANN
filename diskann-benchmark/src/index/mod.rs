@@ -10,12 +10,8 @@ mod search;
 mod streaming;
 
 mod benchmarks;
+mod inmem;
 mod result;
-
-// Feature based backends.
-mod product;
-mod scalar;
-mod spherical;
 
 #[cfg(feature = "bftree")]
 mod bftree;

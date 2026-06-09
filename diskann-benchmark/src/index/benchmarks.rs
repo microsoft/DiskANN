@@ -34,13 +34,15 @@ use half::f16;
 
 use super::{
     build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-    product, scalar, search, spherical,
+    inmem::{product, scalar, spherical},
+    search,
 };
 use crate::{
     index::{
+        inmem::InmemMaintainer,
         result::{AggregatedSearchResults, BuildResult},
         search::plugins,
-        streaming::{self, managed, stats::StreamStats, InmemMaintainer, Managed, StreamRunner},
+        streaming::{self, managed, stats::StreamStats, Managed, StreamRunner},
     },
     inputs::graph_index::{
         IndexBuild, IndexOperation, IndexSource, SearchPhase, StreamingIndexRun,
