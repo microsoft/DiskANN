@@ -145,7 +145,7 @@ mod imp {
                     match input.index_operation.source {
                         IndexSource::Load(_) => {}
                         IndexSource::Build(ref build) => {
-                            if build.multi_insert.is_some() {
+                            if build.multi_insert().is_some() {
                                 failure_score = Some(1);
                             }
                         }
@@ -211,7 +211,7 @@ mod imp {
                             }
 
                             if let IndexSource::Build(ref build) = input.index_operation.source {
-                                if build.multi_insert.is_some() {
+                                if build.multi_insert().is_some() {
                                     writeln!(
                                         f,
                                         "- Scalar Quantization does not support multi-insert"
@@ -259,7 +259,7 @@ mod imp {
                         }
                         IndexSource::Build(build) => {
                             let data: Arc<Matrix<$T>> =
-                                Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
+                                Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                         let start = std::time::Instant::now();
                         let quantizer = diskann_quantization::scalar::train::ScalarQuantizationParameters::new(
@@ -277,7 +277,7 @@ mod imp {
                             inmem::WithBits::<$N>::new(quantizer),
                             common::NoDeletes,
                         )?;
-                        build::set_start_points(index.provider(), data_view, build.start_point_strategy)?;
+                        build::set_start_points(index.provider(), data_view, *build.start_point_strategy())?;
                         Ok(index)
                     };
 
@@ -292,7 +292,7 @@ mod imp {
                             only_single_insert,
                         )?;
 
-                        if let Some(save_path) = &build.save_path {
+                        if let Some(save_path) = build.save_path() {
                             utils::tokio::block_on(save_index(index.clone(), save_path))?;
                         }
 

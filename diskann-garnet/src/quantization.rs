@@ -42,6 +42,8 @@ pub(crate) trait GarnetQuantizer: Send + Sync {
     fn required_vectors(&self) -> usize;
     /// Returns the size of a quantized vector
     fn bytes(&self) -> usize;
+    /// Return whether the quantizer is trained.
+    fn is_trained(&self) -> bool;
     /// Train the quantizer.
     /// Each row of the matrix will be a vector.
     /// Returns a lock guard for purposes of synchronization; after the guard is released, the
@@ -91,6 +93,10 @@ impl GarnetQuantizer for Spherical1Bit {
 
     fn bytes(&self) -> usize {
         Data::<1, GlobalAllocator>::canonical_bytes(self.dim)
+    }
+
+    fn is_trained(&self) -> bool {
+        self.inner.read().unwrap().is_some()
     }
 
     fn train(
@@ -229,6 +235,10 @@ impl GarnetQuantizer for MinMax8Bit {
 
     fn bytes(&self) -> usize {
         minmax::Data::<8>::canonical_bytes(self.inner.dim())
+    }
+
+    fn is_trained(&self) -> bool {
+        true
     }
 
     fn train(&self, _metric: Metric, _data: MatrixView<f32>) -> Result<(), GarnetQuantizerError> {

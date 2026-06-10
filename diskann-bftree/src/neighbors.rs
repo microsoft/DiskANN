@@ -9,11 +9,11 @@ use std::marker::PhantomData;
 
 use crate::AsKey;
 use bf_tree::{BfTree, Config};
-use bytemuck::{bytes_of, cast_slice, cast_slice_mut};
+use bytemuck::{bytes_of, cast_slice, cast_slice_mut, from_bytes};
 use diskann::{
     graph::AdjacencyList,
-    provider::HasId,
-    utils::{IntoUsize, TryIntoVectorId, VectorId},
+    provider::{self, HasId},
+    utils::{IntoUsize, VectorId},
     ANNError, ANNResult,
 };
 
@@ -37,16 +37,18 @@ impl<I: VectorId> NeighborProvider<I> {
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
-        Ok(Self::new(max_degree, adj_list_index))
+        Self::new(max_degree, adj_list_index)
     }
 
-    fn new(max_degree: u32, adjacency_list_index: BfTree) -> Self {
-        Self {
+    fn new(max_degree: u32, adjacency_list_index: BfTree) -> ANNResult<Self> {
+        let dim = 1 + max_degree.into_usize();
+
+        Ok(Self {
             adjacency_list_index,
-            dim: 1 + max_degree.into_usize(),
+            dim,
             num_get_calls: TestCallCount::default(),
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Access the BfTree config
@@ -67,7 +69,10 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)
     ///
-    pub(crate) fn new_from_bftree(max_degree: u32, adjacency_list_index: BfTree) -> Self {
+    pub(crate) fn new_from_bftree(
+        max_degree: u32,
+        adjacency_list_index: BfTree,
+    ) -> ANNResult<Self> {
         Self::new(max_degree, adjacency_list_index)
     }
 
@@ -114,9 +119,11 @@ impl<I: VectorId> NeighborProvider<I> {
                         ));
                     }
 
-                    // The last entry in the retrieved data is neighbor length
-                    let nbr_count =
-                        guard[(read_size as usize) / std::mem::size_of::<I>() - 1].into_usize();
+                    // The last entry in the retrieved data stores the neighbor count as u32
+                    let count_slot_offset = (read_size as usize) - std::mem::size_of::<I>();
+                    let nbr_count = *from_bytes::<u32>(
+                        &cast_slice::<I, u8>(&guard)[count_slot_offset..count_slot_offset + 4],
+                    ) as usize;
 
                     // The specified list length must be smaller than the retrieved data length
                     if (read_size as usize) < (std::mem::size_of::<I>() * (nbr_count + 1)) {
@@ -150,13 +157,10 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair
     /// K: vector id
-    /// V: |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
-    /// Where list length is the full list length and 'Invalid' indicates unfilled empty slots in the list
+    /// V: |VectorId|...|VectorId|Invalid|...|count (u32 LE)|
+    /// Where count is the neighbor list length and 'Invalid' indicates unfilled empty slots
     /// Note: assuming all neighbors in the input list, 'neighbors', are valid
-    /// Two data copies are involved: 1) Copy from the immutable `neighbors` to the proper byte array with neighbor length
-    /// 2) Copy from the byte array to bf-tree
-    #[allow(clippy::expect_used)]
-    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I]) -> ANNResult<()> {
+    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
@@ -170,21 +174,20 @@ impl<I: VectorId> NeighborProvider<I> {
         let i = vector_id.into_usize();
         let key = i.as_key();
 
-        // Serialize the value, neighbor list, into a byte string, &u[8]
+        // Serialize the value into the reusable buffer.
+        // Format: |VectorId|...|VectorId|count (u32)|
         let neighbor_list_edges_in_byte = cast_slice::<I, u8>(neighbors);
+        let count: u32 = neighbors.len() as u32;
 
-        let neighbor_list_len = neighbors
-            .len()
-            .try_into_vector_id()
-            .expect("Fail to convert #neighbors as neighbor vec Id");
-        let neighbor_list_len_in_byte = bytes_of::<I>(&neighbor_list_len);
+        let total_len = neighbor_list_edges_in_byte.len() + std::mem::size_of::<I>();
 
-        // Format
-        // |VectorId|...|VectorId|VectorId (list length)|
-        let value: &[u8] = &[neighbor_list_edges_in_byte, neighbor_list_len_in_byte].concat();
+        buf[..neighbor_list_edges_in_byte.len()].copy_from_slice(neighbor_list_edges_in_byte);
+        // Zero the count slot then write the u32 count into the low bytes
+        let count_offset = neighbor_list_edges_in_byte.len();
+        buf[count_offset..total_len].fill(0);
+        buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
 
-        // Insert the assembled (K, V) pair into bf-tree
-        self.adjacency_list_index.insert(key, value);
+        self.adjacency_list_index.insert(key, &buf[..total_len]);
 
         Ok(())
     }
@@ -192,9 +195,12 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Append unique vectors into a neighbor list
     /// The newly appended neighbor list will always be extended to 'dim' long to avoid frequent mem copy in bf-tree
     /// Note: assuming all neighbors in the input list, 'new_neighbor_ids', are valid
-    /// Three data copies: 1) get_neighbors 2) copy new neighbors to the neighbor list 3) copy the new neighbor list to bf-tree
-    #[allow(clippy::expect_used)]
-    pub fn append_vector(&self, vector_id: I, new_neighbor_ids: &[I]) -> ANNResult<()> {
+    pub fn append_vector(
+        &self,
+        vector_id: I,
+        new_neighbor_ids: &[I],
+        buf: &mut [u8],
+    ) -> ANNResult<()> {
         // Retrieve existing neighborlist
         let mut neighbor_list = AdjacencyList::with_capacity(self.dim);
         self.get_neighbors(vector_id, &mut neighbor_list)?;
@@ -208,21 +214,30 @@ impl<I: VectorId> NeighborProvider<I> {
             new_neighbor_added |= neighbor_list.push(*new_neighbor_id);
         }
 
-        // If unique new neighbors are appended, then upsert the new neighbor list back into the tree
+        // If unique new neighbors are appended, write back using the reusable buffer
         if new_neighbor_added {
             let nbr_count = neighbor_list.len();
-            let mut neighbor_list: Vec<_> = neighbor_list.into();
-            neighbor_list.resize(self.dim, I::default());
-            neighbor_list[self.dim - 1] =
-                I::from_usize(nbr_count).expect("Fails to cast usize as VectorId");
-
-            // Given that we already have a full sized neighbor list ready to be directly saved in bf-tree
-            // We avoid one data copy by directly writing to bf-tree instead of invoking set_neighbor()
-            // Also avoid a bunch of unnecssary checks
             let i = vector_id.into_usize();
             let key = i.as_key();
-            let value = cast_slice::<I, u8>(&neighbor_list);
-            self.adjacency_list_index.insert(key, value);
+
+            // Build the value into the scratch buffer:
+            // |neighbor_0|...|neighbor_n|padding(Invalid)|...|nbr_count|
+            // Total size is always self.dim elements to avoid bf-tree page fragmentation.
+            let id_size = std::mem::size_of::<I>();
+            let total_len = self.dim * id_size;
+
+            buf[..total_len].fill(0);
+
+            // Copy existing neighbors into the buffer
+            let neighbors_bytes = cast_slice::<I, u8>(&neighbor_list);
+            buf[..neighbors_bytes.len()].copy_from_slice(neighbors_bytes);
+
+            // Write the count at the last slot as a raw u32 (no VectorId round-trip needed)
+            let count: u32 = nbr_count as u32;
+            let count_offset = (self.dim - 1) * id_size;
+            buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
+
+            self.adjacency_list_index.insert(key, &buf[..total_len]);
         }
 
         Ok(())
@@ -235,6 +250,74 @@ impl<I: VectorId> NeighborProvider<I> {
 
         self.adjacency_list_index.delete(key);
         Ok(())
+    }
+
+    pub(crate) fn scratch(&self) -> NeighborAccessor<'_, I> {
+        let buf_size = self.dim * std::mem::size_of::<I>();
+        NeighborAccessor {
+            provider: self,
+            buf: vec![0u8; buf_size],
+        }
+    }
+}
+
+pub struct NeighborAccessor<'a, I>
+where
+    I: VectorId,
+{
+    provider: &'a NeighborProvider<I>,
+    buf: Vec<u8>,
+}
+
+impl<'a, I> NeighborAccessor<'a, I>
+where
+    I: VectorId,
+{
+    pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
+        self.provider.set_neighbors(id, neighbors, &mut self.buf)
+    }
+    pub fn write_append(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
+        self.provider.append_vector(id, neighbors, &mut self.buf)
+    }
+}
+
+impl<'a, I> HasId for NeighborAccessor<'a, I>
+where
+    I: VectorId,
+{
+    type Id = I;
+}
+
+impl<'a, I> provider::NeighborAccessor for NeighborAccessor<'a, I>
+where
+    I: VectorId,
+{
+    fn get_neighbors(
+        &mut self,
+        id: Self::Id,
+        neighbors: &mut AdjacencyList<Self::Id>,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.get_neighbors(id, neighbors))
+    }
+}
+
+impl<'a, I> provider::NeighborAccessorMut for NeighborAccessor<'a, I>
+where
+    I: VectorId,
+{
+    fn set_neighbors(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
+    }
+    fn append_vector(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }
 
@@ -257,57 +340,51 @@ mod tests {
         let bf_tree_config = Config::default();
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
+        let mut scratch = neighbor_provider.scratch();
 
         // Set the neighbor list of a vector
         let adj_list = vec![1, 2, 3];
-        neighbor_provider.set_neighbors(1, &adj_list).unwrap();
+        scratch.write_neighbors(1, &adj_list).unwrap();
 
         let mut result = AdjacencyList::with_capacity(10);
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
         assert_eq!(&*adj_list, &*result);
 
         // Append two neighbors, one of which is a duplicate
-        let mut new_neighbors = vec![9, 2, 9];
-        neighbor_provider.append_vector(1, &new_neighbors).unwrap();
+        let new_neighbors = vec![9, 2, 9];
+        scratch.write_append(1, &new_neighbors).unwrap();
 
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
 
-        let mut adj_list_new = vec![1, 2, 3, 9];
+        let adj_list_new = vec![1, 2, 3, 9];
         assert_eq!(&*adj_list_new, &*result);
 
         // Append three more neighbors, and the last one should be ignored due to max degree
-        new_neighbors = vec![5, 6, 7];
-        neighbor_provider.append_vector(1, &new_neighbors).unwrap();
+        let new_neighbors = vec![5, 6, 7];
+        scratch.write_append(1, &new_neighbors).unwrap();
 
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
 
-        adj_list_new = vec![1, 2, 3, 9, 5, 6];
+        let adj_list_new = vec![1, 2, 3, 9, 5, 6];
         assert_eq!(&*adj_list_new, &*result);
 
         // Overwrite the neighbor list of the vector to empty
-        new_neighbors = vec![];
-        neighbor_provider.set_neighbors(1, &new_neighbors).unwrap();
+        scratch.write_neighbors(1, &[]).unwrap();
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
-
-        assert_eq!(&*new_neighbors, &*result);
+        assert!(result.is_empty());
 
         // Append to an emptied neighbor list
-        new_neighbors = vec![3, 4, 5];
-        neighbor_provider.append_vector(1, &new_neighbors).unwrap();
+        let new_neighbors = vec![3, 4, 5];
+        scratch.write_append(1, &new_neighbors).unwrap();
 
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
-
         assert_eq!(&*new_neighbors, &*result);
 
         neighbor_provider.delete_vector(1).unwrap();
-
         assert!(neighbor_provider.get_neighbors(1, &mut result).is_err());
-
-        new_neighbors = vec![];
-        assert_eq!(&*new_neighbors, &*result);
     }
 
-    /// Test the interleaved and parallell traversal of the Bf-Tree
+    /// Test the interleaved and parallel traversal of the Bf-Tree
     /// by invoking the async accessors of the neighbor list provider
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
@@ -320,10 +397,8 @@ mod tests {
             let neighbor_list = vec![i as u32, (i + 1) as u32, (i + 2) as u32];
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
             set.spawn(async move {
-                // One tokio task per neighbor list insertion
-                neighbor_provider_clone
-                    .set_neighbors(i as u32, &neighbor_list)
-                    .unwrap()
+                let mut scratch = neighbor_provider_clone.scratch();
+                scratch.write_neighbors(i as u32, &neighbor_list).unwrap();
             });
         }
 
@@ -331,9 +406,8 @@ mod tests {
             res.unwrap();
         }
 
-        let mut result = AdjacencyList::with_capacity(neighbor_provider.dim);
+        let mut result = AdjacencyList::with_capacity(121);
         for i in 0..100 {
-            // SAFETY: We're only accessing one at a time.
             neighbor_provider
                 .get_neighbors(i as u32, &mut result)
                 .unwrap();
@@ -355,10 +429,11 @@ mod tests {
 
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
+        let mut scratch = neighbor_provider.scratch();
 
         // Set some neighbor lists
-        neighbor_provider.set_neighbors(1, &[2, 3, 4]).unwrap();
-        neighbor_provider.set_neighbors(2, &[1, 3, 5]).unwrap();
+        scratch.write_neighbors(1, &[2, 3, 4]).unwrap();
+        scratch.write_neighbors(2, &[1, 3, 5]).unwrap();
 
         // Call snapshot - should not panic
         neighbor_provider.adjacency_list_index.snapshot();
@@ -397,18 +472,19 @@ mod tests {
     #[tokio::test]
     async fn test_new_from_bftree() {
         let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
-        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree).unwrap();
 
         assert_eq!(neighbor_provider.max_degree(), 10);
 
         // Verify the provider is functional
-        neighbor_provider.set_neighbors(1, &[2, 3]).unwrap();
+        let mut scratch = neighbor_provider.scratch();
+        scratch.write_neighbors(1, &[2, 3]).unwrap();
         let mut result = AdjacencyList::with_capacity(11);
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
         assert_eq!(&[2, 3], &*result);
     }
 
-    /// Test other methods and edge cases of the vector provider and sycrhnoization mechanism of Bf-Tree
+    /// Test other methods and edge cases of the vector provider and synchronization mechanism of Bf-Tree
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_neighbor_access() {
         let bf_tree_config = Config::default();
@@ -419,13 +495,12 @@ mod tests {
         for _ in 0..5 {
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
             set.spawn(async move {
+                let mut scratch = neighbor_provider_clone.scratch();
                 for i in 0..5 {
-                    neighbor_provider_clone
-                        .set_neighbors(i as u32, &[1, 2, 3, 4, 5])
-                        .unwrap();
+                    scratch.write_neighbors(i as u32, &[1, 2, 3, 4, 5]).unwrap();
                 }
 
-                let mut result = AdjacencyList::with_capacity(neighbor_provider_clone.dim);
+                let mut result = AdjacencyList::with_capacity(121);
                 for i in 0..5 {
                     neighbor_provider_clone
                         .get_neighbors(i as u32, &mut result)
