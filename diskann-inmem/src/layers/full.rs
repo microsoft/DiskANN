@@ -5,13 +5,12 @@
 
 use diskann::{ANNError, ANNResult};
 use diskann_vector::{
-    AsUnaligned,
     distance::{self, DistanceProvider, Metric},
-    UnalignedSlice,
+    AsUnaligned, UnalignedSlice,
 };
 use thiserror::Error;
 
-use crate::layers;
+use crate::{layers, num::Bytes};
 
 /// Full-precision data layer.
 #[derive(Debug)]
@@ -45,28 +44,69 @@ where
     pub fn dim(&self) -> usize {
         self.distance.dim
     }
-}
 
-impl<T> layers::AsDistance for Full<T>
-where
-    T: std::fmt::Debug + 'static,
-{
-    fn as_distance(&self) -> &dyn layers::Distance {
-        &self.distance
+    pub fn bytes(&self) -> Bytes {
+        Bytes(self.dim() * std::mem::size_of::<T>())
     }
 }
 
-impl<'a, T> layers::AsQueryDistance<'a, &'a [T]> for Full<T>
+impl<T> layers::Layer for Full<T>
 where
-    T: std::fmt::Debug + Sync + 'static,
+    T: bytemuck::Pod + Send + Sync,
 {
-    fn as_query_distance(
+    fn bytes(&self) -> usize {
+        <Full<T>>::bytes(self).0
+    }
+}
+
+impl<T> layers::Set<&[T]> for Full<T>
+where
+    T: bytemuck::Pod + Send + Sync,
+{
+    fn into_bytes(&self, v: &[T], bytes: &mut [u8]) -> ANNResult<()> {
+        assert_eq!(self.dim(), v.len());
+        bytes.copy_from_slice(bytemuck::must_cast_slice::<T, u8>(v));
+        Ok(())
+    }
+}
+
+impl<'a, T> layers::Search<'a, &'a [T]> for Full<T>
+where
+    T: std::fmt::Debug + Send + Sync + 'static,
+{
+    fn query_distance(
         &'a self,
         query: &'a [T],
     ) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
         Ok(Box::new(QueryDistance::new(self.distance, query)))
     }
 }
+
+impl<T> layers::AsDistance for Full<T>
+where
+    T: std::fmt::Debug + Send + Sync + 'static,
+{
+    fn as_distance(&self) -> &dyn layers::Distance {
+        &self.distance
+    }
+}
+
+impl<'a, T> layers::Insert<'a, &'a [T]> for Full<T>
+where
+    T: bytemuck::Pod + std::fmt::Debug + Send + Sync,
+{}
+
+// impl<'a, T> layers::Insert<'a, &'a [T]> for Full<T>
+// where
+//     T: bytemuck::Pod + std::fmt::Debug + Send + Sync,
+// {
+//     fn search_distance(
+//         &'a self,
+//         query: &'a [T],
+//     ) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
+//         Ok(Box::new(QueryDistance::new(self.distance, query)))
+//     }
+// }
 
 //////////////
 // Distance //
@@ -190,9 +230,7 @@ where
             self.error(x)
         } else {
             Ok(self.distance.f.call_unaligned(
-                unsafe {
-                    UnalignedSlice::new(self.query.as_ptr().cast::<T>(), self.distance.dim)
-                },
+                unsafe { UnalignedSlice::new(self.query.as_ptr().cast::<T>(), self.distance.dim) },
                 unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.distance.dim) },
             ))
         }

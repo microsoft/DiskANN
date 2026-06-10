@@ -17,6 +17,7 @@ use diskann_utils::future::{AsyncFriendly, SendFuture};
 
 use crate::{
     layers::{self, Distance, QueryDistance},
+    num::Bytes,
     store::{self, Primary},
 };
 
@@ -26,14 +27,47 @@ pub struct Provider<T> {
     layer: T,
 }
 
+impl<T> Provider<T> {
+    pub fn new<I, V>(layer: T, capacity: usize, start_points: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        T: layers::Set<V>,
+    {
+        let start_points: Vec<_> = start_points.into_iter().collect();
+        let bytes = layers::Layer::bytes(&layer);
+        let primary = Primary::new(
+            capacity.checked_add(start_points.len()).unwrap(),
+            Bytes(bytes),
+            32,
+        );
+
+        let mut i = capacity;
+        for v in start_points.into_iter() {
+            let mut writer = primary.write(i).unwrap();
+            layers::Set::into_bytes(&layer, v, writer.as_mut_slice()).unwrap();
+            i += 1;
+        }
+
+        Self { primary, layer }
+    }
+
+    fn reader(&self) -> store::Reader<'_> {
+        self.primary.reader()
+    }
+}
+
+///////////////////
+// Data Provider //
+///////////////////
+
 #[derive(Debug, Clone)]
-pub struct Context {}
+pub struct Context;
 
 impl diskann::provider::ExecutionContext for Context {}
 
 impl<T> diskann::provider::DataProvider for Provider<T>
 where
-    T: layers::Layer,
+    T: Send + Sync + 'static,
 {
     type Context = Context;
     type InternalId = u32;
@@ -64,6 +98,28 @@ where
     F: FnOnce() -> R,
 {
     std::future::ready(f())
+}
+
+impl<T, L> diskann::provider::SetElement<T> for Provider<L>
+where
+    L: layers::Layer + layers::Set<T>,
+{
+    type SetError = ANNError;
+
+    fn set_element(
+        &self,
+        context: &Self::Context,
+        id: &Self::ExternalId,
+        element: T,
+    ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
+        let work = move || {
+            let mut write = self.primary.write(id.into_usize()).unwrap();
+            <L as layers::Set<T>>::into_bytes(&self.layer, element, write.as_mut_slice())?;
+            Ok(diskann::provider::NoopGuard::new(*id))
+        };
+
+        ready(work)
+    }
 }
 
 ////////////
@@ -135,35 +191,13 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                     .get(i.into_usize(), &mut self.ids)
                     .unwrap();
                 for neighbor in self.ids.iter().filter(|i| pred.eval_mut(i)) {
-                    if let Some(data) = self.reader.read(i.into_usize()) {
+                    if let Some(data) = self.reader.read(neighbor.into_usize()) {
                         on_neighbors(*neighbor, self.distance.evaluate(data)?)
                     }
                 }
             }
 
             Ok(())
-        };
-
-        ready(work)
-    }
-}
-
-impl<T, L> diskann::provider::SetElement<T> for Provider<L>
-where
-    L: layers::Layer + layers::Set<T>
-{
-    type SetError = ANNError;
-
-    fn set_element(
-        &self,
-        context: &Self::Context,
-        id: &Self::ExternalId,
-        element: T,
-    ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        let work = move || {
-            let mut write = self.primary.write(id.into_usize()).unwrap();
-            <L as layers::Set<T>>::into_bytes(&self.layer, element, write.as_mut_slice())?;
-            Ok(diskann::provider::NoopGuard::new(*id))
         };
 
         ready(work)
@@ -300,9 +334,10 @@ where
         &'a self,
         provider: &'a Provider<L>,
         context: &'a Context,
-        query: T
+        query: T,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let distance = <L as layers::AsQueryDistance<'a, T>>::as_query_distance(&provider.layer, query)?;
+        let distance =
+            <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
         let accessor = SearchAccessor {
             reader: provider.primary.reader(),
             distance,
@@ -342,5 +377,40 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use diskann::graph::DiskANNIndex;
+    use diskann_vector::distance::Metric;
+
+    use crate::layers::Full;
+
+    #[tokio::test]
+    async fn smoke() {
+        let full = Full::<f32>::new(1, Metric::L2);
+        let start_points: [&[f32]; _] = [&[1.0], &[2.0]];
+
+        let provider = Provider::new(full, 10, start_points);
+
+        let config = diskann::graph::config::Builder::new(
+            10,
+            diskann::graph::config::MaxDegree::Same,
+            100,
+            (Metric::L2).into()
+        ).build().unwrap();
+
+        let index = DiskANNIndex::new(config, provider, None);
+
+        index.insert(&Strategy, &Context, &0, &[3.0]).await.unwrap();
+        index.insert(&Strategy, &Context, &1, &[4.0]).await.unwrap();
+        index.insert(&Strategy, &Context, &2, &[5.0]).await.unwrap();
     }
 }

@@ -25,6 +25,7 @@ pub struct Primary {
     // These tags are mirrored from `tags` - with the latter being used for secondary scans
     // offering slightly better locality.
     buffer: Buffer,
+    unpadded: usize,
     tags: Vec<generation::Tag>,
     freelist: Freelist,
     registry: epoch::Registry,
@@ -36,8 +37,12 @@ const SPLIT: usize = std::mem::size_of::<generation::Tag>();
 
 impl Primary {
     pub fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
+        let unpadded = bytes.0 + SPLIT;
+        let padded_bytes = unpadded.checked_next_multiple_of(SPLIT).unwrap();
+
         Self {
-            buffer: Buffer::new(entries, Bytes(bytes.0 + SPLIT), Align(128)),
+            buffer: Buffer::new(entries, Bytes(padded_bytes), Align(128)),
+            unpadded,
             tags: repeat_n(Generation::AVAILABLE, entries)
                 .map(|v| generation::Tag::new(v))
                 .collect(),
@@ -51,6 +56,10 @@ impl Primary {
     #[inline]
     fn tag(&self, i: usize) -> Option<generation::Ref<'_>> {
         self.tags.get(i).map(|v| v.as_ref())
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.buffer.len()
     }
 
     pub fn drain(&self) -> usize {
@@ -71,6 +80,7 @@ impl Primary {
     pub fn reader(&self) -> Reader<'_> {
         Reader {
             buffer: &self.buffer,
+            unpadded: self.unpadded,
             neighbors: &self.neighbors,
             epoch: self.registry.register(),
         }
@@ -128,7 +138,9 @@ impl Primary {
     }
 
     unsafe fn data(&self, i: usize) -> (generation::Mut<'_>, Slice<'_>) {
-        let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }.split(SPLIT);
+        let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }
+            .truncate(self.unpadded)
+            .split(SPLIT);
         (
             unsafe { generation::Tag::from_ptr(mirror.as_ptr().as_ptr().cast()) }.as_mut(),
             data,
@@ -145,6 +157,7 @@ impl Primary {
 #[derive(Debug)]
 pub struct Reader<'a> {
     buffer: &'a Buffer,
+    unpadded: usize,
     neighbors: &'a Neighbors,
     epoch: epoch::Guard<'a>,
 }
@@ -158,7 +171,7 @@ impl<'a> Reader<'a> {
     #[inline]
     pub fn read(&self, i: usize) -> Option<&[u8]> {
         let (generation, rest) = match self.buffer.get(i) {
-            Some(slice) => slice.split(SPLIT),
+            Some(slice) => slice.truncate(self.unpadded).split(SPLIT),
             None => return None,
         };
 
