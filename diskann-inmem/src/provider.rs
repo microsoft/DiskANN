@@ -60,7 +60,7 @@ impl<T> Provider<T> {
 // Data Provider //
 ///////////////////
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Context;
 
 impl diskann::provider::ExecutionContext for Context {}
@@ -345,6 +345,13 @@ where
         };
         Ok(accessor)
     }
+}
+
+impl<'a, T, L> glue::DefaultPostProcessor<'a, Provider<L>, T> for Strategy
+where
+    L: layers::Search<'a, T>,
+{
+    diskann::default_post_processor!(glue::CopyIds);
 }
 
 impl<L> glue::PruneStrategy<Provider<L>> for Strategy

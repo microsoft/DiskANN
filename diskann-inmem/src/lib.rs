@@ -5,11 +5,12 @@
 
 mod arbiter;
 
-mod layers;
+pub mod layers;
 mod store;
 
 pub mod neighbors;
 pub mod num;
-mod provider;
+pub mod provider;
 
 pub use neighbors::Neighbors;
+pub use provider::{Context, Provider, Strategy};
