@@ -203,6 +203,7 @@ verbose_eq!(InlineFilterBaseline {
     hops,
 });
 
+#[allow(clippy::too_many_arguments)]
 fn run_inline_on_grid(
     index: &Arc<graph::DiskANNIndex<test_provider::Provider>>,
     filter: &dyn QueryLabelProvider<u32>,
@@ -500,11 +501,7 @@ fn inline_large_grid_10_matching_points() {
 
 #[test]
 fn inline_large_grid_100_matching_points() {
-    assert_inline_large_grid_with_even_filter(
-        "inline_large_grid_100_matching_points",
-        100,
-        None,
-    );
+    assert_inline_large_grid_with_even_filter("inline_large_grid_100_matching_points", 100, None);
 }
 
 #[test]
