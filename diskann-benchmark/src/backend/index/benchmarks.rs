@@ -241,7 +241,7 @@ where
                         build::set_start_points(
                             index.provider(),
                             data.as_view(),
-                            build.start_point_strategy,
+                            *build.start_point_strategy(),
                         )?;
                         Ok(index)
                     },
@@ -249,7 +249,7 @@ where
                 )?;
 
                 // save the index if requested
-                if let Some(save_path) = &build.save_path {
+                if let Some(save_path) = build.save_path() {
                     utils::tokio::block_on(save_index(index.clone(), save_path))?;
                 }
 
@@ -305,7 +305,7 @@ where
     type Output = Vec<managed::Stats<StreamStats>>;
 
     fn try_match(&self, input: &DynamicIndexRun) -> Result<MatchScore, FailureScore> {
-        utils::match_data_type::<T>(input.build.data_type)
+        utils::match_data_type::<T>(input.build.data_type())
     }
 
     fn description(
@@ -314,7 +314,7 @@ where
         input: Option<&DynamicIndexRun>,
     ) -> std::fmt::Result {
         match input {
-            Some(i) => write!(f, "{}", T::describe(i.build.data_type)),
+            Some(i) => write!(f, "{}", T::describe(i.build.data_type())),
             None => write!(f, "{}", T::DATA_TYPE),
         }
     }
@@ -408,7 +408,7 @@ where
 {
     let data = match data {
         Some(data) => data,
-        None => Arc::new(datafiles::load_dataset(datafiles::BinFile(&input.data))?),
+        None => Arc::new(datafiles::load_dataset(datafiles::BinFile(input.data()))?),
     };
 
     let index = create(data.as_view())?;
@@ -444,7 +444,13 @@ impl<S> Strategy<S> {
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -491,7 +497,13 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Range
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -535,7 +547,13 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkBetaFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -594,7 +612,13 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkMultihopFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -646,7 +670,13 @@ where
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkInlineFilter
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [DP::Element],
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
         Self::kind() == phase.kind()
@@ -709,9 +739,12 @@ where
 {
     let topk = input.search_phase.as_topk()?;
 
-    let consolidate_threshold: f32 = input.runbook_params.consolidate_threshold;
+    let consolidate_threshold: f32 = input
+        .runbook_params
+        .consolidate_threshold
+        .ok_or_else(|| anyhow::anyhow!("consolidate_threshold is required for inmem streaming"))?;
 
-    let data = datafiles::load_dataset::<T>(datafiles::BinFile(&input.build.data))?;
+    let data = datafiles::load_dataset::<T>(datafiles::BinFile(input.build.data()))?;
     let queries = Arc::new(datafiles::load_dataset::<T>(datafiles::BinFile(
         &topk.queries,
     ))?);
@@ -720,7 +753,7 @@ where
     let max_points = ((max_points as f32) * (1.0 + 2.0 * consolidate_threshold)).ceil() as usize;
 
     let index = diskann_async::new_index::<T, _>(
-        input.try_as_config(input.build.l_build)?.build()?,
+        input.try_as_config(input.build.l_build())?.build()?,
         input.inmem_parameters(max_points, data.ncols()),
         common::TableBasedDeletes,
     )?;
@@ -728,10 +761,10 @@ where
     build::set_start_points(
         index.provider(),
         data.as_view(),
-        input.build.start_point_strategy,
+        *input.build.start_point_strategy(),
     )?;
 
-    let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads).unwrap();
+    let num_threads_and_tasks = NonZeroUsize::new(input.build.num_threads()).unwrap();
     let managed_stream = FullPrecisionStream {
         index,
         search: topk.clone(),
@@ -741,7 +774,11 @@ where
         inplace_delete_method: input.runbook_params.ip_delete_method.into(),
     };
 
-    let managed = Managed::new(max_points, consolidate_threshold, managed_stream);
+    let managed = Managed::new(
+        max_points,
+        managed::SlotReclaim::Deferred(consolidate_threshold),
+        managed_stream,
+    );
 
     // compute the maximum value of k used in any search
     let max_k = topk.max_k();

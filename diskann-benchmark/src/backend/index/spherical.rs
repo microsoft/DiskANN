@@ -190,11 +190,11 @@ mod imp {
                     input: &SphericalQuantBuild,
                 ) -> Result<MatchScore, FailureScore> {
                     let mut failure_score: Option<u32> = None;
-                    if input.build.multi_insert.is_some() {
+                    if input.build.multi_insert().is_some() {
                         failure_score = Some(1);
                     }
 
-                    if !f32::is_match(input.build.data_type) {
+                    if !f32::is_match(input.build.data_type()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
@@ -239,18 +239,18 @@ mod imp {
                                 writeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
                             }
 
-                            if input.build.multi_insert.is_some() {
+                            if input.build.multi_insert().is_some() {
                                 writeln!(
                                     f,
                                     "- Spherical Quantization does not support multi-insert"
                                 )?;
                             }
 
-                            if !f32::is_match(input.build.data_type) {
+                            if !f32::is_match(input.build.data_type()) {
                                 writeln!(
                                     f,
                                     "- Only `float32` data type is supported. Instead, got {}",
-                                    input.build.data_type
+                                    input.build.data_type()
                                 )?;
                             }
 
@@ -284,10 +284,10 @@ mod imp {
                     let build = &input.build;
 
                     let data: Arc<Matrix<f32>> =
-                        Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
+                        Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
-                    let m: diskann_vector::distance::Metric = build.distance.into();
+                    let m: diskann_vector::distance::Metric = build.distance().into();
                     let pre_scale = match input.pre_scale {
                         Some(v) => v.try_into()?,
                         None => diskann_quantization::spherical::PreScale::None,

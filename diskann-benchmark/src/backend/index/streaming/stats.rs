@@ -19,10 +19,7 @@ pub(crate) enum StreamStats {
     Insert(BuildStats),
     Replace(BuildStats),
     Delete(GenericStats),
-    Maintain {
-        drop_deleted: GenericStats,
-        release: GenericStats,
-    },
+    Maintain(Vec<GenericStats>),
 }
 
 impl StreamStats {
@@ -33,7 +30,7 @@ impl StreamStats {
 
     /// Returns `true` is `self` is the [`Self::Maintain`] variant.
     pub(crate) fn is_maintain(&self) -> bool {
-        matches!(self, Self::Maintain { .. })
+        matches!(self, Self::Maintain(_))
     }
 
     pub(crate) fn kind(&self) -> &'static str {
@@ -42,7 +39,7 @@ impl StreamStats {
             Self::Insert(_) => "insert",
             Self::Replace(_) => "replace",
             Self::Delete(_) => "delete",
-            Self::Maintain { .. } => "maintain",
+            Self::Maintain(_) => "maintain",
         }
     }
 }
@@ -62,11 +59,11 @@ impl std::fmt::Display for StreamStats {
             Self::Delete(stats) => {
                 write!(f, "{}", stats)
             }
-            Self::Maintain {
-                drop_deleted,
-                release,
-            } => {
-                write!(f, "{}\n\n{}", drop_deleted, release)
+            Self::Maintain(phases) => {
+                for phase in phases {
+                    write!(f, "{}", phase)?;
+                }
+                Ok(())
             }
         }
     }
@@ -151,8 +148,15 @@ where
 
         // Arithmetic cannot underflow because `search_stages` is strictly upper-bounded
         // by `stats.len()`.
-        let other_stages = stats.len() - search_stages;
-        if other_stages != 0 {
+        let other_rows = stats
+            .clone()
+            .filter(|s| !s.is_search())
+            .map(|s| match s {
+                StreamStats::Maintain(phases) => phases.len(),
+                _ => 1,
+            })
+            .sum::<usize>();
+        if other_rows != 0 {
             let header = [
                 "Stage",
                 "Operation",
@@ -161,7 +165,7 @@ where
                 "P99 Latency",
             ];
 
-            let mut table = Table::new(header, other_stages);
+            let mut table = Table::new(header, other_rows);
             let mut row = 0;
             let mut stage: usize = 0;
             for s in stats.clone() {
@@ -182,26 +186,26 @@ where
                         row += 1;
                         stage += 1;
                     }
-                    StreamStats::Delete(stats)
-                    | StreamStats::Maintain {
-                        drop_deleted: stats,
-                        ..
-                    } => {
+                    StreamStats::Delete(stats) => {
                         let mut r = table.row(row);
-                        if s.is_maintain() {
-                            r.insert(format!("{}-pre", stage), 0);
-                        } else {
-                            r.insert(stage, 0);
-                        }
-
+                        r.insert(stage, 0);
                         r.insert(stats.kind.to_string(), 1);
                         r.insert(format!("{:.1}us", stats.latencies.mean), 2);
                         r.insert(stats.latencies.p90, 3);
                         r.insert(stats.latencies.p99, 4);
 
                         row += 1;
-                        if !s.is_maintain() {
-                            stage += 1;
+                        stage += 1;
+                    }
+                    StreamStats::Maintain(phases) => {
+                        for stats in phases {
+                            let mut r = table.row(row);
+                            r.insert(format!("{}-pre", stage), 0);
+                            r.insert(stats.kind.to_string(), 1);
+                            r.insert(format!("{:.1}us", stats.latencies.mean), 2);
+                            r.insert(stats.latencies.p90, 3);
+                            r.insert(stats.latencies.p99, 4);
+                            row += 1;
                         }
                     }
                 }

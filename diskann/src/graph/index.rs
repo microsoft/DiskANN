@@ -49,7 +49,7 @@ use crate::{
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
-        IntoUsize, TryIntoVectorId, VectorId,
+        IntoUsize, TryIntoVectorId,
         async_tools::{self, DynamicBalancer},
     },
 };
@@ -63,35 +63,6 @@ pub struct DiskANNIndex<DP: DataProvider> {
     /// The data provider.
     pub data_provider: DP,
     scratch_pool: ObjectPool<SearchScratch<DP::InternalId>>,
-}
-
-/// Decision returned by [`QueryLabelProvider::on_visit`] to control search traversal.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum QueryVisitDecision<I: VectorId> {
-    /// Accept this node into the frontier for further traversal.
-    Accept(Neighbor<I>),
-    /// Reject this node; do not add it to the frontier.
-    Reject,
-    /// Stop the search immediately without accepting this node.
-    Terminate,
-}
-
-pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
-    /// This is a query scoped provider
-    /// Check if the vec_id's label match the query label
-    fn is_match(&self, vec_id: V) -> bool;
-
-    /// Inspect a candidate before it is inserted into the frontier.
-    /// Implementations can tweak the distance, reject the candidate, or
-    /// request early termination. The default implementation accepts if
-    /// `is_match` returns true, rejects otherwise.
-    fn on_visit(&self, neighbor: Neighbor<V>) -> QueryVisitDecision<V> {
-        if self.is_match(neighbor.id) {
-            QueryVisitDecision::Accept(neighbor)
-        } else {
-            QueryVisitDecision::Reject
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1218,17 +1189,13 @@ where
         id: DP::InternalId,
         l_value: usize,
         k_value: usize,
+        v: S::DeleteElementGuard,
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         S: InplaceDeleteStrategy<DP> + Sync,
         DP: Delete,
     {
         async move {
-            let v = strategy
-                .get_delete_element(&self.data_provider, context, id)
-                .await
-                .into_ann_result()?;
-
             let search_strategy = strategy.search_strategy();
             let mut search_accessor = search_strategy
                 .search_accessor(&self.data_provider, context, v.reborrow())
@@ -1647,6 +1614,20 @@ where
                 .data_provider
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
+
+            // For VisitedAndTopK, we must capture the delete element *before* erasing
+            // the vector data, since it uses the deleted vector as a search query.
+            // This is necessary in hard-delete providers.
+            let delete_element = match inplace_delete_method {
+                InplaceDeleteMethod::VisitedAndTopK { .. } => Some(
+                    strategy
+                        .get_delete_element(&self.data_provider, context, vector_id)
+                        .await
+                        .into_ann_result()?,
+                ),
+                _ => None,
+            };
+
             self.data_provider
                 .delete(context, id)
                 .await
@@ -1665,8 +1646,14 @@ where
                     k_value: k,
                     l_value: l,
                 } => {
-                    self.get_candidates_using_visited_and_topk(strategy, context, vector_id, *l, *k)
-                        .await?
+                    // delete_element is always Some for VisitedAndTopK (set above).
+                    let Some(v) = delete_element else {
+                        unreachable!("delete_element is set for VisitedAndTopK");
+                    };
+                    self.get_candidates_using_visited_and_topk(
+                        strategy, context, vector_id, *l, *k, v,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
                     self.get_candidates_using_twohop_and_onehop(context, &mut accessor, vector_id)
@@ -2108,7 +2095,7 @@ where
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2130,7 +2117,7 @@ where
         init_ids: Option<&'a [DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2355,7 +2342,7 @@ where
                     options,
                 )
                 .await
-                .escalate("retrieving inserted vector must succeed")?;
+                .allow_transient("vector may already be unavailable in hard-delete providers")?;
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
@@ -2927,31 +2914,4 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn query_label_provider_on_visit_default() {
-        #[derive(Debug)]
-        struct BasicValidation;
-
-        impl QueryLabelProvider<u32> for BasicValidation {
-            fn is_match(&self, id: u32) -> bool {
-                id.is_multiple_of(2)
-            }
-        }
-
-        let filter = BasicValidation;
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(0, 1.0)),
-            QueryVisitDecision::Accept(_)
-        ));
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(1, 1.0)),
-            QueryVisitDecision::Reject
-        ));
-    }
 }

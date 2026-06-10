@@ -23,7 +23,7 @@
 //! - This matches C#'s `FilterBitmap` (`ulong[]`) byte layout via `GetBytes()`
 //! - TODO Replace with roaring bitmap for compression
 
-use diskann::graph::index::QueryLabelProvider;
+use diskann::graph::ext::labeled::QueryLabelProvider;
 
 /// A zero-copy bitmap-based label provider for Garnet filtered vector search.
 ///

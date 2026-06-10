@@ -20,8 +20,8 @@ use diskann::{
     error::StandardError,
     graph::{
         SearchOutputBuffer,
+        ext::labeled::QueryLabelProvider,
         glue::{self, SearchPostProcessStep, SearchStrategy},
-        index::QueryLabelProvider,
     },
     neighbor::Neighbor,
     provider::{DataProvider, HasId},
