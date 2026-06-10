@@ -9,7 +9,6 @@
 
 use diskann_vector::distance::Metric;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::{
     graph::{
@@ -132,33 +131,32 @@ impl QueryLabelProvider<u32> for LevelLabelProvider {
 }
 
 #[derive(Debug)]
-struct SeededFilter(HashSet<u32>);
+struct Filter(HashSet<u32>);
 
-impl SeededFilter {
+impl Filter {
     fn matching_points(&self) -> usize {
         self.0.len()
     }
 }
 
-impl FromIterator<u32> for SeededFilter
-{
+impl FromIterator<u32> for Filter {
     fn from_iter<T>(iter: T) -> Self
     where
-        T: IntoIterator<Item = u32> {
+        T: IntoIterator<Item = u32>,
+    {
         Self(HashSet::from_iter(iter))
     }
 }
 
-impl QueryLabelProvider<u32> for SeededFilter {
+impl QueryLabelProvider<u32> for Filter {
     fn is_match(&self, id: u32) -> bool {
         self.0.contains(&id)
     }
 }
 
-
 #[derive(Debug)]
 struct Setup1D {
-    filter: SeededFilter,
+    filter: Filter,
     k: usize,
     l: usize,
     adaptive_l: AdaptiveL,
@@ -194,7 +192,7 @@ impl Setup1D {
     /// We do not expect `43` to be hit.
     fn linear() -> Self {
         Self {
-            filter: SeededFilter::from_iter([43u32, 44, 92, 95]),
+            filter: Filter::from_iter([43u32, 44, 92, 95]),
             k: 5,
             l: 5,
             adaptive_l: AdaptiveL::new(10, 16.0).unwrap(),
@@ -209,7 +207,7 @@ impl Setup1D {
     /// regime and boost the window size by more than 2x. This will allow us to reach `43`.
     fn logarithmic() -> Self {
         Self {
-            filter: SeededFilter::from_iter([43u32, 95]),
+            filter: Filter::from_iter([43u32, 95]),
             k: 5,
             l: 5,
             adaptive_l: AdaptiveL::new(20, 16.0).unwrap(),
@@ -224,7 +222,7 @@ impl Setup1D {
     /// window size to the max.
     fn max() -> Self {
         Self {
-            filter: SeededFilter::from_iter([10, 20, 30, 50]),
+            filter: Filter::from_iter([10, 20, 30, 50]),
             k: 3,
             l: 5,
             adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
@@ -282,8 +280,7 @@ impl Setup1D {
         let expected = self.expected(kind);
 
         assert_eq!(
-            baseline.result_ids,
-            expected,
+            baseline.result_ids, expected,
             "result IDs did not match the synthetically constructed expected IDs",
         );
 
@@ -381,64 +378,6 @@ fn run_inline_on_grid(
         hops: stats.hops as usize,
     }
 }
-
-// fn run_baseline(
-//     test_name: &str,
-//     setup: &Setup1D,
-//     kind: TestKind,
-// ) {
-//     let mut test_root = root();
-//     let mut path = test_root.path();
-//     let name = path.push(test_name);
-//
-//     let provider = test_provider::Provider::grid(Grid::One, setup.points).unwrap();
-//
-//     let index_config = graph::config::Builder::new(
-//         provider.max_degree(),
-//         graph::config::MaxDegree::same(),
-//         100,
-//         Metric::L2.into(),
-//     )
-//     .build()
-//     .unwrap();
-//
-//     let index = graph::DiskANNIndex::new(index_config, provider, None);
-//
-//     let adaptive_l = match kind {
-//         TestKind::Fixed => None,
-//         TestKind::Adaptive => Some(setup.adaptive_l),
-//     };
-//
-//     let baseline = run_inline_on_grid(
-//         &index,
-//         &setup.filter,
-//         setup.points,
-//         setup.filter.matching_points(),
-//         &setup.query,
-//         setup.k,
-//         setup.l,
-//         adaptive_l,
-//     );
-//
-//     let expected = get_or_save_test_results(&name, &baseline);
-//     assert_eq_verbose!(expected, baseline);
-//
-//     let expected = setup.expected(kind);
-//
-//     assert_eq!(
-//         baseline.result_ids,
-//         expected,
-//         "result IDs did not match the synthetically constructed expected IDs",
-//     );
-//
-//     for id in baseline.result_ids {
-//         assert!(
-//             setup.filter.is_match(id),
-//             "returned id {} must satisfy the filter",
-//             id
-//         );
-//     }
-// }
 
 #[test]
 fn inline_search_returns_only_final_level_matches() {
