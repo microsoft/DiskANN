@@ -13,7 +13,7 @@ use std::{
 
 use crate::data_model::GraphDataType;
 use diskann::{
-    utils::{async_tools, vecid_from_usize, TryIntoVectorId, VectorRepr, ONE},
+    utils::{async_tools, VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
 };
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
@@ -675,7 +675,7 @@ where
 
                 match vector_data {
                     Some((i, (vector, _))) => {
-                        let id = vecid_from_usize(i)?;
+                        let id = i as u32;
                         index_clone.insert_vector(id, vector.as_ref()).await?;
                     }
                     None => break,
@@ -705,10 +705,7 @@ async fn run_final_prune<T: VectorRepr>(
     for partition in partitions {
         let index_clone = index.clone();
         tasks.spawn(async move {
-            let start_index = partition.start.try_into_vector_id()?;
-            let end_index = partition.end.try_into_vector_id()?;
-
-            let range = start_index..end_index;
+            let range = (partition.start as u32)..(partition.end as u32);
             index_clone.final_prune(range).await
         });
     }
@@ -771,7 +768,7 @@ where
             config.random_seed,
             storage_provider,
         )?;
-        let start_point = StartPoint::new(vecid_from_usize(medoid_id)?);
+        let start_point = StartPoint::new(medoid_id as u32);
 
         Ok(Self {
             index,

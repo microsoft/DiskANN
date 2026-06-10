@@ -113,7 +113,7 @@ where
 {
     metric: Metric,
     store: &'a FastMemoryVectorProviderAsync<T>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
 }
 
 impl<T> HasId for PruneAccessor<'_, T>
@@ -134,7 +134,7 @@ impl<'a, T> DelegateNeighbor<'a> for PruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    type Delegate = &'a SimpleNeighborProviderAsync;
 
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.neighbors

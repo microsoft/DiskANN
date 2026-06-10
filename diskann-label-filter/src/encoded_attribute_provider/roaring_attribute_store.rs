@@ -11,13 +11,16 @@ use crate::{
     set::{roaring_set_provider::RoaringTreemapSetProvider, SetProvider},
     traits::attribute_store::AttributeStore,
 };
-use diskann::{utils::VectorId, ANNError, ANNErrorKind, ANNResult};
+use diskann::{
+    utils::{IntoUsize, VectorId},
+    ANNError, ANNErrorKind, ANNResult,
+};
 use diskann_utils::future::AsyncFriendly;
 use std::sync::{Arc, RwLock};
 
 pub(crate) struct RoaringAttributeStore<IT>
 where
-    IT: VectorId + AsyncFriendly,
+    IT: VectorId + IntoUsize + AsyncFriendly,
 {
     attribute_map: Arc<RwLock<AttributeEncoder>>,
     index: Arc<RwLock<RoaringTreemapSetProvider<IT>>>,
@@ -26,7 +29,7 @@ where
 
 impl<IT> RoaringAttributeStore<IT>
 where
-    IT: VectorId,
+    IT: VectorId + IntoUsize,
 {
     #[allow(
         dead_code,
@@ -52,7 +55,7 @@ where
 
 impl<IT> AttributeStore<IT> for RoaringAttributeStore<IT>
 where
-    IT: VectorId,
+    IT: VectorId + IntoUsize,
 {
     type AT = u64;
     type Accessor = EncodedAttributeAccessor<RoaringTreemapSetProvider<IT>>;
@@ -68,7 +71,7 @@ where
     ///
     fn delete(&self, vec_id: &IT) -> ANNResult<bool>
     where
-        IT: VectorId,
+        IT: VectorId + IntoUsize,
     {
         let vec_id_u64 = (*vec_id).into_usize() as u64;
         let mut deleted = true;
@@ -133,7 +136,7 @@ where
 
     fn set_element(&self, vec_id: &IT, attributes: &[Attribute]) -> ANNResult<bool>
     where
-        IT: VectorId,
+        IT: VectorId + IntoUsize,
     {
         let id_u64: u64 = (*vec_id).into_usize() as u64;
 

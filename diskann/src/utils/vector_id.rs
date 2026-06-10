@@ -5,7 +5,7 @@
 
 use diskann_vector::contains::ContainsSimd;
 
-use crate::utils::{IntoUsize, TypeStr, VectorIdTryFrom};
+use crate::utils::TypeStr;
 
 /// The data type used to assign an identity to vectors. Canonically, this is either a
 /// `u32` or a `u64`. Since this type is used to stored neighbor information in graphs,
@@ -17,9 +17,6 @@ pub trait VectorId:
     + std::cmp::Ord
     + std::hash::Hash
     + TypeStr
-    + VectorIdTryFrom<u32>
-    + VectorIdTryFrom<usize>
-    + IntoUsize
     + Copy
     + Sized
     + Send
@@ -39,9 +36,6 @@ impl<T> VectorId for T where
         + std::cmp::Ord
         + std::hash::Hash
         + TypeStr
-        + IntoUsize
-        + VectorIdTryFrom<u32>
-        + VectorIdTryFrom<usize>
         + Copy
         + Sized
         + Send

@@ -370,11 +370,11 @@ where
 #[derive(Clone, Copy)]
 pub struct PruneAccessor<'a, const NBITS: usize> {
     store: &'a SQStore<NBITS>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
 }
 
 impl<'a, const NBITS: usize> PruneAccessor<'a, NBITS> {
-    fn new(store: &'a SQStore<NBITS>, neighbors: &'a SimpleNeighborProviderAsync<u32>) -> Self {
+    fn new(store: &'a SQStore<NBITS>, neighbors: &'a SimpleNeighborProviderAsync) -> Self {
         Self { store, neighbors }
     }
 }
@@ -391,7 +391,7 @@ where
 }
 
 impl<'a, const NBITS: usize> DelegateNeighbor<'a> for PruneAccessor<'_, NBITS> {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    type Delegate = &'a SimpleNeighborProviderAsync;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.neighbors
     }

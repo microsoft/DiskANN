@@ -50,11 +50,17 @@ impl From<ConfigError> for ANNError {
     }
 }
 
-trait AsKey {
+pub trait AsKey {
     fn as_key(&self) -> &[u8];
 }
 
 impl AsKey for usize {
+    fn as_key(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
+
+impl AsKey for u32 {
     fn as_key(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }

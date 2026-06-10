@@ -87,7 +87,7 @@ where
 #[derive(Clone, Copy)]
 pub struct PruneAccessor<'a> {
     provider: &'a FastMemoryQuantVectorProviderAsync,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
 }
 
 impl HasId for PruneAccessor<'_> {
@@ -99,7 +99,7 @@ impl HasElementRef for PruneAccessor<'_> {
 }
 
 impl<'a> DelegateNeighbor<'a> for PruneAccessor<'_> {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    type Delegate = &'a SimpleNeighborProviderAsync;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.neighbors
     }
@@ -162,7 +162,7 @@ where
 {
     full: &'a FastMemoryVectorProviderAsync<T>,
     quant: &'a FastMemoryQuantVectorProviderAsync,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     max_fp_vecs_per_prune: usize,
 }
 
@@ -184,7 +184,7 @@ impl<'a, T> DelegateNeighbor<'a> for HybridPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    type Delegate = &'a SimpleNeighborProviderAsync;
     fn delegate_neighbor(&'a mut self) -> Self::Delegate {
         self.neighbors
     }
