@@ -577,6 +577,15 @@ async fn log_build_stats<T: VectorRepr>(index: &Arc<dyn InmemIndexBuilder<T>>) -
     Ok(())
 }
 
+/// Convert a `usize` index into the `u32` internal id type, erroring if it does not fit.
+///
+/// The async index uses `u32` internal ids, so positions in the dataset must not exceed
+/// `u32::MAX`.
+fn u32_try_from(value: usize) -> ANNResult<u32> {
+    u32::try_from(value)
+        .map_err(|_| ANNError::log_index_error(format_args!("id {value} exceeds u32::MAX")))
+}
+
 fn set_start_point_to_medoid<T, StorageReader>(
     index: &Arc<dyn InmemIndexBuilder<T>>,
     path: &str,
@@ -675,7 +684,7 @@ where
 
                 match vector_data {
                     Some((i, (vector, _))) => {
-                        let id = i as u32;
+                        let id = u32_try_from(i)?;
                         index_clone.insert_vector(id, vector.as_ref()).await?;
                     }
                     None => break,
@@ -705,7 +714,7 @@ async fn run_final_prune<T: VectorRepr>(
     for partition in partitions {
         let index_clone = index.clone();
         tasks.spawn(async move {
-            let range = (partition.start as u32)..(partition.end as u32);
+            let range = u32_try_from(partition.start)?..u32_try_from(partition.end)?;
             index_clone.final_prune(range).await
         });
     }
@@ -768,7 +777,7 @@ where
             config.random_seed,
             storage_provider,
         )?;
-        let start_point = StartPoint::new(medoid_id as u32);
+        let start_point = StartPoint::new(u32_try_from(medoid_id)?);
 
         Ok(Self {
             index,

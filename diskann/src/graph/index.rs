@@ -2850,7 +2850,7 @@ where
         }
     }
 
-    /// Prune all nodes in the graph.
+    /// Prune all nodes in `ids`.
     ///
     /// This is used as the final step of graph construction. `ids` yields the
     /// [`DataProvider::InternalId`] of every point to prune.

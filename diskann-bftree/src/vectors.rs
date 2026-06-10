@@ -88,8 +88,14 @@ impl<T: VectorRepr> VectorProvider<T> {
     /// Return a vector of vector Ids of the starting points
     ///
     #[inline(always)]
-    pub fn starting_points(&self) -> Vec<u32> {
-        (self.max_vectors..self.total()).map(|i| i as u32).collect()
+    pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
+        (self.max_vectors..self.total())
+            .map(|i| {
+                u32::try_from(i).map_err(|_| {
+                    ANNError::log_index_error(format_args!("start point id {i} exceeds u32::MAX"))
+                })
+            })
+            .collect()
     }
 
     /// Access the BfTree config

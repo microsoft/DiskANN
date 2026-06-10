@@ -338,7 +338,7 @@ where
 
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        Ok(self.full_vectors.starting_points())
+        self.full_vectors.starting_points()
     }
 
     /// An iterator over all ids including start points (even if they are deleted).
@@ -680,7 +680,7 @@ where
     T: VectorRepr,
 {
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
-        let start_point_ids = self.full_vectors.starting_points();
+        let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::log_async_index_error(format!(
                 "expected start_points to contain `{}` rows, instead it has {}",
@@ -711,7 +711,7 @@ where
     T: VectorRepr,
 {
     fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
-        let start_point_ids = self.full_vectors.starting_points();
+        let start_point_ids = self.full_vectors.starting_points()?;
         if start_points.nrows() != start_point_ids.len() {
             return Err(ANNError::log_async_index_error(format!(
                 "expected start_points to contain `{}` rows, instead it has {}",
