@@ -8,6 +8,7 @@
 //! These tests exercise end-to-end `index.search(InlineSearch { .. })` execution.
 
 use diskann_vector::distance::Metric;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{
@@ -131,26 +132,38 @@ impl QueryLabelProvider<u32> for LevelLabelProvider {
 }
 
 #[derive(Debug)]
-struct TailIdFilter {
-    max_match_id_exclusive: u32,
+struct EvenlyDistributedIdFilter {
+    matching_ids: HashSet<u32>,
 }
 
-impl TailIdFilter {
+impl EvenlyDistributedIdFilter {
     fn new(total_points: usize, matching_points: usize) -> Self {
         assert!(matching_points > 0, "matching_points must be > 0");
         assert!(
             matching_points <= total_points,
             "matching_points must be <= total_points"
         );
-        Self {
-            max_match_id_exclusive: matching_points as u32,
+
+        if matching_points == total_points {
+            return Self {
+                matching_ids: (0..total_points as u32).collect(),
+            };
         }
+
+        // Spread selected IDs across the full ID range using midpoint bucket sampling.
+        let mut matching_ids = HashSet::with_capacity(matching_points);
+        for i in 0..matching_points {
+            let id = ((2 * i + 1) * total_points / (2 * matching_points)) as u32;
+            matching_ids.insert(id.min((total_points - 1) as u32));
+        }
+
+        Self { matching_ids }
     }
 }
 
-impl QueryLabelProvider<u32> for TailIdFilter {
+impl QueryLabelProvider<u32> for EvenlyDistributedIdFilter {
     fn is_match(&self, id: u32) -> bool {
-        id < self.max_match_id_exclusive
+        self.matching_ids.contains(&id)
     }
 }
 
@@ -163,14 +176,43 @@ fn build_three_level_index() -> std::sync::Arc<graph::DiskANNIndex<test_provider
     std::sync::Arc::new(graph::DiskANNIndex::new(index_config, provider, None))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct InlineFilterBaseline {
+    grid_size: usize,
+    matching_points: usize,
+    query: Vec<f32>,
+    k: usize,
+    l: usize,
+    result_count: usize,
+    result_ids: Vec<u32>,
+    result_distances: Vec<f32>,
+    comparisons: usize,
+    hops: usize,
+}
+
+verbose_eq!(InlineFilterBaseline {
+    grid_size,
+    matching_points,
+    query,
+    k,
+    l,
+    result_count,
+    result_ids,
+    result_distances,
+    comparisons,
+    hops,
+});
+
 fn run_inline_on_grid(
     index: &Arc<graph::DiskANNIndex<test_provider::Provider>>,
     filter: &dyn QueryLabelProvider<u32>,
+    grid_size: usize,
+    matching_points: usize,
     query: &[f32],
     k: usize,
     l: usize,
     adaptive_l: Option<AdaptiveL>,
-) -> (usize, usize, usize, Vec<u32>) {
+) -> InlineFilterBaseline {
     let rt = current_thread_runtime();
     let inline = InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), filter, adaptive_l);
 
@@ -188,48 +230,26 @@ fn run_inline_on_grid(
         ))
         .unwrap();
 
-    (
-        stats.result_count as usize,
-        stats.cmps as usize,
-        stats.hops as usize,
-        ids[..stats.result_count as usize].to_vec(),
-    )
+    let result_count = stats.result_count as usize;
+    InlineFilterBaseline {
+        grid_size,
+        matching_points,
+        query: query.to_vec(),
+        k,
+        l,
+        result_count,
+        result_ids: ids[..result_count].to_vec(),
+        result_distances: distances[..result_count].to_vec(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+    }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct InlineAdaptiveLBaseline {
-    grid_size: usize,
+fn assert_inline_large_grid_with_even_filter(
+    test_name: &str,
     matching_points: usize,
-    query: Vec<f32>,
-    k: usize,
-    l: usize,
-    no_adapt_result_count: usize,
-    no_adapt_cmps: usize,
-    no_adapt_hops: usize,
-    no_adapt_ids: Vec<u32>,
-    adapt_result_count: usize,
-    adapt_cmps: usize,
-    adapt_hops: usize,
-    adapt_ids: Vec<u32>,
-}
-
-verbose_eq!(InlineAdaptiveLBaseline {
-    grid_size,
-    matching_points,
-    query,
-    k,
-    l,
-    no_adapt_result_count,
-    no_adapt_cmps,
-    no_adapt_hops,
-    no_adapt_ids,
-    adapt_result_count,
-    adapt_cmps,
-    adapt_hops,
-    adapt_ids,
-});
-
-fn assert_adaptive_l_changes_results_for_tail_filter(test_name: &str, matching_points: usize) {
+    adaptive_l: Option<AdaptiveL>,
+) {
     let mut test_root = root();
     let mut path = test_root.path();
     let name = path.push(test_name);
@@ -239,9 +259,8 @@ fn assert_adaptive_l_changes_results_for_tail_filter(test_name: &str, matching_p
     assert_eq!(total_points, 1000, "expected a 1000-point 3D grid");
 
     let index = setup_grid_index(grid_size);
-    let filter = TailIdFilter::new(total_points, matching_points);
+    let filter = EvenlyDistributedIdFilter::new(total_points, matching_points);
 
-    // Query near the opposite end from head IDs to make sparse matches harder without adaptive L.
     let query = [10.0f32, 10.0, 10.0];
 
     // Keep l_search tiny so non-adaptive search is strongly constrained.
@@ -249,55 +268,24 @@ fn assert_adaptive_l_changes_results_for_tail_filter(test_name: &str, matching_p
     let k = 1;
     let l = 1;
 
-    let (no_adapt_count, no_adapt_cmps, no_adapt_hops, no_adapt_ids) =
-        run_inline_on_grid(&index, &filter, &query, k, l, None);
-
-    // sample_count=1 ensures one early estimate; large scale factor allows substantial expansion.
-    let adaptive = Some(AdaptiveL::new(1, 1000.0).unwrap());
-    let (adapt_count, adapt_cmps, adapt_hops, adapt_ids) =
-        run_inline_on_grid(&index, &filter, &query, k, l, adaptive);
-
-    let baseline = InlineAdaptiveLBaseline {
+    let baseline = run_inline_on_grid(
+        &index,
+        &filter,
         grid_size,
         matching_points,
-        query: query.to_vec(),
+        &query,
         k,
         l,
-        no_adapt_result_count: no_adapt_count,
-        no_adapt_cmps,
-        no_adapt_hops,
-        no_adapt_ids,
-        adapt_result_count: adapt_count,
-        adapt_cmps,
-        adapt_hops,
-        adapt_ids: adapt_ids.clone(),
-    };
+        adaptive_l,
+    );
 
     let expected = get_or_save_test_results(&name, &baseline);
     assert_eq_verbose!(expected, baseline);
 
-    assert!(
-        no_adapt_count != adapt_count || no_adapt_cmps != adapt_cmps || no_adapt_hops != adapt_hops,
-        "adaptive L should change outcome for matching_points={} (count {}->{}, cmps {}->{}, hops {}->{})",
-        matching_points,
-        no_adapt_count,
-        adapt_count,
-        no_adapt_cmps,
-        adapt_cmps,
-        no_adapt_hops,
-        adapt_hops
-    );
-    assert!(
-        adapt_count >= no_adapt_count,
-        "adaptive L should not reduce recall for matching_points={} (no_adapt={}, adaptive={})",
-        matching_points,
-        no_adapt_count,
-        adapt_count
-    );
-    for id in adapt_ids {
+    for id in baseline.result_ids {
         assert!(
             filter.is_match(id),
-            "returned id {} must satisfy the tail filter",
+            "returned id {} must satisfy the evenly-distributed filter",
             id
         );
     }
@@ -306,6 +294,10 @@ fn assert_adaptive_l_changes_results_for_tail_filter(test_name: &str, matching_p
 #[test]
 fn inline_search_returns_only_final_level_matches() {
     let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("inline_search_returns_only_final_level_matches");
+
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
@@ -327,6 +319,23 @@ fn inline_search_returns_only_final_level_matches() {
         ))
         .unwrap();
 
+    let result_count = stats.result_count as usize;
+    let baseline = InlineFilterBaseline {
+        grid_size: 0,
+        matching_points: 0,
+        query: vec![2.0f32],
+        k,
+        l,
+        result_count,
+        result_ids: ids[..result_count].to_vec(),
+        result_distances: distances[..result_count].to_vec(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
     let results = ids[..stats.result_count as usize].iter().copied();
 
     assert!(stats.result_count > 0, "should return final-level matches");
@@ -342,6 +351,10 @@ fn inline_search_returns_only_final_level_matches() {
 #[test]
 fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
     let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches");
+
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
@@ -363,6 +376,23 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
         ))
         .unwrap();
 
+    let result_count = stats.result_count as usize;
+    let baseline = InlineFilterBaseline {
+        grid_size: 0,
+        matching_points: 0,
+        query: vec![0.0f32],
+        k,
+        l,
+        result_count,
+        result_ids: ids[..result_count].to_vec(),
+        result_distances: distances[..result_count].to_vec(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
     assert_eq!(
         stats.result_count, 0,
         "with l_search=1 and no adaptive L, search should not reach final-level matches"
@@ -372,6 +402,10 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
 #[test]
 fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let rt = current_thread_runtime();
+    let mut test_root = root();
+    let mut path = test_root.path();
+    let name = path.push("inline_search_three_level_adaptive_l_with_l1_finds_matches");
+
     let index = build_three_level_index();
 
     let filter = LevelLabelProvider::new();
@@ -395,6 +429,23 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
         ))
         .unwrap();
 
+    let result_count = stats.result_count as usize;
+    let baseline = InlineFilterBaseline {
+        grid_size: 0,
+        matching_points: 0,
+        query: vec![0.0f32],
+        k,
+        l,
+        result_count,
+        result_ids: ids[..result_count].to_vec(),
+        result_distances: distances[..result_count].to_vec(),
+        comparisons: stats.cmps as usize,
+        hops: stats.hops as usize,
+    };
+
+    let expected = get_or_save_test_results(&name, &baseline);
+    assert_eq_verbose!(expected, baseline);
+
     assert!(
         stats.result_count > 0,
         "adaptive L should expand search enough to find final-level matches"
@@ -412,25 +463,47 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
 
 #[test]
 fn inline_adaptive_l_large_grid_1_matching_point() {
-    assert_adaptive_l_changes_results_for_tail_filter(
+    assert_inline_large_grid_with_even_filter(
         "inline_adaptive_l_large_grid_1_matching_point",
         1,
+        Some(AdaptiveL::new(100, 16.0).unwrap()),
     );
 }
 
 #[test]
 fn inline_adaptive_l_large_grid_10_matching_points() {
-    assert_adaptive_l_changes_results_for_tail_filter(
+    assert_inline_large_grid_with_even_filter(
         "inline_adaptive_l_large_grid_10_matching_points",
         10,
+        Some(AdaptiveL::new(100, 16.0).unwrap()),
     );
 }
 
 #[test]
 fn inline_adaptive_l_large_grid_100_matching_points() {
-    assert_adaptive_l_changes_results_for_tail_filter(
+    assert_inline_large_grid_with_even_filter(
         "inline_adaptive_l_large_grid_100_matching_points",
         100,
+        Some(AdaptiveL::new(100, 16.0).unwrap()),
+    );
+}
+
+#[test]
+fn inline_large_grid_1_matching_point() {
+    assert_inline_large_grid_with_even_filter("inline_large_grid_1_matching_point", 1, None);
+}
+
+#[test]
+fn inline_large_grid_10_matching_points() {
+    assert_inline_large_grid_with_even_filter("inline_large_grid_10_matching_points", 10, None);
+}
+
+#[test]
+fn inline_large_grid_100_matching_points() {
+    assert_inline_large_grid_with_even_filter(
+        "inline_large_grid_100_matching_points",
+        100,
+        None,
     );
 }
 

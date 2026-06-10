@@ -1,0 +1,18 @@
+{
+  "file": "diskann/src/graph/test/cases/inline.rs",
+  "test": "graph/test/cases/inline/inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches",
+  "payload": {
+    "comparisons": 6,
+    "grid_size": 0,
+    "hops": 3,
+    "k": 1,
+    "l": 1,
+    "matching_points": 0,
+    "query": [
+      0.0
+    ],
+    "result_count": 0,
+    "result_distances": [],
+    "result_ids": []
+  }
+}
