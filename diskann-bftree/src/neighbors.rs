@@ -7,9 +7,8 @@
 
 use std::marker::PhantomData;
 
-use crate::AsKey;
 use bf_tree::{BfTree, Config};
-use bytemuck::{cast_slice, cast_slice_mut};
+use bytemuck::{bytes_of, cast_slice, cast_slice_mut, from_bytes};
 use diskann::{
     graph::AdjacencyList,
     provider::{self, HasId},
@@ -20,7 +19,7 @@ use diskann::{
 use super::ConfigError;
 use crate::TestCallCount;
 
-pub struct NeighborProvider<I: VectorId + AsKey> {
+pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
     #[allow(dead_code)]
@@ -28,11 +27,11 @@ pub struct NeighborProvider<I: VectorId + AsKey> {
     _phantom: PhantomData<I>,
 }
 
-impl<I: VectorId + AsKey> HasId for NeighborProvider<I> {
+impl<I: VectorId> HasId for NeighborProvider<I> {
     type Id = I;
 }
 
-impl<I: VectorId + AsKey> NeighborProvider<I> {
+impl<I: VectorId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
@@ -87,7 +86,7 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
         let mut guard = neighbors.resize(self.dim);
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = vector_id.as_key();
+        let key = bytemuck::bytes_of(&vector_id);
 
         // Search and retrieve the corresponding neighbor list data as a byte string, &[u8], in the format of
         // |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
@@ -118,20 +117,20 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
                         ));
                     }
 
-                    // The last entry in the retrieved data is the neighbor count,
-                    // encoded as a little-endian u32 in the low 4 bytes (see `len_cell`).
-                    let nbr_count =
-                        read_len(&guard[(read_size as usize) / std::mem::size_of::<I>() - 1]);
+                    // The last entry in the retrieved data stores the neighbor count as u32
+                    let count_slot_offset = (read_size as usize) - std::mem::size_of::<I>();
+                    let nbr_count = *from_bytes::<u32>(
+                        &cast_slice::<I, u8>(&guard)[count_slot_offset..count_slot_offset + 4],
+                    ) as usize;
 
                     // The specified list length must be smaller than the retrieved data length
-                    if (read_size as usize) < (std::mem::size_of::<I>() * (nbr_count as usize + 1))
-                    {
+                    if (read_size as usize) < (std::mem::size_of::<I>() * (nbr_count + 1)) {
                         return Err(ANNError::log_index_error(
                             "The length of the retrieved neighbor list is shorter than the specified length",
                         ));
                     }
 
-                    guard.finish(nbr_count as usize);
+                    guard.finish(nbr_count);
                 }
             }
             bf_tree::LeafReadResult::Deleted => {
@@ -170,18 +169,20 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
         }
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = vector_id.as_key();
+        let key = bytemuck::bytes_of(&vector_id);
 
         // Serialize the value into the reusable buffer.
-        // Format: |VectorId|...|VectorId|length cell|, where the trailing cell is one
-        // `I`-sized slot whose low 4 bytes hold the count as a little-endian u32 (see
-        // `len_cell`).
-        let neighbor_bytes = cast_slice::<I, u8>(neighbors);
-        let total_len = neighbor_bytes.len() + std::mem::size_of::<I>();
+        // Format: |VectorId|...|VectorId|count (u32)|
+        let neighbor_list_edges_in_byte = cast_slice::<I, u8>(neighbors);
+        let count: u32 = neighbors.len() as u32;
 
-        buf[..neighbor_bytes.len()].copy_from_slice(neighbor_bytes);
-        let cell: I = len_cell(neighbors.len() as u32);
-        buf[neighbor_bytes.len()..total_len].copy_from_slice(bytemuck::bytes_of(&cell));
+        let total_len = neighbor_list_edges_in_byte.len() + std::mem::size_of::<I>();
+
+        buf[..neighbor_list_edges_in_byte.len()].copy_from_slice(neighbor_list_edges_in_byte);
+        // Zero the count slot then write the u32 count into the low bytes
+        let count_offset = neighbor_list_edges_in_byte.len();
+        buf[count_offset..total_len].fill(0);
+        buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
 
         self.adjacency_list_index.insert(key, &buf[..total_len]);
 
@@ -213,13 +214,11 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
         // If unique new neighbors are appended, write back using the reusable buffer
         if new_neighbor_added {
             let nbr_count = neighbor_list.len();
-            let key = vector_id.as_key();
+            let key = bytemuck::bytes_of(&vector_id);
 
             // Build the value into the scratch buffer:
-            // |neighbor_0|...|neighbor_n|padding(I::default)|...|length cell|
+            // |neighbor_0|...|neighbor_n|padding(Invalid)|...|nbr_count|
             // Total size is always self.dim elements to avoid bf-tree page fragmentation.
-            // The trailing cell is a length cell (see `len_cell`); intermediate padding
-            // slots are zeroed.
             let id_size = std::mem::size_of::<I>();
             let total_len = self.dim * id_size;
 
@@ -229,10 +228,10 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
             let neighbors_bytes = cast_slice::<I, u8>(&neighbor_list);
             buf[..neighbors_bytes.len()].copy_from_slice(neighbors_bytes);
 
-            // Write the length cell at the last slot
-            let cell: I = len_cell(nbr_count as u32);
+            // Write the count at the last slot as a raw u32 (no VectorId round-trip needed)
+            let count: u32 = nbr_count as u32;
             let count_offset = (self.dim - 1) * id_size;
-            buf[count_offset..count_offset + id_size].copy_from_slice(bytemuck::bytes_of(&cell));
+            buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
 
             self.adjacency_list_index.insert(key, &buf[..total_len]);
         }
@@ -242,7 +241,7 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
 
     pub fn delete_vector(&self, vector_id: I) -> ANNResult<()> {
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = vector_id.as_key();
+        let key = bytemuck::bytes_of(&vector_id);
 
         self.adjacency_list_index.delete(key);
         Ok(())
@@ -259,7 +258,7 @@ impl<I: VectorId + AsKey> NeighborProvider<I> {
 
 pub struct NeighborAccessor<'a, I>
 where
-    I: VectorId + AsKey,
+    I: VectorId,
 {
     provider: &'a NeighborProvider<I>,
     buf: Vec<u8>,
@@ -267,7 +266,7 @@ where
 
 impl<'a, I> NeighborAccessor<'a, I>
 where
-    I: VectorId + AsKey,
+    I: VectorId,
 {
     pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
         self.provider.set_neighbors(id, neighbors, &mut self.buf)
@@ -279,14 +278,14 @@ where
 
 impl<'a, I> HasId for NeighborAccessor<'a, I>
 where
-    I: VectorId + AsKey,
+    I: VectorId,
 {
     type Id = I;
 }
 
 impl<'a, I> provider::NeighborAccessor for NeighborAccessor<'a, I>
 where
-    I: VectorId + AsKey,
+    I: VectorId,
 {
     fn get_neighbors(
         self,
@@ -300,7 +299,7 @@ where
 
 impl<'a, I> provider::NeighborAccessorMut for NeighborAccessor<'a, I>
 where
-    I: VectorId + AsKey,
+    I: VectorId,
 {
     fn set_neighbors(
         mut self,
@@ -318,27 +317,6 @@ where
         let result = self.provider.append_vector(id, neighbors, &mut self.buf);
         std::future::ready(result.map(|()| self))
     }
-}
-
-/// Construct an `I`-typed cell whose low 4 bytes hold `len` as a little-endian `u32`.
-///
-/// This is the encoding used for the trailing length cell in the neighbor-list value;
-/// see [`NeighborProvider::set_neighbors`] for the full layout. The decode side is
-/// [`read_len`].
-fn len_cell<I: bytemuck::Pod>(len: u32) -> I {
-    const { assert!(std::mem::size_of::<I>() >= 4) };
-
-    let mut cell = I::zeroed();
-    bytemuck::bytes_of_mut(&mut cell)[..4].copy_from_slice(&len.to_le_bytes());
-    cell
-}
-
-/// Decode a length cell produced by [`len_cell`], returning the little-endian `u32`
-/// stored in its low 4 bytes.
-fn read_len<I: bytemuck::Pod>(cell: &I) -> u32 {
-    const { assert!(std::mem::size_of::<I>() >= 4) };
-
-    bytemuck::pod_read_unaligned(&bytemuck::bytes_of(cell)[..4])
 }
 
 ///////////
