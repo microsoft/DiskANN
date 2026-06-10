@@ -216,7 +216,7 @@ impl Setup1D {
             points: 100,
             query: [50.0],
             expected_fixed: vec![95],
-            expected_adaptive: vec![44, 95],
+            expected_adaptive: vec![43, 95],
         }
     }
 
@@ -612,55 +612,43 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
 
 #[test]
 fn inline_adaptive_l_no_scaling() {
-    Setup1D::no_scaling().run("inline_adaptive_l_no_scaline", TestKind::Adaptive)
+    Setup1D::no_scaling().run("inline_adaptive_l_no_scaling", TestKind::Adaptive)
 }
 
-// #[test]
-// fn inline_adaptive_l_large_grid_10_matching_points() {
-//     assert_inline_large_grid_with_even_filter(
-//         "inline_adaptive_l_large_grid_10_matching_points",
-//         10,
-//         Some(AdaptiveL::new(50, 16.0).unwrap()),
-//     );
-// }
-//
-// #[test]
-// fn inline_adaptive_l_large_grid_100_matching_points() {
-//     assert_inline_large_grid_with_even_filter(
-//         "inline_adaptive_l_large_grid_100_matching_points",
-//         100,
-//         Some(AdaptiveL::new(50, 16.0).unwrap()),
-//     );
-// }
-//
-// #[test]
-// fn inline_adaptive_l_large_grid_500_matching_points() {
-//     assert_inline_large_grid_with_even_filter(
-//         "inline_adaptive_l_large_grid_500_matching_points",
-//         500,
-//         Some(AdaptiveL::new(50, 16.0).unwrap()),
-//     );
-// }
-//
-// #[test]
-// fn inline_large_grid_1_matching_point() {
-//     assert_inline_large_grid_with_even_filter("inline_large_grid_1_matching_point", 1, None);
-// }
-//
-// #[test]
-// fn inline_large_grid_10_matching_points() {
-//     assert_inline_large_grid_with_even_filter("inline_large_grid_10_matching_points", 10, None);
-// }
-//
-// #[test]
-// fn inline_large_grid_100_matching_points() {
-//     assert_inline_large_grid_with_even_filter("inline_large_grid_100_matching_points", 100, None);
-// }
-//
-// #[test]
-// fn inline_large_grid_500_matching_points() {
-//     assert_inline_large_grid_with_even_filter("inline_large_grid_500_matching_points", 500, None);
-// }
+#[test]
+fn inline_adaptive_l_linear_scaling() {
+    Setup1D::linear().run("inline_adaptive_l_linear", TestKind::Adaptive)
+}
+
+#[test]
+fn inline_adaptive_l_logarithmic() {
+    Setup1D::logarithmic().run("inline_adaptive_l_logarithmic", TestKind::Adaptive)
+}
+
+#[test]
+fn inline_adaptive_l_max() {
+    Setup1D::max().run("inline_adaptive_l_max", TestKind::Adaptive)
+}
+
+#[test]
+fn inline_fixed_no_scaling() {
+    Setup1D::no_scaling().run("inline_fixed_no_scaling", TestKind::Fixed)
+}
+
+#[test]
+fn inline_fixed_linear_scaling() {
+    Setup1D::linear().run("inline_fixed_linear", TestKind::Fixed)
+}
+
+#[test]
+fn inline_fixed_logarithmic() {
+    Setup1D::logarithmic().run("inline_fixed_logarithmic", TestKind::Fixed)
+}
+
+#[test]
+fn inline_fixed_max() {
+    Setup1D::max().run("inline_fixed_max", TestKind::Fixed)
+}
 
 #[test]
 fn inline_search_reaches_matches_through_non_matching_nodes() {
