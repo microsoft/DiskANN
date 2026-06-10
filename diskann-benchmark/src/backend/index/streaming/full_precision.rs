@@ -158,10 +158,10 @@ where
             &self.runtime,
         )?;
 
-        Ok(StreamStats::Maintain {
-            drop_deleted: GenericStats::new(Cow::Borrowed("Drop Deleted"), drop_deleted)?,
-            release: GenericStats::new(Cow::Borrowed("Release"), release)?,
-        })
+        Ok(StreamStats::Maintain(vec![
+            GenericStats::new(Cow::Borrowed("Drop Deleted"), drop_deleted)?,
+            GenericStats::new(Cow::Borrowed("Release"), release)?,
+        ]))
     }
 }
 

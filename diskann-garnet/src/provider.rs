@@ -369,7 +369,14 @@ impl<T: VectorRepr> GarnetProvider<T> {
         };
 
         let quantizer = match &self.quantizer {
-            Some(q) => q,
+            Some(q) => {
+                if !q.is_trained() {
+                    q
+                } else {
+                    // Quantizer already trained, bail.
+                    return false;
+                }
+            }
             None => return false,
         };
 
@@ -719,6 +726,7 @@ impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
         // Set quantization readiness
         if let Some(quantizer) = &self.quantizer
             && !internal_id.should_quantize()
+            && !quantizer.is_trained()
             && self.fsm.total_used() > quantizer.required_vectors()
         {
             context.set_quantizer_ready();

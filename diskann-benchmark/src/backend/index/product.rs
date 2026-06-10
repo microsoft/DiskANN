@@ -201,7 +201,7 @@ mod imp {
                 }
                 IndexSource::Build(build) => {
                     let data: Arc<Matrix<T>> =
-                        Arc::new(datafiles::load_dataset(datafiles::BinFile(&build.data))?);
+                        Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
                     let table = {
@@ -215,7 +215,7 @@ mod imp {
                             train_data.as_view(),
                             input.num_pq_chunks,
                             &mut StdRng::seed_from_u64(input.seed),
-                            diskann_providers::utils::create_thread_pool(build.num_threads)?
+                            diskann_providers::utils::create_thread_pool(build.num_threads())?
                                 .as_ref(),
                         )?
                     };
@@ -230,7 +230,7 @@ mod imp {
                         build::set_start_points(
                             index.provider(),
                             data_view,
-                            build.start_point_strategy,
+                            *build.start_point_strategy(),
                         )?;
                         Ok(index)
                     };
@@ -246,7 +246,7 @@ mod imp {
                     )?;
 
                     // Save the index if requested
-                    if let Some(save_path) = &build.save_path {
+                    if let Some(save_path) = build.save_path() {
                         utils::tokio::block_on(save_index(index.clone(), save_path))?;
                     }
 
