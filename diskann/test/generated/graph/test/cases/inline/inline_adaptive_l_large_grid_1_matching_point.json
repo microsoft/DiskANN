@@ -2,19 +2,23 @@
   "file": "diskann/src/graph/test/cases/inline.rs",
   "test": "graph/test/cases/inline/inline_adaptive_l_large_grid_1_matching_point",
   "payload": {
-    "comparisons": 4,
+    "comparisons": 90,
     "grid_size": 10,
-    "hops": 2,
-    "k": 1,
-    "l": 1,
+    "hops": 28,
+    "k": 5,
+    "l": 5,
     "matching_points": 1,
     "query": [
-      10.0,
-      10.0,
-      10.0
+      5.0,
+      5.0,
+      5.0
     ],
-    "result_count": 0,
-    "result_distances": [],
-    "result_ids": []
+    "result_count": 1,
+    "result_distances": [
+      48.0
+    ],
+    "result_ids": [
+      999
+    ]
   }
 }

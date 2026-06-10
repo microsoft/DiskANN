@@ -319,6 +319,9 @@ where
 ///
 /// Clamped to [1×, max_multiplier] range.
 fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multiplier: f64) -> usize {
+    let specificity = if visited > 0 && matched > 0 { matched as f64 / visited as f64 } else { 0.0 };
+    let branch = if matched == 0 || visited == 0 { "zero" } else if specificity >= 0.5 { ">=50%" } else if specificity >= 0.1 { "10-50%" } else { "<10% log" };
+    eprintln!("[adaptive_l] base_l={base_l} visited={visited} matched={matched} specificity={specificity:.4} branch={branch}");
     if matched == 0 || visited == 0 {
         // No matches at all — use maximum multiplier
         return (base_l as f64 * max_multiplier) as usize;
@@ -406,5 +409,192 @@ mod tests {
 
         // 1% would be 4x, but clamp to 1.5x.
         assert_eq!(compute_adaptive_l(base_l, 1000, 10, 1.5), 150);
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::graph::{self, search::Knn, search_output_buffer, test::provider as test_provider, test::synthetic::Grid, index::QueryLabelProvider};
+    use diskann_vector::distance::Metric;
+    use crate::test::tokio::current_thread_runtime;
+    use std::collections::HashSet;
+
+    #[derive(Debug)]
+    struct EvenlyDistributedFilter { ids: HashSet<u32> }
+    impl EvenlyDistributedFilter {
+        fn new(total: usize, matching: usize) -> Self {
+            let mut ids = HashSet::with_capacity(matching);
+            for i in 0..matching {
+                let id = ((2 * i + 1) * total / (2 * matching)) as u32;
+                ids.insert(id.min((total - 1) as u32));
+            }
+            Self { ids }
+        }
+    }
+    impl QueryLabelProvider<u32> for EvenlyDistributedFilter {
+        fn is_match(&self, id: u32) -> bool { self.ids.contains(&id) }
+    }
+
+    fn run(matching: usize, sc: usize, l: usize, k: usize, adaptive: bool) -> usize {
+        let grid_size = 10;
+        let provider = test_provider::Provider::grid(Grid::Three, grid_size).unwrap();
+        let cfg = graph::config::Builder::new(provider.max_degree(), graph::config::MaxDegree::same(), 100, Metric::L2.into()).build().unwrap();
+        let index = std::sync::Arc::new(graph::DiskANNIndex::new(cfg, provider, None));
+        let filter = EvenlyDistributedFilter::new(1000, matching);
+        let adapt = if adaptive { Some(AdaptiveL::new(sc, 16.0).unwrap()) } else { None };
+        let inline = super::super::InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, adapt);
+        let mut ids = vec![0u32; k];
+        let mut dists = vec![0.0f32; k];
+        let mut buf = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
+        let rt = current_thread_runtime();
+        let stats = rt.block_on(index.search(inline, &test_provider::Strategy::new(), &test_provider::Context::new(), [5.0f32, 5.0, 5.0].as_slice(), &mut buf)).unwrap();
+        stats.result_count as usize
+    }
+
+    #[test]
+    fn probe_branches() {
+        for (matching, k, l, sc) in [(50, 5, 20, 50), (100, 5, 20, 50), (100, 5, 20, 100), (50, 5, 50, 50), (100, 5, 50, 50), (100, 5, 50, 100), (50, 5, 100, 100)] {
+            eprintln!("\n=== m={matching} k={k} l={l} sc={sc} ===");
+            eprintln!("-- non-adaptive --");
+            let rc_no = run(matching, sc, l, k, false);
+            eprintln!("-- adaptive --");
+            let rc_ad = run(matching, sc, l, k, true);
+            eprintln!("result: no_adapt={rc_no} adaptive={rc_ad}");
+        }
+    }
+}
+#[cfg(test)]
+mod probe_tests2 {
+    use super::*;
+    use crate::graph::{self, search::Knn, search_output_buffer, test::provider as test_provider, test::synthetic::Grid, index::QueryLabelProvider};
+    use diskann_vector::distance::Metric;
+    use crate::test::tokio::current_thread_runtime;
+    use std::collections::HashSet;
+
+    /// High-ID filter plus a few extra scattered IDs to control specificity.
+    #[derive(Debug)]
+    struct HybridFilter { ids: HashSet<u32> }
+    impl HybridFilter {
+        fn new(total: usize, high_id_count: usize, extra_scattered: usize) -> Self {
+            let mut ids = HashSet::new();
+            // High-ID matches near query region
+            for i in 0..high_id_count {
+                ids.insert((total - 1 - i) as u32);
+            }
+            // Scattered matches throughout
+            for i in 0..extra_scattered {
+                let id = ((2 * i + 1) * total / (2 * extra_scattered.max(1))) as u32;
+                ids.insert(id.min((total - 1) as u32));
+            }
+            Self { ids }
+        }
+    }
+    impl QueryLabelProvider<u32> for HybridFilter {
+        fn is_match(&self, id: u32) -> bool { self.ids.contains(&id) }
+    }
+
+    fn run(high: usize, scattered: usize, sc: usize, l: usize, k: usize, adaptive: bool) -> usize {
+        let grid_size = 10;
+        let provider = test_provider::Provider::grid(Grid::Three, grid_size).unwrap();
+        let cfg = graph::config::Builder::new(provider.max_degree(), graph::config::MaxDegree::same(), 100, Metric::L2.into()).build().unwrap();
+        let index = std::sync::Arc::new(graph::DiskANNIndex::new(cfg, provider, None));
+        let filter = HybridFilter::new(1000, high, scattered);
+        let adapt = if adaptive { Some(AdaptiveL::new(sc, 16.0).unwrap()) } else { None };
+        let inline = super::super::InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, adapt);
+        let mut ids = vec![0u32; k];
+        let mut dists = vec![0.0f32; k];
+        let mut buf = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
+        let rt = current_thread_runtime();
+        let stats = rt.block_on(index.search(inline, &test_provider::Strategy::new(), &test_provider::Context::new(), [5.0f32, 5.0, 5.0].as_slice(), &mut buf)).unwrap();
+        stats.result_count as usize
+    }
+
+    #[test]
+    fn probe_hybrid() {
+        // Target <10%: need matched/visited < 0.1. E.g., 3 matches in 50 visits = 6%
+        // Target 10-50%: e.g., 10 matches in 50 visits = 20%  
+        // Target >=50%: e.g., 30 matches in 50 visits = 60%
+        for (high, scattered, k, l, sc, label) in [
+            (3, 0, 5, 20, 50, "<10% target"),
+            (5, 0, 5, 20, 50, "<10% target v2"),
+            (2, 0, 5, 20, 50, "<10% target v3"),
+            (10, 0, 5, 20, 50, "10-50% target"),
+            (30, 0, 5, 20, 50, ">=50% target"),
+            (3, 10, 5, 20, 50, "<10% hybrid"),
+            (10, 20, 5, 20, 50, "10-50% hybrid"),
+        ] {
+            eprintln!("\n=== {label}: high={high} scattered={scattered} k={k} l={l} sc={sc} ===");
+            let rc_no = run(high, scattered, sc, l, k, false);
+            let rc_ad = run(high, scattered, sc, l, k, true);
+            eprintln!("result: no_adapt={rc_no} adaptive={rc_ad} improved={}", rc_ad > rc_no);
+        }
+    }
+}
+#[cfg(test)]
+mod probe_tests3 {
+    use super::*;
+    use crate::graph::{self, search::Knn, search_output_buffer, test::provider as test_provider, test::synthetic::Grid, index::QueryLabelProvider};
+    use diskann_vector::distance::Metric;
+    use crate::test::tokio::current_thread_runtime;
+    use std::collections::HashSet;
+
+    #[derive(Debug)]
+    struct HybridFilter { ids: HashSet<u32> }
+    impl HybridFilter {
+        fn new(total: usize, high_id_count: usize, extra_scattered: usize) -> Self {
+            let mut ids = HashSet::new();
+            for i in 0..high_id_count {
+                ids.insert((total - 1 - i) as u32);
+            }
+            for i in 0..extra_scattered {
+                let id = ((2 * i + 1) * total / (2 * extra_scattered.max(1))) as u32;
+                ids.insert(id.min((total - 1) as u32));
+            }
+            Self { ids }
+        }
+    }
+    impl QueryLabelProvider<u32> for HybridFilter {
+        fn is_match(&self, id: u32) -> bool { self.ids.contains(&id) }
+    }
+
+    fn run(high: usize, scattered: usize, sc: usize, l: usize, k: usize, adaptive: bool) -> (usize, Vec<u32>) {
+        let grid_size = 10;
+        let provider = test_provider::Provider::grid(Grid::Three, grid_size).unwrap();
+        let cfg = graph::config::Builder::new(provider.max_degree(), graph::config::MaxDegree::same(), 100, Metric::L2.into()).build().unwrap();
+        let index = std::sync::Arc::new(graph::DiskANNIndex::new(cfg, provider, None));
+        let filter = HybridFilter::new(1000, high, scattered);
+        let adapt = if adaptive { Some(AdaptiveL::new(sc, 16.0).unwrap()) } else { None };
+        let inline = super::super::InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, adapt);
+        let mut ids = vec![0u32; k];
+        let mut dists = vec![0.0f32; k];
+        let mut buf = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
+        let rt = current_thread_runtime();
+        let stats = rt.block_on(index.search(inline, &test_provider::Strategy::new(), &test_provider::Context::new(), [5.0f32, 5.0, 5.0].as_slice(), &mut buf)).unwrap();
+        let rc = stats.result_count as usize;
+        (rc, ids[..rc].to_vec())
+    }
+
+    #[test]
+    fn probe_hybrid_improvement() {
+        // Idea: high-ID matches seed the sample so we hit non-zero branches,
+        // scattered matches give adaptive L extra results to find
+        for (high, scattered, k, l, sc, label) in [
+            // <10% branch: 3 high-ID seeds + scattered for adaptive to find
+            (3, 20, 5, 20, 50, "<10% + scattered 20"),
+            (3, 30, 5, 20, 50, "<10% + scattered 30"),
+            (3, 50, 5, 20, 50, "<10% + scattered 50"),
+            (3, 50, 10, 20, 50, "<10% + scattered 50, k=10"),
+            (3, 50, 10, 30, 50, "<10% + scattered 50, k=10, l=30"),
+            (3, 100, 10, 30, 50, "<10% + scattered 100, k=10, l=30"),
+            // 10-50% branch with scattered
+            (30, 50, 10, 20, 50, "10-50% + scattered 50, k=10"),
+            (30, 100, 10, 30, 50, "10-50% + scattered 100, k=10, l=30"),
+        ] {
+            eprintln!("\n=== {label}: high={high} scat={scattered} ===");
+            let (rc_no, ids_no) = run(high, scattered, sc, l, k, false);
+            let (rc_ad, ids_ad) = run(high, scattered, sc, l, k, true);
+            eprintln!("no_adapt={rc_no} adaptive={rc_ad} improved={} ids_diff={}", rc_ad > rc_no, rc_ad as i32 - rc_no as i32);
+        }
     }
 }
