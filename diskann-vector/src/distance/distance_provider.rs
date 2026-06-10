@@ -113,7 +113,8 @@ impl<T, U> Copy for Distance<T, U>
 where
     T: 'static,
     U: 'static,
-{}
+{
+}
 
 impl<T, U> crate::DistanceFunction<&[T], &[U], f32> for Distance<T, U>
 where

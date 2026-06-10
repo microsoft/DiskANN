@@ -658,6 +658,7 @@ dependencies = [
  "diskann-benchmark-runner",
  "diskann-bftree",
  "diskann-disk",
+ "diskann-inmem",
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
@@ -815,6 +816,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "thiserror 2.0.17",
+ "tokio",
 ]
 
 [[package]]
