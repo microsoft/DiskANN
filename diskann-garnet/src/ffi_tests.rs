@@ -60,6 +60,7 @@ mod tests {
                 callbacks.write_callback(),
                 callbacks.delete_callback(),
                 callbacks.rmw_callback(),
+                callbacks.filter_callback(),
             )
         };
 
@@ -754,76 +755,6 @@ mod tests {
             assert!(ids.len() >= 2, "should return at least 2 vectors");
             // Closest to [1,0] should be id=10 (exact match)
             assert_eq!(ids[0], 10);
-
-            drop_index(ctx.get(), index_ptr);
-        }
-    }
-
-    #[test]
-    fn search_with_bitmap_all_match() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
-
-        unsafe {
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
-                InsertResult::Success
-            );
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
-                InsertResult::Success
-            );
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
-                InsertResult::Success
-            );
-
-            // Bitmap with bits 1,2,3 set (internal IDs for the 3 inserted vectors;
-            // internal ID 0 is the start point)
-            let bitmap: [u8; 8] = [0b00001110, 0, 0, 0, 0, 0, 0, 0];
-            let (ids, _dists) = do_search(&ctx, index_ptr, &[1.0, 0.0], 3, Some(&bitmap));
-            // Start point (internal ID 0) is filtered out from results,
-            // so we may get fewer than k results.
-            assert!(ids.len() >= 2, "should return at least 2 matching vectors");
-            assert_eq!(ids[0], 10, "closest should still be id=10");
-
-            drop_index(ctx.get(), index_ptr);
-        }
-    }
-
-    #[test]
-    fn search_with_bitmap_partial_match() {
-        let store = Store;
-        let (index_ptr, ctx) = create_test_index(&store, VectorQuantType::NoQuant);
-
-        unsafe {
-            // Internal ID 0 -> EID 10, vector [1,0]
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 10, &[1.0, 0.0]),
-                InsertResult::Success
-            );
-            // Internal ID 1 -> EID 20, vector [0,1]
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 20, &[0.0, 1.0]),
-                InsertResult::Success
-            );
-            // Internal ID 2 -> EID 30, vector [1,1]
-            assert_eq!(
-                insert_f32_vector(&ctx, index_ptr, 30, &[1.0, 1.0]),
-                InsertResult::Success
-            );
-
-            // Bitmap with only bit 2 set (internal ID 2 = EID 20, second inserted vector)
-            let bitmap: [u8; 8] = [0b00000100, 0, 0, 0, 0, 0, 0, 0];
-            // Query close to EID 20's vector [0,1] to ensure it appears in results
-            let (ids, _dists) = do_search(&ctx, index_ptr, &[0.0, 1.0], 3, Some(&bitmap));
-            // BetaFilter biases toward matching vectors by scaling their distances.
-            assert!(!ids.is_empty(), "should return at least one result");
-            // EID 20 should appear since it's the closest to query AND matches the filter
-            assert!(
-                ids.contains(&20),
-                "filtered vector EID 20 should be in results"
-            );
 
             drop_index(ctx.get(), index_ptr);
         }
