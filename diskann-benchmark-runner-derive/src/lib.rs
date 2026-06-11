@@ -51,7 +51,7 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
                 let ident = f.ident.as_ref().unwrap().to_string();
                 let doc = format_docstrings(&f.attrs);
 
-                quote_spanned! { ty.span()=> #path::Field::new::<#ty>(#ident, #doc) }
+                quote_spanned! { ty.span()=> #path::NamedField::new::<#ty>(#ident, #doc) }
             });
 
             quote! {
@@ -59,7 +59,7 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
                     fn reflect() -> #path::Type {
                         #path::Type::aggregate(
                             #type_name_str,
-                            [#(#fields),*],
+                            #path::Fields::Named(vec![#(#fields),*]),
                             #doc,
                         )
                     }
@@ -72,7 +72,7 @@ fn process_struct(input: &DeriveInput, s: &syn::DataStruct) -> proc_macro2::Toke
 
 fn format_docstrings(attributes: &[syn::Attribute]) -> proc_macro2::TokenStream {
     match extract_docs(attributes) {
-        None => quote!{ ::std::option::Option::None },
+        None => quote! { ::std::option::Option::None },
         Some(docs) => quote! { ::std::option::Option::Some(#docs.into()) },
     }
 }

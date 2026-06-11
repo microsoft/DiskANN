@@ -51,20 +51,24 @@ impl Type {
         Self::from(Primitive::new(type_name, doc))
     }
 
-    pub fn aggregate<Itr>(type_name: &'static str, fields: Itr, doc: Option<Doc>) -> Self
-    where
-        Itr: IntoIterator<Item = Field>,
-    {
+    pub fn aggregate(type_name: &'static str, fields: Fields, doc: Option<Doc>) -> Self {
         Self::from(Aggregate::new(type_name, fields, doc))
     }
 
-    pub(crate) fn walk(&self, name: &str) -> Result<Reflection, WalkError> {
-        match self {
-            Self::Primitive(_) => Err(WalkError),
-            Self::Aggregate(aggregate) => aggregate.walk(name),
-            Self::Enum(variant) => variant.walk(name),
-        }
+    pub fn enum_<Itr>(type_name: &'static str, variants: Itr, doc: Option<Doc>) -> Self
+    where
+        Itr: IntoIterator<Item = Variant>,
+    {
+        Self::from(Enum::new(type_name, variants, doc))
     }
+
+    // pub(crate) fn walk(&self, name: &str) -> Result<Reflection, WalkError> {
+    //     match self {
+    //         Self::Primitive(_) => Err(WalkError),
+    //         Self::Aggregate(aggregate) => aggregate.walk(name),
+    //         Self::Enum(variant) => variant.walk(name),
+    //     }
+    // }
 }
 
 impl From<Primitive> for Type {
@@ -98,37 +102,40 @@ impl Primitive {
 
 pub struct Aggregate {
     type_name: &'static str,
-    fields: Vec<Field>,
+    fields: Fields,
     doc: Option<Doc>,
 }
 
 impl Aggregate {
-    pub fn new<Itr>(type_name: &'static str, fields: Itr, doc: Option<Doc>) -> Self
-    where
-        Itr: IntoIterator<Item = Field>,
-    {
+    pub fn new(type_name: &'static str, fields: Fields, doc: Option<Doc>) -> Self {
         Self {
             type_name,
-            fields: fields.into_iter().collect(),
+            fields,
             doc,
         }
     }
 
-    fn walk(&self, field: &str) -> Result<Reflection, WalkError> {
-        match self.fields.iter().find(|f| f.name == field) {
-            Some(f) => Ok(f.field),
-            None => Err(WalkError),
-        }
-    }
+    // fn walk(&self, field: &str) -> Result<Reflection, WalkError> {
+    //     match self.fields.iter().find(|f| f.name == field) {
+    //         Some(f) => Ok(f.field),
+    //         None => Err(WalkError),
+    //     }
+    // }
 }
 
-pub struct Field {
+pub enum Fields {
+    Named(Vec<NamedField>),
+    Unnamed(Vec<UnnamedField>),
+    Unit,
+}
+
+pub struct NamedField {
     name: &'static str,
     field: Reflection,
     doc: Option<Doc>,
 }
 
-impl Field {
+impl NamedField {
     pub fn new<T>(name: &'static str, doc: Option<Doc>) -> Self
     where
         T: Reflect,
@@ -141,16 +148,33 @@ impl Field {
     }
 }
 
+pub struct UnnamedField {
+    field: Reflection,
+    doc: Option<Doc>,
+}
+
+impl UnnamedField {
+    pub fn new<T>(doc: Option<Doc>) -> Self
+    where
+        T: Reflect,
+    {
+        Self {
+            field: reflect::<T>(),
+            doc,
+        }
+    }
+}
+
 pub struct Enum {
     type_name: &'static str,
-    variants: Vec<(&'static str, Variant)>,
+    variants: Vec<Variant>,
     doc: Option<Doc>,
 }
 
 impl Enum {
     pub fn new<Itr>(type_name: &'static str, variants: Itr, doc: Option<Doc>) -> Self
     where
-        Itr: IntoIterator<Item = (&'static str, Variant)>,
+        Itr: IntoIterator<Item = Variant>,
     {
         Self {
             type_name,
@@ -159,32 +183,23 @@ impl Enum {
         }
     }
 
-    fn walk(&self, variant: &str) -> Result<Reflection, WalkError> {
-        match self.variants.iter().find(|(v, _)| *v == variant) {
-            Some(v) => Ok(v.1.variant),
-            None => Err(WalkError),
-        }
-    }
+    // fn walk(&self, variant: &str) -> Result<Reflection, WalkError> {
+    //     match self.variants.iter().find(|(v, _)| *v == variant) {
+    //         Some(v) => Ok(v.1.variant),
+    //         None => Err(WalkError),
+    //     }
+    // }
 }
 
 pub struct Variant {
-    variant: Option<Reflection>,
+    name: &'static str,
+    fields: Fields,
     doc: Option<Doc>,
 }
 
 impl Variant {
-    pub fn new<T>(doc: Option<Doc>) -> Self
-    where
-        T: Reflect,
-    {
-        Self {
-            variant: Some(reflect::<T>()),
-            doc,
-        }
-    }
-
-    pub fn aggregate(doc: Option<Doc>) -> Self {
-
+    pub fn new(name: &'static str, fields: Fields, doc: Option<Doc>) -> Self {
+        Self { name, fields, doc }
     }
 }
 
@@ -192,19 +207,19 @@ impl Variant {
 // Algorithms //
 ////////////////
 
-pub fn walk<'a, I>(reflection: Reflection, paths: I) -> Result<Reflection, WalkError>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut current = reflection;
-    for p in paths {
-        current = current.reflect().walk(p)?;
-    }
-    Ok(current)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct WalkError;
+// pub fn walk<'a, I>(reflection: Reflection, paths: I) -> Result<Reflection, WalkError>
+// where
+//     I: IntoIterator<Item = &'a str>,
+// {
+//     let mut current = reflection;
+//     for p in paths {
+//         current = current.reflect().walk(p)?;
+//     }
+//     Ok(current)
+// }
+//
+// #[derive(Debug, Clone, Copy)]
+// pub struct WalkError;
 
 ///////////////
 // Bootstrap //
