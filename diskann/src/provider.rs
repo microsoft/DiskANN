@@ -50,45 +50,15 @@
 //!   implementations may allow internal IDs to be reused immediately following the deletion
 //!   of the external ID while others may wait for a "release".
 //!
-//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`DelegateNeighbors`] all need to
+//! * [`HasId`]: Traits such as [`NeighborAccessor`] and [`NeighborAccessorMut`] all need to
 //!   interact with the underlying [`DataProvider`] using an internal ID type.
 //!
 //!   The [`HasId`] trait provides a common base-trait for these related concepts, which
 //!   ensures implementers only need to define and constrain it once.
-//!
-//! * [`BuildDistanceComputer`]: A sub-trait of [`HasElementRef`] that allows for
-//!   random-access distance computations on the retrieved elements.
-//!
-//! # Neighbor Delegation
-//!
-//! Graph operations require both data access (distances, elements) and graph
-//! access (neighbor retrieval and mutation). These concerns are typically served
-//! by different backing stores and need not vary together.
-//!
-//! For example, search and pruning use different data accessors (optimized for
-//! query distances vs. pairwise element distances), but both share the same
-//! graph topology.
-//!
-//! Rather than requiring every data accessor to manually forward
-//! [`NeighborAccessor`] methods, the [`DelegateNeighbor`] trait routes neighbor
-//! access to a single shared implementation.
-//!
-//! Data accessor types should implement [`DelegateNeighbor`] to return a
-//! [`NeighborAccessor`]. This automatically provides [`AsNeighbor`] and
-//! [`AsNeighborMut`] (the latter when the delegate implements
-//! [`NeighborAccessorMut`]).
-//!
-//! Algorithms requiring graph access should accept `&mut T` where
-//! `T: AsNeighbor` or `T: AsNeighborMut`, which provides blanket
-//! implementations of [`NeighborAccessor`] and [`NeighborAccessorMut`]
-//! for `&mut T`.
 
 use std::ops::Deref;
 
-use diskann_vector::DistanceFunction;
-use sealed::{BoundTo, Sealed};
-
-use crate::{ANNError, ANNResult, error::ToRanked, graph::AdjacencyList, utils::VectorId};
+use crate::{ANNResult, error::ToRanked, graph::AdjacencyList, utils::VectorId};
 
 //////////////////////
 // ExecutionContext //
@@ -366,45 +336,9 @@ where
     }
 }
 
-///////////////////
-// HasElementRef //
-///////////////////
-
-/// An association between a data accessor and the element it yields.
-pub trait HasElementRef {
-    type ElementRef<'a>;
-}
-
-/////////////////////////////
-// Build Distance Computer //
-/////////////////////////////
-
-/// A trait that provides random-access distance computations over elements
-/// identified by [`HasElementRef`].
-pub trait BuildDistanceComputer: HasElementRef {
-    /// The error type (if any) associated with distance computer construction.
-    ///
-    /// Implementations are encouraged to make distance computer construction infallible.
-    type DistanceComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
-
-    /// The concrete type of the distance computer, which must be applicable to all pairs
-    /// of elements identified by [`HasElementRef::ElementRef`].
-    type DistanceComputer: for<'a, 'b> DistanceFunction<Self::ElementRef<'a>, Self::ElementRef<'b>>
-        + Send
-        + Sync;
-
-    /// Build the random-access distance computer for this accessor.
-    ///
-    /// This method is expected to be relatively cheap to invoke and implementations are
-    /// encouraged to make this method infallible.
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError>;
-}
-
-/////////////////////////
-// Neighbor Delegation //
-/////////////////////////
+///////////////////////
+// Neighbor Accessor //
+///////////////////////
 
 /// An accessor that provides random-access neighbor retrieval from a graph.
 ///
@@ -414,51 +348,38 @@ pub trait BuildDistanceComputer: HasElementRef {
 ///
 /// As such, data accessors used in conjunction with graph operations need to additionally
 /// provide an implementation of this trait.
-///
-/// To avoid repeating implementations for every accessor flavor, the trait
-/// [`DelegateNeighbor`] should be used instead to route the implementation of
-/// [`NeighborAccessor`] to a single type if applicable.
-///
-/// # Note
-///
-/// The `NeighborAccessor` method receive by value. Implementations are strongly encouraged
-/// to be cheap to construct, copy, or clone. This can generally be achieved by implementing
-/// `NeighborAccessor` for `&T`, `&mut T`, or a thing wrapper around such references.
-pub trait NeighborAccessor: HasId + Sized + Send + Sync {
+pub trait NeighborAccessor: HasId + Send + Sync {
     /// Get the neighbors for the node associated with `id`.
     ///
     /// Populate the neighbors into the `neighbors` out parameter.
     ///
     /// Implementations are expected to clear `neighbors` prior to populating.
     fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send;
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 }
 
 /// A mutable extension of [`NeighborAccessor`] that enables the underlying graph to be
 /// mutated.
-///
-/// Generally, data accessors should implement [`DelegateNeighbor`] instead of extending this
-/// trait if graph and data access are naturally decoupled.
 pub trait NeighborAccessorMut: NeighborAccessor {
     /// Overwrite the neighbor list for the node associated with `id`.
     fn set_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send;
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 
-    /// Append all entries in `neighbors` tothe neighbor list currently associated with `id`.
+    /// Append all entries in `neighbors` to the neighbor list currently associated with `id`.
     ///
     /// The behavior when the resulting list exceeds some pre-configured capacity or
     /// contains duplicates is implementation defined.
     fn append_vector(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send;
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send;
 
     /// A potentially optimized bulk implementation of [`Self::set_neighbors`].
     ///
@@ -467,125 +388,76 @@ pub trait NeighborAccessorMut: NeighborAccessor {
     ///
     /// Implementations are allowed to commit entries out of order.
     fn set_neighbors_bulk<I, T>(
-        mut self,
+        &mut self,
         iter: I,
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         I: Iterator<Item = (Self::Id, T)> + Send,
         T: Deref<Target = [Self::Id]> + Send,
     {
         async move {
             for (vector_id, neighbors) in iter {
-                self = self.set_neighbors(vector_id, neighbors.deref()).await?;
+                self.set_neighbors(vector_id, neighbors.deref()).await?;
             }
-            Ok(self)
+            Ok(())
         }
     }
 }
 
-/// This implementation allows `&mut T` to be used as a [`NeighborAccessor`] without
-/// requiring manual invocation of [`DelegateNeighbor`].
-impl<T> NeighborAccessor for &mut T
+/// A small adaptor providing [`NeighborAccessor`] and [`NeighborAccessorMut`] for `&mut T`.
+pub struct Neighbors<'a, T>(pub &'a mut T);
+
+impl<T> HasId for Neighbors<'_, T>
 where
-    T: AsNeighbor,
+    T: HasId,
 {
-    async fn get_neighbors(
-        self,
+    type Id = T::Id;
+}
+
+impl<T> NeighborAccessor for Neighbors<'_, T>
+where
+    T: NeighborAccessor,
+{
+    fn get_neighbors(
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
-        self.delegate_neighbor()
-            .get_neighbors(id, neighbors)
-            .await?;
-        Ok(self)
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.get_neighbors(id, neighbors)
     }
 }
 
-/// This implementation allows `&mut T` to be used as a [`NeighborAccessorMut`] without
-/// requiring manual invocation of [`DelegateNeighbor`].
-impl<T> NeighborAccessorMut for &mut T
+impl<T> NeighborAccessorMut for Neighbors<'_, T>
 where
-    T: AsNeighborMut,
+    T: NeighborAccessorMut,
 {
-    async fn set_neighbors(self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<Self> {
-        self.delegate_neighbor()
-            .set_neighbors(id, neighbors)
-            .await?;
-        Ok(self)
+    fn set_neighbors(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.set_neighbors(id, neighbors)
     }
-    async fn append_vector(self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<Self> {
-        self.delegate_neighbor()
-            .append_vector(id, neighbors)
-            .await?;
-        Ok(self)
+
+    fn append_vector(
+        &mut self,
+        id: Self::Id,
+        neighbors: &[Self::Id],
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        self.0.append_vector(id, neighbors)
     }
-    async fn set_neighbors_bulk<I, U>(self, iter: I) -> ANNResult<Self>
+
+    fn set_neighbors_bulk<I, U>(
+        &mut self,
+        iter: I,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         I: Iterator<Item = (Self::Id, U)> + Send,
         U: Deref<Target = [Self::Id]> + Send,
     {
-        self.delegate_neighbor().set_neighbors_bulk(iter).await?;
-        Ok(self)
+        self.0.set_neighbors_bulk(iter)
     }
 }
-
-/// Accessor may delegate the responsibility of being a [`NeighborAccessor`] to an auxiliary
-/// type by implementing this trait.
-///
-/// If the implementation of a [`NeighborAccessor`]/[`NeighborAccessorMut`] is coupled with
-/// the data accessor itself (meaning that no delegation can take place), then implementations
-/// may do the following. Assume the accessor has type `T`. Then:
-///
-/// 1. Implement [`NeighborAccessor`]/[`NeighborAccessorMut`] for a thin wrapper around
-///    `&[mut] T`.
-///
-/// 2. Implement [`DelegateNeighbor`] to return this wrapper as its delegate.
-///
-/// Implementation code can use this trait through the [`AsNeighbor`] and [`AsNeighborMut`]
-/// convenience traits to ensure proper application of the HRTB requirements.
-///
-/// Additionally, the `&mut T` blanket implementation of [`NeighborAccessor`] and
-/// [`NeighborAccessorMut`] can be used to avoid manually invoking `delegate_neighbor`.
-pub trait DelegateNeighbor<'this, Lifetime: Sealed = BoundTo<&'this Self>>:
-    HasId + Send + Sync
-{
-    /// The type of the delegated [`NeighborAccessor`].
-    type Delegate: NeighborAccessor<Id = Self::Id>;
-
-    /// Construct the delegate.
-    fn delegate_neighbor(&'this mut self) -> Self::Delegate;
-}
-
-impl<'this, T> DelegateNeighbor<'this> for T
-where
-    T: Copy + NeighborAccessor,
-{
-    type Delegate = Self;
-    fn delegate_neighbor(&'this mut self) -> Self::Delegate {
-        *self
-    }
-}
-
-/// A convenience HRTB wrapper for [`DelegateNeighbor`]. Accessors should implement
-/// [`DelegateNeighbor`].
-///
-/// # Note
-///
-/// This trait should never be implemented manually. Instead, this trait is automatically
-/// implemented for a type `T` when it implements [`DelegateNeighbor`].
-pub trait AsNeighbor: for<'a> DelegateNeighbor<'a> {}
-
-/// A convenience HRTB wrapper for [`DelegateNeighbor`]. Accessors should implement
-/// [`DelegateNeighbor`].
-///
-/// # Note
-///
-/// This trait should never be implemented manually. Instead, this trait is automatically
-/// implemented for a type `T` when it implements [`DelegateNeighbor`].
-pub trait AsNeighborMut: for<'a> DelegateNeighbor<'a, Delegate: NeighborAccessorMut> {}
-
-impl<T> AsNeighbor for T where T: for<'a> DelegateNeighbor<'a> {}
-impl<T> AsNeighborMut for T where T: for<'a> DelegateNeighbor<'a, Delegate: NeighborAccessorMut> {}
 
 /// Get a default accessor from a provider.
 ///
@@ -615,17 +487,6 @@ impl std::fmt::Display for DefaultContext {
 }
 
 impl ExecutionContext for DefaultContext {}
-
-//////////
-// Misc //
-//////////
-
-// Constraint for HRBT-style associated types.
-mod sealed {
-    pub trait Sealed: Sized {}
-    pub struct BoundTo<T>(T);
-    impl<T> Sealed for BoundTo<T> {}
-}
 
 ///////////
 // Tests //
