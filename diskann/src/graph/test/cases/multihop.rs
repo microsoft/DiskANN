@@ -56,7 +56,7 @@ impl QueryLabelProvider<u32> for AcceptAll {
 
 /// Accepts all IDs but only allows even IDs in results.
 #[derive(Debug)]
-struct EvenFilter;
+pub(super) struct EvenFilter;
 
 impl QueryLabelProvider<u32> for EvenFilter {
     fn is_match(&self, id: u32) -> bool {
@@ -115,7 +115,7 @@ impl QueryLabelProvider<u32> for TerminateOnTarget {
 
 /// Accepts all via `is_match`, but blocks one ID and adjusts another's distance.
 #[derive(Debug)]
-struct BlockAndAdjust {
+pub(super) struct BlockAndAdjust {
     blocked: u32,
     adjusted: u32,
     factor: f32,
@@ -123,11 +123,11 @@ struct BlockAndAdjust {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct BlockAndAdjustMetrics {
-    total_visits: usize,
-    rejected_count: usize,
-    adjusted_count: usize,
-    visited_ids: Vec<u32>,
+pub(super) struct BlockAndAdjustMetrics {
+    pub(super) total_visits: usize,
+    pub(super) rejected_count: usize,
+    pub(super) adjusted_count: usize,
+    pub(super) visited_ids: Vec<u32>,
 }
 
 verbose_eq!(BlockAndAdjustMetrics {
@@ -138,7 +138,7 @@ verbose_eq!(BlockAndAdjustMetrics {
 });
 
 impl BlockAndAdjust {
-    fn new(blocked: u32, adjusted: u32, factor: f32) -> Self {
+    pub(super) fn new(blocked: u32, adjusted: u32, factor: f32) -> Self {
         Self {
             blocked,
             adjusted,
@@ -147,7 +147,7 @@ impl BlockAndAdjust {
         }
     }
 
-    fn metrics(&self) -> BlockAndAdjustMetrics {
+    pub(super) fn metrics(&self) -> BlockAndAdjustMetrics {
         self.metrics.lock().unwrap().clone()
     }
 }
@@ -181,7 +181,7 @@ impl QueryLabelProvider<u32> for BlockAndAdjust {
 /// Build a 1D provider with the given points and adjacency lists.
 ///
 /// `start_pos` is the 1D position of the start node (id = `start_id`).
-fn build_1d_provider(
+pub(super) fn build_1d_provider(
     start_id: u32,
     start_pos: f32,
     start_neighbors: AdjacencyList<u32>,
@@ -489,7 +489,7 @@ verbose_eq!(MultihopBaseline {
 });
 
 /// Set up a 3D grid index using the test provider.
-fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
     use crate::graph::test::synthetic::Grid;
 
     let grid = Grid::Three;

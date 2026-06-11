@@ -1,0 +1,24 @@
+{
+  "file": "diskann/src/graph/test/cases/inline.rs",
+  "test": "graph/test/cases/inline/inline_fixed_linear",
+  "payload": {
+    "comparisons": 54,
+    "grid_size": 100,
+    "hops": 54,
+    "k": 5,
+    "l": 5,
+    "matching_points": 4,
+    "query": [
+      50.0
+    ],
+    "result_count": 2,
+    "result_distances": [
+      1764.0,
+      2025.0
+    ],
+    "result_ids": [
+      92,
+      95
+    ]
+  }
+}

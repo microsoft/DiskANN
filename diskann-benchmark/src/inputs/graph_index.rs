@@ -244,6 +244,63 @@ impl MultiHopSearchPhase {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct AdaptiveL {
+    pub(crate) sample_count: NonZeroUsize,
+    pub(crate) scale_factor: f64,
+}
+
+impl AdaptiveL {
+    pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
+            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct InlineSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: InputFile,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(crate) adaptive_l: Option<AdaptiveL>,
+}
+
+impl InlineSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            adaptive_l.validate(checker)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            let adaptive_l = graph::search::AdaptiveL::new(
+                adaptive_l.sample_count.into(),
+                adaptive_l.scale_factor,
+            )?; // Safe to unwrap since we've already validated the input
+            Ok(Some(adaptive_l))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 /// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -304,6 +361,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkInlineFilter(InlineSearchPhase),
 }
 
 #[derive(Debug, Error)]
@@ -330,6 +388,7 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
         }
     }
 
@@ -374,6 +433,16 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_inline_filter(&self) -> Result<&InlineSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkInlineFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkInlineFilter,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -383,6 +452,7 @@ impl SearchPhase {
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
         }
     }
 }
@@ -393,6 +463,7 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkInlineFilter,
 }
 
 impl SearchPhaseKind {
@@ -402,6 +473,7 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkInlineFilter => "topk-inline-filter",
         }
     }
 }
