@@ -76,7 +76,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Topk)
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
-            .search(plugins::TopkMultihopFilter),
+            .search(plugins::TopkMultihopFilter)
+            .search(plugins::TopkInlineFilter),
     )?;
 
     registry.register(
@@ -642,6 +643,58 @@ where
         )?;
 
         let result = search::knn::run(&multihop, &groundtruth, steps)?;
+        Ok(AggregatedSearchResults::Topk(result))
+    }
+}
+
+//----------------//
+// InlineFilter //
+//----------------//
+
+impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::TopkInlineFilter
+where
+    DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
+    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [DP::Element]> + Clone + AsyncFriendly,
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        Self::kind() == phase.kind()
+    }
+
+    fn kind(&self) -> &'static str {
+        Self::kind().as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<DP>>,
+        phase: &SearchPhase,
+        strategy: &Strategy<S>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let inline = phase.as_topk_inline_filter()?;
+
+        let queries: Arc<Matrix<DP::Element>> = Arc::new(datafiles::load_dataset(
+            datafiles::BinFile(&inline.queries),
+        )?);
+
+        let groundtruth =
+            datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
+
+        let steps = search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+
+        let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
+
+        let inline = benchmark_core::search::graph::InlineFilterSearch::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(strategy.inner()),
+            bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect(),
+            inline.adaptive_l()?,
+        )?;
+
+        let result = search::knn::run(&inline, &groundtruth, steps)?;
         Ok(AggregatedSearchResults::Topk(result))
     }
 }

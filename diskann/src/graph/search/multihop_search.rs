@@ -188,16 +188,12 @@ where
         range_search_second_round: false,
     };
 
-    // Initialize search state if not already initialized.
-    // This allows paged search to call multihop_search_internal multiple times
-    if scratch.visited.is_empty() {
-        accessor
-            .start_point_distances(|id, distance| {
-                scratch.visited.insert(id);
-                scratch.best.insert(Neighbor::new(id, distance));
-            })
-            .await?;
-    }
+    accessor
+        .start_point_distances(|id, distance| {
+            scratch.visited.insert(id);
+            scratch.best.insert(Neighbor::new(id, distance));
+        })
+        .await?;
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
