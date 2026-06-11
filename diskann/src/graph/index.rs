@@ -25,8 +25,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
-        self, Batch, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, PruneStrategy,
-        SearchAccessor, SearchPostProcess, SearchStrategy,
+        self, Batch, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, PruneAccessor,
+        PruneStrategy, SearchAccessor, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -35,7 +35,7 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
-    workingset::{AsWorkingSet, Fill, View},
+    workingset::View,
 };
 
 use crate::{
@@ -44,8 +44,8 @@ use crate::{
     internal,
     neighbor::{self, Neighbor, NeighborQueue},
     provider::{
-        AsNeighbor, AsNeighborMut, BuildDistanceComputer, DataProvider, Delete, ElementStatus,
-        ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
+        DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
+        NeighborAccessorMut, SetElement,
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
@@ -284,7 +284,7 @@ where
 
             let prune_strategy = strategy.prune_strategy();
             let mut prune_accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let mut scratch = self.search_scratch(self.l_build(), num_start_ids);
@@ -295,7 +295,6 @@ where
             let insert_retry = self.config.experimental_insert_retry();
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
@@ -324,14 +323,8 @@ where
                     force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
                 };
 
-                self.robust_prune(
-                    &mut prune_accessor,
-                    internal_id,
-                    context,
-                    &mut working_set,
-                    options,
-                )
-                .await?;
+                self.robust_prune(&mut prune_accessor, internal_id, context, options)
+                    .await?;
 
                 let should_retry =
                     insert_retry.is_some_and(|v| v.should_retry(attempt, new_neighbors.len()));
@@ -352,6 +345,7 @@ where
 
             // insert out edges
             prune_accessor
+                .neighbors()
                 .set_neighbors(internal_id, &new_neighbors)
                 .await?;
 
@@ -361,12 +355,10 @@ where
             // add edges from `new_neighbors` to `internal_id` and prune if necessary
             for source in new_neighbors.iter().take(num_back_edges) {
                 self.add_edge_and_prune(
-                    &prune_strategy,
-                    context,
+                    &mut prune_accessor,
                     std::slice::from_ref(&internal_id),
                     *source,
                     &mut prune_scratch,
-                    &mut working_set,
                     None,
                 )
                 .await?;
@@ -383,25 +375,20 @@ where
         clippy::too_many_arguments,
         reason = "internal method with tightly coupled params"
     )]
-    fn search_and_prune<S, B, Set>(
+    fn search_and_prune<S, B, A>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         ids: &[DP::InternalId],
         position: usize,
-        working_set: &mut Set,
+        prune_accessor: &mut A,
         prune_scratch: &mut prune::Scratch<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
-        S: for<'a> InsertStrategy<
-                'a,
-                DP,
-                B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
-            >,
+        S: for<'a> InsertStrategy<'a, DP, B::Element<'a>>,
         B: Batch,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
             let internal_id = ids[position];
@@ -436,11 +423,7 @@ where
                 .await?;
 
                 // Add other vector id pairs in the mini batch to the candidate pool
-                let prune_strategy = strategy.prune_strategy();
-                let mut prune_accessor = prune_strategy
-                    .prune_accessor(&self.data_provider, context)
-                    .into_ann_result()?;
-
+                //
                 // N.B.: If `candidates == 0`, then `async_tools::around` naturally returns
                 // an empty iterator and `robust_prune_with` will skip the additional
                 // distance computations.
@@ -451,12 +434,11 @@ where
                 };
 
                 self.robust_prune_with(
-                    &mut prune_accessor,
+                    prune_accessor,
                     internal_id,
                     async_tools::around(ids, position, candidates).copied(),
                     &mut search_record,
                     prune_scratch,
-                    working_set,
                     options,
                 )
                 .await
@@ -592,36 +574,40 @@ where
     ///
     /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
     /// contain all edges successfully processed by this task.
-    fn search_and_prune_batch<S, B, Set>(
+    fn search_and_prune_batch<S, B>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         work: &DynamicBalancer<DP::InternalId>,
-        working_set: &mut Set,
+        seed: &S::Seed,
     ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
     where
+        S: MultiInsertStrategy<DP, B>,
         B: Batch,
-        S: for<'a> InsertStrategy<
-                'a,
-                DP,
-                B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
-            >,
-        Set: Send + Sync,
     {
         async move {
             let mut output = Vec::new();
+            let mut accessor = match strategy.seeded_prune_accessor(
+                self.provider(),
+                context,
+                seed,
+                self.max_occlusion_size(),
+            ) {
+                Ok(accessor) => accessor,
+                Err(err) => return Err((output, err)),
+            };
+
             let mut prune_scratch = prune::Scratch::new();
             while let Some((_, position)) = work.next() {
                 match self
                     .search_and_prune(
-                        strategy,
+                        &strategy.insert_strategy(),
                         context,
                         batch,
                         work.all(),
                         position,
-                        working_set,
+                        &mut accessor,
                         &mut prune_scratch,
                     )
                     .await
@@ -667,11 +653,10 @@ where
                 ));
 
             let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let mut prune_scratch = prune::Scratch::new();
-            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
@@ -686,7 +671,6 @@ where
                 current.source,
                 &candidates,
                 &mut prune_scratch,
-                &mut working_set,
                 options,
             )
             .await
@@ -907,23 +891,26 @@ where
                 .await
                 .into_ann_result()?;
 
+            let seed = Arc::new(seed);
+            let strategy = Arc::new(strategy);
+
             let handles: Vec<_> = (0..num_tasks.get() - 1)
                 .map(|_| {
                     let self_clone = self.clone();
-                    let insert_strategy = strategy.insert_strategy();
+                    let seed_clone = seed.clone();
+                    let strategy_clone = strategy.clone();
                     let context_clone = context.clone();
                     let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
-                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
 
                     let future = async move {
                         self_clone
                             .search_and_prune_batch(
-                                &insert_strategy,
+                                &*strategy_clone,
                                 &context_clone,
                                 &vectors_clone,
                                 &work_clone,
-                                &mut working_set,
+                                &seed_clone,
                             )
                             .await
                     };
@@ -933,13 +920,7 @@ where
 
             // Defer dealing with the `result` until after we have joined the other tasks.
             let mut edges = match self
-                .search_and_prune_batch(
-                    &strategy.insert_strategy(),
-                    context,
-                    &vectors,
-                    &work,
-                    &mut seed.as_working_set(self.max_occlusion_size()),
-                )
+                .search_and_prune_batch(&*strategy, context, &vectors, &work, &seed)
                 .await
             {
                 Ok(v) => v,
@@ -1001,9 +982,11 @@ where
             {
                 let prune_strategy = strategy.insert_strategy().prune_strategy();
                 let accessor = &mut prune_strategy
-                    .prune_accessor(&self.data_provider, context)
+                    .prune_accessor(&self.data_provider, context, 0)
                     .into_ann_result()?;
+
                 accessor
+                    .neighbors()
                     .set_neighbors_bulk(
                         edges
                             .into_iter()
@@ -1017,11 +1000,18 @@ where
                 .map(|i| {
                     let self_clone = self.clone();
                     let context_clone = context.clone();
-                    let strategy_clone = strategy.insert_strategy().prune_strategy();
+                    let strategy_clone = strategy.clone();
                     let backedges_clone = backedges.clone();
-                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
+                    let seed_clone = seed.clone();
 
                     tokio::spawn(context.wrap_spawn(async move {
+                        let mut accessor = strategy_clone.seeded_prune_accessor(
+                            self_clone.provider(),
+                            &context_clone,
+                            &seed_clone,
+                            self_clone.max_occlusion_size(),
+                        )?;
+
                         // Get the range of items to process in this task.
                         let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
                         let itr = backedges_clone.iter().skip(range.start).take(range.len());
@@ -1038,12 +1028,10 @@ where
 
                             self_clone
                                 .add_edge_and_prune(
-                                    &strategy_clone,
-                                    &context_clone,
+                                    &mut accessor,
                                     &sorted_buf,
                                     *source,
                                     &mut prune_scratch,
-                                    &mut working_set,
                                     None,
                                 )
                                 .await?;
@@ -1083,7 +1071,7 @@ where
     ) -> impl SendFuture<ANNResult<bool>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut neighbors = AdjacencyList::new();
@@ -1105,7 +1093,7 @@ where
 
     pub fn drop_adj_list(
         &self,
-        accessor: &mut impl AsNeighborMut<Id = DP::InternalId>,
+        accessor: &mut impl NeighborAccessorMut<Id = DP::InternalId>,
         vector_id: DP::InternalId,
     ) -> impl SendFuture<ANNResult<()>> {
         accessor
@@ -1127,7 +1115,7 @@ where
         DP: Delete,
         F: FnMut(DP::InternalId) + Send,
         G: FnMut(DP::InternalId) + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut neighbors = AdjacencyList::new();
@@ -1162,7 +1150,7 @@ where
     ) -> impl SendFuture<ANNResult<PartitionedNeighbors<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut undeleted = Vec::new();
@@ -1190,7 +1178,7 @@ where
     ) -> impl SendFuture<ANNResult<Vec<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut return_candidates = Vec::new();
@@ -1265,11 +1253,11 @@ where
             // Collect IDs whose adjacency lists need to be updated.
             let prune_strategy = strategy.prune_strategy();
             let mut prune_accessor = prune_strategy
-                .prune_accessor(self.provider(), context)
+                .prune_accessor(self.provider(), context, 0)
                 .into_ann_result()?;
 
             let ids_to_modify = self
-                .return_refs_to_deleted_vertex(&mut prune_accessor, id, &undeleted_ids)
+                .return_refs_to_deleted_vertex(&mut prune_accessor.neighbors(), id, &undeleted_ids)
                 .await?;
 
             undeleted_ids.truncate(k_value);
@@ -1292,7 +1280,7 @@ where
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut two_hop_nbhs = HashSet::new();
@@ -1355,7 +1343,7 @@ where
     ) -> impl SendFuture<ANNResult<InplaceDeleteWorkList<DP::InternalId>>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut undeleted_one_hop_nbhs = Vec::new();
@@ -1505,8 +1493,13 @@ where
                             };
 
                             let mut prune_scratch = prune::Scratch::new();
-                            let mut working_set =
-                                strategy_clone.create_working_set(self_clone.max_occlusion_size());
+                            let mut accessor = strategy_clone
+                                .prune_accessor(
+                                    self_clone.provider(),
+                                    &context_clone,
+                                    self_clone.max_occlusion_size(),
+                                )
+                                .into_ann_result()?;
 
                             match result {
                                 Some(source) => {
@@ -1520,12 +1513,10 @@ where
 
                                     self_clone
                                         .add_edge_and_prune(
-                                            &strategy_clone,
-                                            &context_clone,
+                                            &mut accessor,
                                             &adj_list,
                                             source,
                                             &mut prune_scratch,
-                                            &mut working_set,
                                             Some(&ids_to_delete_clone), // delete any edges to a deleted point as part of add_edge_and_prune
                                         )
                                         .await?;
@@ -1549,11 +1540,12 @@ where
                 // finally, drop each deleted neighbor's edges, this can run sequentially
                 let prune_strategy = strategy.prune_strategy();
                 let mut accessor = prune_strategy
-                    .prune_accessor(&self.data_provider, context)
+                    .prune_accessor(&self.data_provider, context, 0)
                     .into_ann_result()?;
 
                 for vector_id in ids_to_delete.iter() {
-                    self.drop_adj_list(&mut accessor, *vector_id).await?;
+                    self.drop_adj_list(&mut accessor.neighbors(), *vector_id)
+                        .await?;
                 }
             }
 
@@ -1598,27 +1590,25 @@ where
             delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
+            let mut accessor = prune_strategy
+                .prune_accessor(self.provider(), context, self.max_occlusion_size())
+                .into_ann_result()?;
+
             let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
                 self.add_edge_and_prune(
-                    &prune_strategy,
-                    context,
+                    &mut accessor,
                     edges,
                     *neighbor,
                     &mut prune_scratch,
-                    &mut working_set,
                     Some(&delete_set), // delete the edge to the deleted point as part of add_edge_and_prune
                 )
                 .await?
             }
 
-            let mut accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            self.drop_adj_list(&mut accessor, vector_id).await?;
+            self.drop_adj_list(&mut accessor.neighbors(), vector_id)
+                .await?;
 
             Ok(())
         }
@@ -1664,7 +1654,7 @@ where
 
             let prune_strategy = strategy.prune_strategy();
             let mut accessor = prune_strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             let InplaceDeleteWorkList {
@@ -1685,16 +1675,19 @@ where
                     .await?
                 }
                 InplaceDeleteMethod::TwoHopAndOneHop => {
-                    self.get_candidates_using_twohop_and_onehop(context, &mut accessor, vector_id)
-                        .await?
+                    self.get_candidates_using_twohop_and_onehop(
+                        context,
+                        &mut accessor.neighbors(),
+                        vector_id,
+                    )
+                    .await?
                 }
                 InplaceDeleteMethod::OneHop => {
-                    self.get_candidates_using_onehop(context, &mut accessor, vector_id)
+                    self.get_candidates_using_onehop(context, &mut accessor.neighbors(), vector_id)
                         .await?
                 }
             };
 
-            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut edges_to_add = HashMap::<DP::InternalId, Vec<DP::InternalId>>::new();
 
             // fetch the filtered adjacency list of `p`.
@@ -1702,25 +1695,20 @@ where
                 undeleted: adjacency_list,
                 ..
             } = self
-                .get_undeleted_neighbors(context, &mut accessor, vector_id)
+                .get_undeleted_neighbors(context, &mut accessor.neighbors(), vector_id)
                 .await?;
-
-            let computer = accessor.build_distance_computer().into_ann_result()?;
 
             // This is the total union of elements that we consider for neighbors.
             // It's possible there is some repitition, but implementations of `Fill` should
             // already properly handle that.
-            let view = accessor
-                .fill(
-                    &mut working_set,
+            let (view, computer) = accessor
+                .fill(internal::chain(
                     internal::chain(
-                        internal::chain(
-                            replace_candidates.iter().copied(),
-                            in_neighbors.iter().copied(),
-                        ),
-                        adjacency_list.iter().copied(),
+                        replace_candidates.iter().copied(),
+                        in_neighbors.iter().copied(),
                     ),
-                )
+                    adjacency_list.iter().copied(),
+                ))
                 .await
                 .into_ann_result()?;
 
@@ -1808,7 +1796,7 @@ where
     ) -> impl SendFuture<ANNResult<ConsolidateKind>>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         async move {
             let status = self
@@ -1888,12 +1876,12 @@ where
             let mut pool = HashSet::new();
             let mut deleted_neighbors = Vec::new();
             let accessor = &mut strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
 
             self.on_neighbors(
                 context,
-                accessor,
+                &mut accessor.neighbors(),
                 vector_id,
                 |i| {
                     pool.insert(i);
@@ -1915,7 +1903,7 @@ where
             for id in deleted_neighbors.iter() {
                 self.on_neighbors(
                     context,
-                    accessor,
+                    &mut accessor.neighbors(),
                     *id,
                     |i| {
                         pool.insert(i);
@@ -1935,7 +1923,6 @@ where
                     neighbors
                 } else {
                     let mut prune_scratch = prune::Scratch::new();
-                    let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
@@ -1950,7 +1937,6 @@ where
                             vector_id,
                             &neighbors,
                             &mut prune_scratch,
-                            &mut working_set,
                             options,
                         )
                         .await
@@ -1970,7 +1956,10 @@ where
                 adj_list
             );
 
-            accessor.set_neighbors(vector_id, &adj_list).await?;
+            accessor
+                .neighbors()
+                .set_neighbors(vector_id, &adj_list)
+                .await?;
             Ok(ConsolidateKind::Complete)
         }
     }
@@ -2208,7 +2197,7 @@ where
         accessor: &mut NA,
     ) -> impl SendFuture<ANNResult<usize>>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut expanded_nodes = HashSet::<DP::InternalId>::new();
@@ -2239,7 +2228,7 @@ where
     ) -> impl SendFuture<ANNResult<DegreeStats>>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         async move {
             let mut max_degree_usize: usize = 0;
@@ -2305,26 +2294,23 @@ where
     /// We're going through a temporary phase of moving the `Context` into the `Strategy`.
     /// For now - we unfortunately need both.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn add_edge_and_prune<'a, S>(
+    pub(crate) fn add_edge_and_prune<'a, A>(
         &'a self,
-        strategy: &'a S,
-        context: &'a DP::Context,
+        accessor: &'a mut A,
         targets: &[DP::InternalId],
         source: DP::InternalId,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut S::WorkingSet,
         to_remove: Option<&HashSet<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        S: PruneStrategy<DP>,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
-            let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
             let mut adj_list = AdjacencyList::with_capacity(self.max_degree_with_slack());
-            accessor.get_neighbors(source, &mut adj_list).await?;
+            accessor
+                .neighbors()
+                .get_neighbors(source, &mut adj_list)
+                .await?;
 
             let mut did_remove = false;
             if let Some(set) = to_remove {
@@ -2349,9 +2335,12 @@ where
                 // No pruning is needed; we can just append.
                 tracked_trace!("Appending back-edge from {} to {:?}.", source, targets,);
                 if did_remove {
-                    accessor.set_neighbors(source, &adj_list).await?;
+                    accessor
+                        .neighbors()
+                        .set_neighbors(source, &adj_list)
+                        .await?;
                 } else if let Some(edges) = adj_list.last(num_new_edges) {
-                    accessor.append_vector(source, edges).await?;
+                    accessor.neighbors().append_vector(source, edges).await?;
                 }
             } else {
                 // During back-edge insertion, we are working with a limited number
@@ -2362,16 +2351,11 @@ where
                     force_saturate: false,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    source,
-                    &adj_list,
-                    scratch,
-                    working_set,
-                    options,
-                )
-                .await
-                .allow_transient("vector may already be unavailable in hard-delete providers")?;
+                self.robust_prune_list(accessor, source, &adj_list, scratch, options)
+                    .await
+                    .allow_transient(
+                        "vector may already be unavailable in hard-delete providers",
+                    )?;
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
@@ -2379,7 +2363,10 @@ where
                     scratch.neighbors
                 );
 
-                accessor.set_neighbors(source, &scratch.neighbors).await?;
+                accessor
+                    .neighbors()
+                    .set_neighbors(source, &scratch.neighbors)
+                    .await?;
             }
 
             Ok(())
@@ -2391,21 +2378,16 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune<A, Set>(
+    /// Forwards errors from [`PruneAccessor::fill`].
+    fn robust_prune<A>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         mut context: prune::Context<'_, DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
             // Early exit.
@@ -2413,13 +2395,10 @@ where
                 return Ok(());
             }
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-
-            let view = accessor
-                .fill(working_set, context.pool.iter().map(|n| n.id))
+            let (view, computer) = accessor
+                .fill(context.pool.iter().map(|n| n.id))
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
@@ -2440,30 +2419,24 @@ where
     ///
     /// All other fields of `scratch` are clobbered.
     ///
-    /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`Fill`] and then computing distances to populate the candidate pool.
+    /// This works by first retrieving `location` and all ids in `list` via
+    /// [`PruneAccessor::fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
-    /// this API are suppressed and any IDs that failed will be skipped during prune unless
-    /// the vector that was not retrieved was `location`. If this is the case,
-    /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
-    /// the caller.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune_list<A, Set>(
+    /// Forwards errors from [`PruneAccessor::fill`]. If `location` was not made available
+    /// during [`PruneAccessor::fill`], [`prune::ListError::FailedVectorRetrieval`] is
+    /// returned to delegate escalation to the caller.
+    fn robust_prune_list<A>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         list: &AdjacencyList<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
     {
         async move {
             // Early exit.
@@ -2471,17 +2444,14 @@ where
                 return Ok(());
             }
 
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-
             // Fetch into the working set, including the source location.
-            let view = accessor
-                .fill(
-                    working_set,
-                    internal::chain(std::iter::once(location), list.iter().copied()),
-                )
+            let (view, computer) = accessor
+                .fill(internal::chain(
+                    std::iter::once(location),
+                    list.iter().copied(),
+                ))
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             scratch.pool.clear();
             scratch.pool.reserve(list.len());
@@ -2534,42 +2504,31 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`Fill::fill`]. If `internal_id` cannot be retrieved
-    /// from the working set, [`prune::ListError::FailedVectorRetrieval`] is returned.
-    ///
-    /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "internal method with tightly coupled params"
-    )]
-    fn robust_prune_with<A, Set, Itr>(
+    /// Forwards errors from [`PruneAccessor::fill`]. If `internal_id` cannot be retrieved,
+    /// [`prune::ListError::FailedVectorRetrieval`] is returned.
+    fn robust_prune_with<A, Itr>(
         &self,
         accessor: &mut A,
         internal_id: DP::InternalId,
         extras: Itr,
         record: &mut VisitedSearchRecord<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: BuildDistanceComputer + Fill<Set, Id = DP::InternalId> + Send + Sync,
-        Set: Send + Sync,
+        A: PruneAccessor<Id = DP::InternalId>,
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
-            let computer = accessor.build_distance_computer().into_ann_result()?;
-            let view = accessor
+            let (view, computer) = accessor
                 .fill(
-                    working_set,
                     internal::chain(
                         std::iter::once(internal_id),
                         internal::chain(extras.clone(), record.ids()),
                     )
                     .take(self.max_occlusion_size()),
                 )
-                .await
-                .into_ann_result()?;
+                .await?;
 
             if extras.len() != 0 {
                 let this_vector = view
@@ -2867,17 +2826,18 @@ where
             let end: u64 = range.end.into();
 
             let mut accessor = strategy
-                .prune_accessor(&self.data_provider, context)
+                .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
-
-            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
 
             for id in start..end {
                 let id = id.try_into_vector_id()?;
-                accessor.get_neighbors(id, &mut neighbors).await?;
+                accessor
+                    .neighbors()
+                    .get_neighbors(id, &mut neighbors)
+                    .await?;
                 if neighbors.len() <= self.pruned_degree() {
                     continue;
                 }
@@ -2887,18 +2847,14 @@ where
                     force_saturate: false,
                 };
 
-                self.robust_prune_list(
-                    &mut accessor,
-                    id,
-                    &neighbors,
-                    &mut prune_scratch,
-                    &mut working_set,
-                    options,
-                )
-                .await
-                .escalate("prune-range does not support transient errors")?;
+                self.robust_prune_list(&mut accessor, id, &neighbors, &mut prune_scratch, options)
+                    .await
+                    .escalate("prune-range does not support transient errors")?;
 
-                accessor.set_neighbors(id, &prune_scratch.neighbors).await?;
+                accessor
+                    .neighbors()
+                    .set_neighbors(id, &prune_scratch.neighbors)
+                    .await?;
             }
 
             Ok(())

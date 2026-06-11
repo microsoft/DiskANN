@@ -17,7 +17,7 @@ use diskann::{
         },
         workingset,
     },
-    provider::{BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId},
+    provider::{ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::future::AsyncFriendly;
@@ -28,13 +28,11 @@ use crate::model::{
         FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
         SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, Unseeded,
-            VectorStore,
+            CreateVectorStore, Hybrid, NoStore, Panics, Quantized, SetElementHelper, VectorStore,
         },
         distances,
         inmem::{
-            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-            PassThrough, Rerank,
+            DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision, Rerank,
         },
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
@@ -84,60 +82,48 @@ where
 // PruneAccessor //
 ///////////////////
 
-#[derive(Clone, Copy)]
 pub struct PruneAccessor<'a> {
     provider: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    distance: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
 }
 
 impl HasId for PruneAccessor<'_> {
     type Id = u32;
 }
 
-impl HasElementRef for PruneAccessor<'_> {
+impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [u8];
-}
 
-impl<'a> DelegateNeighbor<'a> for PruneAccessor<'_> {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    type Distance<'a>
+        = &'a pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>
+    where
+        Self: 'a;
+
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync<u32>
+    where
+        Self: 'a;
+
+    async fn fill<Itr>(&mut self, _itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        Ok((self, &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
         self.neighbors
     }
 }
 
-impl BuildDistanceComputer for PruneAccessor<'_> {
-    type DistanceComputerError = ANNError;
-    type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(self.provider.distance_computer())
-    }
-}
-
-impl workingset::Fill<PassThrough> for PruneAccessor<'_> {
-    type Error = std::convert::Infallible;
-    type View<'a>
-        = Self
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(*self)
-    }
-}
-
 // Pass-through view — reads PQ codes directly from the provider.
-impl workingset::View<u32> for PruneAccessor<'_> {
+impl workingset::View<u32> for &PruneAccessor<'_> {
     type ElementRef<'a> = &'a [u8];
     type Element<'a>
         = &'a [u8]
@@ -155,7 +141,6 @@ impl workingset::View<u32> for PruneAccessor<'_> {
 // HybridPruneAccessor //
 /////////////////////////
 
-#[derive(Clone)]
 pub struct HybridPruneAccessor<'a, T>
 where
     T: VectorRepr,
@@ -163,6 +148,11 @@ where
     full: &'a FastMemoryVectorProviderAsync<T>,
     quant: &'a FastMemoryQuantVectorProviderAsync,
     neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    distance: distances::pq::HybridComputer<T>,
+
+    // During pruning, we make the first `max_fp_vecs_per_prune` are full-precision with
+    // the rest being quantized. This hash set records which IDs should be full-precision.
+    full_precision_ids: hashbrown::HashSet<u32>,
     max_fp_vecs_per_prune: usize,
 }
 
@@ -173,92 +163,40 @@ where
     type Id = u32;
 }
 
-impl<T> HasElementRef for HybridPruneAccessor<'_, T>
+impl<T> glue::PruneAccessor for HybridPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
     type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
-}
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+    type Distance<'a>
+        = &'a distances::pq::HybridComputer<T>
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync<u32>
+    where
+        Self: 'a;
 
-impl<'a, T> DelegateNeighbor<'a> for HybridPruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+    async fn fill<Itr>(&mut self, itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        self.full_precision_ids.clear();
+        self.full_precision_ids
+            .extend(itr.take(self.max_fp_vecs_per_prune));
+        Ok((self, &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
         self.neighbors
     }
 }
 
-impl<T> BuildDistanceComputer for HybridPruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type DistanceComputerError = ANNError;
-    type DistanceComputer = distances::pq::HybridComputer<T>;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        let metric = self.quant.metric();
-        Ok(distances::pq::HybridComputer::new(
-            self.quant.distance_computer(),
-            T::distance(metric, Some(self.full.dim())),
-        ))
-    }
-}
-
-/// Tracks which IDs should use full-precision vectors during hybrid pruning.
-///
-/// IDs in the set get full-precision distance computations; all others fall back to
-/// quantized vectors.
-pub struct FullPrecisionTracker(hashbrown::HashSet<u32>);
-
-impl workingset::AsWorkingSet<FullPrecisionTracker> for Unseeded {
-    fn as_working_set(&self, capacity: usize) -> FullPrecisionTracker {
-        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
-    }
-}
-
-// Selective fill — the first `max_fp_vecs_per_prune` candidates receive full-precision
-// vectors; the remainder are accessed through the pass-through `MaybeFullPrecision` view.
-impl<T> workingset::Fill<FullPrecisionTracker> for HybridPruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Error = std::convert::Infallible;
-    type View<'a>
-        = MaybeFullPrecision<'a, T>
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        state: &'a mut FullPrecisionTracker,
-        itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        state.0.clear();
-        state.0.extend(itr.take(self.max_fp_vecs_per_prune));
-        Ok(MaybeFullPrecision {
-            builder: self,
-            full: state,
-        })
-    }
-}
-
-pub struct MaybeFullPrecision<'a, T>
-where
-    T: VectorRepr,
-{
-    builder: &'a HybridPruneAccessor<'a, T>,
-    full: &'a FullPrecisionTracker,
-}
-
-impl<T> workingset::View<u32> for MaybeFullPrecision<'_, T>
+impl<T> workingset::View<u32> for &HybridPruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
@@ -269,18 +207,14 @@ where
         Self: 'a;
 
     fn get(&self, id: u32) -> Option<Self::Element<'_>> {
-        let element = if self.full.0.contains(&id) {
+        let element = if self.full_precision_ids.contains(&id) {
             // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
             // this invariant is not enforced. See `get_vector_sync` for details.
-            unsafe {
-                distances::pq::Hybrid::Full(self.builder.full.get_vector_sync(id.into_usize()))
-            }
+            unsafe { distances::pq::Hybrid::Full(self.full.get_vector_sync(id.into_usize())) }
         } else {
             // SAFETY: This is unsound. We assume no concurrent writes to this slot, but
             // this invariant is not enforced. See `get_vector_sync` for details.
-            unsafe {
-                distances::pq::Hybrid::Quant(self.builder.quant.get_vector_sync(id.into_usize()))
-            }
+            unsafe { distances::pq::Hybrid::Quant(self.quant.get_vector_sync(id.into_usize())) }
         };
         Some(element)
     }
@@ -465,24 +399,30 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridPruneAccessor<'a, T>;
     type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = FullPrecisionTracker;
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
-    }
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
         _context: &'a Ctx,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        let full = &provider.base_vectors;
+        let quant = &provider.aux_vectors;
+        let metric = quant.metric();
+
+        let distance = distances::pq::HybridComputer::new(
+            quant.distance_computer(),
+            T::distance(metric, Some(full.dim())),
+        );
+
         let accessor = HybridPruneAccessor {
             full: &provider.base_vectors,
             quant: &provider.aux_vectors,
             neighbors: provider.neighbors(),
+            distance,
+            full_precision_ids: hashbrown::HashSet::with_capacity(capacity),
             max_fp_vecs_per_prune: self.max_fp_vecs_per_prune.unwrap_or(usize::MAX),
         };
         Ok(accessor)
@@ -516,9 +456,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type Seed = Unseeded;
-    type WorkingSet = FullPrecisionTracker;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -535,7 +475,19 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(Unseeded))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<
+        <Self as PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>>>::PruneAccessor<'a>,
+    > {
+        Ok(self.prune_accessor(provider, context, capacity)?)
     }
 }
 
@@ -618,23 +570,19 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
     type PruneAccessor<'a> = PruneAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = PassThrough;
-
-    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
-        PassThrough
-    }
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
         _context: &'a Ctx,
+        _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let accessor = PruneAccessor {
             provider: &provider.aux_vectors,
             neighbors: provider.neighbors(),
+            distance: provider.aux_vectors.distance_computer(),
         };
         Ok(accessor)
     }
@@ -666,9 +614,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type Seed = PassThrough;
-    type WorkingSet = PassThrough;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -685,6 +633,17 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(PassThrough))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<PruneAccessor<'a>> {
+        self.prune_accessor(provider, context, capacity)
+            .into_ann_result()
     }
 }

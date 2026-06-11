@@ -8,7 +8,7 @@ use std::{fmt::Debug, future::Future};
 use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
-    error::Infallible,
+    error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
@@ -18,10 +18,7 @@ use diskann::{
         workingset,
     },
     neighbor::Neighbor,
-    provider::{
-        BuildDistanceComputer, DefaultContext, DelegateNeighbor, ExecutionContext, HasElementRef,
-        HasId,
-    },
+    provider::{DefaultContext, ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 
@@ -34,7 +31,7 @@ use crate::model::graph::provider::async_::{
         CreateVectorStore, FlatVectorAccess, FullPrecision, NoDeletes, NoStore, Panics,
         PrefetchCacheLineLevel, SetElementHelper,
     },
-    inmem::{DefaultProvider, PassThrough},
+    inmem::DefaultProvider,
     postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
 };
 
@@ -115,14 +112,13 @@ where
 // PruneAccessor //
 ///////////////////
 
-#[derive(Clone, Copy)]
 pub struct PruneAccessor<'a, T>
 where
     T: VectorRepr,
 {
-    metric: Metric,
     store: &'a FastMemoryVectorProviderAsync<T>,
     neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    distance: <T as VectorRepr>::Distance,
 }
 
 impl<T> HasId for PruneAccessor<'_, T>
@@ -132,64 +128,41 @@ where
     type Id = u32;
 }
 
-impl<T> HasElementRef for PruneAccessor<'_, T>
+impl<T> glue::PruneAccessor for PruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
     type ElementRef<'a> = &'a [T];
-}
 
-impl<'a, T> DelegateNeighbor<'a> for PruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
 
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+    type Distance<'a>
+        = &'a <T as VectorRepr>::Distance
+    where
+        Self: 'a;
+
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync<u32>
+    where
+        Self: 'a;
+
+    async fn fill<Itr>(&mut self, _itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        Ok((self, &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
         self.neighbors
     }
 }
 
-impl<T> BuildDistanceComputer for PruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type DistanceComputerError = Panics;
-    type DistanceComputer = T::Distance;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(self.metric, Some(self.store.dim())))
-    }
-}
-
-impl<T> workingset::Fill<PassThrough> for PruneAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Error = Infallible;
-
-    type View<'a>
-        = PruneAccessor<'a, T>
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(*self)
-    }
-}
-
 // Pass-through view.
-impl<T> workingset::View<u32> for PruneAccessor<'_, T>
+impl<T> workingset::View<u32> for &PruneAccessor<'_, T>
 where
     T: VectorRepr,
 {
@@ -482,26 +455,21 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> = T::Distance;
     type PruneAccessor<'a> = PruneAccessor<'a, T>;
     type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = PassThrough;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
         _context: &'a Ctx,
+        _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let accessor = PruneAccessor {
-            metric: provider.metric,
             store: &provider.base_vectors,
             neighbors: provider.neighbors(),
+            distance: T::distance(provider.metric, Some(provider.base_vectors.dim())),
         };
         Ok(accessor)
-    }
-
-    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
-        PassThrough
     }
 }
 
@@ -534,9 +502,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type Seed = PassThrough;
-    type WorkingSet = PassThrough;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -553,7 +521,18 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(PassThrough))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<PruneAccessor<'a, T>> {
+        self.prune_accessor(provider, context, capacity)
+            .into_ann_result()
     }
 }
 
