@@ -206,7 +206,6 @@ pub(super) fn build_1d_provider(
 fn run_internal(
     provider: &test_provider::Provider,
     query: &[f32],
-    k: usize,
     l: usize,
     max_degree: usize,
     filter: &dyn QueryLabelProvider<u32>,
@@ -219,7 +218,7 @@ fn run_internal(
 
         let stats = crate::graph::search::multihop_search::multihop_search_internal(
             max_degree,
-            &Knn::new_default(k, l).unwrap(),
+            &Knn::new_default(l).unwrap(),
             &mut accessor,
             &mut scratch,
             &mut NoopSearchRecord::new(),
@@ -264,7 +263,7 @@ fn accept_all_finds_all_nodes() {
         3,
     );
 
-    let (stats, results) = run_internal(&provider, &[1.5], 3, 10, 3, &AcceptAll);
+    let (stats, results) = run_internal(&provider, &[1.5], 10, 3, &AcceptAll);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
     assert!(ids.contains(&0), "node 0 should be found");
@@ -305,7 +304,7 @@ fn reject_triggers_two_hop_expansion() {
     );
 
     let filter = EvenFilter;
-    let (stats, results) = run_internal(&provider, &[2.0], 5, 20, 4, &filter);
+    let (stats, results) = run_internal(&provider, &[2.0], 20, 4, &filter);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
 
@@ -356,7 +355,7 @@ fn reject_all_yields_only_start() {
         2,
     );
 
-    let (_stats, results) = run_internal(&provider, &[0.5], 5, 10, 2, &RejectAll);
+    let (_stats, results) = run_internal(&provider, &[0.5], 10, 2, &RejectAll);
 
     // Only the start point should be in the best set — all one-hop neighbors
     // were rejected. Two-hop expansion goes through rejected nodes but RejectAll's
@@ -392,7 +391,7 @@ fn terminate_stops_search_on_target() {
     );
 
     let filter = TerminateOnTarget::new(2);
-    let (_stats, _results) = run_internal(&provider, &[0.0], 4, 10, 2, &filter);
+    let (_stats, _results) = run_internal(&provider, &[0.0], 10, 2, &filter);
 
     let hits = filter.hits();
     assert!(hits.contains(&2), "target node 2 should have been visited");
@@ -430,7 +429,7 @@ fn block_and_adjust_modifies_results() {
     );
 
     let filter = BlockAndAdjust::new(1, 2, 0.5);
-    let (_stats, results) = run_internal(&provider, &[0.0], 5, 10, 3, &filter);
+    let (_stats, results) = run_internal(&provider, &[0.0], 10, 3, &filter);
 
     let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
 
@@ -556,7 +555,7 @@ fn two_hop_reaches_through_non_matching() {
     let k = 5;
     let l = 20;
 
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(l).unwrap();
     let multihop = MultihopSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
@@ -625,7 +624,7 @@ fn even_filtering_grid() {
 
     let k = 20;
     let l = 40;
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(l).unwrap();
     let multihop = MultihopSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
@@ -691,7 +690,7 @@ fn callback_filtering_grid() {
 
     let k = 20;
     let l = 40;
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(l).unwrap();
     let multihop = MultihopSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
