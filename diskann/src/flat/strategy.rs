@@ -12,7 +12,7 @@ use diskann_vector::PreprocessedDistanceFunction;
 
 use crate::{
     error::{StandardError, ToRanked},
-    provider::DataProvider,
+    provider::{DataProvider, HasId},
 };
 
 /// Fused iterate-and-score primitive over the elements of a flat index.
@@ -21,17 +21,16 @@ use crate::{
 /// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
 /// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
 /// be able to compute distances.
-pub trait DistancesUnordered<C>: Send + Sync
+///
+/// The id type used to identify each scanned element is supplied by the [`HasId`]
+/// super-bound, mirroring [`crate::graph::glue::SearchAccessor`].
+pub trait DistancesUnordered<C>: HasId + Send + Sync
 where
     C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
 {
     /// Lifetime is intentionally unconstrained so it can appear under HRTB without
     /// inducing a `'static` bound on `Self`.
     type ElementRef<'a>;
-
-    /// Id type yielded by the underlying data backend, used to uniquely identify
-    /// each element passed to the closure of [`Self::distances_unordered`].
-    type Id;
 
     /// The error type for [`Self::distances_unordered`].
     type Error: ToRanked + Debug + Send + Sync + 'static;
@@ -58,9 +57,6 @@ where
     /// distances.
     type ElementRef<'a>;
 
-    /// Id type yielded by the `Self::Visitor`.
-    type Id;
-
     /// The concrete query-computer type.
     type QueryComputer: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>
         + Send
@@ -74,7 +70,7 @@ where
     type Visitor<'a>: for<'b> DistancesUnordered<
             Self::QueryComputer,
             ElementRef<'b> = Self::ElementRef<'b>,
-            Id = Self::Id,
+            Id = P::InternalId,
         >
     where
         Self: 'a,
@@ -130,9 +126,12 @@ mod tests {
         items: Vec<(u32, Vec<f32>)>,
     }
 
+    impl HasId for Scanner {
+        type Id = u32;
+    }
+
     impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Scanner {
         type ElementRef<'a> = &'a [f32];
-        type Id = u32;
         type Error = Infallible;
 
         fn distances_unordered<F>(
@@ -201,9 +200,12 @@ mod tests {
         fail_after: usize,
     }
 
+    impl HasId for Failing {
+        type Id = u32;
+    }
+
     impl DistancesUnordered<<f32 as VectorRepr>::QueryDistance> for Failing {
         type ElementRef<'a> = &'a [f32];
-        type Id = u32;
         type Error = Boom;
 
         fn distances_unordered<F>(
@@ -304,9 +306,12 @@ mod tests {
         }
     }
 
+    impl HasId for ViewScanner {
+        type Id = u32;
+    }
+
     impl DistancesUnordered<ViewComputer> for ViewScanner {
         type ElementRef<'a> = View<'a>;
-        type Id = u32;
         type Error = Infallible;
 
         fn distances_unordered<F>(
