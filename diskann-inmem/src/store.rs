@@ -38,7 +38,7 @@ const SPLIT: usize = std::mem::size_of::<generation::Tag>();
 impl Primary {
     pub fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
         let unpadded = bytes.0 + SPLIT;
-        let padded_bytes = unpadded.checked_next_multiple_of(SPLIT).unwrap();
+        let padded_bytes = unpadded.checked_next_multiple_of(64).unwrap();
 
         Self {
             buffer: Buffer::new(entries, Bytes(padded_bytes), Align(128)),
@@ -187,6 +187,28 @@ impl<'a> Reader<'a> {
         } else {
             None
         }
+    }
+
+    /// Return `true` if the index `i` is in-bounds.
+    #[inline]
+    #[must_use = "this function has no side-effects"]
+    pub fn is_in_bounds(&self, i: usize) -> bool {
+        i < self.buffer.len()
+    }
+
+    /// Return the raw data slice for index `i` without any race guarantees.
+    ///
+    /// # Safety
+    ///
+    /// The index `i` must be in-bounds.
+    #[inline]
+    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> Slice<'_> {
+        unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
+    }
+
+    /// Return the number of bytes for each entry.
+    pub(crate) fn bytes(&self) -> Bytes {
+        Bytes(self.unpadded)
     }
 
     // TODO: We may want to lock `Neighbors` in some way to enable exclusive access during

@@ -13,10 +13,7 @@ use std::{io::Write, num::NonZeroUsize, sync::Arc};
 
 use diskann::graph::{self, DiskANNIndex};
 use diskann_benchmark_core::{
-    self as benchmark_core,
-    build as build_core,
-    recall::GroundTruthMode,
-    search as core_search,
+    self as benchmark_core, build as build_core, recall::GroundTruthMode, search as core_search,
 };
 use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
@@ -189,7 +186,11 @@ impl Benchmark for Inmem2 {
             build_core::ids::Identity::<u32>::new(),
         );
 
-        writeln!(output, "Building index with {} threads...", input.num_threads)?;
+        writeln!(
+            output,
+            "Building index with {} threads...",
+            input.num_threads
+        )?;
         let build_results = build_core::build_tracked(
             builder,
             build_core::Parallelism::dynamic(
@@ -201,7 +202,11 @@ impl Benchmark for Inmem2 {
         )?;
 
         let total_build_time = build_results.end_to_end_latency();
-        writeln!(output, "Build complete in {:.2}s", total_build_time.as_seconds())?;
+        writeln!(
+            output,
+            "Build complete in {:.2}s",
+            total_build_time.as_seconds()
+        )?;
         checkpoint.checkpoint(&total_build_time)?;
 
         // Search.
@@ -222,8 +227,7 @@ impl Benchmark for Inmem2 {
         let num_threads = NonZeroUsize::new(input.num_threads).unwrap();
 
         for &search_l in &input.search_l {
-            let params =
-                graph::search::Knn::new(input.search_n, search_l, None)?;
+            let params = graph::search::Knn::new(input.search_n, search_l, None)?;
 
             let setup = core_search::Setup {
                 threads: num_threads,

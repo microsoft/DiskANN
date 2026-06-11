@@ -45,4 +45,3 @@ pub trait Search<'a, T>: Send + Sync + 'static {
 }
 
 pub trait Insert<'a, T>: Search<'a, T> + Set<T> + AsDistance {}
-
