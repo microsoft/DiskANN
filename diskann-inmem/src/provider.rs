@@ -135,6 +135,7 @@ pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
     distance: Box<dyn QueryDistance + 'a>,
     ids: AdjacencyList<u32>,
+    expand_beam: FExpandBeam,
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -190,11 +191,20 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                     .neighbors()
                     .get(i.into_usize(), &mut self.ids)
                     .unwrap();
-                for neighbor in self.ids.iter().filter(|i| pred.eval_mut(i)) {
-                    if let Some(data) = self.reader.read(neighbor.into_usize()) {
-                        on_neighbors(*neighbor, self.distance.evaluate(data)?)
-                    }
-                }
+
+                // Filter out unvisited IDs and ensure that all the IDs we are about
+                self.ids
+                    .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
+
+                unsafe {
+                    (self.expand_beam)(
+                        &self.ids,
+                        8,
+                        &self.reader,
+                        &*self.distance,
+                        &mut on_neighbors,
+                    )
+                }?;
             }
 
             Ok(())
@@ -202,6 +212,104 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 
         ready(work)
     }
+}
+
+type FExpandBeam = unsafe fn(
+    &[u32],
+    usize,
+    &store::Reader<'_>,
+    &dyn layers::QueryDistance,
+    &mut dyn FnMut(u32, f32),
+) -> ANNResult<()>;
+
+fn dispatch_expand_beam(bytes: Bytes) -> FExpandBeam {
+    if bytes <= Bytes(CACHE_LINE_SIZE) {
+        expand_beam_inner::<1>
+    } else if bytes <= Bytes(2 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<2>
+    } else if bytes <= Bytes(3 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<3>
+    } else if bytes <= Bytes(4 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<4>
+    } else if bytes <= Bytes(5 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<5>
+    } else if bytes <= Bytes(6 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<6>
+    } else if bytes <= Bytes(7 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<7>
+    } else if bytes <= Bytes(16 * CACHE_LINE_SIZE) {
+        expand_beam_inner::<8>
+    } else {
+        expand_beam_inner::<16>
+    }
+}
+
+const CACHE_LINE_SIZE: usize = 64;
+
+pub unsafe fn test_function(
+    list: &[u32],
+    lookahead: usize,
+    reader: &store::Reader<'_>,
+    distance: &dyn layers::QueryDistance,
+    f: &mut dyn FnMut(u32, f32),
+) -> ANNResult<()> {
+    unsafe { expand_beam_inner::<4>(list, lookahead, reader, distance, f) }
+}
+
+/// Safety (no # yet because we need to revisit this - clippy will lint)
+///
+/// * All items in `list` must in-bounds with respect to `reader`.
+/// * The number of bytes associated with `N` cache lines must "make sense".
+unsafe fn expand_beam_inner<const N: usize>(
+    list: &[u32],
+    lookahead: usize,
+    reader: &store::Reader<'_>,
+    distance: &dyn layers::QueryDistance,
+    f: &mut dyn FnMut(u32, f32),
+) -> ANNResult<()> {
+    debug_assert!(
+        N * CACHE_LINE_SIZE <= reader.bytes().0.next_multiple_of(CACHE_LINE_SIZE),
+        "we really rely on this: {}, bytes = {}", N, reader.bytes().0
+    );
+
+    let len = list.len();
+    let lookahead = lookahead.min(len);
+
+    for j in 0..lookahead {
+        unsafe {
+            diskann_vector::prefetch_exactly::<N>(
+                reader
+                    .read_raw_unchecked(list.get_unchecked(j).into_usize())
+                    .as_ptr()
+                    .as_ptr()
+                    .cast_const()
+                    .cast(),
+            )
+        }
+    }
+
+    let mut j = lookahead;
+    for &i in list.iter() {
+        if j != len {
+            unsafe {
+                diskann_vector::prefetch_exactly::<N>(
+                    reader
+                        .read_raw_unchecked(list.get_unchecked(j).into_usize())
+                        .as_ptr()
+                        .as_ptr()
+                        .cast_const()
+                        .cast(),
+                )
+            }
+            j += 1;
+        }
+
+        if let Some(data) = reader.read(i.into_usize()) {
+            f(i, distance.evaluate(data)?)
+        }
+    }
+
+    Ok(())
 }
 
 ////////////
@@ -336,12 +444,14 @@ where
         context: &'a Context,
         query: T,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let distance =
-            <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
+        let distance = <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
+        let reader = provider.primary.reader();
+        let expand_beam = dispatch_expand_beam(reader.bytes());
         let accessor = SearchAccessor {
-            reader: provider.primary.reader(),
+            reader,
             distance,
             ids: AdjacencyList::new(),
+            expand_beam,
         };
         Ok(accessor)
     }
@@ -411,8 +521,10 @@ mod tests {
             10,
             diskann::graph::config::MaxDegree::Same,
             100,
-            (Metric::L2).into()
-        ).build().unwrap();
+            (Metric::L2).into(),
+        )
+        .build()
+        .unwrap();
 
         let index = DiskANNIndex::new(config, provider, None);
 
