@@ -116,13 +116,19 @@ mod imp {
             // Compressing
             let start = std::time::Instant::now();
             let store = {
+                let threadpool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(input.compression_threads.get())
+                    .build()?;
+
                 let compression_progress =
                     make_progress_bar("compressing", data.nrows(), output.draw_target())?;
-                let store = Store::new(
-                    data.as_view(),
-                    diskann_quantization::spherical::iface::Impl::<NBITS>::new(quantizer)?,
-                    &compression_progress,
-                )?;
+                let store = threadpool.install(|| {
+                    Store::new(
+                        data.as_view(),
+                        diskann_quantization::spherical::iface::Impl::<NBITS>::new(quantizer)?,
+                        &compression_progress,
+                    )
+                })?;
                 compression_progress.finish();
                 store
             };
