@@ -311,6 +311,31 @@ mod tests {
     }
 
     ////////////////////////////
+    //     BF-Tree Index      //
+    ////////////////////////////
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_spherical_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-spherical.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
     //  MinMax Quantization   //
     ////////////////////////////
 
@@ -543,6 +568,14 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_inline_filter_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
         run_integration_test(raw);
     }
 

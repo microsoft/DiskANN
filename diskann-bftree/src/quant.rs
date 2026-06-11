@@ -149,7 +149,7 @@ impl QuantVectorProvider {
         Ok(())
     }
 
-    /// Return the quant vector at index `i`.
+    /// Return the quant vector at index `i`
     #[cfg(test)]
     pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<u8>, AccessError> {
         let mut value = vec![0u8; self.quantizer.bytes()];
@@ -212,11 +212,6 @@ impl QuantVectorProvider {
         self.quant_vector_index.insert(key, v);
 
         Ok(())
-    }
-
-    pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
-        self.quant_vector_index.delete(key);
     }
 }
 
