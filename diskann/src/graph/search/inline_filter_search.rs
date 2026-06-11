@@ -309,7 +309,6 @@ where
 /// Compute adaptive L based on observed specificity.
 ///
 /// Piecewise scaling:
-/// Piecewise scaling:
 ///   specificity ≥ 50%   → 1× L (no change, most nodes match)
 ///   10% ≤ specificity < 50%  → 2× L
 ///   specificity < 10%   → log-scale: 2^(-log10(specificity))
@@ -325,7 +324,6 @@ fn compute_adaptive_l(base_l: usize, visited: usize, matched: usize, max_multipl
     }
 
     let specificity = matched as f64 / visited as f64;
-
     let multiplier = if specificity >= 0.5 {
         // ≥50% specificity: no scaling needed
         1.0

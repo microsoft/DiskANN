@@ -9,7 +9,6 @@
 
 use diskann_vector::distance::Metric;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::{
     graph::{
@@ -132,39 +131,173 @@ impl QueryLabelProvider<u32> for LevelLabelProvider {
 }
 
 #[derive(Debug)]
-struct EvenlyDistributedIdFilter {
-    matching_ids: HashSet<u32>,
+struct Filter(HashSet<u32>);
+
+impl Filter {
+    fn matching_points(&self) -> usize {
+        self.0.len()
+    }
 }
 
-impl EvenlyDistributedIdFilter {
-    fn new(total_points: usize, matching_points: usize) -> Self {
-        assert!(matching_points > 0, "matching_points must be > 0");
-        assert!(
-            matching_points <= total_points,
-            "matching_points must be <= total_points"
+impl FromIterator<u32> for Filter {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = u32>,
+    {
+        Self(HashSet::from_iter(iter))
+    }
+}
+
+impl QueryLabelProvider<u32> for Filter {
+    fn is_match(&self, id: u32) -> bool {
+        self.0.contains(&id)
+    }
+}
+
+#[derive(Debug)]
+struct Setup1D {
+    filter: Filter,
+    k: usize,
+    l: usize,
+    adaptive_l: AdaptiveL,
+    points: usize,
+    query: [f32; 1],
+    expected_fixed: Vec<u32>,
+    expected_adaptive: Vec<u32>,
+}
+
+impl Setup1D {
+    /// Graph search experiences a >50% hit rate on its way to the query.
+    ///
+    /// In this regime, adaptive-L is not triggered and we expect adaptive-L search and
+    /// non-adaptive to match.
+    fn no_scaling() -> Self {
+        Self {
+            filter: (40..100).collect(),
+            k: 5,
+            l: 5,
+            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
+            points: 100,
+            query: [50.0],
+            expected_fixed: vec![50, 51, 49, 52, 48],
+            expected_adaptive: vec![50, 51, 49, 52, 48],
+        }
+    }
+
+    /// Graph search experiences a hit-rate between 10% and 50% on its way to the query.
+    ///
+    /// With a sample count of 10, the two seeded IDs will result in a 20% hit-rate.
+    ///
+    /// This will boost `l` to 10. The additional point 44 requires this larger `l` to hit.
+    /// We do not expect `43` to be hit.
+    fn linear() -> Self {
+        Self {
+            filter: Filter::from_iter([43u32, 44, 92, 95]),
+            k: 5,
+            l: 5,
+            adaptive_l: AdaptiveL::new(10, 16.0).unwrap(),
+            points: 100,
+            query: [50.0],
+            expected_fixed: vec![92, 95],
+            expected_adaptive: vec![44, 92, 95],
+        }
+    }
+
+    /// Graph search experiences a non-zero but <10% hit-rate. This enters the logarithmic
+    /// regime and boost the window size by more than 2x. This will allow us to reach `43`.
+    fn logarithmic() -> Self {
+        Self {
+            filter: Filter::from_iter([43u32, 95]),
+            k: 5,
+            l: 5,
+            adaptive_l: AdaptiveL::new(20, 16.0).unwrap(),
+            points: 100,
+            query: [50.0],
+            expected_fixed: vec![95],
+            expected_adaptive: vec![43, 95],
+        }
+    }
+
+    /// No matching items are found durihng the sample window. Adaptive will boost the
+    /// window size to the max.
+    fn max() -> Self {
+        Self {
+            filter: Filter::from_iter([10, 20, 30, 50]),
+            k: 3,
+            l: 5,
+            adaptive_l: AdaptiveL::new(5, 16.0).unwrap(),
+            points: 100,
+            query: [50.0],
+            expected_fixed: vec![50],
+            expected_adaptive: vec![50, 30, 20],
+        }
+    }
+
+    fn expected(&self, kind: TestKind) -> &[u32] {
+        match kind {
+            TestKind::Fixed => &self.expected_fixed,
+            TestKind::Adaptive => &self.expected_adaptive,
+        }
+    }
+
+    fn run(&self, test_name: &str, kind: TestKind) {
+        let mut test_root = root();
+        let mut path = test_root.path();
+        let name = path.push(test_name);
+
+        let provider = test_provider::Provider::grid(Grid::One, self.points).unwrap();
+
+        let index_config = graph::config::Builder::new(
+            provider.max_degree(),
+            graph::config::MaxDegree::same(),
+            100,
+            Metric::L2.into(),
+        )
+        .build()
+        .unwrap();
+
+        let index = graph::DiskANNIndex::new(index_config, provider, None);
+
+        let adaptive_l = match kind {
+            TestKind::Fixed => None,
+            TestKind::Adaptive => Some(self.adaptive_l.clone()),
+        };
+
+        let baseline = run_inline_on_grid(
+            &index,
+            &self.filter,
+            self.points,
+            self.filter.matching_points(),
+            &self.query,
+            self.k,
+            self.l,
+            adaptive_l,
         );
 
-        if matching_points == total_points {
-            return Self {
-                matching_ids: (0..total_points as u32).collect(),
-            };
-        }
+        let expected = get_or_save_test_results(&name, &baseline);
+        assert_eq_verbose!(expected, baseline);
 
-        // Spread selected IDs across the full ID range using midpoint bucket sampling.
-        let mut matching_ids = HashSet::with_capacity(matching_points);
-        for i in 0..matching_points {
-            let id = ((2 * i + 1) * total_points / (2 * matching_points)) as u32;
-            matching_ids.insert(id.min((total_points - 1) as u32));
-        }
+        let expected = self.expected(kind);
 
-        Self { matching_ids }
+        assert_eq!(
+            baseline.result_ids, expected,
+            "result IDs did not match the synthetically constructed expected IDs",
+        );
+
+        for id in baseline.result_ids {
+            assert!(
+                self.filter.is_match(id),
+                "returned id {} must satisfy the filter",
+                id
+            );
+        }
     }
 }
 
-impl QueryLabelProvider<u32> for EvenlyDistributedIdFilter {
-    fn is_match(&self, id: u32) -> bool {
-        self.matching_ids.contains(&id)
-    }
+#[derive(Debug)]
+enum TestKind {
+    Fixed,
+    Adaptive,
 }
 
 fn build_three_level_index() -> std::sync::Arc<graph::DiskANNIndex<test_provider::Provider>> {
@@ -205,7 +338,7 @@ verbose_eq!(InlineFilterBaseline {
 
 #[allow(clippy::too_many_arguments)]
 fn run_inline_on_grid(
-    index: &Arc<graph::DiskANNIndex<test_provider::Provider>>,
+    index: &graph::DiskANNIndex<test_provider::Provider>,
     filter: &dyn QueryLabelProvider<u32>,
     grid_size: usize,
     matching_points: usize,
@@ -243,52 +376,6 @@ fn run_inline_on_grid(
         result_distances: distances[..result_count].to_vec(),
         comparisons: stats.cmps as usize,
         hops: stats.hops as usize,
-    }
-}
-
-fn assert_inline_large_grid_with_even_filter(
-    test_name: &str,
-    matching_points: usize,
-    adaptive_l: Option<AdaptiveL>,
-) {
-    let mut test_root = root();
-    let mut path = test_root.path();
-    let name = path.push(test_name);
-
-    let grid_size = 10; // 10^3 = 1000 points
-    let total_points = Grid::Three.num_points(grid_size);
-    assert_eq!(total_points, 1000, "expected a 1000-point 3D grid");
-
-    let index = setup_grid_index(grid_size);
-    let filter = EvenlyDistributedIdFilter::new(total_points, matching_points);
-
-    let query = [10.0f32, 10.0, 10.0];
-
-    // Keep l_search tiny so non-adaptive search is strongly constrained.
-    // Knn requires l >= k, so we keep both at 1.
-    let k = 1;
-    let l = 1;
-
-    let baseline = run_inline_on_grid(
-        &index,
-        &filter,
-        grid_size,
-        matching_points,
-        &query,
-        k,
-        l,
-        adaptive_l,
-    );
-
-    let expected = get_or_save_test_results(&name, &baseline);
-    assert_eq_verbose!(expected, baseline);
-
-    for id in baseline.result_ids {
-        assert!(
-            filter.is_match(id),
-            "returned id {} must satisfy the evenly-distributed filter",
-            id
-        );
     }
 }
 
@@ -463,45 +550,43 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
 }
 
 #[test]
-fn inline_adaptive_l_large_grid_1_matching_point() {
-    assert_inline_large_grid_with_even_filter(
-        "inline_adaptive_l_large_grid_1_matching_point",
-        1,
-        Some(AdaptiveL::new(100, 16.0).unwrap()),
-    );
+fn inline_adaptive_l_no_scaling() {
+    Setup1D::no_scaling().run("inline_adaptive_l_no_scaling", TestKind::Adaptive)
 }
 
 #[test]
-fn inline_adaptive_l_large_grid_10_matching_points() {
-    assert_inline_large_grid_with_even_filter(
-        "inline_adaptive_l_large_grid_10_matching_points",
-        10,
-        Some(AdaptiveL::new(100, 16.0).unwrap()),
-    );
+fn inline_adaptive_l_linear_scaling() {
+    Setup1D::linear().run("inline_adaptive_l_linear", TestKind::Adaptive)
 }
 
 #[test]
-fn inline_adaptive_l_large_grid_100_matching_points() {
-    assert_inline_large_grid_with_even_filter(
-        "inline_adaptive_l_large_grid_100_matching_points",
-        100,
-        Some(AdaptiveL::new(100, 16.0).unwrap()),
-    );
+fn inline_adaptive_l_logarithmic() {
+    Setup1D::logarithmic().run("inline_adaptive_l_logarithmic", TestKind::Adaptive)
 }
 
 #[test]
-fn inline_large_grid_1_matching_point() {
-    assert_inline_large_grid_with_even_filter("inline_large_grid_1_matching_point", 1, None);
+fn inline_adaptive_l_max() {
+    Setup1D::max().run("inline_adaptive_l_max", TestKind::Adaptive)
 }
 
 #[test]
-fn inline_large_grid_10_matching_points() {
-    assert_inline_large_grid_with_even_filter("inline_large_grid_10_matching_points", 10, None);
+fn inline_fixed_no_scaling() {
+    Setup1D::no_scaling().run("inline_fixed_no_scaling", TestKind::Fixed)
 }
 
 #[test]
-fn inline_large_grid_100_matching_points() {
-    assert_inline_large_grid_with_even_filter("inline_large_grid_100_matching_points", 100, None);
+fn inline_fixed_linear_scaling() {
+    Setup1D::linear().run("inline_fixed_linear", TestKind::Fixed)
+}
+
+#[test]
+fn inline_fixed_logarithmic() {
+    Setup1D::logarithmic().run("inline_fixed_logarithmic", TestKind::Fixed)
+}
+
+#[test]
+fn inline_fixed_max() {
+    Setup1D::max().run("inline_fixed_max", TestKind::Fixed)
 }
 
 #[test]
