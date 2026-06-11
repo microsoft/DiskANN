@@ -2054,7 +2054,7 @@ where
     ///
     /// - [`search::Knn`]: Standard k-NN graph-based search
     /// - [`search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
-    /// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
+    /// - [`search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
     /// - [`search::Range`]: Range-based search within a distance radius
     /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
     ///
