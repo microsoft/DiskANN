@@ -52,7 +52,7 @@ impl labeled::QueryLabelProvider<u32> for AcceptAll {
 
 /// Accepts all IDs but only allows even IDs in results.
 #[derive(Debug)]
-struct EvenFilter;
+pub(super) struct EvenFilter;
 
 impl labeled::QueryLabelProvider<u32> for EvenFilter {
     fn is_match(&self, id: u32) -> bool {
@@ -77,7 +77,7 @@ impl labeled::QueryLabelProvider<u32> for RejectAll {
 /// Build a 1D provider with the given points and adjacency lists.
 ///
 /// `start_pos` is the 1D position of the start node (id = `start_id`).
-fn build_1d_index(
+pub(super) fn build_1d_index(
     start_id: u32,
     start_pos: f32,
     start_neighbors: AdjacencyList<u32>,
@@ -288,7 +288,7 @@ verbose_eq!(MultihopBaseline {
 });
 
 /// Set up a 3D grid index using the test provider.
-fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
     use crate::graph::test::synthetic::Grid;
 
     let grid = Grid::Three;
