@@ -3,23 +3,19 @@
  * Licensed under the MIT license.
  */
 
-//! Label-filtered search using multi-hop expansion.
+//! Filtered search using multi-hop expansion.
+
+use std::collections::HashSet;
 
 use diskann_utils::future::SendFuture;
-use hashbrown::HashSet;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{
-            self, HybridPredicate, Predicate, PredicateMut, SearchAccessor, SearchPostProcess,
-            SearchStrategy,
-        },
-        index::{
-            DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
-        },
+        glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
+        index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
@@ -28,33 +24,28 @@ use crate::{
     utils::VectorId,
 };
 
-/// Parameters for label-filtered search using multi-hop expansion.
+/// Parameters for Filtered search using multi-hop expansion.
 ///
 /// This search extends standard graph search by expanding through non-matching
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
 #[derive(Debug)]
-pub struct MultihopSearch<'q, InternalId> {
+pub struct MultihopSearch {
     /// Base graph search parameters.
     pub inner: Knn,
-    /// Label evaluator for determining node matches.
-    pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
-impl<'q, InternalId> MultihopSearch<'q, InternalId> {
+impl MultihopSearch {
     /// Create new multihop search parameters.
-    pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
-        Self {
-            inner,
-            label_evaluator,
-        }
+    pub fn new(inner: Knn) -> Self {
+        Self { inner }
     }
 }
 
-impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopSearch<'b, DP::InternalId>
+impl<'a, DP, S, T> Search<'a, DP, S, T> for MultihopSearch
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
@@ -78,31 +69,43 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
+            let num_starting_points = accessor.num_starting_points().await?;
 
-            let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
+            let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
-            let stats = multihop_search_internal(
+            let ret = multihop_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
-                self.label_evaluator,
             )
             .await?;
 
+            // NOTE: The start point filter here filters out start points that were
+            // explicitly rejected by the FilteredAccessor - not start points in general.
             let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
-                    scratch.best.iter().take(self.inner.l_value().get()),
+                    scratch
+                        .best
+                        .iter()
+                        .filter(|n| !ret.rejected_start_points.contains(&n.id))
+                        .take(self.inner.l_value().get()),
                     output,
                 )
                 .await
                 .into_ann_result()?;
 
-            Ok(stats.finish(result_count as u32))
+            let stats = SearchStats {
+                cmps: ret.cmps,
+                hops: ret.hops,
+                result_count: result_count as u32,
+                range_search_second_round: false,
+            };
+
+            Ok(stats)
         }
     }
 }
@@ -111,87 +114,46 @@ where
 // Internal Implementation //
 /////////////////////////////
 
-/// A predicate that checks if an item is not in the visited set AND matches the label filter.
-///
-/// Used during two-hop expansion to filter neighbors based on both visitation
-/// status and label matching criteria.
-pub struct NotInMutWithLabelCheck<'a, K>
-where
-    K: VectorId,
-{
-    visited_set: &'a mut HashSet<K>,
-    query_label_evaluator: &'a dyn QueryLabelProvider<K>,
+#[derive(Debug)]
+struct Ret<I> {
+    cmps: u32,
+    hops: u32,
+    rejected_start_points: HashSet<I>,
 }
-
-impl<'a, K> NotInMutWithLabelCheck<'a, K>
-where
-    K: VectorId,
-{
-    /// Construct a new `NotInMutWithLabelCheck` around `visited_set`.
-    pub fn new(
-        visited_set: &'a mut HashSet<K>,
-        query_label_evaluator: &'a dyn QueryLabelProvider<K>,
-    ) -> Self {
-        Self {
-            visited_set,
-            query_label_evaluator,
-        }
-    }
-}
-
-impl<K> Predicate<K> for NotInMutWithLabelCheck<'_, K>
-where
-    K: VectorId,
-{
-    fn eval(&self, item: &K) -> bool {
-        !self.visited_set.contains(item) && self.query_label_evaluator.is_match(*item)
-    }
-}
-
-impl<K> PredicateMut<K> for NotInMutWithLabelCheck<'_, K>
-where
-    K: VectorId,
-{
-    fn eval_mut(&mut self, item: &K) -> bool {
-        if self.query_label_evaluator.is_match(*item) {
-            return self.visited_set.insert(*item);
-        }
-        false
-    }
-}
-
-impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {}
 
 /// Internal multihop search implementation.
 ///
-/// Performs label-filtered search by expanding through non-matching nodes
-/// to find matching neighbors within two hops.
-pub(crate) async fn multihop_search_internal<I, A, SR>(
+/// Performs filtered search by expanding through non-matching nodes to find matching
+/// neighbors within two hops.
+async fn multihop_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
-    query_label_evaluator: &dyn QueryLabelProvider<I>,
-) -> ANNResult<InternalSearchStats>
+) -> ANNResult<Ret<I>>
 where
     I: VectorId,
-    A: SearchAccessor<Id = I>,
+    A: FilteredAccessor<Id = I>,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
 
-    // Helper to build the final stats from scratch state.
-    let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
-        cmps: scratch.cmps,
-        hops: scratch.hops,
-        range_search_second_round: false,
-    };
+    // It's possible for start points to be rejected by the `FilteredAccessor`. To deal with
+    // this, we still use them as standard graph entry points, but track the rejection in
+    // this hash set for later filtering.
+    let mut rejected_start_points = HashSet::new();
 
     accessor
         .start_point_distances(|id, distance| {
-            scratch.visited.insert(id);
-            scratch.best.insert(Neighbor::new(id, distance));
+            if id.is_reject() {
+                rejected_start_points.insert(id.into_inner());
+            }
+
+            scratch.visited.insert(id.into_inner());
+            scratch
+                .best
+                .insert(Neighbor::new(id.into_inner(), distance));
         })
         .await?;
 
@@ -206,8 +168,8 @@ where
         candidates_two_hop_expansion.clear();
         two_hop_neighbors.clear();
 
-        // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-        // Each of these nodes will be a frontier node.
+        // In this loop we are going to find the beam_width number of nodes that are closest
+        // to the query. Each of these nodes will be a frontier node.
         while scratch.beam_nodes.len() < beam_width
             && let Some(closest_node) = scratch.best.closest_notvisited()
         {
@@ -217,27 +179,22 @@ where
 
         // compute distances from query to one-hop neighbors, and mark them visited
         accessor
-            .expand_beam(
+            .expand_beam_filtered(
+                glue::ExpansionKind::All,
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
-                |id, distance| one_hop_neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| one_hop_neighbors.push((id, distance)),
             )
             .await?;
 
         // Process one-hop neighbors based on on_visit() decision
-        for neighbor in one_hop_neighbors.iter().copied() {
-            match query_label_evaluator.on_visit(neighbor) {
-                QueryVisitDecision::Accept(accepted) => {
-                    scratch.best.insert(accepted);
+        for (choice, distance) in one_hop_neighbors.iter().copied() {
+            match choice {
+                glue::Decision::Accept(id) => {
+                    scratch.best.insert(Neighbor::new(id, distance));
                 }
-                QueryVisitDecision::Reject => {
-                    // Rejected nodes: still add to two-hop expansion so we can traverse through them
-                    candidates_two_hop_expansion.push(neighbor);
-                }
-                QueryVisitDecision::Terminate => {
-                    scratch.cmps += one_hop_neighbors.len() as u32;
-                    scratch.hops += scratch.beam_nodes.len() as u32;
-                    return Ok(make_stats(scratch));
+                glue::Decision::Reject(id) => {
+                    candidates_two_hop_expansion.push(Neighbor::new(id, distance));
                 }
             }
         }
@@ -262,11 +219,14 @@ where
             candidates_two_hop_expansion.iter().map(|n| n.id).collect();
 
         accessor
-            .expand_beam(
+            .expand_beam_filtered(
+                glue::ExpansionKind::AcceptOnly,
                 two_hop_expansion_candidate_ids.iter().copied(),
-                NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
+                glue::NotInMut::new(&mut scratch.visited),
                 |id, distance| {
-                    two_hop_neighbors.push(Neighbor::new(id, distance));
+                    if let glue::Decision::Accept(id) = id {
+                        two_hop_neighbors.push(Neighbor::new(id, distance));
+                    }
                 },
             )
             .await?;
@@ -280,59 +240,9 @@ where
         scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
     }
 
-    Ok(make_stats(scratch))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A simple label evaluator that matches only even IDs.
-    #[derive(Debug)]
-    struct EvenOnly;
-
-    impl QueryLabelProvider<u32> for EvenOnly {
-        fn is_match(&self, id: u32) -> bool {
-            id.is_multiple_of(2)
-        }
-    }
-
-    #[test]
-    fn predicate_eval_requires_not_visited_and_matching() {
-        let mut visited = HashSet::new();
-        visited.insert(2u32);
-        let label = EvenOnly;
-        let pred = NotInMutWithLabelCheck::new(&mut visited, &label);
-
-        // Not visited + matches label → true
-        assert!(pred.eval(&4));
-
-        // Already visited + matches label → false
-        assert!(!pred.eval(&2));
-
-        // Not visited + doesn't match label → false
-        assert!(!pred.eval(&3));
-
-        // Already visited + doesn't match → false
-        visited.insert(3);
-        let pred = NotInMutWithLabelCheck::new(&mut visited, &label);
-        assert!(!pred.eval(&3));
-    }
-
-    #[test]
-    fn predicate_eval_mut_inserts_only_matching() {
-        let mut visited = HashSet::new();
-        let label = EvenOnly;
-        let mut pred = NotInMutWithLabelCheck::new(&mut visited, &label);
-
-        // Matching + not visited → inserts and returns true
-        assert!(pred.eval_mut(&4));
-        // Second call → already visited, returns false
-        assert!(!pred.eval_mut(&4));
-
-        // Non-matching → not inserted, returns false
-        assert!(!pred.eval_mut(&3));
-        // Confirm 3 was NOT added to visited set
-        assert!(!pred.visited_set.contains(&3));
-    }
+    Ok(Ret {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        rejected_start_points,
+    })
 }

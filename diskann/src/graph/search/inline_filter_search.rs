@@ -13,10 +13,8 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, SearchAccessor, SearchPostProcess, SearchStrategy},
-        index::{
-            DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
-        },
+        glue::{self, FilteredAccessor, SearchPostProcess, SearchStrategy},
+        index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
@@ -79,34 +77,24 @@ impl AdaptiveL {
 ///     specificity = 0.1% (1/1000)   → 8× L
 ///   and so on up to a pre-set maximum multiplier
 #[derive(Debug)]
-pub struct InlineFilterSearch<'q, InternalId> {
+pub struct InlineFilterSearch {
     /// Base graph search parameters.
     pub inner: Knn,
-    /// Label evaluator for determining node matches and early termination.
-    pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
     /// Adaptive L for the search.
     pub adaptive_l: Option<AdaptiveL>,
 }
 
-impl<'q, InternalId> InlineFilterSearch<'q, InternalId> {
+impl InlineFilterSearch {
     /// Create new inline filter search parameters.
-    pub fn new(
-        inner: Knn,
-        label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
-        adaptive_l: Option<AdaptiveL>,
-    ) -> Self {
-        Self {
-            inner,
-            label_evaluator,
-            adaptive_l,
-        }
+    pub fn new(inner: Knn, adaptive_l: Option<AdaptiveL>) -> Self {
+        Self { inner, adaptive_l }
     }
 }
 
-impl<'a, 'q, DP, S, T> Search<'a, DP, S, T> for InlineFilterSearch<'q, DP::InternalId>
+impl<'a, DP, S, T> Search<'a, DP, S, T> for InlineFilterSearch
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: FilteredAccessor>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
@@ -130,17 +118,20 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let start_ids = accessor.starting_points().await?;
+            let num_starting_points = accessor.num_starting_points().await?;
 
-            let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
+            let mut scratch = index.search_scratch(self.inner.l_value().get(), num_starting_points);
 
-            let (stats, matched_results) = inline_filter_search_internal(
+            let Ret {
+                cmps,
+                hops,
+                matched_results,
+            } = inline_filter_search_internal(
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
-                self.label_evaluator,
                 self.adaptive_l,
             )
             .await?;
@@ -155,35 +146,50 @@ where
                 .await
                 .into_ann_result()?;
 
-            Ok(stats.finish(result_count as u32))
+            let stats = SearchStats {
+                cmps,
+                hops,
+                range_search_second_round: false,
+                result_count: result_count as u32,
+            };
+
+            Ok(stats)
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn inline_filter_search_internal<I, A, SR>(
+#[derive(Debug)]
+struct Ret<I>
+where
+    I: Eq,
+{
+    cmps: u32,
+    hops: u32,
+    matched_results: Vec<Neighbor<I>>,
+}
+
+async fn inline_filter_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
-    query_label_evaluator: &dyn QueryLabelProvider<I>,
     adaptive_l: Option<AdaptiveL>,
-) -> ANNResult<(InternalSearchStats, Vec<Neighbor<I>>)>
+) -> ANNResult<Ret<I>>
 where
     I: VectorId,
-    A: SearchAccessor<Id = I>,
+    A: FilteredAccessor<Id = I>,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
     let l_search = search_params.l_value().get();
 
-    // Helper to build the final stats from scratch state.
-    let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
-        cmps: scratch.cmps,
-        hops: scratch.hops,
-        range_search_second_round: false,
-    };
+    // // Helper to build the final stats from scratch state.
+    // let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
+    //     cmps: scratch.cmps,
+    //     hops: scratch.hops,
+    //     range_search_second_round: false,
+    // };
 
     // Matched results tracked separately — scratch.best contains all nodes
     // for greedy navigation, matched_results contains only filter-matching nodes.
@@ -191,14 +197,12 @@ where
 
     accessor
         .start_point_distances(|id, distance| {
-            scratch.visited.insert(id);
-            scratch.best.insert(Neighbor::new(id, distance));
-            // Check if the start point matches the filter
-            // Note that we don't allow termination on start points. This is mostly a moot point
-            // as we're planning to get rid of the termination option for `on_visit` anyway
-            if query_label_evaluator.on_visit(Neighbor::new(id, distance))
-                == QueryVisitDecision::Accept(Neighbor::new(id, distance))
-            {
+            scratch.visited.insert(id.into_inner());
+            scratch
+                .best
+                .insert(Neighbor::new(id.into_inner(), distance));
+
+            if let glue::Decision::Accept(id) = id {
                 matched_results.push(Neighbor::new(id, distance));
             }
         })
@@ -236,44 +240,27 @@ where
 
         // compute distances from query to one-hop neighbors, and mark them visited
         accessor
-            .expand_beam(
+            .expand_beam_filtered(
+                glue::ExpansionKind::All,
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
-                |id, distance| one_hop_neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| one_hop_neighbors.push((id, distance)),
             )
             .await?;
 
         // Process one-hop neighbors based on on_visit() decision
-        for neighbor in one_hop_neighbors.iter().copied() {
-            let decision = query_label_evaluator.on_visit(neighbor);
-
-            match decision {
-                QueryVisitDecision::Accept(accepted) => {
-                    // All nodes go into scratch.best for navigation,
-                    // matched nodes also go into matched_results for final output.
-                    scratch.best.insert(accepted);
-                    matched_results.push(accepted);
-                    sample_matched += 1;
-                }
-                QueryVisitDecision::Reject => {
-                    // Unmatched nodes still guide navigation
-                    scratch.best.insert(neighbor);
-                }
-                QueryVisitDecision::Terminate => {
-                    scratch.cmps += one_hop_neighbors.len() as u32;
-                    scratch.hops += scratch.beam_nodes.len() as u32;
-                    matched_results.sort_unstable_by(|a, b| {
-                        a.distance
-                            .partial_cmp(&b.distance)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-
-                    return Ok((make_stats(scratch), matched_results));
-                }
+        for (decision, distance) in one_hop_neighbors.iter().copied() {
+            if let glue::Decision::Accept(id) = decision {
+                // matched nodes also go into matched_results for final output.
+                matched_results.push(Neighbor::new(id, distance));
+                sample_matched += 1;
             }
-            if adaptive_l.is_some() {
-                sample_visited += 1;
-            }
+
+            // All nodes go into scratch.best for navigation,
+            scratch
+                .best
+                .insert(Neighbor::new(decision.into_inner(), distance));
+            sample_visited += 1;
         }
 
         scratch.cmps += one_hop_neighbors.len() as u32;
@@ -303,7 +290,11 @@ where
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok((make_stats(scratch), matched_results))
+    Ok(Ret {
+        cmps: scratch.cmps,
+        hops: scratch.hops,
+        matched_results,
+    })
 }
 
 /// Compute adaptive L based on observed specificity.

@@ -49,7 +49,7 @@ use crate::{
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
-        IntoUsize, TryIntoVectorId, VectorId,
+        IntoUsize, TryIntoVectorId,
         async_tools::{self, DynamicBalancer},
     },
 };
@@ -63,35 +63,6 @@ pub struct DiskANNIndex<DP: DataProvider> {
     /// The data provider.
     pub data_provider: DP,
     scratch_pool: ObjectPool<SearchScratch<DP::InternalId>>,
-}
-
-/// Decision returned by [`QueryLabelProvider::on_visit`] to control search traversal.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum QueryVisitDecision<I: VectorId> {
-    /// Accept this node into the frontier for further traversal.
-    Accept(Neighbor<I>),
-    /// Reject this node; do not add it to the frontier.
-    Reject,
-    /// Stop the search immediately without accepting this node.
-    Terminate,
-}
-
-pub trait QueryLabelProvider<V: VectorId>: std::fmt::Debug + Send + Sync {
-    /// This is a query scoped provider
-    /// Check if the vec_id's label match the query label
-    fn is_match(&self, vec_id: V) -> bool;
-
-    /// Inspect a candidate before it is inserted into the frontier.
-    /// Implementations can tweak the distance, reject the candidate, or
-    /// request early termination. The default implementation accepts if
-    /// `is_match` returns true, rejects otherwise.
-    fn on_visit(&self, neighbor: Neighbor<V>) -> QueryVisitDecision<V> {
-        if self.is_match(neighbor.id) {
-            QueryVisitDecision::Accept(neighbor)
-        } else {
-            QueryVisitDecision::Reject
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2124,7 +2095,7 @@ where
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2146,7 +2117,7 @@ where
         init_ids: Option<&'a [DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>>
     where
-        S: SearchStrategy<'a, DP, T>,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: glue::SearchAccessor>,
         T: Copy + Send + 'a,
     {
         async move {
@@ -2943,31 +2914,4 @@ impl InternalSearchStats {
 struct BatchIdMismatch {
     batch_len: usize,
     ids_len: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn query_label_provider_on_visit_default() {
-        #[derive(Debug)]
-        struct BasicValidation;
-
-        impl QueryLabelProvider<u32> for BasicValidation {
-            fn is_match(&self, id: u32) -> bool {
-                id.is_multiple_of(2)
-            }
-        }
-
-        let filter = BasicValidation;
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(0, 1.0)),
-            QueryVisitDecision::Accept(_)
-        ));
-        assert!(matches!(
-            filter.on_visit(Neighbor::new(1, 1.0)),
-            QueryVisitDecision::Reject
-        ));
-    }
 }

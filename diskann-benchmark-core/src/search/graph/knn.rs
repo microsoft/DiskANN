@@ -90,6 +90,8 @@ impl<DP, T, S> Search for KNN<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    graph::search::Knn:
+        for<'a> graph::Search<'a, DP, S, &'a [T], Output = graph::index::SearchStats>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;

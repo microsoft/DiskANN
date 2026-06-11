@@ -163,11 +163,11 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
+            ext::labeled::QueryLabelProvider,
             glue::{
-                DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
-                SearchStrategy,
+                self, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
+                MultiInsertStrategy, SearchStrategy,
             },
-            index::QueryLabelProvider,
             search::Range,
             search_output_buffer,
         },
@@ -335,7 +335,7 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: DefaultSearchStrategy<'a, DP, Q>,
+        S: DefaultSearchStrategy<'a, DP, Q, SearchAccessor: glue::SearchAccessor>,
         Q: Copy + std::fmt::Debug + Send + Sync + 'a,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -380,7 +380,7 @@ pub(crate) mod tests {
         max_candidates: usize,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<'a, DP, Q> + 'static,
+        S: SearchStrategy<'a, DP, Q, SearchAccessor: glue::SearchAccessor> + 'static,
         Q: Copy + std::fmt::Debug + Send + Sync + 'a,
     {
         assert!(max_candidates <= groundtruth.len());
@@ -432,8 +432,12 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context: Default>,
-        FS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T]> + Clone + 'static,
-        QS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T]> + Clone + 'static,
+        FS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
+            + Clone
+            + 'static,
+        QS: for<'a> DefaultSearchStrategy<'a, DP, &'a [T], SearchAccessor: glue::SearchAccessor>
+            + Clone
+            + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         // Assume all vectors have the same length.
