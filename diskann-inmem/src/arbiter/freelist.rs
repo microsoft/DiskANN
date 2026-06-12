@@ -6,22 +6,27 @@
 use std::{
     num::NonZeroU32,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicUsize, Ordering},
         Mutex,
     },
 };
 
+use crossbeam_queue::ArrayQueue;
+use diskann::utils::IntoUsize;
+
 #[derive(Debug)]
 pub struct Freelist {
-    recycled: Mutex<Vec<u32>>,
-    capacity: NonZeroU32,
-    have_recycled: AtomicBool,
+    recycled: ArrayQueue<u32>,
+
+    /// An (approximate) number of recycled IDs that exist outside the freelist.
+    orphaned: AtomicUsize,
 
     /// The highest ID the freelist manages. This is used when in "append" to determine the
     /// maximum ID we can return this way.
     max: u32,
+
     /// The number of "unallocated" IDs remaining.
-    unallocated: AtomicU32,
+    current: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,37 +38,30 @@ pub enum Id {
 impl Freelist {
     pub fn new(max: u32, capacity: NonZeroU32) -> Self {
         Self {
-            recycled: Mutex::new(Vec::with_capacity(capacity.get() as usize)),
-            capacity,
-            have_recycled: AtomicBool::new(false),
+            recycled: ArrayQueue::new(capacity.get().into_usize()),
+            orphaned: AtomicUsize::new(0),
             max,
-            unallocated: AtomicU32::new(max),
+            current: AtomicU32::new(0),
         }
     }
 
     pub fn pop(&self) -> Id {
-        // Small performance optimization - avoid locking the mutex if looks like that won't
-        // succeed anyways.
-        if self.have_recycled.load(Ordering::Relaxed) {
-            let mut recycled = self.recycled.lock().unwrap();
-            if let Some(id) = recycled.pop() {
-                return Id::Found(id);
-            }
-            self.have_recycled.store(false, Ordering::Relaxed);
+        if let Some(id) = self.recycled.pop() {
+            return Id::Found(id);
         }
 
         // Missed in the recycled buffer. Try pulling from the high-water mark.
-        let mut unallocated = self.unallocated.load(Ordering::Relaxed);
-        while unallocated != 0 {
-            match self.unallocated.compare_exchange(
-                unallocated,
-                unallocated - 1,
+        let mut current = self.current.load(Ordering::Relaxed);
+        while current != self.max {
+            match self.current.compare_exchange(
+                current,
+                current + 1,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(unallocated) => return Id::Found(self.max - unallocated),
+                Ok(current) => return Id::Found(current),
                 Err(actual) => {
-                    unallocated = actual;
+                    current = actual;
                 }
             }
         }
@@ -76,13 +74,12 @@ impl Freelist {
     /// inserted. If `false` is returned, it is likely because the internal recycle
     /// buffer is full.
     pub fn push(&self, id: u32) -> bool {
-        let mut recycled = self.recycled.lock().unwrap();
-        if recycled.len() < self.capacity() {
-            recycled.push(id);
-            self.have_recycled.store(true, Ordering::Relaxed);
-            true
-        } else {
-            false
+        match self.recycled.push(id) {
+            Ok(()) => true,
+            Err(_) => {
+                self.orphaned.fetch_add(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 
@@ -92,16 +89,19 @@ impl Freelist {
     where
         I: IntoIterator<Item = u32>,
     {
-        let mut recycled = self.recycled.lock().unwrap();
-        let available = self.capacity() - recycled.len();
+        let mut itr = itr.into_iter();
         let mut count = 0;
-        itr.into_iter().take(available).for_each(|id| {
-            count += 1;
-            recycled.push(id);
-        });
+        while let Some(id) = itr.next() {
+            if let Err(_) = self.recycled.push(id) {
+                let (lower, _) = itr.size_hint();
 
-        if count > 0 {
-            self.have_recycled.store(true, Ordering::Relaxed);
+                // Add 1 to "put back" the last ID.
+                self.orphaned
+                    .fetch_add(lower.saturating_add(1), Ordering::Relaxed);
+                break;
+            } else {
+                count += 1;
+            }
         }
 
         count
@@ -112,6 +112,6 @@ impl Freelist {
     //----------//
 
     fn capacity(&self) -> usize {
-        self.capacity.get() as usize
+        self.recycled.capacity()
     }
 }

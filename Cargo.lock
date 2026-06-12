@@ -811,6 +811,7 @@ name = "diskann-inmem"
 version = "0.53.0"
 dependencies = [
  "bytemuck",
+ "crossbeam-queue",
  "diskann",
  "diskann-utils",
  "diskann-vector",

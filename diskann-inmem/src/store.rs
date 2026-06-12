@@ -9,8 +9,11 @@ use std::{
     sync::{atomic::Ordering, Mutex},
 };
 
+use diskann::utils::IntoUsize;
+use diskann_utils::views::MatrixView;
+
 use crate::{
-    arbiter::{epoch, generation, Buffer, Freelist, Generation, RawSlice},
+    arbiter::{epoch, freelist, generation, Buffer, Freelist, Generation, RawSlice},
     num::{Align, Bytes},
     Neighbors,
 };
@@ -23,89 +26,137 @@ pub struct Primary {
     // offering slightly better locality.
     buffer: Buffer,
     unpadded: Bytes,
+
+    // The number of unfrozen points. This is guaranteed to be less than `buffer`.
+    unfrozen: usize,
     tags: Vec<generation::Tag>,
     freelist: Freelist,
     registry: epoch::Registry,
     neighbors: Neighbors,
-    drain: Mutex<Vec<(u32, Generation)>>,
 }
 
 const SPLIT: Bytes = Bytes::size_of::<generation::Tag>();
 
 impl Primary {
-    pub fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
+    pub fn new(
+        entries: usize,
+        bytes: Bytes,
+        max_neighbors: usize,
+        init: MatrixView<'_, u8>,
+    ) -> Self {
+        assert_eq!(init.ncols(), bytes.value());
+        assert_ne!(init.nrows(), 0);
+
         let unpadded = bytes.checked_add(SPLIT).unwrap();
         let padded_bytes = unpadded.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
 
-        Self {
-            buffer: Buffer::new(entries, padded_bytes, Align::_128).unwrap(),
+        let total = entries.checked_add(init.nrows()).unwrap();
+
+        let this = Self {
+            buffer: Buffer::new(total, padded_bytes, Align::_128).unwrap(),
             unpadded,
-            tags: repeat_n(Generation::AVAILABLE, entries)
+            unfrozen: entries,
+            tags: repeat_n(Generation::AVAILABLE, total)
                 .map(|v| generation::Tag::new(v))
                 .collect(),
+
+            // NOTE: The `Freelist` is initialized to `entries` and not `total` because
+            // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
             registry: epoch::Registry::new(),
             neighbors: Neighbors::new(entries, max_neighbors),
-            drain: Mutex::new(Vec::new()),
-        }
-    }
+        };
 
-    #[inline]
-    fn tag(&self, i: usize) -> Option<generation::Ref<'_>> {
-        self.tags.get(i).map(|v| v.as_ref())
+        // Populate frozen points.
+        for (i, data) in init.row_iter().enumerate() {
+            let mut slot = this.slot((entries + i).try_into().unwrap());
+            slot.as_mut_slice().copy_from_slice(data);
+            slot.freeze();
+        }
+
+        this
     }
 
     pub fn capacity(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() - self.unfrozen
     }
 
-    pub fn drain(&self) -> usize {
-        let mut drain = self.drain.lock().unwrap();
-        let waiter = self.registry.waiting();
-        let before = drain.len();
-        drain.retain(|(i, generation)| {
-            if waiter < *generation {
-                self.freelist.push(*i);
-                false
-            } else {
-                true
+    pub fn try_drain(&self) -> Option<usize> {
+        fn release(tag: generation::Mut<'_>, kind: &'static str) {
+            // Relaxed ordering is sufficient as all readers/writers are synchronized on
+            // the central generation.
+            if let Err(got) = tag.try_set(
+                Generation::OWNED,
+                Generation::AVAILABLE,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                panic!(
+                    "CONCURRENCY VIOLATION: {} - expected {} - got {}",
+                    kind,
+                    Generation::AVAILABLE,
+                    got,
+                );
             }
-        });
-        before - drain.len()
+        }
+
+        let drain = self.registry.try_advance()?;
+        let items = drain.len();
+        for i in drain {
+            // We release the mirror before the main tag. The other direction would
+            // prematurely advertise availability.
+            let (mirror, _) = unsafe { self.data_unchecked(i.into_usize()) };
+            release(mirror, "mirror");
+            release(self.tags[i.into_usize()].as_mut(), "tag");
+            self.freelist.push(i);
+        }
+        Some(items)
     }
 
-    pub fn reader(&self) -> Reader<'_> {
-        Reader {
+    pub fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
+        Ok(Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
             neighbors: &self.neighbors,
-            epoch: self.registry.register(),
+            epoch: self.registry.register()?,
+        })
+    }
+
+    /// Attempt to acquire new slot for writing.
+    pub fn acquire(&self) -> Slot<'_> {
+        match self.freelist.pop() {
+            freelist::Id::Found(id) => self.slot(id),
+            freelist::Id::Scan => unimplemented!("fallback scan not implemented"),
         }
     }
 
-    pub(crate) fn write(&self, i: usize) -> Option<Write<'_>> {
-        let tag = self.tag_mut(i)?;
-        match tag.try_set(
+    fn slot(&self, i: u32) -> Slot<'_> {
+        let tag = self.tag_mut(i.into_usize()).unwrap();
+        if let Err(got) = tag.try_set(
             Generation::AVAILABLE,
             Generation::OWNED,
-            Ordering::Acquire,
+            Ordering::Relaxed,
             Ordering::Relaxed,
         ) {
-            Ok(_) => {
-                let (mirror, data) = unsafe { self.data(i) };
-                let write = Write {
-                    tag,
-                    mirror,
-                    generation: self.registry.generation(),
-                    data,
-                };
-                Some(write)
-            }
-            Err(_) => None,
+            panic!(
+                "CONCURRENCY VIOLATION: acquire - expected {} - got {}",
+                Generation::AVAILABLE,
+                got
+            );
+        }
+
+        let (mirror, data) = unsafe { self.data_unchecked(i.into_usize()) };
+        Slot {
+            tag,
+            mirror,
+            generation: self.registry.generation(),
+            data,
+            slot: i,
         }
     }
 
     pub(crate) fn delete(&self, i: usize) -> bool {
+        let guard = self.registry.register().unwrap();
         let tag = self.tag_mut(i).unwrap();
         let current = tag.get(Ordering::Relaxed);
 
@@ -121,20 +172,16 @@ impl Primary {
         match tag.try_set(current, owned, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(current) => {
                 // Set the metadata in the mirror as well.
-                let (mirror, _) = unsafe { self.data(i) };
+                let (mirror, _) = unsafe { self.data_unchecked(i) };
                 mirror.set(owned, Ordering::Relaxed);
-                let wait_for = self.registry.advance();
-                self.drain
-                    .lock()
-                    .unwrap()
-                    .push((i.try_into().unwrap(), wait_for));
+                guard.retire(i as u32);
                 true
             }
             Err(_) => false,
         }
     }
 
-    unsafe fn data(&self, i: usize) -> (generation::Mut<'_>, RawSlice<'_>) {
+    unsafe fn data_unchecked(&self, i: usize) -> (generation::Mut<'_>, RawSlice<'_>) {
         let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }
             .truncate(self.unpadded)
             .split(SPLIT);
@@ -229,20 +276,32 @@ impl<'a> Reader<'a> {
 }
 
 #[derive(Debug)]
-pub struct Write<'a> {
+pub struct Slot<'a> {
     tag: generation::Mut<'a>,
     mirror: generation::Mut<'a>,
     generation: Generation,
     data: RawSlice<'a>,
+    slot: u32,
 }
 
-impl<'a> Write<'a> {
+impl<'a> Slot<'a> {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.data.as_mut_slice() }
     }
+
+    /// Return the slot associated with this write.
+    pub fn slot(&self) -> u32 {
+        self.slot
+    }
+
+    fn freeze(self) {
+        let me = std::mem::ManuallyDrop::new(self);
+        me.mirror.set(Generation::FROZEN, Ordering::Release);
+        me.tag.set(Generation::FROZEN, Ordering::Release);
+    }
 }
 
-impl Drop for Write<'_> {
+impl Drop for Slot<'_> {
     fn drop(&mut self) {
         self.mirror.set(self.generation, Ordering::Release);
         self.tag.set(self.generation, Ordering::Release);

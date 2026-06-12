@@ -142,13 +142,13 @@ impl Drop for Buffer {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct BufferError;
 
 impl std::fmt::Display for BufferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "requested allocation exceeds `isize::MAX`")
+        f.write_str("requested allocation exceeds `isize::MAX`")
     }
 }
 
@@ -319,7 +319,7 @@ impl<'a> RawSlice<'a> {
 mod tests {
     use super::*;
 
-    use std::{thread, sync::Barrier};
+    use std::{sync::Barrier, thread};
 
     #[derive(Debug)]
     struct Ctx {
@@ -373,7 +373,6 @@ mod tests {
         // Check Slice Methods
         check_slice_methods(&mut buffer, &ctx);
 
-
         // Check that concurrent mutation is allowed.
         //
         // This is mainly a Miri check.
@@ -402,7 +401,10 @@ mod tests {
             assert_eq!(raw_slice.len(), buffer.stride());
 
             assert_eq!(raw_slice.as_non_null().as_ptr(), raw_slice.as_mut_ptr());
-            assert_eq!(raw_slice.as_non_null().as_ptr().cast_const(), raw_slice.as_ptr());
+            assert_eq!(
+                raw_slice.as_non_null().as_ptr().cast_const(),
+                raw_slice.as_ptr()
+            );
 
             assert_eq!(
                 raw_slice.as_ptr(),
