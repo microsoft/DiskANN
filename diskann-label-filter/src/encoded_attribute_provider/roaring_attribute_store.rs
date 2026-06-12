@@ -8,12 +8,16 @@ use crate::{
     encoded_attribute_provider::{
         attribute_encoder::AttributeEncoder, encoded_attribute_accessor::EncodedAttributeAccessor,
     },
-    set::{roaring_set_provider::RoaringTreemapSetProvider, SetProvider},
+    set::{
+        roaring_set_provider::{RoaringTreemapSetProvider},
+        SetProvider,
+    },
     traits::attribute_store::AttributeStore,
 };
 use diskann::{utils::VectorId, ANNError, ANNErrorKind, ANNResult};
 use diskann_utils::future::AsyncFriendly;
-use std::sync::{Arc, RwLock};
+use roaring::RoaringTreemap;
+use std::{ops::Deref, sync::{Arc, RwLock}};
 
 pub struct RoaringAttributeStore<IT>
 where
@@ -22,6 +26,7 @@ where
     attribute_map: Arc<RwLock<AttributeEncoder>>,
     index: Arc<RwLock<RoaringTreemapSetProvider<IT>>>,
     inv_index: Arc<RwLock<RoaringTreemapSetProvider<u64>>>,
+    field_attr_index: Arc<RwLock<RoaringTreemapSetProvider<String>>>,
 }
 
 impl<IT> Default for RoaringAttributeStore<IT>
@@ -46,6 +51,7 @@ where
             attribute_map: Arc::new(RwLock::new(AttributeEncoder::new())),
             index: Arc::new(RwLock::new(RoaringTreemapSetProvider::<IT>::new())),
             inv_index: Arc::new(RwLock::new(RoaringTreemapSetProvider::<u64>::new())),
+            field_attr_index: Arc::new(RwLock::new(RoaringTreemapSetProvider::<String>::new())),
         }
     }
 
@@ -56,6 +62,73 @@ where
 
     pub(crate) fn attribute_map(&self) -> Arc<RwLock<AttributeEncoder>> {
         self.attribute_map.clone()
+    }
+
+    pub fn inverted_postings(&self) -> ANNResult<Vec<(u64, RoaringTreemap)>> {
+        let inv_guard = self.inv_index.read().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on inverted index",
+            )
+        })?;
+
+        Ok(inv_guard.entries_cloned())
+    }
+
+    /// Return a treemap of point IDs matching the encoded attribute ID.
+    pub(crate) fn posting_bitmap_for_attr_id(&self, attr_id: u64) -> ANNResult<RoaringTreemap> {
+        let inv_guard = self.inv_index.read().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on inverted index",
+            )
+        })?;
+
+        let Some(postings) = inv_guard.get(&attr_id)? else {
+            return Ok(RoaringTreemap::new());
+        };
+
+        Ok(postings.into_owned())
+    }
+
+    pub(crate) fn posting_bitmap_read_inplace_for_attr_id(
+        &self,
+        attr_id: u64,
+        f: &mut dyn FnMut(&RoaringTreemap),
+    ) -> ANNResult<()> {
+        let inv_guard = self.inv_index.read().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on inverted index",
+            )
+        })?;
+
+        let Some(postings) = inv_guard.get(&attr_id)? else {
+            return Ok(());
+        };
+
+        f(postings.deref());
+        Ok(())
+    }
+
+    /// Return all encoded attribute IDs known for a field name.
+    ///
+    /// This index is append-only for attribute IDs and may include IDs with
+    /// empty postings. Callers should tolerate empty posting lists.
+    pub(crate) fn attribute_ids_for_field(&self, field_name: &str) -> ANNResult<Vec<u64>> {
+        let field_guard = self.field_attr_index.read().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on field_attr_index",
+            )
+        })?;
+
+        let key = field_name.to_string();
+        let Some(attr_ids) = field_guard.get(&key)? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(attr_ids.into_owned().iter().collect())
     }
 }
 
@@ -154,7 +227,7 @@ where
             ));
         }
 
-        // Acquire locks in consistent order: attribute_map, index, inv_index
+        // Acquire locks in consistent order: attribute_map, index, inv_index, field_attr_index
         let mut attr_map_guard = self.attribute_map.write().map_err(|_| {
             ANNError::message(
                 ANNErrorKind::LockPoisonError,
@@ -171,6 +244,12 @@ where
             ANNError::message(
                 ANNErrorKind::LockPoisonError,
                 "Failed to acquire write lock on inv_index",
+            )
+        })?;
+        let mut field_attr_index_guard = self.field_attr_index.write().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire write lock on field_attr_index",
             )
         })?;
 
@@ -192,6 +271,7 @@ where
             let attr_id = attr_map_guard.insert(attr);
             inv_index_guard.insert(&attr_id, &id_u64)?;
             index_guard.insert(vec_id, &attr_id)?;
+            field_attr_index_guard.insert(attr.field_name(), &attr_id)?;
         }
         Ok(true)
     }

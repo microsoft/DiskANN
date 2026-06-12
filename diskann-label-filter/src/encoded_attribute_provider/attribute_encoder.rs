@@ -18,7 +18,7 @@ use std::hash::Hash;
 /// struct below and define hash/eq, e.t.c for it to work with our scenario.
 /// The caveat is that the original attribute object cannot be used for lookups
 /// which should be ok.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct InternalAttribute {
     field_name: String,
     attr_value: AttributeValue,
@@ -33,13 +33,11 @@ impl InternalAttribute {
     }
 
     /// Get the field name
-    #[expect(dead_code, reason = "Callers will be added in the next PR")]
     pub(crate) fn field_name(&self) -> &str {
         &self.field_name
     }
 
     /// Get the attribute value
-    #[expect(dead_code, reason = "Callers will be added in the next PR")]
     pub(crate) fn attr_value(&self) -> &AttributeValue {
         &self.attr_value
     }
@@ -53,6 +51,7 @@ impl InternalAttribute {
 /// to add this feature.
 pub(crate) struct AttributeEncoder {
     attribute_index: HashMap<InternalAttribute, u64>,
+    reverse_attribute_index: HashMap<u64, InternalAttribute>,
     running_index: u64,
 }
 
@@ -60,6 +59,7 @@ impl AttributeEncoder {
     pub fn new() -> Self {
         Self {
             attribute_index: HashMap::new(),
+            reverse_attribute_index: HashMap::new(),
             running_index: 0,
         }
     }
@@ -69,14 +69,16 @@ impl AttributeEncoder {
     /// returned.
     /// Returns: the id of the attribute
     pub fn insert(&mut self, attribute: &Attribute) -> u64 {
+        let internal = InternalAttribute::new(attribute);
+        if let Some(&id) = self.attribute_index.get(&internal) {
+            return id;
+        }
+
         let current_index = self.running_index;
-        *self
-            .attribute_index
-            .entry(InternalAttribute::new(attribute))
-            .or_insert_with(|| {
-                self.running_index += 1;
-                current_index
-            })
+        self.running_index += 1;
+        self.attribute_index.insert(internal.clone(), current_index);
+        self.reverse_attribute_index.insert(current_index, internal);
+        current_index
     }
 
     /// Return the id for a given attribute. Converts the attribute into
@@ -95,24 +97,26 @@ impl AttributeEncoder {
         }
     }
 
+    pub(crate) fn get_by_id(&self, id: u64) -> Option<&InternalAttribute> {
+        self.reverse_attribute_index.get(&id)
+    }
+
+    /// Return the next unassigned attribute id.
+    ///
+    /// This is useful for representing query-time "missing" attributes in an
+    /// encoded expression while guaranteeing the id is not currently assigned.
+    pub(crate) fn next_unused_id(&self) -> u64 {
+        self.running_index
+    }
+
     ///Return the number of entries in the attribute map.
     #[expect(dead_code, reason = "Will be used in the next PR")]
     pub(crate) fn len(&self) -> usize {
         self.attribute_index.len()
     }
 
-    /// Apply a function to each entry in the attribute map
-    /// This allows iteration over the internal attribute mappings
-    #[expect(dead_code, reason = "Will be used in the next PR")]
-    pub(crate) fn for_each<F>(&self, mut func: F)
-    where
-        F: FnMut(&InternalAttribute, u64),
-    {
-        for (attr, &id) in &self.attribute_index {
-            func(attr, id);
-        }
-    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -123,6 +127,7 @@ mod tests {
     fn test_new_attribute_map_is_empty() {
         let attribute_map: AttributeEncoder = AttributeEncoder::new();
         assert_eq!(attribute_map.attribute_index.len(), 0);
+        assert_eq!(attribute_map.reverse_attribute_index.len(), 0);
         assert_eq!(attribute_map.running_index, 0);
     }
 
@@ -137,6 +142,7 @@ mod tests {
 
         assert_eq!(id, 0); // First attribute should get ID 0
         assert_eq!(attribute_map.attribute_index.len(), 1);
+        assert_eq!(attribute_map.reverse_attribute_index.len(), 1);
         assert_eq!(attribute_map.running_index, 1);
     }
 
@@ -153,6 +159,7 @@ mod tests {
 
         assert_eq!(id1, id2); // Should return the same ID
         assert_eq!(attribute_map.attribute_index.len(), 1); // Map should still have only one entry
+        assert_eq!(attribute_map.reverse_attribute_index.len(), 1);
         assert_eq!(attribute_map.running_index, 1); // Running index should only increment once
     }
 
@@ -173,6 +180,7 @@ mod tests {
         assert_eq!(id2, 1);
         assert_eq!(id3, 2);
         assert_eq!(attribute_map.attribute_index.len(), 3);
+        assert_eq!(attribute_map.reverse_attribute_index.len(), 3);
         assert_eq!(attribute_map.running_index, 3);
     }
 
@@ -188,6 +196,9 @@ mod tests {
         let retrieved_id = attribute_map.get(&attribute).unwrap();
 
         assert_eq!(inserted_id, retrieved_id);
+        let reverse = attribute_map.get_by_id(inserted_id).unwrap();
+        assert_eq!(reverse.field_name(), "test_field");
+        assert_eq!(reverse.attr_value(), &AttributeValue::String("test_value".to_string()));
     }
 
     #[test]
@@ -198,5 +209,16 @@ mod tests {
 
         let result = attribute_map.get(&attribute);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_next_unused_id() {
+        let mut attribute_map: AttributeEncoder = AttributeEncoder::new();
+        assert_eq!(attribute_map.next_unused_id(), 0);
+
+        let attribute =
+            Attribute::from_value("field", AttributeValue::String("value".to_string()));
+        let _ = attribute_map.insert(&attribute);
+        assert_eq!(attribute_map.next_unused_id(), 1);
     }
 }

@@ -61,6 +61,14 @@ impl AttributeValue {
         }
     }
 
+    pub fn as_numeric_f64(&self) -> Option<f64> {
+        match self {
+            AttributeValue::Integer(n) => Some(*n as f64),
+            AttributeValue::Real(r) => Some(*r),
+            _ => None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         matches!(self, AttributeValue::Empty)
     }

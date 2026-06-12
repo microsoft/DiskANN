@@ -85,6 +85,13 @@ where
             index: HashMap::with_hasher(BuildIdentityHasher::default()),
         }
     }
+
+    pub fn entries_cloned(&self) -> Vec<(Key, RoaringBitmap)> {
+        self.index
+            .iter()
+            .map(|(key, bitmap)| (key.clone(), bitmap.clone()))
+            .collect()
+    }
 }
 
 /// Macro to implement SetProvider for roaring containers
@@ -167,6 +174,13 @@ where
         Self {
             index: HashMap::with_hasher(BuildIdentityHasher::default()),
         }
+    }
+
+    pub fn entries_cloned(&self) -> Vec<(Key, RoaringTreemap)> {
+        self.index
+            .iter()
+            .map(|(key, bitmap)| (key.clone(), bitmap.clone()))
+            .collect()
     }
 }
 

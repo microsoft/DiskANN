@@ -33,14 +33,9 @@ impl ASTLabelIdMapper {
 
     fn _lookup(encoder: &AttributeEncoder, attribute: &Attribute) -> ANNResult<ASTIdExpr<u64>> {
         match encoder.get(attribute) {
-            Some(attribute_id) => Ok(ASTIdExpr::Terminal(attribute_id)),
-            None => Err(ANNError::message(
-                ANNErrorKind::Opaque,
-                format!(
-                    "{} present in the query does not exist in the dataset.",
-                    attribute
-                ),
-            )),
+            Some(attribute_id) => Ok(ASTIdExpr::Eq(attribute_id)),
+            // Unknown equality terms should evaluate to false at runtime, not fail mapping.
+            None => Ok(ASTIdExpr::Eq(encoder.next_unused_id())),
         }
     }
 }
@@ -99,17 +94,15 @@ impl ASTVisitor for ASTLabelIdMapper {
                 tracing::warn!("< Not supported ");
                 None
             }
-            CompareOp::Lte(_num) => {
-                tracing::warn!("<= Not supported ");
-                None
+            CompareOp::Lte(num) => {
+                return Ok(ASTIdExpr::Lte(field.to_string(), *num));
             }
             CompareOp::Gt(_num) => {
                 tracing::warn!("> Not supported ");
                 None
             }
-            CompareOp::Gte(_num) => {
-                tracing::warn!(">= Not supported ");
-                None
+            CompareOp::Gte(num) => {
+                return Ok(ASTIdExpr::Gte(field.to_string(), *num));
             }
         };
 
@@ -142,7 +135,6 @@ mod tests {
         parser::ast::ASTVisitor,
         ASTExpr, CompareOp,
     };
-    use diskann::ANNErrorKind;
     use serde_json::Value;
     use std::sync::{Arc, RwLock};
 
@@ -188,7 +180,7 @@ mod tests {
         };
 
         let result = mapper.visit(&expr).unwrap();
-        assert!(matches!(result, ASTIdExpr::Terminal(_)));
+        assert!(matches!(result, ASTIdExpr::Eq(_)));
 
         // Test with existing number attribute
         let expr = ASTExpr::Compare {
@@ -197,7 +189,7 @@ mod tests {
         };
 
         let result = mapper.visit(&expr).unwrap();
-        assert!(matches!(result, ASTIdExpr::Terminal(_)));
+        assert!(matches!(result, ASTIdExpr::Eq(_)));
 
         // Test with existing boolean attribute
         let expr = ASTExpr::Compare {
@@ -206,7 +198,7 @@ mod tests {
         };
 
         let result = mapper.visit(&expr).unwrap();
-        assert!(matches!(result, ASTIdExpr::Terminal(_)));
+        assert!(matches!(result, ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -220,11 +212,8 @@ mod tests {
         };
 
         let result = mapper.visit(&expr);
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
-        assert!(error.to_string().contains("does not exist in the dataset"));
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -238,11 +227,8 @@ mod tests {
         };
 
         let result = mapper.visit(&expr);
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
-        assert!(error.to_string().contains("does not exist in the dataset"));
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -269,15 +255,14 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not supported"));
 
-        // Test Lte operation (not supported)
+        // Test Lte operation (supported)
         let expr = ASTExpr::Compare {
             field: "price".to_string(),
             op: CompareOp::Lte(300.0),
         };
 
-        let result = mapper.visit(&expr);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not supported"));
+        let result = mapper.visit(&expr).unwrap();
+        assert_eq!(result, ASTIdExpr::Lte("price".to_string(), 300.0));
 
         // Test Gt operation (not supported)
         let expr = ASTExpr::Compare {
@@ -289,15 +274,14 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not supported"));
 
-        // Test Gte operation (not supported)
+        // Test Gte operation (supported)
         let expr = ASTExpr::Compare {
             field: "price".to_string(),
             op: CompareOp::Gte(250.0),
         };
 
-        let result = mapper.visit(&expr);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not supported"));
+        let result = mapper.visit(&expr).unwrap();
+        assert_eq!(result, ASTIdExpr::Gte("price".to_string(), 250.0));
     }
 
     #[test]
@@ -321,8 +305,8 @@ mod tests {
         match result {
             ASTIdExpr::And(exprs) => {
                 assert_eq!(exprs.len(), 2);
-                assert!(matches!(exprs[0], ASTIdExpr::Terminal(_)));
-                assert!(matches!(exprs[1], ASTIdExpr::Terminal(_)));
+                assert!(matches!(exprs[0], ASTIdExpr::Eq(_)));
+                assert!(matches!(exprs[1], ASTIdExpr::Eq(_)));
             }
             _ => panic!("Expected ASTIdExpr::And"),
         }
@@ -349,8 +333,8 @@ mod tests {
         match result {
             ASTIdExpr::Or(exprs) => {
                 assert_eq!(exprs.len(), 2);
-                assert!(matches!(exprs[0], ASTIdExpr::Terminal(_)));
-                assert!(matches!(exprs[1], ASTIdExpr::Terminal(_)));
+                assert!(matches!(exprs[0], ASTIdExpr::Eq(_)));
+                assert!(matches!(exprs[1], ASTIdExpr::Eq(_)));
             }
             _ => panic!("Expected ASTIdExpr::Or"),
         }
@@ -373,7 +357,7 @@ mod tests {
         // Verify it's a NOT expression wrapping a terminal
         match id_expr {
             ASTIdExpr::Not(inner) => match inner.as_ref() {
-                ASTIdExpr::Terminal(_) => {} // Expected: NOT wrapping a terminal (label ID)
+                ASTIdExpr::Eq(_) => {} // Expected: NOT wrapping an equality expression (label ID)
                 _ => panic!("Expected NOT to wrap a terminal expression"),
             },
             _ => panic!("Expected a NOT expression"),
@@ -412,14 +396,14 @@ mod tests {
                 match &and_exprs[0] {
                     ASTIdExpr::Or(or_exprs) => {
                         assert_eq!(or_exprs.len(), 2);
-                        assert!(matches!(or_exprs[0], ASTIdExpr::Terminal(_)));
-                        assert!(matches!(or_exprs[1], ASTIdExpr::Terminal(_)));
+                        assert!(matches!(or_exprs[0], ASTIdExpr::Eq(_)));
+                        assert!(matches!(or_exprs[1], ASTIdExpr::Eq(_)));
                     }
                     _ => panic!("Expected ASTIdExpr::Or as first element"),
                 }
 
                 // Second element should be a terminal
-                assert!(matches!(and_exprs[1], ASTIdExpr::Terminal(_)));
+                assert!(matches!(and_exprs[1], ASTIdExpr::Eq(_)));
             }
             _ => panic!("Expected ASTIdExpr::And"),
         }
@@ -460,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn test_visit_and_with_error_propagation() {
+    fn test_visit_and_with_missing_eq_maps_successfully() {
         let mut mapper = create_test_mapper();
 
         // Create an AND expression where one sub-expression will fail
@@ -476,15 +460,19 @@ mod tests {
         ]);
 
         let result = mapper.visit(&expr);
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
-        assert!(error.to_string().contains("does not exist in the dataset"));
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ASTIdExpr::And(exprs) => {
+                assert_eq!(exprs.len(), 2);
+                assert!(matches!(exprs[0], ASTIdExpr::Eq(_)));
+                assert!(matches!(exprs[1], ASTIdExpr::Eq(_)));
+            }
+            _ => panic!("Expected ASTIdExpr::And"),
+        }
     }
 
     #[test]
-    fn test_visit_or_with_error_propagation() {
+    fn test_visit_or_with_missing_eq_maps_successfully() {
         let mut mapper = create_test_mapper();
 
         // Create an OR expression where one sub-expression will fail
@@ -500,11 +488,15 @@ mod tests {
         ]);
 
         let result = mapper.visit(&expr);
-        assert!(result.is_err());
-
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), ANNErrorKind::Opaque);
-        assert!(error.to_string().contains("does not exist in the dataset"));
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ASTIdExpr::Or(exprs) => {
+                assert_eq!(exprs.len(), 2);
+                assert!(matches!(exprs[0], ASTIdExpr::Eq(_)));
+                assert!(matches!(exprs[1], ASTIdExpr::Eq(_)));
+            }
+            _ => panic!("Expected ASTIdExpr::Or"),
+        }
     }
 
     #[test]
@@ -535,7 +527,7 @@ mod tests {
         };
 
         let result = mapper.visit(&expr).unwrap();
-        assert!(matches!(result, ASTIdExpr::Terminal(_)));
+        assert!(matches!(result, ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -596,12 +588,9 @@ mod tests {
         };
 
         let result = mapper.visit(&expr);
-        // This should fail because the integer 300 doesn't match the real 299.99
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not exist in the dataset"));
+        // This should map to a non-existent equality id because 300 != 299.99 in the dataset.
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -616,11 +605,8 @@ mod tests {
         };
 
         let result = mapper.visit(&expr);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not exist in the dataset"));
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), ASTIdExpr::Eq(_)));
     }
 
     #[test]
@@ -667,20 +653,20 @@ mod tests {
                         match &or_exprs[0] {
                             ASTIdExpr::And(inner_and_exprs) => {
                                 assert_eq!(inner_and_exprs.len(), 2);
-                                assert!(matches!(inner_and_exprs[0], ASTIdExpr::Terminal(_)));
-                                assert!(matches!(inner_and_exprs[1], ASTIdExpr::Terminal(_)));
+                                assert!(matches!(inner_and_exprs[0], ASTIdExpr::Eq(_)));
+                                assert!(matches!(inner_and_exprs[1], ASTIdExpr::Eq(_)));
                             }
                             _ => panic!("Expected ASTIdExpr::And as first OR element"),
                         }
 
                         // Second OR element should be a terminal
-                        assert!(matches!(or_exprs[1], ASTIdExpr::Terminal(_)));
+                        assert!(matches!(or_exprs[1], ASTIdExpr::Eq(_)));
                     }
                     _ => panic!("Expected ASTIdExpr::Or as first element"),
                 }
 
                 // Second element should be a terminal
-                assert!(matches!(and_exprs[1], ASTIdExpr::Terminal(_)));
+                assert!(matches!(and_exprs[1], ASTIdExpr::Eq(_)));
             }
             _ => panic!("Expected ASTIdExpr::And"),
         }

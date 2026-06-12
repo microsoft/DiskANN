@@ -67,6 +67,22 @@ fn setup_encoder_and_filter(
     (attr_map, ast_expr, encoded_id)
 }
 
+fn setup_numeric_encoder_and_filter(
+    field: &str,
+    stored_value: AttributeValue,
+    op: CompareOp,
+) -> (Arc<RwLock<AttributeEncoder>>, ASTExpr, u64) {
+    let mut encoder = AttributeEncoder::new();
+    let attr = Attribute::from_value(field, stored_value);
+    let encoded_id = encoder.insert(&attr);
+    let attr_map = Arc::new(RwLock::new(encoder));
+    let ast_expr = ASTExpr::Compare {
+        field: field.to_string(),
+        op,
+    };
+    (attr_map, ast_expr, encoded_id)
+}
+
 // -----------------------------------------------------------------------
 // Test 1: when the filter matches, evaluate_similarity returns inner * beta
 // -----------------------------------------------------------------------
@@ -114,6 +130,46 @@ fn test_evaluate_similarity_no_filter_match_preserves_score() {
         inner_dist,
         "an unmatched filter should leave the inner similarity unchanged"
     );
+}
+
+#[test]
+fn test_evaluate_similarity_numeric_lte_match_scales_by_beta() {
+    let (attr_map, ast_expr, price_id) = setup_numeric_encoder_and_filter(
+        "price",
+        AttributeValue::Integer(250),
+        CompareOp::Lte(300.0),
+    );
+    let filter_expr = EncodedFilterExpr::new(&ast_expr, attr_map).expect("filter expr");
+
+    let beta = 2.5_f32;
+    let inner_dist = 4.0_f32;
+    let computer = InlineBetaComputer::new(ConstComputer(inner_dist), beta, filter_expr);
+
+    let mut matching_map = RoaringTreemap::new();
+    matching_map.insert(price_id);
+    let doc = EncodedDocument::new(&[1.0f32, 0.0][..], &matching_map);
+
+    assert_eq!(computer.evaluate_similarity(doc), inner_dist * beta);
+}
+
+#[test]
+fn test_evaluate_similarity_numeric_gte_no_match_preserves_score() {
+    let (attr_map, ast_expr, price_id) = setup_numeric_encoder_and_filter(
+        "price",
+        AttributeValue::Integer(250),
+        CompareOp::Gte(300.0),
+    );
+    let filter_expr = EncodedFilterExpr::new(&ast_expr, attr_map).expect("filter expr");
+
+    let beta = 2.5_f32;
+    let inner_dist = 4.0_f32;
+    let computer = InlineBetaComputer::new(ConstComputer(inner_dist), beta, filter_expr);
+
+    let mut non_matching_map = RoaringTreemap::new();
+    non_matching_map.insert(price_id);
+    let doc = EncodedDocument::new(&[1.0f32, 0.0][..], &non_matching_map);
+
+    assert_eq!(computer.evaluate_similarity(doc), inner_dist);
 }
 
 // -----------------------------------------------------------------------

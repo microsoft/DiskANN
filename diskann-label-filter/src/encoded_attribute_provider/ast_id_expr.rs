@@ -28,8 +28,12 @@ where
     Or(Vec<ASTIdExpr<T>>),
     /// Logical NOT: negates the sub-expression
     Not(Box<ASTIdExpr<T>>),
-    /// Comparison on a field (supports dot notation)
-    Terminal(T),
+    /// Equality comparison on a fully encoded attribute.
+    Eq(T),
+    /// Numeric less-than-or-equal comparison on a field.
+    Lte(String, f64),
+    /// Numeric greater-than-or-equal comparison on a field.
+    Gte(String, f64),
 }
 
 pub trait ASTIdExprVisitorMut<T>
@@ -44,7 +48,9 @@ where
             ASTIdExpr::And(exprs) => self.visit_and(exprs),
             ASTIdExpr::Or(exprs) => self.visit_or(exprs),
             ASTIdExpr::Not(expr) => self.visit_not(expr),
-            ASTIdExpr::Terminal(id) => self.visit_terminal(id),
+            ASTIdExpr::Eq(id) => self.visit_eq(id),
+            ASTIdExpr::Lte(field, value) => self.visit_lte(field, *value),
+            ASTIdExpr::Gte(field, value) => self.visit_gte(field, *value),
         }
     }
 
@@ -57,8 +63,14 @@ where
     /// Visit a NOT expression
     fn visit_not(&mut self, expr: &ASTIdExpr<T>) -> Self::Output;
 
-    /// Visit a comparison expression
-    fn visit_terminal(&mut self, id: &T) -> Self::Output;
+    /// Visit an equality comparison.
+    fn visit_eq(&mut self, id: &T) -> Self::Output;
+
+    /// Visit a less-than-or-equal comparison.
+    fn visit_lte(&mut self, field: &str, value: f64) -> Self::Output;
+
+    /// Visit a greater-than-or-equal comparison.
+    fn visit_gte(&mut self, field: &str, value: f64) -> Self::Output;
 }
 
 pub trait ASTIdExprVisitor<T>
@@ -73,7 +85,9 @@ where
             ASTIdExpr::And(exprs) => self.visit_and(exprs),
             ASTIdExpr::Or(exprs) => self.visit_or(exprs),
             ASTIdExpr::Not(expr) => self.visit_not(expr),
-            ASTIdExpr::Terminal(id) => self.visit_terminal(id),
+            ASTIdExpr::Eq(id) => self.visit_eq(id),
+            ASTIdExpr::Lte(field, value) => self.visit_lte(field, *value),
+            ASTIdExpr::Gte(field, value) => self.visit_gte(field, *value),
         }
     }
 
@@ -86,8 +100,14 @@ where
     /// Visit a NOT expression
     fn visit_not(&self, expr: &ASTIdExpr<T>) -> Self::Output;
 
-    /// Visit a comparison expression
-    fn visit_terminal(&self, id: &T) -> Self::Output;
+    /// Visit an equality comparison.
+    fn visit_eq(&self, id: &T) -> Self::Output;
+
+    /// Visit a less-than-or-equal comparison.
+    fn visit_lte(&self, field: &str, value: f64) -> Self::Output;
+
+    /// Visit a greater-than-or-equal comparison.
+    fn visit_gte(&self, field: &str, value: f64) -> Self::Output;
 }
 
 impl<T> ASTIdExpr<T>
@@ -152,8 +172,16 @@ where
         format!("NOT ({})", inner)
     }
 
-    fn visit_terminal(&mut self, id: &T) -> Self::Output {
+    fn visit_eq(&mut self, id: &T) -> Self::Output {
         format!("label_id:{}", id)
+    }
+
+    fn visit_lte(&mut self, field: &str, value: f64) -> Self::Output {
+        format!("{}<={}", field, value)
+    }
+
+    fn visit_gte(&mut self, field: &str, value: f64) -> Self::Output {
+        format!("{}>={}", field, value)
     }
 }
 
@@ -174,14 +202,14 @@ mod tests {
 
     #[test]
     fn test_print_visitor_terminal() {
-        let expr = ASTIdExpr::Terminal(42u64);
+        let expr = ASTIdExpr::Eq(42u64);
         let result = expr.to_string();
         assert_eq!(result, "label_id:42");
     }
 
     #[test]
     fn test_print_visitor_single_and() {
-        let expr = ASTIdExpr::And(vec![ASTIdExpr::Terminal(5u64)]);
+        let expr = ASTIdExpr::And(vec![ASTIdExpr::Eq(5u64)]);
         let result = expr.to_string();
         assert_eq!(result, "label_id:5");
     }
@@ -189,9 +217,9 @@ mod tests {
     #[test]
     fn test_print_visitor_multiple_and() {
         let expr = ASTIdExpr::And(vec![
-            ASTIdExpr::Terminal(1u64),
-            ASTIdExpr::Terminal(2u64),
-            ASTIdExpr::Terminal(3u64),
+            ASTIdExpr::Eq(1u64),
+            ASTIdExpr::Eq(2u64),
+            ASTIdExpr::Eq(3u64),
         ]);
         let result = expr.to_string();
         assert_eq!(result, "(label_id:1 AND label_id:2 AND label_id:3)");
@@ -206,14 +234,14 @@ mod tests {
 
     #[test]
     fn test_print_visitor_single_or() {
-        let expr = ASTIdExpr::Or(vec![ASTIdExpr::Terminal(10u64)]);
+        let expr = ASTIdExpr::Or(vec![ASTIdExpr::Eq(10u64)]);
         let result = expr.to_string();
         assert_eq!(result, "label_id:10");
     }
 
     #[test]
     fn test_print_visitor_multiple_or() {
-        let expr = ASTIdExpr::Or(vec![ASTIdExpr::Terminal(7u64), ASTIdExpr::Terminal(8u64)]);
+        let expr = ASTIdExpr::Or(vec![ASTIdExpr::Eq(7u64), ASTIdExpr::Eq(8u64)]);
         let result = expr.to_string();
         assert_eq!(result, "(label_id:7 OR label_id:8)");
     }
@@ -227,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_print_visitor_not() {
-        let expr = ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(15u64)));
+        let expr = ASTIdExpr::Not(Box::new(ASTIdExpr::Eq(15u64)));
         let result = expr.to_string();
         assert_eq!(result, "NOT (label_id:15)");
     }
@@ -235,8 +263,8 @@ mod tests {
     #[test]
     fn test_print_visitor_nested_and_or() {
         let expr = ASTIdExpr::And(vec![
-            ASTIdExpr::Terminal(1u64),
-            ASTIdExpr::Or(vec![ASTIdExpr::Terminal(2u64), ASTIdExpr::Terminal(3u64)]),
+            ASTIdExpr::Eq(1u64),
+            ASTIdExpr::Or(vec![ASTIdExpr::Eq(2u64), ASTIdExpr::Eq(3u64)]),
         ]);
         let result = expr.to_string();
         assert_eq!(result, "(label_id:1 AND (label_id:2 OR label_id:3))");
@@ -245,8 +273,8 @@ mod tests {
     #[test]
     fn test_print_visitor_nested_or_and() {
         let expr = ASTIdExpr::Or(vec![
-            ASTIdExpr::And(vec![ASTIdExpr::Terminal(4u64), ASTIdExpr::Terminal(5u64)]),
-            ASTIdExpr::Terminal(6u64),
+            ASTIdExpr::And(vec![ASTIdExpr::Eq(4u64), ASTIdExpr::Eq(5u64)]),
+            ASTIdExpr::Eq(6u64),
         ]);
         let result = expr.to_string();
         assert_eq!(result, "((label_id:4 AND label_id:5) OR label_id:6)");
@@ -255,10 +283,10 @@ mod tests {
     #[test]
     fn test_print_visitor_complex_nested() {
         let expr = ASTIdExpr::And(vec![
-            ASTIdExpr::Or(vec![ASTIdExpr::Terminal(1u64), ASTIdExpr::Terminal(2u64)]),
+            ASTIdExpr::Or(vec![ASTIdExpr::Eq(1u64), ASTIdExpr::Eq(2u64)]),
             ASTIdExpr::Not(Box::new(ASTIdExpr::And(vec![
-                ASTIdExpr::Terminal(3u64),
-                ASTIdExpr::Terminal(4u64),
+                ASTIdExpr::Eq(3u64),
+                ASTIdExpr::Eq(4u64),
             ]))),
         ]);
         let result = expr.to_string();
@@ -270,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_print_visitor_deeply_nested_not() {
-        let expr = ASTIdExpr::Not(Box::new(ASTIdExpr::Not(Box::new(ASTIdExpr::Terminal(
+        let expr = ASTIdExpr::Not(Box::new(ASTIdExpr::Not(Box::new(ASTIdExpr::Eq(
             99u64,
         )))));
         let result = expr.to_string();
@@ -280,8 +308,8 @@ mod tests {
     #[test]
     fn test_fmt_display_implementation() {
         let expr = ASTIdExpr::And(vec![
-            ASTIdExpr::Terminal(1u64),
-            ASTIdExpr::Or(vec![ASTIdExpr::Terminal(2u64), ASTIdExpr::Terminal(3u64)]),
+            ASTIdExpr::Eq(1u64),
+            ASTIdExpr::Or(vec![ASTIdExpr::Eq(2u64), ASTIdExpr::Eq(3u64)]),
         ]);
         let formatted = format!("{}", expr);
         assert_eq!(formatted, "(label_id:1 AND (label_id:2 OR label_id:3))");
@@ -289,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_fmt_display_single_terminal() {
-        let expr = ASTIdExpr::Terminal(42u64);
+        let expr = ASTIdExpr::Eq(42u64);
         let formatted = format!("{}", expr);
         assert_eq!(formatted, "label_id:42");
     }
@@ -297,14 +325,14 @@ mod tests {
     #[test]
     fn test_print_visitor_different_attribute_type() {
         // Test with u32 instead of u64
-        let expr = ASTIdExpr::Terminal(100u32);
+        let expr = ASTIdExpr::Eq(100u32);
         let result = expr.to_string();
         assert_eq!(result, "label_id:100");
     }
 
     #[test]
     fn test_print_visitor_large_and_expression() {
-        let terminals: Vec<ASTIdExpr<u64>> = (1..=5).map(ASTIdExpr::Terminal).collect();
+        let terminals: Vec<ASTIdExpr<u64>> = (1..=5).map(ASTIdExpr::Eq).collect();
         let expr = ASTIdExpr::And(terminals);
         let result = expr.to_string();
         assert_eq!(
@@ -315,12 +343,24 @@ mod tests {
 
     #[test]
     fn test_print_visitor_large_or_expression() {
-        let terminals: Vec<ASTIdExpr<u64>> = (10..=13).map(ASTIdExpr::Terminal).collect();
+        let terminals: Vec<ASTIdExpr<u64>> = (10..=13).map(ASTIdExpr::Eq).collect();
         let expr = ASTIdExpr::Or(terminals);
         let result = expr.to_string();
         assert_eq!(
             result,
             "(label_id:10 OR label_id:11 OR label_id:12 OR label_id:13)"
         );
+    }
+
+    #[test]
+    fn test_print_visitor_lte() {
+        let expr: ASTIdExpr<u64> = ASTIdExpr::Lte("price".to_string(), 300.0);
+        assert_eq!(expr.to_string(), "price<=300");
+    }
+
+    #[test]
+    fn test_print_visitor_gte() {
+        let expr: ASTIdExpr<u64> = ASTIdExpr::Gte("price".to_string(), 125.5);
+        assert_eq!(expr.to_string(), "price>=125.5");
     }
 }

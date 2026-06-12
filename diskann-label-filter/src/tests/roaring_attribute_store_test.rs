@@ -229,6 +229,28 @@ fn test_duplicate_attributes() {
     assert!(set.len() == 2);
 }
 
+#[test]
+fn test_attribute_ids_for_field_index() {
+    let store = create_test_store();
+
+    let attrs = vec![
+        Attribute::from_value("price", AttributeValue::Integer(100)),
+        Attribute::from_value("price", AttributeValue::Integer(200)),
+        Attribute::from_value("category", AttributeValue::String("books".to_string())),
+    ];
+
+    store.set_element(&1u32, &attrs).unwrap();
+
+    let price_ids = store.attribute_ids_for_field("price").unwrap();
+    assert_eq!(price_ids.len(), 2);
+
+    let category_ids = store.attribute_ids_for_field("category").unwrap();
+    assert_eq!(category_ids.len(), 1);
+
+    let missing = store.attribute_ids_for_field("missing_field").unwrap();
+    assert!(missing.is_empty());
+}
+
 #[ignore = "This is a rudimentary perf test to be run manually."]
 #[test]
 fn test_memory_usage_with_many_vectors() {
