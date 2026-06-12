@@ -35,11 +35,7 @@ impl<T> Provider<T> {
     {
         let start_points: Vec<_> = start_points.into_iter().collect();
         let bytes = layers::Layer::bytes(&layer);
-        let primary = Primary::new(
-            capacity.checked_add(start_points.len()).unwrap(),
-            Bytes(bytes),
-            32,
-        );
+        let primary = Primary::new(capacity.checked_add(start_points.len()).unwrap(), bytes, 32);
 
         let mut i = capacity;
         for v in start_points.into_iter() {
@@ -223,21 +219,21 @@ type FExpandBeam = unsafe fn(
 ) -> ANNResult<()>;
 
 fn dispatch_expand_beam(bytes: Bytes) -> FExpandBeam {
-    if bytes <= Bytes(CACHE_LINE_SIZE) {
+    if bytes <= Bytes::CACHELINE {
         expand_beam_inner::<1>
-    } else if bytes <= Bytes(2 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(2) {
         expand_beam_inner::<2>
-    } else if bytes <= Bytes(3 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(3) {
         expand_beam_inner::<3>
-    } else if bytes <= Bytes(4 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(4) {
         expand_beam_inner::<4>
-    } else if bytes <= Bytes(5 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(5) {
         expand_beam_inner::<5>
-    } else if bytes <= Bytes(6 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(6) {
         expand_beam_inner::<6>
-    } else if bytes <= Bytes(7 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(7) {
         expand_beam_inner::<7>
-    } else if bytes <= Bytes(16 * CACHE_LINE_SIZE) {
+    } else if bytes <= Bytes::CACHELINE.unchecked_mul(16) {
         expand_beam_inner::<8>
     } else {
         expand_beam_inner::<16>
@@ -268,8 +264,15 @@ unsafe fn expand_beam_inner<const N: usize>(
     f: &mut dyn FnMut(u32, f32),
 ) -> ANNResult<()> {
     debug_assert!(
-        N * CACHE_LINE_SIZE <= reader.bytes().0.next_multiple_of(CACHE_LINE_SIZE),
-        "we really rely on this: {}, bytes = {}", N, reader.bytes().0
+        N * CACHE_LINE_SIZE
+            <= reader
+                .bytes()
+                .checked_next_multiple_of(Bytes::CACHELINE)
+                .unwrap()
+                .value(),
+        "we really rely on this: {}, bytes = {}",
+        N,
+        reader.bytes()
     );
 
     let len = list.len();
@@ -281,8 +284,6 @@ unsafe fn expand_beam_inner<const N: usize>(
                 reader
                     .read_raw_unchecked(list.get_unchecked(j).into_usize())
                     .as_ptr()
-                    .as_ptr()
-                    .cast_const()
                     .cast(),
             )
         }
@@ -296,15 +297,13 @@ unsafe fn expand_beam_inner<const N: usize>(
                     reader
                         .read_raw_unchecked(list.get_unchecked(j).into_usize())
                         .as_ptr()
-                        .as_ptr()
-                        .cast_const()
                         .cast(),
                 )
             }
             j += 1;
         }
 
-        if let Some(data) = reader.read(i.into_usize()) {
+        if let Some(data) = unsafe { reader.read_in_bounds(i.into_usize()) } {
             f(i, distance.evaluate(data)?)
         }
     }

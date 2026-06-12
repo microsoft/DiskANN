@@ -3,8 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{error::StandardError, utils::VectorRepr, ANNResult};
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann::ANNResult;
+use diskann_vector::DistanceFunction;
+
+use crate::num::Bytes;
 
 pub(crate) mod full;
 pub use full::Full;
@@ -31,7 +33,7 @@ pub trait Layer: Send + Sync + 'static {
     /// Return the number of bytes needed by this layer representation.
     ///
     /// To be well-behaved, this function must be idempotent.
-    fn bytes(&self) -> usize;
+    fn bytes(&self) -> Bytes;
 }
 
 pub trait Set<T>: Layer {

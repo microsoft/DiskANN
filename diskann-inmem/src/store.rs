@@ -6,14 +6,11 @@
 use std::{
     iter::repeat_n,
     num::NonZeroU32,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Mutex,
-    },
+    sync::{atomic::Ordering, Mutex},
 };
 
 use crate::{
-    arbiter::{self, buffer, epoch, generation, Buffer, Freelist, Generation, Slice},
+    arbiter::{epoch, generation, Buffer, Freelist, Generation, RawSlice},
     num::{Align, Bytes},
     Neighbors,
 };
@@ -25,7 +22,7 @@ pub struct Primary {
     // These tags are mirrored from `tags` - with the latter being used for secondary scans
     // offering slightly better locality.
     buffer: Buffer,
-    unpadded: usize,
+    unpadded: Bytes,
     tags: Vec<generation::Tag>,
     freelist: Freelist,
     registry: epoch::Registry,
@@ -33,15 +30,15 @@ pub struct Primary {
     drain: Mutex<Vec<(u32, Generation)>>,
 }
 
-const SPLIT: usize = std::mem::size_of::<generation::Tag>();
+const SPLIT: Bytes = Bytes::size_of::<generation::Tag>();
 
 impl Primary {
     pub fn new(entries: usize, bytes: Bytes, max_neighbors: usize) -> Self {
-        let unpadded = bytes.0 + SPLIT;
-        let padded_bytes = unpadded.checked_next_multiple_of(64).unwrap();
+        let unpadded = bytes.checked_add(SPLIT).unwrap();
+        let padded_bytes = unpadded.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
 
         Self {
-            buffer: Buffer::new(entries, Bytes(padded_bytes), Align(128)),
+            buffer: Buffer::new(entries, padded_bytes, Align::_128).unwrap(),
             unpadded,
             tags: repeat_n(Generation::AVAILABLE, entries)
                 .map(|v| generation::Tag::new(v))
@@ -137,12 +134,12 @@ impl Primary {
         }
     }
 
-    unsafe fn data(&self, i: usize) -> (generation::Mut<'_>, Slice<'_>) {
+    unsafe fn data(&self, i: usize) -> (generation::Mut<'_>, RawSlice<'_>) {
         let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }
             .truncate(self.unpadded)
             .split(SPLIT);
         (
-            unsafe { generation::Tag::from_ptr(mirror.as_ptr().as_ptr().cast()) }.as_mut(),
+            unsafe { generation::Tag::from_ptr(mirror.as_mut_ptr().cast()) }.as_mut(),
             data,
         )
     }
@@ -157,7 +154,7 @@ impl Primary {
 #[derive(Debug)]
 pub struct Reader<'a> {
     buffer: &'a Buffer,
-    unpadded: usize,
+    unpadded: Bytes,
     neighbors: &'a Neighbors,
     epoch: epoch::Guard<'a>,
 }
@@ -170,20 +167,8 @@ impl<'a> Reader<'a> {
     /// 2. The read cannot be guaranteed to be race-free.
     #[inline]
     pub fn read(&self, i: usize) -> Option<&[u8]> {
-        let (generation, rest) = match self.buffer.get(i) {
-            Some(slice) => slice.truncate(self.unpadded).split(SPLIT),
-            None => return None,
-        };
-
-        // NOTE: Must be `Acquire` to correctly synchronize with writes.
-        let generation = unsafe { generation::Tag::from_ptr(generation.as_ptr().as_ptr().cast()) }
-            .as_ref()
-            .get(Ordering::Acquire);
-
-        if generation >= self.epoch.generation() {
-            // SAFETY: tags and buffer always have the same length, and we
-            // verified i < tags.len() above.
-            Some(unsafe { rest.as_slice() })
+        if self.is_in_bounds(i) {
+            unsafe { self.read_in_bounds(i) }
         } else {
             None
         }
@@ -196,19 +181,44 @@ impl<'a> Reader<'a> {
         i < self.buffer.len()
     }
 
+    #[inline]
+    pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
+        debug_assert!(self.is_in_bounds(i));
+
+        let (generation, rest) = unsafe {
+            self.buffer
+                .get_unchecked(i)
+                .truncate_unchecked(self.unpadded)
+                .split_unchecked(SPLIT)
+        };
+
+        // NOTE: Must be `Acquire` to correctly synchronize with writes.
+        let generation = unsafe { generation::Tag::from_ptr(generation.as_mut_ptr().cast()) }
+            .as_ref()
+            .get(Ordering::Acquire);
+
+        if generation >= self.epoch.generation() {
+            // SAFETY: tags and buffer always have the same length, and we
+            // verified i < tags.len() above.
+            Some(unsafe { rest.as_slice() })
+        } else {
+            None
+        }
+    }
+
     /// Return the raw data slice for index `i` without any race guarantees.
     ///
     /// # Safety
     ///
     /// The index `i` must be in-bounds.
     #[inline]
-    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> Slice<'_> {
+    pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
         unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
     }
 
     /// Return the number of bytes for each entry.
     pub(crate) fn bytes(&self) -> Bytes {
-        Bytes(self.unpadded)
+        self.unpadded
     }
 
     // TODO: We may want to lock `Neighbors` in some way to enable exclusive access during
@@ -223,14 +233,10 @@ pub struct Write<'a> {
     tag: generation::Mut<'a>,
     mirror: generation::Mut<'a>,
     generation: Generation,
-    data: Slice<'a>,
+    data: RawSlice<'a>,
 }
 
 impl<'a> Write<'a> {
-    pub fn raw_slice(&mut self) -> Slice<'_> {
-        self.data
-    }
-
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.data.as_mut_slice() }
     }

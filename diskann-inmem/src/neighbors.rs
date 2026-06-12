@@ -30,8 +30,8 @@ pub struct Neighbors {
 
 impl Neighbors {
     pub fn new(entries: usize, max_length: usize) -> Self {
-        let bytes = Bytes((max_length + 1) * std::mem::size_of::<Id>());
-        let neighbors = Buffer::new(entries, bytes, Align(128));
+        let bytes = Bytes::new((max_length + 1) * std::mem::size_of::<Id>());
+        let neighbors = Buffer::new(entries, bytes, Align::_128).unwrap();
         let locks = std::iter::repeat_with(|| RwLock::new(()))
             .take(entries.div_ceil(LOCK_GRANULARITY))
             .collect();
@@ -42,7 +42,7 @@ impl Neighbors {
     /// Return the maximum length for any adjacency list.
     pub fn max_length(&self) -> usize {
         // We reserve 4 bytes at the beginning for the length of the adjacency list.
-        (self.neighbors.stride().0 - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>()
+        (self.neighbors.stride().value() - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>()
     }
 
     pub fn entries(&self) -> usize {
@@ -59,9 +59,9 @@ impl Neighbors {
         // SAFETY: By consruction `self.buffer` has the same number of entries as
         // `self.locks` and we have already checked that `i` is in-bounds there.
         let (prefix, rest) =
-            unsafe { self.neighbors.get_unchecked(i) }.split(std::mem::size_of::<Id>());
+            unsafe { self.neighbors.get_unchecked(i) }.split(Bytes::size_of::<Id>());
 
-        debug_assert_eq!(prefix.len(), std::mem::size_of::<Id>());
+        debug_assert_eq!(prefix.len(), Bytes::size_of::<Id>());
         debug_assert!(prefix.as_ptr().is_aligned());
 
         // SAFETY: We hold the read-lock, so reading is safe. From our bounds checks, we
@@ -73,7 +73,7 @@ impl Neighbors {
         let mut resizer = neighbors.resize(len);
         unsafe {
             std::ptr::copy_nonoverlapping(
-                rest.as_ptr().as_ptr(),
+                rest.as_mut_ptr(),
                 resizer.as_mut_ptr().cast::<u8>(),
                 len * std::mem::size_of::<Id>(),
             )
@@ -98,8 +98,8 @@ impl Neighbors {
 
         let raw = unsafe {
             std::slice::from_raw_parts_mut(
-                slice.as_ptr().as_ptr().cast::<Id>(),
-                slice.len() / std::mem::size_of::<Id>(),
+                slice.as_mut_ptr().cast::<Id>(),
+                slice.len().value() / std::mem::size_of::<Id>(),
             )
         };
 
