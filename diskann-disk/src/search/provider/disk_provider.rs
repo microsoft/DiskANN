@@ -33,7 +33,10 @@ use diskann_providers::{
     model::{compute_pq_distance, graph::provider::determinant_diversity},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
-use diskann_utils::{object_pool::{ObjectPool, PoolOption, TryAsPooled}, views::Matrix};
+use diskann_utils::{
+    object_pool::{ObjectPool, PoolOption, TryAsPooled},
+    views::Matrix,
+};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
@@ -428,16 +431,14 @@ where
             &self.params,
         );
 
-        Ok(
-            output.extend(reranked.into_iter().filter_map(|idx| {
-                let id = ordered_ids[idx];
-                let distance = candidate_distances[idx];
-                associated_data
-                    .get(&id)
-                    .copied()
-                    .map(|data| ((id, data), distance))
-            })),
-        )
+        Ok(output.extend(reranked.into_iter().filter_map(|idx| {
+            let id = ordered_ids[idx];
+            let distance = candidate_distances[idx];
+            associated_data
+                .get(&id)
+                .copied()
+                .map(|data| ((id, data), distance))
+        })))
     }
 }
 
@@ -1735,6 +1736,129 @@ mod disk_provider_tests {
             indices,
             vec![152, 72, 170, 118, 87, 165, 79, 141, 108, 86],
             "Expected indices to match"
+        );
+    }
+
+    #[test]
+    fn test_disk_search_determinant_diversity() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED,
+                index_path: TEST_INDEX,
+                index_path_prefix: TEST_INDEX_PREFIX,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+
+        let query_vector: [f32; 128] = [1f32; 128];
+        let return_list_size = 10u32;
+        let search_list_size = 20u32;
+
+        // Baseline: no post-processor. Det-div selects from the same L=20 candidate pool,
+        // so all det-div IDs must be a subset of the baseline candidates.
+        let baseline = search_engine
+            .search(
+                &query_vector,
+                search_list_size,
+                search_list_size,
+                Some(4),
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        let baseline_ids: std::collections::HashSet<u32> =
+            baseline.results.iter().map(|r| r.vertex_id).collect();
+        let baseline_top1 = baseline
+            .results
+            .first()
+            .expect("baseline returned no results");
+
+        // Run with determinant-diversity post-processor (default-ish params).
+        let params = DeterminantDiversityParams::new(2.0, 0.01).unwrap();
+        let result = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                None,
+                Some(SearchPostProcessorKind::DeterminantDiversity(params)),
+                false,
+            )
+            .unwrap();
+        let det_div_ids: Vec<u32> = result.results.iter().map(|r| r.vertex_id).collect();
+
+        assert_eq!(
+            det_div_ids.len(),
+            return_list_size as usize,
+            "det-div should return k results when the candidate pool is large enough"
+        );
+        for id in &det_div_ids {
+            assert!(
+                baseline_ids.contains(id),
+                "det-div selected id {} that is not in the search candidate pool",
+                id
+            );
+        }
+
+        let mut unique = std::collections::HashSet::new();
+        for id in &det_div_ids {
+            assert!(unique.insert(*id), "det-div produced duplicate id {}", id);
+        }
+
+        // Greedy det-div with power > 0 and eta > 0 selects the highest-similarity
+        // candidate first.
+        assert_eq!(
+            result.results[0].vertex_id, baseline_top1.vertex_id,
+            "det-div top-1 should be the nearest neighbor (highest similarity)"
+        );
+
+        // Pure greedy orthogonalization (eta == 0) should also produce a valid subset.
+        let pure_params = DeterminantDiversityParams::new(2.0, 0.0).unwrap();
+        let pure_result = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                None,
+                Some(SearchPostProcessorKind::DeterminantDiversity(pure_params)),
+                false,
+            )
+            .unwrap();
+        let pure_ids: Vec<u32> = pure_result.results.iter().map(|r| r.vertex_id).collect();
+        for id in &pure_ids {
+            assert!(
+                baseline_ids.contains(id),
+                "det-div(eta=0) selected id {} that is not in the search candidate pool",
+                id
+            );
+        }
+
+        // The vector_filter is honored by det-div: filter out the baseline top-1 and
+        // verify it is excluded from the det-div results.
+        let excluded = baseline_top1.vertex_id;
+        let filter: VectorFilter<GraphDataF32VectorUnitData> = Box::new(move |id| *id != excluded);
+        let filtered = search_engine
+            .search(
+                &query_vector,
+                return_list_size,
+                search_list_size,
+                Some(4),
+                Some(filter),
+                Some(SearchPostProcessorKind::DeterminantDiversity(params)),
+                false,
+            )
+            .unwrap();
+        let filtered_ids: Vec<u32> = filtered.results.iter().map(|r| r.vertex_id).collect();
+        assert!(
+            !filtered_ids.contains(&excluded),
+            "det-div results must respect the vector filter"
         );
     }
 

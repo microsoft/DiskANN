@@ -27,8 +27,8 @@ impl TryFrom<RawTopkPostProcessor> for TopkPostProcessor {
     fn try_from(raw: RawTopkPostProcessor) -> Result<Self, Self::Error> {
         match raw {
             RawTopkPostProcessor::DeterminantDiversity { power, eta } => {
-                let params = DeterminantDiversityParams::new(power, eta)
-                    .map_err(|e| e.to_string())?;
+                let params =
+                    DeterminantDiversityParams::new(power, eta).map_err(|e| e.to_string())?;
                 Ok(Self::DeterminantDiversity(params))
             }
         }

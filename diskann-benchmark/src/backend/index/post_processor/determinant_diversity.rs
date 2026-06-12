@@ -8,12 +8,12 @@ use std::future::Future;
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::utils::IntoUsize;
 use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
-use diskann_utils::views::Matrix;
-use diskann_providers::post_processor::DeterminantDiversityParams;
 use diskann_providers::model::graph::provider::{
     async_::inmem::{self, GetFullPrecision},
     determinant_diversity,
 };
+use diskann_providers::post_processor::DeterminantDiversityParams;
+use diskann_utils::views::Matrix;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
