@@ -69,6 +69,9 @@ document-index = []
 # Enable multi-vector MaxSim distance benchmarks
 multi-vector = []
 
+# Precompute query label provider bitmaps at build time instead of per-query
+precompute-query-bitmaps = []
+
 # Enable Disk Index benchmarks
 disk-index = [
     "diskann-disk/perf_test",

@@ -29,6 +29,8 @@ pub(crate) struct DocumentBuildParams {
     pub(crate) data_type: DataType,
     pub(crate) data: InputFile,
     pub(crate) data_labels: InputFile,
+    #[serde(default = "default_use_ast_filters")]
+    pub(crate) use_ast_filters: bool,
     pub(crate) distance: crate::utils::SimilarityMeasure,
     pub(crate) max_degree: usize,
     pub(crate) l_build: usize,
@@ -64,6 +66,8 @@ pub(crate) struct DocumentSearchParams {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
+    #[serde(default = "default_use_ast_filters")]
+    pub(crate) use_ast_filters: bool,
     pub(crate) beta: f32,
     pub(crate) reps: NonZeroUsize,
     pub(crate) num_threads: Vec<NonZeroUsize>,
@@ -77,6 +81,10 @@ impl DocumentSearchParams {
         self.groundtruth.resolve(checker)?;
         Ok(())
     }
+}
+
+fn default_use_ast_filters() -> bool {
+    true
 }
 
 fn default_reps() -> NonZeroUsize {
@@ -111,6 +119,7 @@ impl Example for DocumentIndexBuild {
                 data_type: DataType::Float32,
                 data: InputFile::new("data.fbin"),
                 data_labels: InputFile::new("data.label.jsonl"),
+                use_ast_filters: default_use_ast_filters(),
                 distance: crate::utils::SimilarityMeasure::SquaredL2,
                 max_degree: 32,
                 l_build: 50,
@@ -121,6 +130,7 @@ impl Example for DocumentIndexBuild {
                 queries: InputFile::new("queries.fbin"),
                 query_predicates: InputFile::new("query.label.jsonl"),
                 groundtruth: InputFile::new("groundtruth.bin"),
+                use_ast_filters: default_use_ast_filters(),
                 beta: 0.5,
                 reps: default_reps(),
                 num_threads: default_thread_counts(),

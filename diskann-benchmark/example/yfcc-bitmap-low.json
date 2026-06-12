@@ -1,0 +1,43 @@
+{
+    "search_directories": [
+        "test_data/temp",
+        "D:\\YFCC10M",
+        "D:\\caselaw_dataset"
+    ],
+    "jobs": [
+        {
+            "type": "document-index-build",
+            "content": {
+                "build": {
+                    "data_type": "uint8",
+                    "data": "base.10M.u8bin",
+                    "data_labels": "base.10M.label.jsonl",
+                    "use_ast_filters": false,
+                    "distance": "squared_l2",
+                    "max_degree": 64,
+                    "l_build": 100,
+                    "alpha": 1.2,
+                    "num_threads": 128
+                },
+                "search": {
+                    "queries": "single_low_query_10k.u8bin",
+                    "query_predicates": "single_low_query_10k.label.jsonl",
+                    "groundtruth": "10M_single_low_query_10k.gt",
+                    "use_ast_filters": false,
+                    "beta": 0.5,
+                    "reps": 5,
+                    "num_threads": [
+                        32
+                    ],
+                    "runs": [
+                        {
+                            "search_n": 20,
+                            "search_l": [20, 30, 40, 50, 100, 200, 500, 1000],
+                            "recall_k": 10
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}

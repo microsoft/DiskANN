@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn document_filter_integration() {
-        let input_path = example_directory().join("document-filter.json");
+        let input_path = example_directory().join("document-filter-bitmap.json");
 
         let tempdir = tempfile::tempdir().unwrap();
         let output_path = tempdir.path().join("output.json");

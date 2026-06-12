@@ -1,0 +1,42 @@
+{
+    "search_directories": [
+        "D:\\YFCC10M",
+        "D:\\caselaw_dataset"
+    ],
+    "jobs": [
+        {
+            "type": "document-index-build",
+            "content": {
+                "build": {
+                    "data_type": "float32",
+                    "data": "caselaw_singlevec_base_embeddings.bin",
+                    "data_labels": "caselaw_singlevec_base_metadata.jsonl",
+                    "use_ast_filters": true,
+                    "distance": "squared_l2",
+                    "max_degree": 64,
+                    "l_build": 100,
+                    "alpha": 1.2,
+                    "num_threads": 128
+                },
+                "search": {
+                    "queries": "caselaw_singlevec_query_mid_sel.bin",
+                    "query_predicates": "caselaw_singlevec_query_mid_sel_filters.jsonl",
+                    "groundtruth": "caselaw_singlevec_query_filters_mid_sel.gt",
+                    "use_ast_filters": true,
+                    "beta": 0.7,
+                    "reps": 5,
+                    "num_threads": [
+                        32
+                    ],
+                    "runs": [
+                        {
+                            "search_n": 20,
+                            "search_l": [20, 30, 40, 50, 100, 200],
+                            "recall_k": 10
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
