@@ -51,6 +51,7 @@ libc = "0.2.148"
 
 [dev-dependencies]
 rstest.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
 diskann-providers = { workspace = true, default-features = false, features = [

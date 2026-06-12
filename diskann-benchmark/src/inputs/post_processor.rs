@@ -9,7 +9,7 @@ use diskann_benchmark_runner::Checker;
 use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum RawTopkPostProcessor {
     DeterminantDiversity { power: f32, eta: f32 },
@@ -19,6 +19,16 @@ enum RawTopkPostProcessor {
 #[serde(try_from = "RawTopkPostProcessor", into = "RawTopkPostProcessor")]
 pub(crate) enum TopkPostProcessor {
     DeterminantDiversity(DeterminantDiversityParams),
+}
+
+impl schemars::JsonSchema for TopkPostProcessor {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        RawTopkPostProcessor::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+        RawTopkPostProcessor::json_schema(generator)
+    }
 }
 
 impl TryFrom<RawTopkPostProcessor> for TopkPostProcessor {

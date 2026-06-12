@@ -18,7 +18,7 @@ as_input!(MetadataIndexBuild);
 // Metadata-only Index Build //
 ///////////////////////////////
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, Copy, schemars::JsonSchema)]
 pub(crate) enum InvertedIndexKind {
     #[serde(rename = "bftree")]
     #[default]
@@ -32,13 +32,13 @@ impl std::fmt::Display for InvertedIndexKind {
         }
     }
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct FilterParams {
     pub(crate) query_predicates: InputFile,
     pub(crate) data_labels: InputFile,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MetadataIndexBuild {
     /// Filter parameters describing predicate and label file locations. The
     /// actual label file used to build the inverted index is taken from

@@ -39,6 +39,7 @@ opentelemetry_sdk = { workspace = true, optional = true }
 scopeguard = { version = "1.2", optional = true }
 diskann-benchmark-core = { workspace = true, features = ["bigann"] }
 itertools.workspace = true
+schemars.workspace = true
 
 [lints]
 clippy.undocumented_unsafe_blocks = "warn"

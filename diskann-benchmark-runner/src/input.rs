@@ -16,7 +16,7 @@ pub trait Input: Sized + std::fmt::Debug + 'static {
     /// [`Deserialize`](serde::Deserialize) implementation.
     ///
     /// Final object validation is performed via [`from_raw`](Self::from_raw).
-    type Raw: serde::de::DeserializeOwned + serde::Serialize;
+    type Raw: serde::de::DeserializeOwned + serde::Serialize + schemars::JsonSchema;
 
     /// Return the discriminant associated with this type.
     ///
@@ -66,6 +66,14 @@ impl Registered<'_> {
     /// See: [`Input::example`].
     pub fn example(&self) -> anyhow::Result<serde_json::Value> {
         self.0.example()
+    }
+
+    /// Return the JSON Schema for the raw input type.
+    ///
+    /// This can be used to generate human-readable documentation of the input format
+    /// via [`crate::schema::render`].
+    pub fn schema(&self) -> serde_json::Value {
+        self.0.schema()
     }
 }
 
@@ -165,6 +173,7 @@ pub(crate) mod internal {
             checker: &mut Checker,
         ) -> anyhow::Result<Any>;
         fn example(&self) -> anyhow::Result<serde_json::Value>;
+        fn schema(&self) -> serde_json::Value;
 
         // reflection
         fn as_any(&self) -> &dyn std::any::Any;
@@ -188,6 +197,12 @@ pub(crate) mod internal {
         }
         fn example(&self) -> anyhow::Result<serde_json::Value> {
             Ok(serde_json::to_value(T::example())?)
+        }
+        fn schema(&self) -> serde_json::Value {
+            let generator =
+                schemars::generate::SchemaSettings::default().into_generator();
+            let schema = generator.into_root_schema_for::<T::Raw>();
+            serde_json::to_value(schema).unwrap_or_default()
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self

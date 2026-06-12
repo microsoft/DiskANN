@@ -89,6 +89,12 @@ pub enum Commands {
     Inputs {
         /// Describe the layout of the named input kind.
         describe: Option<String>,
+        /// Output the schema documentation instead of an example JSON.
+        #[arg(long, action)]
+        schema: bool,
+        /// Drill into a specific field by dotted path (e.g. "build.start_point_strategy").
+        #[arg(long)]
+        field: Option<String>,
     },
     /// List the available benchmarks.
     Benchmarks {},
@@ -194,16 +200,56 @@ impl App {
     ) -> anyhow::Result<()> {
         match &self.command {
             // If a named benchmark isn't given, then list the available benchmarks.
-            Commands::Inputs { describe } => {
+            Commands::Inputs { describe, schema, field } => {
                 if let Some(describe) = describe {
                     if let Some(input) = registry.input(describe) {
-                        let repr = jobs::Unprocessed::format_input(input)?;
-                        writeln!(
-                            output,
-                            "The example JSON representation for \"{}\" is:",
-                            describe
-                        )?;
-                        writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
+                        if *schema || field.is_some() {
+                            let schema_value = input.schema();
+
+                            // If a field path is specified, drill into that sub-schema.
+                            let (target_schema, target_example) = if let Some(path) = field {
+                                let sub = crate::schema::resolve_path(&schema_value, path)
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "Field path \"{}\" not found in schema for \"{}\"",
+                                            path,
+                                            describe
+                                        )
+                                    })?;
+
+                                // Extract the matching sub-value from the example JSON.
+                                let repr = jobs::Unprocessed::format_input(input)?;
+                                let example_json = serde_json::to_value(&repr)?;
+                                let sub_example = extract_path(&example_json, path);
+
+                                (sub, sub_example)
+                            } else {
+                                let repr = jobs::Unprocessed::format_input(input)?;
+                                let example_json = serde_json::to_value(&repr)?;
+                                (schema_value, Some(example_json))
+                            };
+
+                            writeln!(
+                                output,
+                                "Schema for \"{}\"{}:\n",
+                                describe,
+                                field.as_ref().map(|f| format!(".{f}")).unwrap_or_default()
+                            )?;
+                            crate::schema::render(&target_schema, &mut output)?;
+
+                            if let Some(example) = target_example {
+                                writeln!(output, "\nExample:\n")?;
+                                writeln!(output, "{}", serde_json::to_string_pretty(&example)?)?;
+                            }
+                        } else {
+                            let repr = jobs::Unprocessed::format_input(input)?;
+                            writeln!(
+                                output,
+                                "The example JSON representation for \"{}\" is:",
+                                describe
+                            )?;
+                            writeln!(output, "{}", serde_json::to_string_pretty(&repr)?)?;
+                        }
                         return Ok(());
                     } else {
                         writeln!(output, "No input found for \"{}\"", describe)?;
@@ -417,6 +463,20 @@ impl App {
             }
         }
     }
+}
+
+/// Walk a dotted path (e.g. "build.start_point_strategy") into a JSON value,
+/// descending into object fields at each segment.
+fn extract_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let mut current = value;
+    // The example JSON wraps in {"tag": ..., "content": {...}} — try "content" first.
+    if let Some(content) = current.get("content") {
+        current = content;
+    }
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current.clone())
 }
 
 ///////////

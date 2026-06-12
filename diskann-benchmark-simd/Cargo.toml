@@ -17,6 +17,7 @@ diskann-utils = { workspace = true, default-features = false }
 half = { workspace = true, features = ["rand_distr"] }
 diskann-benchmark-runner = { workspace = true }
 rand.workspace = true
+schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

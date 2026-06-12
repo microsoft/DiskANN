@@ -17,6 +17,25 @@ use crate::{
     utils::SimilarityMeasure,
 };
 
+/// Schema stand-in for [`QuantizationType`] so that `diskann-disk` doesn't need `schemars`.
+#[cfg(feature = "disk-index")]
+struct QuantizationTypeSchema;
+
+#[cfg(feature = "disk-index")]
+impl schemars::JsonSchema for QuantizationTypeSchema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "QuantizationType".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Quantization type. One of: \"FP\", \"PQ_<chunks>\", \"SQ_<bits>\", or \"SQ_<bits>_<stddev>\".",
+            "examples": ["FP", "PQ_192", "SQ_8", "SQ_8_2.0"]
+        })
+    }
+}
+
 //////////////
 // Registry //
 //////////////
@@ -27,26 +46,26 @@ as_input!(DiskIndexOperation);
 // Input //
 ///////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DiskIndexOperation {
     pub(crate) source: DiskIndexSource, // either load or build
     pub(crate) search_phase: DiskSearchPhase,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "disk-index-source")] // Use tagged enums for JSON
 pub(crate) enum DiskIndexSource {
     Load(DiskIndexLoad),
     Build(DiskIndexBuild),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 pub(crate) struct DiskIndexLoad {
     pub(crate) data_type: DataType,
     pub(crate) load_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 pub(crate) struct DiskIndexBuild {
     pub(crate) data_type: DataType,
     pub(crate) data: InputFile,
@@ -58,12 +77,13 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) build_ram_limit_gb: f64,
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
+    #[schemars(with = "QuantizationTypeSchema")]
     pub(crate) quantization_type: QuantizationType,
     pub(crate) save_path: String,
 }
 
 /// Search phase configuration
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub(crate) struct DiskSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,

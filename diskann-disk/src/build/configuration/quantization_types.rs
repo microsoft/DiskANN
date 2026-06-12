@@ -285,4 +285,36 @@ mod tests {
             assert_eq!(quant_type, deserialized);
         }
     }
+
+    /// Ensures the manual `JsonSchema` impl stays in sync with actual variants.
+    /// If a variant is added to `QuantizationType`, this match will fail to compile.
+    #[test]
+    fn schema_covers_all_quantization_variants() {
+        fn assert_exhaustive(q: QuantizationType) -> &'static str {
+            match q {
+                QuantizationType::FP => "FP",
+                QuantizationType::PQ { .. } => "PQ",
+                QuantizationType::SQ { .. } => "SQ",
+            }
+        }
+
+        let variants = vec![
+            QuantizationType::FP,
+            QuantizationType::PQ { num_chunks: 16 },
+            QuantizationType::SQ {
+                nbits: 8,
+                standard_deviation: Some(Positive::new(2.0).unwrap()),
+            },
+        ];
+
+        // All variants serialize as strings (the custom Serialize impl uses Display).
+        for variant in &variants {
+            let json = serde_json::to_value(variant).unwrap();
+            let name = assert_exhaustive(*variant);
+            assert!(
+                json.is_string(),
+                "expected string serialization for {name}, got: {json}"
+            );
+        }
+    }
 }
