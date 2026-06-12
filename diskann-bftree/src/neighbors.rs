@@ -75,14 +75,6 @@ impl<I: VectorId> NeighborProvider<I> {
         Self::new(max_degree, adjacency_list_index)
     }
 
-    /// The length of a single `value` in the tree
-    ///
-    /// The length in bytes of the values read and set
-    /// into the bf-tree is always `max_degree + 1` I-cells long.
-    fn value_bytes(&self) -> usize {
-        (self.max_degree() + 1) as usize * std::mem::size_of::<I>()
-    }
-
     /// Retrieve the neighbor list of a vector
     /// `neighbors` is cleared first upon each invocation
     /// One data copy is involved which copies the data from bf-tree to `neighbors`
@@ -96,16 +88,15 @@ impl<I: VectorId> NeighborProvider<I> {
         // Serialize the key, vector_id, into a byte string, &[u8]
         let key = bytemuck::bytes_of(&vector_id);
 
-        // Search and retrieve the corresponding neighbor list data as a byte string, &[u8], in the format of
-        // |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
-        // Where list length is the full list length and 'Invalid' indicates unfilled empty slots in the list
+        // Search and retrieve the corresponding neighbor list data as a byte string,
+        // &[u8], in the format described in [`Self::set_neighbors_internal`].
         let value = cast_slice_mut::<I, u8>(&mut guard);
         match self.adjacency_list_index.read(key, value) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 // If found, then re-construct the neighbor list (valid neighbors only)
                 if read_size > 0 {
                     // A retrieved neighbor list should be exactly max_degree + 1 length
-                    if read_size != self.value_bytes() as u32 {
+                    if read_size != (self.max_degree() + 1) * std::mem::size_of::<I>() as u32 {
                         return Err(ANNError::log_index_error(
                             "Retrieved neighbor list is not expected length = max degree + 1",
                         ));
@@ -116,6 +107,13 @@ impl<I: VectorId> NeighborProvider<I> {
                     // SAFETY: we know this will not panic since
                     // read_size == self.dim * std::mem::size_of::<I>().
                     let count = cell_to_len(&guard[self.dim - 1]);
+
+                    // The specified list length must be smaller than the retrieved data length
+                    if count > self.max_degree() {
+                        return Err(ANNError::log_index_error(
+                            "Size of retrieved neighbor list is shorter than the stored neighbor count",
+                        ));
+                    }
 
                     guard.finish(count as usize);
                 }
@@ -145,7 +143,7 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Each key is a `VectorId`, written in bytes. The value is a neighbor list
     /// of length exactly `self.max_degree() + 1`. Specifically, an array of
     /// exactly `n` neighbors is written as :  
-    /// ```
+    /// ```text
     /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
     ///     
     /// -----------------------------------------------
@@ -160,27 +158,24 @@ impl<I: VectorId> NeighborProvider<I> {
         &self,
         vector_id: I,
         neighbors: &[I],
-        buf: &mut [u8],
+        buf: &mut [I],
     ) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
-        if buf.len() < self.value_bytes() {
+        if buf.len() < self.dim {
             return Err(ANNError::log_index_error(
                 "The provided buffer is not long enough",
             ));
         }
 
-        let buf = cast_slice_mut::<u8, I>(&mut buf[..self.value_bytes()]);
-
         // Serialize the value into the reusable buffer.
-        // Format: |VectorId|...|VectorId|padding(Invalid)|padding(Invalid)|...|length cell|,
-        // where the trailing cell is one `I`-sized slot holding the count (see `len_cell`).
         buf[..neighbors.len()].copy_from_slice(neighbors);
-        buf[buf.len() - 1] = len_to_cell(neighbors.len() as u32);
+        buf[self.dim - 1] = len_to_cell(neighbors.len() as u32);
 
         let key = bytemuck::bytes_of(&vector_id);
-        let value = cast_slice::<I, u8>(buf);
+        let value = cast_slice::<I, u8>(&mut buf[..self.dim]);
+
         self.adjacency_list_index.insert(key, value);
 
         Ok(())
@@ -195,8 +190,8 @@ impl<I: VectorId> NeighborProvider<I> {
     /// # Errors
     ///  
     ///  - Neighbor length is larger than `self.max_degree()`
-    ///  - Buffer length is smaller than `self.value_bytes()`
-    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
+    ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
+    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
         if neighbors.len() > self.max_degree() as usize {
             return Err(ANNError::log_index_error(
                 "The provided neighbor list is longer than the max degree",
@@ -216,7 +211,7 @@ impl<I: VectorId> NeighborProvider<I> {
         &self,
         vector_id: I,
         new_neighbor_ids: &[I],
-        buf: &mut [u8],
+        buf: &mut [I],
     ) -> ANNResult<()> {
         // Retrieve existing neighborlist
         let mut neighbor_list = AdjacencyList::with_capacity(self.dim);
@@ -248,10 +243,9 @@ impl<I: VectorId> NeighborProvider<I> {
     }
 
     pub(crate) fn scratch(&self) -> NeighborAccessor<'_, I> {
-        let buf_size = self.dim * std::mem::size_of::<I>();
         NeighborAccessor {
             provider: self,
-            buf: vec![0u8; buf_size],
+            buf: vec![I::zeroed(); self.dim],
         }
     }
 }
@@ -261,7 +255,7 @@ where
     I: VectorId,
 {
     provider: &'a NeighborProvider<I>,
-    buf: Vec<u8>,
+    buf: Vec<I>,
 }
 
 impl<'a, I> NeighborAccessor<'a, I>
