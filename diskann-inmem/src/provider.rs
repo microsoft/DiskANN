@@ -13,9 +13,10 @@ use diskann::{
     utils::IntoUsize,
     ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_utils::future::{AsyncFriendly, SendFuture};
+use diskann_utils::{views::Matrix, future::{AsyncFriendly, SendFuture}};
 
 use crate::{
+    arbiter::epoch,
     layers::{self, Distance, QueryDistance},
     num::Bytes,
     store::{self, Primary},
@@ -35,19 +36,28 @@ impl<T> Provider<T> {
     {
         let start_points: Vec<_> = start_points.into_iter().collect();
         let bytes = layers::Layer::bytes(&layer);
-        let primary = Primary::new(capacity.checked_add(start_points.len()).unwrap(), bytes, 32);
+        let mut data = Matrix::new(0u8, start_points.len(), bytes.value());
 
-        let mut i = capacity;
-        for v in start_points.into_iter() {
-            let mut writer = primary.write(i).unwrap();
-            layers::Set::into_bytes(&layer, v, writer.as_mut_slice()).unwrap();
-            i += 1;
+        for (row, point) in std::iter::zip(data.row_iter_mut(), start_points.into_iter()) {
+            layers::Set::into_bytes(&layer, point, row).unwrap();
         }
+
+        let primary = Primary::new(
+            capacity,
+            bytes,
+            32,
+            data.as_view(),
+        );
+
+        // for v in start_points.into_iter() {
+        //     let mut writer = primary.acquire();
+        //     layers::Set::into_bytes(&layer, v, writer.as_mut_slice()).unwrap();
+        // }
 
         Self { primary, layer }
     }
 
-    fn reader(&self) -> store::Reader<'_> {
+    fn reader(&self) -> Result<store::Reader<'_>, epoch::Unavailable> {
         self.primary.reader()
     }
 }
@@ -109,9 +119,9 @@ where
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut write = self.primary.write(id.into_usize()).unwrap();
-            <L as layers::Set<T>>::into_bytes(&self.layer, element, write.as_mut_slice())?;
-            Ok(diskann::provider::NoopGuard::new(*id))
+            let mut slot = self.primary.acquire();
+            <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
+            Ok(diskann::provider::NoopGuard::new(slot.slot()))
         };
 
         ready(work)
@@ -444,7 +454,7 @@ where
         query: T,
     ) -> ANNResult<SearchAccessor<'a>> {
         let distance = <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
-        let reader = provider.primary.reader();
+        let reader = provider.primary.reader()?;
         let expand_beam = dispatch_expand_beam(reader.bytes());
         let accessor = SearchAccessor {
             reader,
@@ -468,17 +478,17 @@ where
     L: layers::Layer + layers::AsDistance,
 {
     type PruneAccessor<'a> = PruneAccessor<'a>;
-    type PruneAccessorError = diskann::error::Infallible;
+    type PruneAccessorError = ANNError;
 
     fn prune_accessor<'a>(
         &self,
         provider: &'a Provider<L>,
         context: &'a Context,
         capacity: usize,
-    ) -> Result<PruneAccessor<'a>, diskann::error::Infallible> {
+    ) -> ANNResult<PruneAccessor<'a>> {
         let set = workingset::map::Builder::new(workingset::map::Capacity::Default).build(capacity);
         Ok(PruneAccessor {
-            reader: provider.primary.reader(),
+            reader: provider.primary.reader()?,
             set,
             distance: <L as layers::AsDistance>::as_distance(&provider.layer),
             ids: AdjacencyList::new(),

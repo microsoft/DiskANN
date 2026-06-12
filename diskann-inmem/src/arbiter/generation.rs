@@ -50,8 +50,8 @@ impl Tag {
 /// representing older generations. This allows zero to stand for "unused" as it is newer
 /// than any valid generation.
 ///
-/// Certain low-numbered generations are reserved for special uses. Any generation less
-/// than or equal to [`Generation::RESERVED`] is reserved.
+/// Certain low-numbered generations are reserved for special uses. Any generation for which
+/// [`Generation::is_reserved`] returns `true` is reserved.
 ///
 /// # Reserved Generations
 ///
@@ -90,16 +90,16 @@ impl Generation {
     /// See [`Generation`].
     pub const OWNED: Self = Self::new(1);
 
-    /// See [`Generation`].
-    pub const FROZEN: Self = Self::new(2);
-
     /// The maximum reserved generation. See [`Generation`].
-    pub const RESERVED: Self = Self::FROZEN;
+    const RESERVED: Self = Self::OWNED;
+
+    /// See [`Generation`].
+    pub const FROZEN: Self = Self::MAX;
 
     /// Return `true` if `self` belongs to a reserved generation.
     #[must_use = "this function has no side-effects"]
     pub(crate) fn is_reserved(self) -> bool {
-        self <= Self::RESERVED
+        (self <= Self::RESERVED) || (self == Self::FROZEN)
     }
 
     /// Construct a new [`Generation`] with `value`.
@@ -114,13 +114,16 @@ impl Generation {
         self.0
     }
 
+    pub(in crate::arbiter) fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
+    }
+
     #[cfg(test)]
     const fn add(self, v: u64) -> Self {
         Self(self.0 + v)
     }
 
-    #[cfg(test)]
-    const fn sub(self, v: u64) -> Self {
+    pub(in crate::arbiter) const fn sub(self, v: u64) -> Self {
         Self(self.0 - v)
     }
 }
@@ -147,6 +150,21 @@ impl<'a> Ref<'a> {
     #[inline]
     pub fn get(&self, ordering: Ordering) -> Generation {
         Generation::new(self.0.load(ordering))
+    }
+}
+
+impl std::fmt::Display for Generation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let me = *self;
+        if me == Self::AVAILABLE {
+            f.write_str("Generation(AVAILABLE)")
+        } else if me == Self::OWNED {
+            f.write_str("Generation(OWNED)")
+        } else if me == Self::FROZEN {
+            f.write_str("Generation(FROZEN)")
+        } else {
+            write!(f, "Generation({})", me.value())
+        }
     }
 }
 
@@ -181,6 +199,16 @@ impl<'a> Mut<'a> {
             .map_err(Generation::new)
     }
 
+    #[inline]
+    pub fn fetch_decrement(&self, ordering: Ordering) -> Generation {
+        Generation::new(self.inner().fetch_sub(1, ordering))
+    }
+
+    #[inline]
+    pub fn fetch_min(&self, generation: Generation, ordering: Ordering) -> Generation {
+        Generation::new(self.inner().fetch_min(generation.value(), ordering))
+    }
+
     /// Atomically store a [`Generation`] with the given ordering.
     #[inline]
     pub fn set(&self, generation: Generation, ordering: Ordering) {
@@ -203,9 +231,12 @@ impl<'a> std::ops::Deref for Mut<'a> {
 mod tests {
     use super::*;
 
-    use std::{thread, sync::Barrier};
+    use std::{sync::Barrier, thread};
 
-    use crate::{num::{Bytes,Align}, arbiter::Buffer};
+    use crate::{
+        arbiter::Buffer,
+        num::{Align, Bytes},
+    };
 
     fn spin_decrement(m: Mut<'_>, count: usize) {
         for i in 0..count {
@@ -260,7 +291,8 @@ mod tests {
     fn test_is_reserved() {
         assert!(Generation::AVAILABLE.is_reserved());
         assert!(Generation::OWNED.is_reserved());
+        assert!(!Generation::OWNED.add(1).is_reserved());
+
         assert!(Generation::FROZEN.is_reserved());
-        assert!(!Generation::FROZEN.add(1).is_reserved());
     }
 }

@@ -9,6 +9,7 @@ edition.workspace = true
 
 [dependencies]
 bytemuck = { workspace = true, features = ["must_cast"] }
+crossbeam-queue = "0.3.12"
 diskann = { workspace = true }
 diskann-utils = { workspace = true, default-features = false }
 diskann-vector.workspace = true

@@ -8,7 +8,7 @@ pub use buffer::{Buffer, RawSlice};
 
 pub mod epoch;
 
-mod freelist;
+pub mod freelist;
 pub use freelist::Freelist;
 
 pub mod generation;
