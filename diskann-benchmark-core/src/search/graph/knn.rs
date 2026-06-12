@@ -138,8 +138,8 @@ where
 pub enum KnnWrapperError {
     #[error("k_value cannot be zero")]
     KZero,
-    #[error("l_value must be at least k_value")]
-    LLessThanK,
+    #[error("l_value ({l_value}) must be at least k_value ({k_value})")]
+    LLessThanK { l_value: usize, k_value: usize },
     #[error("invalid KNN parameters")]
     InvalidKnnParameters,
 }
