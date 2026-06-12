@@ -335,7 +335,7 @@ where
 
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        Ok(self.full_vectors.starting_points()?)
+        self.full_vectors.starting_points()
     }
 
     /// An iterator over all ids including start points (even if they are deleted).
