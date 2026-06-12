@@ -267,6 +267,7 @@ where
             )?,
             neighbor_provider: NeighborProvider::new_with_config(
                 params.max_degree,
+                params.max_points + params.num_start_points.get(),
                 params.neighbor_list_provider_config,
             )?,
             metric: params.metric,
@@ -1782,6 +1783,7 @@ where
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
+            saved_params.max_points + saved_params.frozen_points.get(),
             adjacency_list_index,
         )?;
 
@@ -1930,6 +1932,7 @@ where
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
+            saved_params.max_points + saved_params.frozen_points.get(),
             adjacency_list_index,
         )?;
 
