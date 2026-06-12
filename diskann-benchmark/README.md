@@ -154,6 +154,22 @@ which will generate something like
 The above can be placed in the `jobs` array of the skeleton file.
 Any number of inputs can be used.
 
+### Schema Documentation
+
+For detailed documentation of all fields, types, and enum variants, use the `--schema` flag:
+```sh
+cargo run --release --package diskann-benchmark -- inputs graph-index-build --schema
+```
+This produces a tree-style overview of every field with its type, whether it's optional, and
+descriptions — followed by the example JSON.
+
+To drill into a specific field, use `--field` with a dotted path:
+```sh
+cargo run --release --package diskann-benchmark -- inputs graph-index-build --field source.start_point_strategy
+```
+This shows only the schema and example for that field, which is useful when you know the overall
+structure but need details on a specific option.
+
 > **_NOTE:_**: The contents of each JSON file may (and in some cases, must) be modified.
   In particular, files paths such as `"data"`, `"queries"`, and `"groundtruth"` must be
   edited and point to valid `.bin` files or the correct type. These paths can be kept as
