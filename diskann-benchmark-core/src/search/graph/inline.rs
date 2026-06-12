@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, glue, search::AdaptiveL},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -15,7 +15,7 @@ use diskann_utils::{future::AsyncFriendly, views::Matrix};
 use crate::search::{self, Search, graph::Strategy};
 
 /// A built-in helper for benchmarking filtered K-nearest neighbors search
-/// using the multi-hop search method.
+/// using the inline search method.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or [`search::search_all`]
 /// and provides some basic additional metrics for the latter. Result aggregation for
@@ -25,7 +25,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
-pub struct MultiHop<DP, T, S>
+pub struct InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
@@ -33,13 +33,14 @@ where
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
     labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    adaptive_l: Option<AdaptiveL>,
 }
 
-impl<DP, T, S> MultiHop<DP, T, S>
+impl<DP, T, S> InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`MultiHop`] searcher.
+    /// Construct a new [`InlineFilterSearch`] searcher.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -63,6 +64,7 @@ where
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
         labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        adaptive_l: Option<AdaptiveL>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -78,12 +80,13 @@ where
                 queries,
                 strategy,
                 labels,
+                adaptive_l,
             }))
         }
     }
 }
 
-impl<DP, T, S> Search for MultiHop<DP, T, S>
+impl<DP, T, S> Search for InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
@@ -111,12 +114,15 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let multihop_search =
-            graph::search::MultihopFilterSearch::new(*parameters, &*self.labels[index]);
+        let inline_search = graph::search::InlineFilterSearch::new(
+            *parameters,
+            &*self.labels[index],
+            self.adaptive_l.clone(),
+        );
         let stats = self
             .index
             .search(
-                multihop_search,
+                inline_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
@@ -155,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multihop() {
+    fn test_inline() {
         let nearest_neighbors = 5;
 
         let index = search::graph::test_grid_provider();
@@ -169,20 +175,23 @@ mod tests {
 
         let queries = Arc::new(queries);
 
-        let multihop = MultiHop::new(
+        let adaptive_l = graph::search::AdaptiveL::new(10, 16.0).unwrap();
+
+        let inline = InlineFilterSearch::new(
             index,
             queries.clone(),
             Strategy::broadcast(provider::Strategy::new()),
             (0..queries.nrows())
                 .map(|_| -> Arc<dyn QueryLabelProvider<_>> { Arc::new(NoOdds {}) })
                 .collect(),
+            Some(adaptive_l),
         )
         .unwrap();
 
         // Test the standard search interface.
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
-            multihop.clone(),
+            inline.clone(),
             graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
@@ -224,7 +233,7 @@ mod tests {
         let recall_n = nearest_neighbors;
 
         let all = search::search_all(
-            multihop,
+            inline,
             parameters,
             search::graph::knn::Aggregator::new(
                 rows,
@@ -255,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multihop_error() {
+    fn test_inline_error() {
         let index = search::graph::test_grid_provider();
         let queries = Arc::new(Matrix::new(0.0f32, 2, index.provider().dim()));
 
@@ -266,11 +275,12 @@ mod tests {
         let strategy = provider::Strategy::new();
 
         // Error for a mismatch between strategies and queries.
-        let err = MultiHop::new(
+        let err = InlineFilterSearch::new(
             index.clone(),
             queries.clone(),
             Strategy::collection([strategy.clone()]),
             labels.clone(),
+            None,
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -280,11 +290,12 @@ mod tests {
         );
 
         // Error for a mismatch between label providers and queries.
-        let err = MultiHop::new(
+        let err = InlineFilterSearch::new(
             index,
             queries.clone(),
             Strategy::broadcast(strategy.clone()),
             labels.clone(),
+            None,
         )
         .unwrap_err();
         let msg = err.to_string();

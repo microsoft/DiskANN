@@ -18,7 +18,7 @@ use diskann::{
         },
         workingset,
     },
-    provider::{BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId},
+    provider::{ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_quantization::{
@@ -30,7 +30,7 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{GetFullPrecision, PassThrough, Rerank};
+use super::{GetFullPrecision, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::provider::async_::{
@@ -293,62 +293,50 @@ where
 // PruneAccessor //
 ///////////////////
 
-#[derive(Clone, Copy)]
+type Distance = UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
+
 pub struct PruneAccessor<'a> {
     store: &'a SphericalStore,
     neighbors: &'a SimpleNeighborProviderAsync,
+    distance: Distance,
 }
 
 impl HasId for PruneAccessor<'_> {
     type Id = u32;
 }
 
-impl HasElementRef for PruneAccessor<'_> {
+impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = spherical::iface::Opaque<'a>;
-}
 
-impl<'a> DelegateNeighbor<'a> for PruneAccessor<'_> {
-    type Delegate = &'a SimpleNeighborProviderAsync;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
+    type View<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    type Distance<'a>
+        = &'a Distance
+    where
+        Self: 'a;
+
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync
+    where
+        Self: 'a;
+
+    async fn fill<Itr>(&mut self, _itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        Ok((self, &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
         self.neighbors
     }
 }
 
-impl BuildDistanceComputer for PruneAccessor<'_> {
-    type DistanceComputerError = AllocatorError;
-    type DistanceComputer =
-        UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        self.store.distance_computer().map(UnwrapErr::new)
-    }
-}
-
-// Pass-through fill — returns `&Self` which directly accesses the underlying provider.
-impl workingset::Fill<PassThrough> for PruneAccessor<'_> {
-    type Error = std::convert::Infallible;
-    type View<'a>
-        = Self
-    where
-        Self: 'a;
-
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
-    {
-        Ok(*self)
-    }
-}
-
 // Pass-through view — reads spherical vectors directly from the provider.
-impl workingset::View<u32> for PruneAccessor<'_> {
+impl workingset::View<u32> for &PruneAccessor<'_> {
     type ElementRef<'a> = spherical::iface::Opaque<'a>;
     type Element<'a>
         = spherical::iface::Opaque<'a>
@@ -620,24 +608,22 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    type DistanceComputer<'a> =
-        UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
     type PruneAccessor<'a> = PruneAccessor<'a>;
-    type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = PassThrough;
-
-    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
-        PassThrough
-    }
+    type PruneAccessorError = AllocatorError;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
         _context: &'a Ctx,
+        _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let accessor = PruneAccessor {
             store: &provider.aux_vectors,
             neighbors: provider.neighbors(),
+            distance: provider
+                .aux_vectors
+                .distance_computer()
+                .map(UnwrapErr::new)?,
         };
         Ok(accessor)
     }
@@ -671,9 +657,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type Seed = PassThrough;
-    type WorkingSet = PassThrough;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -690,7 +676,17 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(PassThrough))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultProvider<V, SphericalStore, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<PruneAccessor<'a>> {
+        Ok(self.prune_accessor(provider, context, capacity)?)
     }
 }
 

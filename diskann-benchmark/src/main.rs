@@ -572,6 +572,14 @@ mod tests {
     }
 
     #[test]
+    fn graph_index_inline_filter_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
     fn graph_index_filter_integration_with_gt_compute() {
         let storage_provider = FileStorageProvider;
 

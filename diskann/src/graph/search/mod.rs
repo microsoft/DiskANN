@@ -14,7 +14,7 @@
 //! ```ignore
 //! use diskann::graph::{
 //!     neighbor::{BackInserter, Neighbor},
-//!     search::{Knn, Range, MultihopSearch},
+//!     search::{Knn, Range, MultihopFilterSearch},
 //!     Search,
 //! };
 //!
@@ -42,8 +42,9 @@ use crate::{
     provider::DataProvider,
 };
 
+mod inline_filter_search;
 mod knn_search;
-pub(crate) mod multihop_search;
+pub(crate) mod multihop_filter_search;
 mod range_search;
 
 mod paged;
@@ -63,7 +64,8 @@ pub(crate) mod scratch;
 /// - [`Knn`] - Standard k-nearest neighbor search
 /// - [`Range`] - Range-based search within a distance radius
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
-/// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
+/// - [`MultihopFilterSearch`] - Label-filtered search with multi-hop expansion
+/// - [`InlineFilterSearch`] - Inline filtered search with optional adaptive L sizing
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<'a, DP, S, T>
 where
@@ -110,8 +112,9 @@ where
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
+pub use inline_filter_search::{AdaptiveL, InlineFilterSearch};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
-pub use multihop_search::MultihopSearch;
+pub use multihop_filter_search::MultihopFilterSearch;
 pub use range_search::{Range, RangeSearchError};
 
 // Feature-gated diverse search.

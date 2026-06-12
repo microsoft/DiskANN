@@ -27,7 +27,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
-                .search(plugins::TopkMultihopFilter),
+                .search(plugins::TopkMultihopFilter)
+                .search(plugins::TopkInlineFilter),
         )?;
 
         registry.register(
@@ -36,7 +37,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
-                .search(plugins::TopkMultihopFilter),
+                .search(plugins::TopkMultihopFilter)
+                .search(plugins::TopkInlineFilter),
         )?;
 
         registry.register(
@@ -45,7 +47,8 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
                 .search(plugins::Topk)
                 .search(plugins::Range)
                 .search(plugins::TopkBetaFilter)
-                .search(plugins::TopkMultihopFilter),
+                .search(plugins::TopkMultihopFilter)
+                .search(plugins::TopkInlineFilter),
         )?;
     }
 
@@ -544,6 +547,57 @@ mod imp {
             )?;
 
             let result = search::knn::run(&multihop, &groundtruth, steps)?;
+            Ok(AggregatedSearchResults::Topk(result))
+        }
+    }
+
+    impl search::plugins::Plugin<SQProvider, SearchPhase, exhaustive::SphericalQuery>
+        for search::plugins::TopkInlineFilter
+    {
+        fn is_match(&self, phase: &SearchPhase) -> bool {
+            Self::kind() == phase.kind()
+        }
+
+        fn kind(&self) -> &'static str {
+            Self::kind().as_str()
+        }
+
+        fn run(
+            &self,
+            index: Arc<DiskANNIndex<SQProvider>>,
+            phase: &SearchPhase,
+            query_layout: &exhaustive::SphericalQuery,
+        ) -> anyhow::Result<AggregatedSearchResults> {
+            let inline = phase.as_topk_inline_filter()?;
+
+            let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+                &inline.queries,
+            ))?);
+
+            let groundtruth =
+                datafiles::load_range_groundtruth(datafiles::BinFile(&inline.groundtruth))?;
+
+            let steps =
+                search::knn::SearchSteps::new(inline.reps, &inline.num_threads, &inline.runs);
+
+            let bit_maps = generate_bitmaps(&inline.query_predicates, &inline.data_labels)?;
+
+            let bit_map_filters: Arc<[_]> = bit_maps
+                .into_iter()
+                .map(utils::filters::as_query_label_provider)
+                .collect();
+
+            let inline = benchmark_core::search::graph::InlineFilterSearch::new(
+                index.clone(),
+                queries.clone(),
+                benchmark_core::search::graph::Strategy::broadcast(
+                    inmem::spherical::Quantized::search((*query_layout).into()),
+                ),
+                bit_map_filters.clone(),
+                inline.adaptive_l()?,
+            )?;
+
+            let result = search::knn::run(&inline, &groundtruth, steps)?;
             Ok(AggregatedSearchResults::Topk(result))
         }
     }
