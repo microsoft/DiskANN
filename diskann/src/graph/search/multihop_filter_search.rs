@@ -34,14 +34,14 @@ use crate::{
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
 #[derive(Debug)]
-pub struct MultihopSearch<'q, InternalId> {
+pub struct MultihopFilterSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: Knn,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
-impl<'q, InternalId> MultihopSearch<'q, InternalId> {
+impl<'q, InternalId> MultihopFilterSearch<'q, InternalId> {
     /// Create new multihop search parameters.
     pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
         Self {
@@ -51,7 +51,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopSearch<'b, DP::InternalId>
+impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopFilterSearch<'b, DP::InternalId>
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,
@@ -188,16 +188,12 @@ where
         range_search_second_round: false,
     };
 
-    // Initialize search state if not already initialized.
-    // This allows paged search to call multihop_search_internal multiple times
-    if scratch.visited.is_empty() {
-        accessor
-            .start_point_distances(|id, distance| {
-                scratch.visited.insert(id);
-                scratch.best.insert(Neighbor::new(id, distance));
-            })
-            .await?;
-    }
+    accessor
+        .start_point_distances(|id, distance| {
+            scratch.visited.insert(id);
+            scratch.best.insert(Neighbor::new(id, distance));
+        })
+        .await?;
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);

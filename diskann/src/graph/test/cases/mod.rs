@@ -8,6 +8,7 @@ mod grid_insert;
 mod grid_search;
 mod helpers;
 mod index;
+mod inline;
 mod inplace_delete;
 mod multihop;
 mod paged_search;
