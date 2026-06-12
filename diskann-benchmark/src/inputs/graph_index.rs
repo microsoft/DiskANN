@@ -449,10 +449,6 @@ impl SearchPhase {
     }
 }
 
-fn has_topk_determinant_diversity(phase: &SearchPhase) -> bool {
-    matches!(phase, SearchPhase::TopkDeterminantDiversity(_))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchPhaseKind {
     Topk,
@@ -829,14 +825,6 @@ impl IndexOperation {
         self.source.validate(checker)?;
         self.search_phase.validate(checker)?;
 
-        if has_topk_determinant_diversity(&self.search_phase)
-            && *self.source.data_type() != DataType::Float32
-        {
-            anyhow::bail!(
-                "determinant-diversity post-processor requires graph-index full precision float32 input"
-            );
-        }
-
         Ok(())
     }
 }
@@ -914,12 +902,6 @@ impl IndexPQOperation {
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.index_operation.validate(checker)?;
-
-        if has_topk_determinant_diversity(&self.index_operation.search_phase) {
-            anyhow::bail!(
-                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
-            );
-        }
 
         Ok(())
     }
@@ -1007,12 +989,6 @@ impl IndexSQOperation {
 
         self.index_operation.validate(checker)?;
 
-        if has_topk_determinant_diversity(&self.index_operation.search_phase) {
-            anyhow::bail!(
-                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
-            );
-        }
-
         Ok(())
     }
 }
@@ -1089,12 +1065,6 @@ impl SphericalQuantBuild {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.build.validate(checker)?;
         self.search_phase.validate(checker)?;
-
-        if has_topk_determinant_diversity(&self.search_phase) {
-            anyhow::bail!(
-                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
-            );
-        }
 
         if self.build.save_path.is_some() {
             return Err(anyhow::anyhow!(
@@ -1373,12 +1343,6 @@ impl DynamicIndexRun {
         self.build.validate(checker)?;
         self.runbook_params.validate(checker)?;
         self.search_phase.validate(checker)?;
-
-        if has_topk_determinant_diversity(&self.search_phase) {
-            anyhow::bail!(
-                "determinant-diversity post-processor is only supported on graph-index full precision float32 topk"
-            );
-        }
 
         Ok(())
     }
