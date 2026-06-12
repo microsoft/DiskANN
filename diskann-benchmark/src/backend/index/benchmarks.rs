@@ -476,7 +476,7 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
-            post_processor::DeterminantDiversity::new(params.power(), params.eta()),
+            post_processor::DeterminantDiversity::new(params),
         )?;
 
         let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);

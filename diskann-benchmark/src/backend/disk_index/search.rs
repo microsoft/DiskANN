@@ -269,11 +269,8 @@ where
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
                 let post_processor = search_params.post_processor.as_ref().map(
-                    |TopkPostProcessor::DeterminantDiversity { power, eta }| {
-                        SearchPostProcessorKind::DeterminantDiversity {
-                            power: *power,
-                            eta: *eta,
-                        }
+                    |TopkPostProcessor::DeterminantDiversity(params)| {
+                        SearchPostProcessorKind::DeterminantDiversity(*params)
                     },
                 );
                 let vector_filter = if search_params.vector_filters_file.is_none() {

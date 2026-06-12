@@ -27,9 +27,10 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
+use diskann_providers::post_processor::DeterminantDiversityParams;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{compute_pq_distance, graph::provider::determinant_diversity_post_process},
+    model::{compute_pq_distance, graph::provider::determinant_diversity},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_quantization::num::Positive;
@@ -268,14 +269,13 @@ pub struct RerankAndFilter<'a> {
 #[derive(Clone, Copy)]
 pub struct DeterminantDiversityAndFilter<'a> {
     filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
-    power: f32,
-    eta: f32,
+    params: DeterminantDiversityParams,
 }
 
 #[derive(Clone, Copy)]
 pub enum SearchPostProcessorKind {
     RerankAndFilter,
-    DeterminantDiversity { power: f32, eta: f32 },
+    DeterminantDiversity(DeterminantDiversityParams),
 }
 
 #[derive(Clone, Copy)]
@@ -291,8 +291,11 @@ impl<'a> RerankAndFilter<'a> {
 }
 
 impl<'a> DeterminantDiversityAndFilter<'a> {
-    pub fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync), power: f32, eta: f32) -> Self {
-        Self { filter, power, eta }
+    pub fn new(
+        filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+        params: DeterminantDiversityParams,
+    ) -> Self {
+        Self { filter, params }
     }
 }
 
@@ -412,12 +415,12 @@ where
             associated_data.insert(id, *data);
         }
 
-        let reranked = determinant_diversity_post_process(
+        let reranked = determinant_diversity(
             candidate_vectors,
             &query_f32,
             usize::MAX,
-            self.eta,
-            Positive::new(self.power).expect("power must be > 0"),
+            self.params.eta(),
+            Positive::new(self.params.power()).expect("power must be > 0"),
         );
 
         Ok(
@@ -988,11 +991,10 @@ where
             SearchPostProcessorKind::RerankAndFilter => DiskSearchPostProcessor::RerankAndFilter(
                 RerankAndFilter::new(vector_filter.as_ref()),
             ),
-            SearchPostProcessorKind::DeterminantDiversity { power, eta } => {
+            SearchPostProcessorKind::DeterminantDiversity(params) => {
                 DiskSearchPostProcessor::DeterminantDiversity(DeterminantDiversityAndFilter::new(
                     vector_filter.as_ref(),
-                    power,
-                    eta,
+                    params,
                 ))
             }
         });

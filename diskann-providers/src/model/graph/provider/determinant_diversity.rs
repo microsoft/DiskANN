@@ -37,7 +37,7 @@
 //!
 //! # Variants
 //!
-//! The public entry point is [`determinant_diversity_post_process`].
+//! The public entry point is [`determinant_diversity`].
 //! It applies either the unregularized (`eta == 0`) or ridge-regularized (`eta > 0`)
 //! formulation internally.
 //!
@@ -61,7 +61,7 @@ struct DistanceRange {
     max: f32,
 }
 
-pub fn determinant_diversity_post_process<Id: Copy>(
+pub fn determinant_diversity<Id: Copy>(
     candidates: Vec<(Id, f32, Vec<f32>)>,
     query: &[f32],
     k: usize,
@@ -361,14 +361,14 @@ mod tests {
     #[test]
     fn test_empty_candidates() {
         let result =
-            determinant_diversity_post_process::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, p(1.0));
+            determinant_diversity::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_empty_query() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
-        let result = determinant_diversity_post_process(candidates, &[], 5, 0.5, p(1.0));
+        let result = determinant_diversity(candidates, &[], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -380,14 +380,14 @@ mod tests {
             (1u32, 0.3, vec![1.0]), // Wrong dimension
         ];
         let query = &[1.0, 2.0, 3.0];
-        let _ = determinant_diversity_post_process(candidates, query, 5, 0.5, p(1.0));
+        let _ = determinant_diversity(candidates, query, 5, 0.5, p(1.0));
     }
 
     #[test]
     fn test_single_candidate() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
         let query = &[1.0, 2.0];
-        let result = determinant_diversity_post_process(candidates, query, 5, 0.5, p(1.0));
+        let result = determinant_diversity(candidates, query, 5, 0.5, p(1.0));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, 0);
     }
@@ -396,7 +396,7 @@ mod tests {
     fn test_k_larger_than_candidates() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 10, 0.5, p(1.0));
+        let result = determinant_diversity(candidates, query, 10, 0.5, p(1.0));
         assert_eq!(result.len(), 2); // Should return min(k, candidates.len())
     }
 
@@ -408,7 +408,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 1.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 1.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on diversity metric with eta > 0
@@ -423,7 +423,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on greedy orthogonalization (eta == 0)
@@ -436,8 +436,8 @@ mod tests {
         let query = &[1.0, 1.0];
 
         // Test with different power values - should still work without panicking
-        let result1 = determinant_diversity_post_process(candidates.clone(), query, 2, 0.0, p(1.0));
-        let result2 = determinant_diversity_post_process(candidates, query, 2, 0.0, p(2.0));
+        let result1 = determinant_diversity(candidates.clone(), query, 2, 0.0, p(1.0));
+        let result2 = determinant_diversity(candidates, query, 2, 0.0, p(2.0));
 
         assert_eq!(result1.len(), 2);
         assert_eq!(result2.len(), 2);
@@ -447,7 +447,7 @@ mod tests {
     fn test_distances_preserved() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
 
         // Verify that distances are preserved from input
         assert!(result.iter().all(|(_, dist)| *dist == 0.5 || *dist == 0.3));
@@ -467,7 +467,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]), // nearly parallel to 0
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
 
         // Should select 2 candidates
         assert_eq!(result.len(), 2);
@@ -489,7 +489,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]),
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.5, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.5, p(1.0));
 
         assert_eq!(result.len(), 2);
         let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
@@ -511,7 +511,7 @@ mod tests {
         let query = &[1.0, 0.0];
 
         // With high power, relevance is heavily weighted so the closest candidate dominates
-        let result = determinant_diversity_post_process(candidates.clone(), query, 1, 0.0, p(10.0));
+        let result = determinant_diversity(candidates.clone(), query, 1, 0.0, p(10.0));
         assert_eq!(result.len(), 1);
         // Closest candidate should be preferred due to high power weighting
         assert_eq!(
@@ -528,7 +528,7 @@ mod tests {
             (1u32, 0.5, vec![0.0, 1.0]), // same distance as 0
         ];
         let query = &[1.0, 0.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
 
         // Should still return candidates without panicking
         assert_eq!(result.len(), 2);
@@ -544,7 +544,7 @@ mod tests {
         ];
         let query = &[1.0, 1.0];
         // eta=0.0 must invoke greedy path, not ridge-regularized
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
     }
 
@@ -554,7 +554,7 @@ mod tests {
     fn test_k_zero_returns_empty() {
         let candidates = vec![(0u32, 0.1, vec![1.0, 0.0]), (1u32, 0.2, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 0, 0.5, p(1.0));
+        let result = determinant_diversity(candidates, query, 0, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -568,7 +568,7 @@ mod tests {
         // the empty-vector early return if the dimension check would have
         // matched (so use a 0-length query here to stay on the early path).
         let query: &[f32] = &[];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -582,7 +582,7 @@ mod tests {
             (30u32, 0.3, vec![1.0, 1.0]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 3, 0.0, p(1.0));
         assert_eq!(result.len(), 3);
 
         // Result IDs must be a permutation of the input IDs (no duplicates,
@@ -606,7 +606,7 @@ mod tests {
             (2u32, 0.1, vec![3.0, 0.0]),
         ];
         let query = &[1.0, 0.0];
-        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 3, 0.0, p(1.0));
         assert_eq!(result.len(), 3);
 
         let mut ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
@@ -628,7 +628,7 @@ mod tests {
             (2u32, 0.9, vec![0.0, 0.0, 1.0]),
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 3, 0.0, p(2.0));
+        let result = determinant_diversity(candidates, query, 3, 0.0, p(2.0));
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].0, 0, "Most relevant candidate must be first");
     }
@@ -639,7 +639,7 @@ mod tests {
     fn test_ids_pair_with_their_input_distance() {
         let candidates = vec![(7u32, 1.5, vec![1.0, 0.0]), (9u32, 0.25, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity_post_process(candidates, query, 2, 0.0, p(1.0));
+        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
 
         for (id, dist) in &result {

@@ -172,7 +172,7 @@ impl DeterminantDiversity {
             .as_topk()
             .ok()
             .and_then(|topk| topk.post_processor.as_ref())
-            .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
+            .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity(_)))
     }
 
     pub(crate) const fn as_str() -> &'static str {
@@ -184,11 +184,7 @@ impl DeterminantDiversity {
     ) -> anyhow::Result<(&TopkSearchPhase, DeterminantDiversityParams)> {
         let topk = phase.as_topk()?;
         match topk.post_processor.as_ref() {
-            Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => {
-                let params = DeterminantDiversityParams::new(*power, *eta)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                Ok((topk, params))
-            }
+            Some(TopkPostProcessor::DeterminantDiversity(params)) => Ok((topk, *params)),
             _ => Err(anyhow::anyhow!(
                 "determinant-diversity plugin selected for non determinant-diversity input",
             )),

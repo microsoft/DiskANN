@@ -8,21 +8,21 @@ use std::future::Future;
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::utils::IntoUsize;
 use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
+use diskann_providers::post_processor::DeterminantDiversityParams;
 use diskann_providers::model::graph::provider::{
     async_::inmem::{self, GetFullPrecision},
-    determinant_diversity_post_process,
+    determinant_diversity,
 };
 use diskann_quantization::num::Positive;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
-    power: f32,
-    eta: f32,
+    params: DeterminantDiversityParams,
 }
 
 impl DeterminantDiversity {
-    pub(crate) const fn new(power: f32, eta: f32) -> Self {
-        Self { power, eta }
+    pub(crate) const fn new(params: DeterminantDiversityParams) -> Self {
+        Self { params }
     }
 }
 
@@ -54,12 +54,12 @@ where
             embedded.push((candidate.id, candidate.distance, vector.to_vec()));
         }
 
-        let reranked = determinant_diversity_post_process(
+        let reranked = determinant_diversity(
             embedded,
             query,
             candidates.len(),
-            self.eta,
-            Positive::new(self.power).expect("power must be > 0"),
+            self.params.eta(),
+            Positive::new(self.params.power()).expect("power must be > 0"),
         );
 
         std::future::ready(Ok(output.extend(reranked)))

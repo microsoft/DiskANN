@@ -403,7 +403,7 @@ fn has_topk_determinant_diversity(phase: &SearchPhase) -> bool {
         .as_topk()
         .ok()
         .and_then(|topk| topk.post_processor.as_ref())
-        .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity { .. }))
+    .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity(_)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

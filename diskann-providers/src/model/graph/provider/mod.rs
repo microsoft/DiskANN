@@ -11,5 +11,5 @@ pub mod layers;
 ///
 /// This module is not async-specific.
 /// It provides diversity-promoting reranking for nearest neighbor search results.
-pub mod determinant_diversity;
-pub use determinant_diversity::determinant_diversity_post_process;
+mod determinant_diversity;
+pub use determinant_diversity::determinant_diversity;
