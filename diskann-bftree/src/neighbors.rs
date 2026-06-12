@@ -183,9 +183,9 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair.
     ///
-    /// The list of neighbors and their length is written into
-    /// the passed buffer `buf` before writing `self.value_bytes()` of it
-    /// into the bf-tree.
+    /// The list of neighbors and their length is written into the passed buffer
+    /// `buf` before writing the leading `self.dim * std::mem::size_of::<I>()`
+    /// bytes of it into the bf-tree.
     ///
     /// # Errors
     ///  
