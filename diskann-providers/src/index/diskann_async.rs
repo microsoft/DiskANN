@@ -343,8 +343,7 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        let graph_search =
-            graph::search::Knn::new_default(parameters.search_l).unwrap();
+        let graph_search = graph::search::Knn::new_default(parameters.search_l).unwrap();
         index
             .search(
                 graph_search,
@@ -1691,8 +1690,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
@@ -1710,8 +1708,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let graph_search =
-                            graph::search::Knn::new_default(search_l).unwrap();
+                        let graph_search = graph::search::Knn::new_default(search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -2962,7 +2959,8 @@ pub(crate) mod tests {
             diverse_results_k,
             return_list_size,
             attribute_provider.clone(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let search_params = diskann::graph::search::Knn::new(
             search_list_size,
