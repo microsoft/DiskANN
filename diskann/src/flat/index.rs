@@ -53,7 +53,7 @@ impl<P: DataProvider> FlatIndex<P> {
     /// `processor` over the survivors to populate `output`.
     ///
     /// The post-processor [`SearchPostProcess::post_process`] outputs the number
-    /// of results that survive, which is returned as `SearchStats::result_count`. 
+    /// of results that survive, which is returned as `SearchStats::result_count`.
     pub fn knn_search<S, T, O, PP, OB>(
         &self,
         k: NonZeroUsize,
