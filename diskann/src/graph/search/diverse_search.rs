@@ -72,8 +72,8 @@ where
         let attribute_provider = self.diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
             self.inner.l_value().get(),
-            self.inner.k_value(),
-            self.diverse_params.diverse_results_k,
+            self.diverse_params.original_k_value,
+            self.diverse_params.diverse_results_k.get(),
             attribute_provider,
         );
 

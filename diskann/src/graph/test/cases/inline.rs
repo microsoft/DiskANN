@@ -348,7 +348,7 @@ fn run_inline_on_grid(
     adaptive_l: Option<AdaptiveL>,
 ) -> InlineFilterBaseline {
     let rt = current_thread_runtime();
-    let inline = InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), filter, adaptive_l);
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), filter, adaptive_l);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -391,7 +391,7 @@ fn inline_search_returns_only_final_level_matches() {
     let filter = LevelLabelProvider::new();
     let k = 8;
     let l = 32;
-    let inline = InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, None);
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), &filter, None);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -448,7 +448,7 @@ fn inline_search_three_level_no_adaptive_l_with_l1_finds_no_matches() {
     let filter = LevelLabelProvider::new();
     let k = 1;
     let l = 1;
-    let inline = InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, None);
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), &filter, None);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -500,8 +500,7 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let k = 1;
     let l = 1;
     let adaptive_l = AdaptiveL::new(1, 16.0).unwrap();
-    let inline =
-        InlineFilterSearch::new(Knn::new_default(k, l).unwrap(), &filter, Some(adaptive_l));
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), &filter, Some(adaptive_l));
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -633,7 +632,7 @@ fn inline_search_reaches_matches_through_non_matching_nodes() {
 
     let k = 5;
     let l = 20;
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(l).unwrap();
     let inline = InlineFilterSearch::new(search_params, &filter, None);
 
     let mut ids = vec![0u32; k];
@@ -725,7 +724,7 @@ fn inline_callback_filtering_grid() {
 
     let k = 20;
     let l = 40;
-    let search_params = Knn::new_default(k, l).unwrap();
+    let search_params = Knn::new_default(l).unwrap();
     let inline = InlineFilterSearch::new(search_params, &filter, None);
 
     let mut ids = vec![0u32; k];

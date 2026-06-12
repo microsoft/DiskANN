@@ -12,7 +12,7 @@ use diskann::{
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
-use crate::search::{self, Search, graph::Strategy};
+use crate::search::{self, Search, graph::KnnWrapper, graph::Strategy};
 
 /// A built-in helper for benchmarking filtered K-nearest neighbors search
 /// using the multi-hop search method.
@@ -22,7 +22,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
 /// aggregator as [`search::graph::knn::KNN`]).
 ///
-/// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
+/// The provided implementation of [`Search`] accepts [`KnnWrapper`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
@@ -90,7 +90,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::Knn;
+    type Parameters = KnnWrapper;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -112,7 +112,7 @@ where
     {
         let context = DP::Context::default();
         let multihop_search =
-            graph::search::MultihopFilterSearch::new(*parameters, &*self.labels[index]);
+            graph::search::MultihopFilterSearch::new(parameters.knn, &*self.labels[index]);
         let stats = self
             .index
             .search(
@@ -183,7 +183,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+            KnnWrapper::new(nearest_neighbors, 10).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -211,11 +211,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
+                KnnWrapper::new(nearest_neighbors, 10).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors, 15, None).unwrap(),
+                KnnWrapper::new(nearest_neighbors, 15).unwrap(),
                 setup.clone(),
             ),
         ];
