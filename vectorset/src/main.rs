@@ -32,6 +32,7 @@ const DEFAULT_PORT: u16 = 6379;
 trait Element: bytemuck::Pod + std::fmt::Debug + Send + Sync + 'static {}
 
 impl Element for u8 {}
+impl Element for i8 {}
 impl Element for f32 {}
 
 #[derive(Deserialize)]
@@ -53,9 +54,9 @@ struct Options {
     #[arg(short, long)]
     threads: Option<usize>,
 
-    /// Data type for vector elements
-    #[arg(long)]
-    data_type: DataType,
+    /// Quantizer
+    #[arg(long, default_value_t)]
+    quantizer: Quantizer,
 
     #[command(subcommand)]
     command: Commands,
@@ -106,6 +107,10 @@ struct IngestArgs {
     /// Input vector bin has no header
     #[arg(long)]
     no_header_with_dim: Option<usize>,
+
+    /// Metric
+    #[arg(long)]
+    metric: Option<DistanceMetric>,
 
     /// Paths to base vectors
     base_path: PathBuf,
@@ -158,7 +163,94 @@ struct QueryArgs {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum DataType {
     Uint8,
+    Int8,
     Float32,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Default)]
+enum Quantizer {
+    /// f32 vectors; no quantization
+    #[default]
+    NoQuant,
+    /// f32 vectors; spherical 1-bit quantization
+    Bin,
+    /// f32 vectors; minmax 8-bit scalar quantization
+    Q8,
+    /// u8 vectors; no quantization
+    XNoQuant_U8,
+    /// i8 vectors; no quantization
+    XNoQuant_I8,
+    /// u8 vectors; spherical 1-bit quantization
+    XBin_U8,
+    /// i8 vectors; spherical 1-bit quantization
+    XBin_I8,
+}
+
+impl Quantizer {
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Quantizer::NoQuant | Quantizer::Bin | Quantizer::Q8 => DataType::Float32,
+            Quantizer::XNoQuant_I8 | Quantizer::XBin_I8 => DataType::Int8,
+            Quantizer::XNoQuant_U8 | Quantizer::XBin_U8 => DataType::Uint8,
+        }
+    }
+}
+
+impl ToRedisArgs for Quantizer {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let q = match self {
+            Quantizer::NoQuant => b"NOQUANT".as_slice(),
+            Quantizer::Bin => b"BIN".as_slice(),
+            Quantizer::Q8 => b"Q8".as_slice(),
+            Quantizer::XNoQuant_U8 => b"XNOQUANT_U8",
+            Quantizer::XNoQuant_I8 => b"XNOQUANT_I8",
+            Quantizer::XBin_U8 => b"XBIN_U8",
+            Quantizer::XBin_I8 => b"XBIN_I8",
+        };
+        out.write_arg(q);
+    }
+}
+
+impl std::fmt::Display for Quantizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Quantizer::NoQuant => "NOQUANT",
+            Quantizer::Bin => "BIN",
+            Quantizer::Q8 => "Q8",
+            Quantizer::XNoQuant_U8 => "XNOQUANT_U8",
+            Quantizer::XNoQuant_I8 => "XNOQUANT_I8",
+            Quantizer::XBin_U8 => "XBIN_U8",
+            Quantizer::XBin_I8 => "XBIN_I8",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum DistanceMetric {
+    L2,
+    Cosine,
+    CosineNormalized,
+    InnerProduct,
+}
+
+impl ToRedisArgs for DistanceMetric {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        let q = match self {
+            DistanceMetric::L2 => b"L2".as_slice(),
+            DistanceMetric::Cosine => b"COSINE".as_slice(),
+            DistanceMetric::CosineNormalized => b"COSINE_NORMALIZED".as_slice(),
+            DistanceMetric::InnerProduct => b"IP".as_slice(),
+        };
+        out.write_arg(q);
+    }
 }
 
 struct VectorId(u32);
@@ -285,8 +377,9 @@ async fn async_main(opts: Options) -> Result<()> {
         None
     };
 
-    match opts.data_type {
+    match opts.quantizer.data_type() {
         DataType::Uint8 => dispatch::<u8>(&opts.command, &opts, infos, cred).await,
+        DataType::Int8 => dispatch::<i8>(&opts.command, &opts, infos, cred).await,
         DataType::Float32 => dispatch::<f32>(&opts.command, &opts, infos, cred).await,
     }
 }
@@ -361,7 +454,9 @@ async fn ingest<T: Element>(
         let l_build = args.l_build;
         let degree = args.degree;
         let mut cred = cred.clone();
-        let data_type = opts.data_type;
+        let data_type = opts.quantizer.data_type();
+        let quantizer = opts.quantizer;
+        let metric = args.metric;
 
         tasks.spawn(async move {
             let mut buf = vec![T::zeroed(); ds.batch_size() * ds.dim()];
@@ -387,11 +482,15 @@ async fn ingest<T: Element>(
                         let element = VectorId((first_id + i) as u32);
                         let buf_start = i * ds.dim();
                         let buf_end = buf_start + ds.dim();
+
                         pipeline.cmd("VADD").arg(&vset);
 
                         match data_type {
                             DataType::Uint8 => {
-                                pipeline.arg(b"XB8");
+                                pipeline.arg(b"XU8");
+                            }
+                            DataType::Int8 => {
+                                pipeline.arg(b"XI8");
                             }
                             DataType::Float32 => {
                                 pipeline.arg(b"FP32");
@@ -402,13 +501,10 @@ async fn ingest<T: Element>(
                             .arg(bytemuck::cast_slice::<_, u8>(&buf[buf_start..buf_end]))
                             .arg(element);
 
-                        match data_type {
-                            DataType::Uint8 => {
-                                pipeline.arg(b"XPREQ8");
-                            }
-                            DataType::Float32 => {
-                                pipeline.arg(b"NOQUANT");
-                            }
+                        pipeline.arg(quantizer);
+
+                        if let Some(metric) = metric {
+                            pipeline.arg(b"XDISTANCE_METRIC").arg(metric);
                         }
 
                         pipeline
@@ -508,7 +604,7 @@ async fn query<T: Element>(
         let n = args.n;
         let l_search = args.l_search;
         let mut cred = cred.clone();
-        let data_type = opts.data_type;
+        let data_type = opts.quantizer.data_type();
 
         tasks.spawn(async move {
             let mut pipeline = Pipeline::with_capacity(pipeline_size);
@@ -532,7 +628,8 @@ async fn query<T: Element>(
                     pipeline.cmd("VSIM").arg(&vset);
 
                     match data_type {
-                        DataType::Uint8 => pipeline.arg(b"XB8"),
+                        DataType::Uint8 => pipeline.arg(b"XU8"),
+                        DataType::Int8 => pipeline.arg(b"XI8"),
                         DataType::Float32 => pipeline.arg(b"FP32"),
                     };
 

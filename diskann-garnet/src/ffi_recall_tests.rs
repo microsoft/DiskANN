@@ -10,8 +10,8 @@ mod tests {
     use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
-        VectorQuantType, VectorValueType, create_index, drop_index, garnet::Context, insert,
-        search_vector, test_utils::Store,
+        VectorQuantType, create_index, drop_index, garnet::Context, insert, search_vector,
+        test_utils::Store,
     };
 
     /// Helper to insert a vector with a string external ID and FP32 data.
@@ -25,16 +25,15 @@ mod tests {
         let vector_bytes: &[u8] = bytemuck::cast_slice(vector);
         unsafe {
             insert(
-                ctx.0,
+                ctx.get(),
                 index_ptr,
                 id_bytes.as_ptr(),
                 id_bytes.len(),
-                VectorValueType::FP32,
                 vector_bytes.as_ptr(),
                 vector.len(),
                 b"".as_ptr(),
                 0,
-            )
+            ) > 0
         }
     }
 
@@ -156,14 +155,14 @@ mod tests {
     ) -> f64 {
         store.clear();
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
 
         let reduce_dimensions = 0;
         let l_build = 100;
         let max_degree = 32;
         let index_ptr = unsafe {
             create_index(
-                ctx.0,
+                ctx.get(),
                 dimensions,
                 reduce_dimensions,
                 VectorQuantType::NoQuant,
@@ -204,9 +203,8 @@ mod tests {
 
             let count = unsafe {
                 search_vector(
-                    ctx.0,
+                    ctx.get(),
                     index_ptr,
-                    VectorValueType::FP32,
                     query_bytes.as_ptr(),
                     vec.len(),
                     delta,
@@ -237,7 +235,7 @@ mod tests {
             total_expected += expected_ids.len();
         }
 
-        unsafe { drop_index(ctx.0, index_ptr) };
+        unsafe { drop_index(ctx.get(), index_ptr) };
 
         total_matches as f64 / total_expected as f64
     }

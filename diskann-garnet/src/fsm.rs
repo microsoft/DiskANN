@@ -17,16 +17,11 @@
 //! in-memory views of certain state that is updated atomically: a queue which
 //! keeps track of a fixed number of IDs available for reused, and an atomic
 //! counter which tracks the next new ID.
-//!
-//! The atomic `next_id` also prevents minting duplicate IDs to concurrent
-//! inserts. While this operation could be done via RMW and retry on conflict
-//! detection, the atomic is much faster and just as accurate since this code is
-//! the only place where the FSM is read or written to.
 
 use crossbeam::queue::ArrayQueue;
 use std::sync::{
-    RwLock,
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    RwLock, RwLockReadGuard,
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 use thiserror::Error;
 
@@ -39,27 +34,89 @@ const FAST_SIZE: usize = 1024;
 const FSM_KEY_PREFIX: u32 = u32::from_be_bytes(*b"_fsm");
 
 #[derive(Debug, Error, PartialEq)]
-pub enum FsmError {
+pub(crate) enum FsmError {
     #[error("Garnet operation failed")]
     Garnet(#[from] GarnetError),
     #[error("requested ID is out of range {0}")]
     IdOutOfRange(u32),
 }
 
-pub struct FreeSpaceMap {
+/// Guard returned by `next_id()` to ensure correctness when reuse is enabled.
+pub(crate) struct ReuseGuard<'a> {
+    id: u32,
+    barrier: RwLockReadGuard<'a, Barrier>,
+}
+
+impl<'a> ReuseGuard<'a> {
+    fn new(id: u32, barrier: RwLockReadGuard<'a, Barrier>) -> Self {
+        ReuseGuard { id, barrier }
+    }
+
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub(crate) fn should_quantize(&self) -> bool {
+        self.barrier.quantization_enabled
+    }
+}
+
+struct Barrier {
+    max_id_for_backfill: u32,
+    quantization_enabled: bool,
+}
+
+/// The free space map manages an ID pool in Garnet to track which IDs are being
+/// used. This is necessary to reuse deleted vectors IDs, which is needed due to
+/// the small ID space of u32.
+///
+/// Users can call `next_id()` to get an ID which may be a newly minted ID or a
+/// reused one from a previously deleted vector. Use `mark_used()` and
+/// `mark_deleted()` to flag IDs as used or free respectively.
+///
+/// When quantization backfill is required, set `reuse_enabled` to `false` and
+/// `quantization_enabled` to true in the constructor. This will prevent all ID
+/// reuse until `enable_reuse()` is called. At the start of backfill,
+/// `max_id_for_backfill()` can be used to set the upper bound of the backfill
+/// range.
+pub(crate) struct FreeSpaceMap {
+    /// Garnet callbacks for reading/writing FSM keys
     callbacks: Callbacks,
+    /// A flag to signal whether there are free IDs in the FSM.
+    /// This is set after a scan of the FSM, and is used to prevent extraneous reads
+    /// of FSM blocks.
     has_free_ids: AtomicBool,
+    /// A queue of previously deleted IDs to prevent excessive reads to the FSM
     fast_free_list: ArrayQueue<u32>,
+    /// The maximum block ID stored in the FSM
     max_block: RwLock<u32>,
+    /// The next ID that will be minted if reusing previously deleted IDs is unavailable
     next_id: AtomicU32,
+    /// The total number of IDs marked used in the FSM
+    total_used: AtomicUsize,
+    /// Controls when ID reuse for deleted IDs is enabled.
+    reuse_enabled: AtomicBool,
+    /// Quantization backfill related parameters that must be synchronized.
+    barrier: RwLock<Barrier>,
 }
 
 impl FreeSpaceMap {
-    pub fn new(ctx: Context, callbacks: Callbacks) -> Result<Self, FsmError> {
+    pub(crate) fn new(
+        ctx: &Context,
+        callbacks: Callbacks,
+        quantization_enabled: bool,
+        reuse_enabled: bool,
+    ) -> Result<Self, FsmError> {
         let has_free_ids = AtomicBool::new(false);
         let fast_free_list = ArrayQueue::new(FAST_SIZE);
         let max_block = RwLock::new(u32::MAX);
         let next_id = AtomicU32::new(0);
+        let total_used = AtomicUsize::new(0);
+        let reuse_enabled = AtomicBool::new(reuse_enabled);
+        let barrier = RwLock::new(Barrier {
+            max_id_for_backfill: u32::MAX,
+            quantization_enabled,
+        });
 
         let mut this = Self {
             callbacks,
@@ -67,13 +124,16 @@ impl FreeSpaceMap {
             fast_free_list,
             max_block,
             next_id,
+            total_used,
+            reuse_enabled,
+            barrier,
         };
 
         // Attempt to load state from Garnet.
         let block_key = Self::block_key(0);
         if this
             .callbacks
-            .exists_wid(ctx.term(Term::Metadata), block_key)
+            .exists_wid(&ctx.term(Term::Metadata), block_key)
         {
             this.load_state(ctx)?;
         } else {
@@ -86,24 +146,25 @@ impl FreeSpaceMap {
     }
 
     /// Load all state from Garnet by scanning the FSM blocks.
-    fn load_state(&mut self, ctx: Context) -> Result<(), FsmError> {
+    fn load_state(&mut self, ctx: &Context) -> Result<(), FsmError> {
         let mut max_block_id = 0;
         while self
             .callbacks
-            .exists_wid(ctx.term(Term::Metadata), Self::block_key(max_block_id))
+            .exists_wid(&ctx.term(Term::Metadata), Self::block_key(max_block_id))
         {
             max_block_id += 1;
         }
 
         let mut block = vec![0u8; BLOCK_SIZE_BYTES];
         let mut last_used_id = -1i64;
+        let mut total_used = 0usize;
 
         for block_id in (0..max_block_id).rev() {
             let block_key = Self::block_key(block_id);
 
             if !self
                 .callbacks
-                .read_single_wid(ctx.term(Term::Metadata), block_key, &mut block)
+                .read_single_wid(&ctx.term(Term::Metadata), block_key, &mut block)
             {
                 break;
             }
@@ -115,8 +176,9 @@ impl FreeSpaceMap {
                     let used = bit_used(byte, bidx);
                     if used {
                         last_used_id = last_used_id.max(id as i64);
-                    } else if (id as i64) < last_used_id && self.fast_free_list.push(id).is_err() {
-                        break;
+                        total_used += 1;
+                    } else if (id as i64) < last_used_id {
+                        let _ = self.fast_free_list.push(id);
                     }
 
                     id = id.saturating_sub(1);
@@ -130,6 +192,8 @@ impl FreeSpaceMap {
         self.next_id
             .store((last_used_id + 1) as u32, Ordering::Release);
 
+        self.total_used.store(total_used, Ordering::Release);
+
         if !self.fast_free_list.is_empty() {
             self.has_free_ids.store(true, Ordering::Release);
         }
@@ -138,20 +202,20 @@ impl FreeSpaceMap {
     }
 
     /// Mark an ID as free.
-    pub fn mark_free(&self, ctx: Context, id: u32) -> Result<(), FsmError> {
+    pub(crate) fn mark_free(&self, ctx: &Context, id: u32) -> Result<(), FsmError> {
         // We don't care about the changed status on free.
         self.mark_id(ctx, id, false).map(|_| ())
     }
 
     /// Mark an ID as occupied.
-    fn mark_used(&self, ctx: Context, id: u32) -> Result<bool, FsmError> {
+    fn mark_used(&self, ctx: &Context, id: u32) -> Result<bool, FsmError> {
         self.mark_id(ctx, id, true)
     }
 
     /// Mark an ID according to value (true = used, false = free).
     /// Side effects only happen if the value actually changed. The return value reflects whether
     /// data changed or not.
-    fn mark_id(&self, ctx: Context, id: u32, used: bool) -> Result<bool, FsmError> {
+    fn mark_id(&self, ctx: &Context, id: u32, used: bool) -> Result<bool, FsmError> {
         if id >= self.next_id.load(Ordering::Acquire) {
             return Err(FsmError::IdOutOfRange(id));
         }
@@ -166,12 +230,20 @@ impl FreeSpaceMap {
         let mut changed = false;
 
         if !self.callbacks.rmw_wid(
-            ctx.term(Term::Metadata),
+            &ctx.term(Term::Metadata),
             block_key,
             BLOCK_SIZE_BYTES,
             |data: &mut [u8]| changed = update_status(used, &mut data[byte_idx], bit_idx),
         ) {
             return Err(FsmError::Garnet(GarnetError::Write));
+        }
+
+        if changed {
+            if used {
+                self.total_used.fetch_add(1, Ordering::AcqRel);
+            } else {
+                self.total_used.fetch_sub(1, Ordering::AcqRel);
+            }
         }
 
         // NOTE: We don't modify the free list if the id was already free.
@@ -184,7 +256,8 @@ impl FreeSpaceMap {
         Ok(changed)
     }
 
-    pub fn is_free(&self, ctx: Context, id: u32) -> Result<bool, FsmError> {
+    /// Return whether a given ID is free.
+    pub(crate) fn is_free(&self, ctx: &Context, id: u32) -> Result<bool, FsmError> {
         if id >= self.next_id.load(Ordering::Acquire) {
             return Err(FsmError::IdOutOfRange(id));
         }
@@ -200,7 +273,7 @@ impl FreeSpaceMap {
 
         if !self
             .callbacks
-            .read_single_wid(ctx.term(Term::Metadata), block_key, &mut block)
+            .read_single_wid(&ctx.term(Term::Metadata), block_key, &mut block)
         {
             return Err(FsmError::Garnet(GarnetError::Read));
         }
@@ -213,8 +286,15 @@ impl FreeSpaceMap {
     /// Return a a new ID.
     /// This may be a a fresh ID larger than all the others, or it may be a reused ID that
     /// previously belonged to a deleted element. The returned ID is marked as used.
-    pub fn next_id(&self, ctx: Context) -> Result<u32, FsmError> {
-        if self.has_free_ids.load(Ordering::Acquire) {
+    ///
+    /// Returns a guard with `id()` and `should_quantize()` accessors. IDs returned
+    /// with `should_quantize()` equal true should be quantized.
+    pub(crate) fn next_id(&self, ctx: &Context) -> Result<ReuseGuard<'_>, FsmError> {
+        // A read barrier is acquired for the whole function. This prevents ID
+        // minting during quantization phase changes.
+        let barrier = self.barrier.read().unwrap();
+
+        if self.reuse_enabled.load(Ordering::Acquire) && self.has_free_ids.load(Ordering::Acquire) {
             // We retry reusing a freed ID until there are none or we get one and marking it used
             // succeeds in changing the value.
             loop {
@@ -240,34 +320,38 @@ impl FreeSpaceMap {
                 };
 
                 if let Some(id) = id {
-                    return Ok(id);
+                    return Ok(ReuseGuard::new(id, barrier));
                 }
 
                 break;
             }
         }
 
-        // Retry minting a new ID until we are successfully able to mark it used.
-        let mut changed = false;
-        let mut id = 0u32;
-        while !changed {
-            id = self.next_id.fetch_add(1, Ordering::AcqRel);
-
+        let id = self.next_id.fetch_add(1, Ordering::AcqRel);
+        {
             // Make sure we have enough FSM blocks for this id.
             let (block_id, _, _) = self.indexes_for_id(id);
             let max_block = { *self.max_block.read().unwrap() };
             if block_id > max_block {
                 self.expand_to(ctx, id)?;
             }
-
-            changed = self.mark_used(ctx, id)?;
         }
 
-        Ok(id)
+        self.mark_used(ctx, id)?;
+
+        Ok(ReuseGuard::new(id, barrier))
     }
 
-    pub fn max_id(&self) -> u32 {
+    /// Return the maximum ID that has been assigned to a vector.
+    ///
+    /// This ID may be free if that ID has been deleted since the ID was created.
+    pub(crate) fn max_id(&self) -> u32 {
         self.next_id.load(Ordering::Acquire).saturating_sub(1)
+    }
+
+    /// Return the number of IDs currently marked used in the FSM.
+    pub(crate) fn total_used(&self) -> usize {
+        self.total_used.load(Ordering::Acquire)
     }
 
     /// Return the FSM block number, byte index, and bit index for a given ID.
@@ -289,7 +373,7 @@ impl FreeSpaceMap {
     }
 
     /// Scan the FSM blocks to fill up fast_free_list.
-    fn refill_fast_free_list(&self, ctx: Context) -> Result<bool, FsmError> {
+    fn refill_fast_free_list(&self, ctx: &Context) -> Result<bool, FsmError> {
         // NOTE: We take a write lock to prevent multiple refills happening simultaneously.
         #[allow(clippy::readonly_write_lock)]
         let max_block = self.max_block.write().unwrap();
@@ -301,23 +385,38 @@ impl FreeSpaceMap {
 
         let mut has_free_ids = false;
         let mut id = 0u32;
-        'scan: for block_id in 0..*max_block {
+        let mut block = vec![0u8; BLOCK_SIZE_BYTES];
+        'scan: for block_id in 0..=*max_block {
+            if id >= self.next_id.load(Ordering::Acquire) {
+                // Don't look at IDs outside the current range.
+                break;
+            }
+
             let block_key = Self::block_key(block_id);
-            let mut block = vec![0u8; BLOCK_SIZE_BYTES];
             if !self
                 .callbacks
-                .read_single_wid(ctx.term(Term::Metadata), block_key, &mut block)
+                .read_single_wid(&ctx.term(Term::Metadata), block_key, &mut block)
             {
                 return Err(FsmError::Garnet(GarnetError::Read));
             }
 
             for &byte in &block {
+                if id >= self.next_id.load(Ordering::Acquire) {
+                    // Don't look at IDs outside the current range.
+                    break 'scan;
+                }
+
                 if byte == 0xff {
                     id += 8;
                     continue;
                 }
 
                 for bidx in 0..8 {
+                    if id >= self.next_id.load(Ordering::Acquire) {
+                        // Don't look at IDs outside the current range.
+                        break 'scan;
+                    }
+
                     if !bit_used(byte, bidx) {
                         has_free_ids = true;
                         self.has_free_ids.store(true, Ordering::Release);
@@ -338,7 +437,7 @@ impl FreeSpaceMap {
     }
 
     /// Ensure enough blocks exist in the FSM to hold `id`.
-    fn expand_to(&self, ctx: Context, id: u32) -> Result<(), FsmError> {
+    fn expand_to(&self, ctx: &Context, id: u32) -> Result<(), FsmError> {
         let (block_id, _, _) = self.indexes_for_id(id);
         let mut max_block = self.max_block.write().unwrap();
         if *max_block == u32::MAX || block_id == *max_block + 1 {
@@ -347,7 +446,7 @@ impl FreeSpaceMap {
 
             if !self
                 .callbacks
-                .write_wid(ctx.term(Term::Metadata), block_key, &block_bytes)
+                .write_wid(&ctx.term(Term::Metadata), block_key, &block_bytes)
             {
                 return Err(FsmError::Garnet(GarnetError::Write));
             }
@@ -362,6 +461,66 @@ impl FreeSpaceMap {
         }
 
         Ok(())
+    }
+
+    /// Visit each used id in the FSM, invoking f on each id.
+    pub(crate) fn visit_used<F>(&self, ctx: &Context, mut f: F) -> Result<(), FsmError>
+    where
+        F: FnMut(u32) -> bool,
+    {
+        let max_block = { *self.max_block.read().unwrap() };
+        let mut block = vec![0u8; BLOCK_SIZE_BYTES];
+        let mut id = 0u32;
+
+        for block_id in 0..max_block + 1 {
+            let block_key = Self::block_key(block_id);
+            if !self
+                .callbacks
+                .read_single_wid(&ctx.term(Term::Metadata), block_key, &mut block)
+            {
+                return Err(FsmError::Garnet(GarnetError::Read));
+            }
+
+            for &byte in &block {
+                if byte == 0x00 {
+                    id += 8;
+                    continue;
+                }
+
+                for bidx in 0..8 {
+                    if bit_used(byte, bidx) {
+                        let keep_going = f(id);
+                        if !keep_going {
+                            return Ok(());
+                        }
+                    }
+                    id += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Signal that new IDs should be quantized.
+    pub(crate) fn enable_quantization(&self) {
+        // Taking the write barrier ensures that we switch quantization phases when
+        // 1. No `next_id` is not changing (because `next_id()` operates under a read barrier)
+        // 2. All vector data for any pending unquantized inserts has been written. (because
+        //     `insert()` updates data under the same read barrier via `ReuseGuard`)
+        let mut guard = self.barrier.write().unwrap();
+        guard.max_id_for_backfill = self.next_id.load(Ordering::Acquire).saturating_sub(1);
+        guard.quantization_enabled = true;
+    }
+
+    /// Allow reuse of previously deleted IDs.
+    pub(crate) fn enable_reuse(&self) {
+        self.reuse_enabled.store(true, Ordering::Release);
+    }
+
+    /// Return the max ID for purposes of backfilling quantized vectors.
+    pub(crate) fn max_id_for_backfill(&self) -> u32 {
+        self.barrier.read().unwrap().max_id_for_backfill
     }
 }
 
@@ -394,9 +553,10 @@ mod tests {
     where
         F: FnMut(&[u8]),
     {
+        let ctx = Context::new(0);
         let key = FreeSpaceMap::block_key(block_id);
         let block = store
-            .get(Context(0).term(Term::Metadata).0, bytemuck::bytes_of(&key))
+            .get(ctx.term(Term::Metadata).get(), bytemuck::bytes_of(&key))
             .unwrap();
         f(&block);
     }
@@ -404,9 +564,10 @@ mod tests {
     #[test]
     fn create_fresh() {
         let store = Store;
+        let ctx = Context::new(0);
 
         // A fresh FSM should result in full block of all zeroes.
-        let _fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let _fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
         verify_block(&store, 0, |block| {
             assert_eq!(block.len(), BLOCK_SIZE_BYTES);
             assert_eq!(block.iter().filter(|b| **b != 0).count(), 0);
@@ -416,30 +577,32 @@ mod tests {
     #[test]
     fn basic_next_id() {
         let store = Store;
+        let ctx = Context::new(0);
 
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
 
         // A fresh FSM should not have free IDs.
         assert!(!fsm.has_free_ids.load(std::sync::atomic::Ordering::Acquire));
 
         // It should return sequentials IDs starting from 0.
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 0);
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 1);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 0);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 1);
     }
 
     #[test]
     fn basic_delete() {
         let store = Store;
+        let ctx = Context::new(0);
 
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
 
         // Deleting a ID out of range should return an error.
-        let res = fsm.mark_free(Context(0), 0);
+        let res = fsm.mark_free(&ctx, 0);
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), FsmError::IdOutOfRange(0));
 
         for _ in 0u32..64 {
-            let _ = fsm.next_id(Context(0)).unwrap();
+            let _ = fsm.next_id(&ctx).unwrap();
         }
 
         verify_block(&store, 0, |block| {
@@ -451,8 +614,8 @@ mod tests {
             }
         });
 
-        fsm.mark_free(Context(0), 37).unwrap();
-        fsm.mark_free(Context(0), 9).unwrap();
+        fsm.mark_free(&ctx, 37).unwrap();
+        fsm.mark_free(&ctx, 9).unwrap();
 
         verify_block(&store, 0, |block| {
             assert_eq!(block[0], 0b11111111);
@@ -474,21 +637,22 @@ mod tests {
     #[test]
     fn basic_id_reuse() {
         let store = Store;
+        let ctx = Context::new(0);
 
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
 
         for _ in 0u32..64 {
-            let _ = fsm.next_id(Context(0)).unwrap();
+            let _ = fsm.next_id(&ctx).unwrap();
         }
 
         // Next ID should be 64 since none are free before that.
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 64);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 64);
 
         // After deleting an ID, it should be returned from `next_id()`.
-        fsm.mark_free(Context(0), 37).unwrap();
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 37);
+        fsm.mark_free(&ctx, 37).unwrap();
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 37);
         // Once all free IDs are used, fresh ones should be returned.
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 65);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 65);
         // And has_free_ids should now be false.
         assert!(!fsm.has_free_ids.load(Ordering::Acquire));
     }
@@ -496,33 +660,35 @@ mod tests {
     #[test]
     fn basic_recovery() {
         let store = Store;
+        let ctx = Context::new(0);
 
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
 
         for _ in 0u32..64 {
-            let _ = fsm.next_id(Context(0)).unwrap();
+            let _ = fsm.next_id(&ctx).unwrap();
         }
 
-        fsm.mark_free(Context(0), 37).unwrap();
+        fsm.mark_free(&ctx, 37).unwrap();
 
         // Loading FSM from store should recover all the state.
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
         assert_eq!(*fsm.max_block.read().unwrap(), 0);
         assert_eq!(fsm.next_id.load(Ordering::Acquire), 64);
         assert!(fsm.has_free_ids.load(Ordering::Acquire));
         assert_eq!(fsm.fast_free_list.len(), 1);
-        assert_eq!(fsm.next_id(Context(0)).unwrap(), 37);
+        assert_eq!(fsm.next_id(&ctx).unwrap().id(), 37);
     }
 
     #[test]
     fn dynamic_expansion() {
         let store = Store;
+        let ctx = Context::new(0);
 
-        let fsm = FreeSpaceMap::new(Context(0), store.callbacks()).unwrap();
+        let fsm = FreeSpaceMap::new(&ctx, store.callbacks(), false, true).unwrap();
 
         // Asking for more than BLOCK_SIZE_IDS will force another FSM block to be allocated.
         for _ in 0u32..BLOCK_SIZE_IDS as u32 + 1 {
-            let _ = fsm.next_id(Context(0)).unwrap();
+            let _ = fsm.next_id(&ctx).unwrap();
         }
     }
 }

@@ -5,19 +5,17 @@
 
 //! Label-filtered search using multi-hop expansion.
 
-use diskann_utils::Reborrow;
 use diskann_utils::future::SendFuture;
-use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
 use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
-    error::{ErrorExt, IntoANNResult},
+    error::IntoANNResult,
     graph::{
         glue::{
-            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            self, HybridPredicate, Predicate, PredicateMut, SearchAccessor, SearchPostProcess,
+            SearchStrategy,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -26,7 +24,7 @@ use crate::{
         search_output_buffer::SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::{BuildQueryComputer, DataProvider},
+    provider::DataProvider,
     utils::VectorId,
 };
 
@@ -36,14 +34,14 @@ use crate::{
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
 #[derive(Debug)]
-pub struct MultihopSearch<'q, InternalId> {
+pub struct MultihopFilterSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: Knn,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
-impl<'q, InternalId> MultihopSearch<'q, InternalId> {
+impl<'q, InternalId> MultihopFilterSearch<'q, InternalId> {
     /// Create new multihop search parameters.
     pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
         Self {
@@ -53,33 +51,32 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T> Search<DP, S, T> for MultihopSearch<'q, DP::InternalId>
+impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopFilterSearch<'b, DP::InternalId>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    S: SearchStrategy<'a, DP, T>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
     fn search<O, PP, OB>(
         self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
         processor: PP,
-        context: &DP::Context,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
         O: Send,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        PP: SearchPostProcess<S::SearchAccessor, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
+                .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
 
             let start_ids = accessor.starting_points().await?;
 
@@ -89,7 +86,6 @@ where
                 index.max_degree_with_slack(),
                 &self.inner,
                 &mut accessor,
-                &computer,
                 &mut scratch,
                 &mut NoopSearchRecord::new(),
                 self.label_evaluator,
@@ -100,7 +96,6 @@ where
                 .post_process(
                     &mut accessor,
                     query,
-                    &computer,
                     scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
@@ -171,18 +166,17 @@ impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {
 ///
 /// Performs label-filtered search by expanding through non-matching nodes
 /// to find matching neighbors within two hops.
-pub(crate) async fn multihop_search_internal<I, A, T, SR>(
+pub(crate) async fn multihop_search_internal<I, A, SR>(
     max_degree_with_slack: usize,
     search_params: &Knn,
     accessor: &mut A,
-    computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
     search_record: &mut SR,
     query_label_evaluator: &dyn QueryLabelProvider<I>,
 ) -> ANNResult<InternalSearchStats>
 where
     I: VectorId,
-    A: ExpandBeam<T, Id = I> + SearchExt,
+    A: SearchAccessor<Id = I>,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
@@ -194,21 +188,12 @@ where
         range_search_second_round: false,
     };
 
-    // Initialize search state if not already initialized.
-    // This allows paged search to call multihop_search_internal multiple times
-    if scratch.visited.is_empty() {
-        let start_ids = accessor.starting_points().await?;
-
-        for id in start_ids {
+    accessor
+        .start_point_distances(|id, distance| {
             scratch.visited.insert(id);
-            let element = accessor
-                .get_element(id)
-                .await
-                .escalate("start point retrieval must succeed")?;
-            let dist = computer.evaluate_similarity(element.reborrow());
-            scratch.best.insert(Neighbor::new(id, dist));
-        }
-    }
+            scratch.best.insert(Neighbor::new(id, distance));
+        })
+        .await?;
 
     // Pre-allocate with good capacity to avoid repeated allocations
     let mut one_hop_neighbors = Vec::with_capacity(max_degree_with_slack);
@@ -234,9 +219,8 @@ where
         accessor
             .expand_beam(
                 scratch.beam_nodes.iter().copied(),
-                computer,
                 glue::NotInMut::new(&mut scratch.visited),
-                |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
+                |id, distance| one_hop_neighbors.push(Neighbor::new(id, distance)),
             )
             .await?;
 
@@ -280,9 +264,8 @@ where
         accessor
             .expand_beam(
                 two_hop_expansion_candidate_ids.iter().copied(),
-                computer,
                 NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
-                |distance, id| {
+                |id, distance| {
                     two_hop_neighbors.push(Neighbor::new(id, distance));
                 },
             )

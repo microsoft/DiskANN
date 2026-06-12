@@ -68,8 +68,8 @@ where
     build_core::graph::MultiInsert<DP, T, S>: build_core::Build<Output = ()>,
     build_core::ids::Identity<DP::ExternalId>: build_core::ids::ToId<DP::ExternalId>,
 {
-    let rt = diskann_benchmark_core::tokio::runtime(input.num_threads)?;
-    match &input.multi_insert {
+    let rt = diskann_benchmark_core::tokio::runtime(input.num_threads())?;
+    match input.multi_insert() {
         None => {
             let runner = build_core::graph::SingleInsert::new(
                 index,
@@ -82,7 +82,7 @@ where
                 runner,
                 build_core::Parallelism::dynamic(
                     diskann::utils::ONE,
-                    NonZeroUsize::new(input.num_threads).unwrap(),
+                    NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
                 Some(&ProgressMeter::new(output)),
@@ -123,8 +123,8 @@ where
     build_core::graph::SingleInsert<DP, T, S>: build_core::Build<Output = ()>,
     build_core::ids::Identity<DP::ExternalId>: build_core::ids::ToId<DP::ExternalId>,
 {
-    let rt = diskann_benchmark_core::tokio::runtime(input.num_threads)?;
-    match &input.multi_insert {
+    let rt = diskann_benchmark_core::tokio::runtime(input.num_threads())?;
+    match input.multi_insert() {
         None => {
             let runner = build_core::graph::SingleInsert::new(
                 index,
@@ -137,7 +137,7 @@ where
                 runner,
                 build_core::Parallelism::dynamic(
                     diskann::utils::ONE,
-                    NonZeroUsize::new(input.num_threads).unwrap(),
+                    NonZeroUsize::new(input.num_threads()).unwrap(),
                 ),
                 &rt,
                 Some(&ProgressMeter::new(output)),

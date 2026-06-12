@@ -183,3 +183,14 @@ impl TopkMultihopFilter {
         SearchPhaseKind::TopkMultihopFilter
     }
 }
+
+/// A search plugin for inline filtered search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkInlineFilter;
+
+impl TopkInlineFilter {
+    /// Returns [`SearchPhaseKind::TopkInlineFilter`].
+    pub(crate) fn kind() -> SearchPhaseKind {
+        SearchPhaseKind::TopkInlineFilter
+    }
+}

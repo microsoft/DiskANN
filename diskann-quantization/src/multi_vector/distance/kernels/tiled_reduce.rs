@@ -134,12 +134,12 @@ pub(super) unsafe fn tiled_reduce<A, K, LA, LB>(
         return;
     }
 
-    // Allocate conversion buffers once. Identity conversions use `Buffer = ()`
-    // and these calls are no-ops.
+    // Cap by actual data — planned tile can vastly exceed it, and some
+    // ConvertTo impls (e.g. f16) allocate per call.
     let a_tile_rows = K::A_PANEL * plan.a_panels_per_tile;
     let b_tile_rows = K::B_PANEL * plan.b_panels_per_tile;
-    let mut a_buf = ca.new_buffer(a_tile_rows, k);
-    let mut b_buf = cb.new_buffer(b_tile_rows, k);
+    let mut a_buf = ca.new_buffer(a_tile_rows.min(a_padded_nrows), k);
+    let mut b_buf = cb.new_buffer(b_tile_rows.min(b_nrows), k);
 
     // SAFETY: Caller guarantees b_ptr is valid for b_nrows * k elements.
     let pb_end = unsafe { b_ptr.add(b_nrows * k) };

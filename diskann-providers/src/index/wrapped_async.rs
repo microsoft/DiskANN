@@ -11,13 +11,13 @@ use diskann::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
             Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-            MultiInsertStrategy, PruneStrategy, SearchStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchAccessor, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors},
         search_output_buffer,
     },
     neighbor::Neighbor,
-    provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
+    provider::{DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement},
     utils::ONE,
 };
 use diskann_utils::Reborrow;
@@ -192,15 +192,15 @@ where
         })
     }
 
-    pub fn insert<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    pub fn insert<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         id: &DP::ExternalId,
         vector: T,
     ) -> ANNResult<()>
     where
-        S: InsertStrategy<DP, T>,
+        S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
         T: Copy + Send,
     {
@@ -233,7 +233,7 @@ where
     ) -> ANNResult<bool>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -243,7 +243,7 @@ where
 
     pub fn drop_adj_list<NA>(&self, accessor: &mut NA, vector_id: DP::InternalId) -> ANNResult<()>
     where
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
@@ -258,7 +258,7 @@ where
     ) -> ANNResult<PartitionedNeighbors<DP::InternalId>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -296,7 +296,7 @@ where
     ) -> ANNResult<ConsolidateKind>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle.block_on(self.inner.drop_deleted_neighbors(
             context,
@@ -320,17 +320,17 @@ where
             .block_on(self.inner.consolidate_vector(strategy, context, vector_id))
     }
 
-    pub fn search<S, T, O, OB, P>(
-        &self,
+    pub fn search<'a, S, T, O, OB, P>(
+        &'a self,
         search_params: P,
-        strategy: &S,
-        context: &DP::Context,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> ANNResult<P::Output>
     where
-        P: graph::search::Search<DP, S, T>,
-        S: DefaultSearchStrategy<DP, T, O>,
+        P: graph::search::Search<'a, DP, S, T>,
+        S: DefaultSearchStrategy<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
@@ -346,13 +346,13 @@ where
     /// [`PagedSearch::next_page`] for retrieving results.
     pub fn paged_search<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self
@@ -367,14 +367,14 @@ where
     /// Begin a paged search with explicit initial seed IDs (synchronous wrapper).
     pub fn paged_search_with_init_ids<'a, S, T>(
         &'a self,
-        strategy: S,
+        strategy: &'a S,
         context: &'a DP::Context,
         query: T,
         l_value: usize,
         init_ids: Option<&'a [DP::InternalId]>,
-    ) -> ANNResult<PagedSearch<'a, DP, S, T>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
+        S: SearchStrategy<'a, DP, T> + 'static,
         T: Copy + Send + 'a,
     {
         let inner = self.handle.block_on(
@@ -404,7 +404,7 @@ where
     ) -> ANNResult<noawait::PagedSearch<DP::InternalId>>
     where
         T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-        S: for<'a> SearchStrategy<DP, <T as Reborrow<'a>>::Target> + 'static,
+        S: for<'a> SearchStrategy<'a, DP, <T as Reborrow<'a>>::Target> + 'static,
     {
         noawait::PagedSearch::new(self.inner.clone(), strategy, context, query, l_value)
     }
@@ -415,7 +415,7 @@ where
         accessor: &mut NA,
     ) -> ANNResult<usize>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.count_reachable_nodes(start_points, accessor))
@@ -424,7 +424,7 @@ where
     pub fn get_degree_stats<NA, Itr>(&self, accessor: &mut NA, itr: Itr) -> ANNResult<DegreeStats>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.get_degree_stats(accessor, itr))
@@ -435,15 +435,19 @@ where
 ///
 /// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
 /// blocks the current thread to drive the underlying async search forward.
-pub struct PagedSearch<'a, DP: DataProvider, S: SearchStrategy<DP, T>, T> {
-    handle: tokio::runtime::Handle,
-    inner: graph::search::PagedSearch<'a, DP, S, T>,
-}
-
-impl<'a, DP, S, T> PagedSearch<'a, DP, S, T>
+pub struct PagedSearch<'a, DP, A>
 where
     DP: DataProvider,
-    S: SearchStrategy<DP, T>,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
+    handle: tokio::runtime::Handle,
+    inner: graph::search::PagedSearch<'a, DP, A>,
+}
+
+impl<'a, DP, A> PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
 {
     /// Returns the next page of at most `k` nearest-neighbor results.
     ///
@@ -547,7 +551,7 @@ pub mod noawait {
         where
             DP: DataProvider<InternalId = I>,
             T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
-            S: for<'a> SearchStrategy<DP, <T as Reborrow<'a>>::Target> + 'static,
+            S: for<'a> SearchStrategy<'a, DP, <T as Reborrow<'a>>::Target> + 'static,
         {
             // Prepare the input and output channels used to communicate with the search task.
             let (input, output) = channel::<I>();
@@ -559,7 +563,7 @@ pub mod noawait {
                 // The assumption of `noawait` is that this call will always resolve to
                 // `Poll::Ready`.
                 let mut state = match index
-                    .paged_search(strategy, &context, query.reborrow(), l_value)
+                    .paged_search(&strategy, &context, query.reborrow(), l_value)
                     .await
                 {
                     Ok(state) => state,
@@ -726,7 +730,7 @@ mod tests {
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
         for (i, v) in train_data.row_iter().enumerate() {
-            index.insert(FullPrecision, &ctx, &(i as u32), v).unwrap();
+            index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 
         let save_metadata = AsyncIndexMetadata::new(save_path.to_string());

@@ -6,14 +6,11 @@
 use diskann::error::IntoANNResult;
 use diskann::graph::glue::{SearchPostProcess, SearchStrategy};
 use diskann::neighbor::Neighbor;
-use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
+use diskann::provider::{DataProvider, HasId};
 
-use diskann::ANNError;
-use diskann_utils::Reborrow;
-use diskann_vector::PreprocessedDistanceFunction;
+use diskann::{ANNError, ANNResult};
 use roaring::RoaringTreemap;
 
-use crate::document::EncodedDocument;
 use crate::encoded_attribute_provider::{
     document_provider::DocumentProvider, encoded_filter_expr::EncodedFilterExpr,
     roaring_attribute_store::RoaringAttributeStore,
@@ -37,36 +34,38 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 
 impl<'q, DP, Strategy, Q>
     SearchStrategy<
+        'q,
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, Q::Target>,
-    Q: Send + Sync + Reborrow<'q>,
+    Strategy: SearchStrategy<'q, DP, &'q Q>,
+    Q: Send + Sync + 'q,
 {
-    type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type SearchAccessorError = ANNError;
-    type SearchAccessor<'a> = EncodedDocumentAccessor<Strategy::SearchAccessor<'a>>;
+    type SearchAccessor = EncodedDocumentAccessor<Strategy::SearchAccessor>;
 
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        context: &'a DP::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+    fn search_accessor(
+        &'q self,
+        provider: &'q DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        context: &'q DP::Context,
+        query: &'q FilteredQuery<Q>,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let inner_accessor = self
             .inner
-            .search_accessor(provider.inner_provider(), context)
+            .search_accessor(provider.inner_provider(), context, query.query())
             .into_ann_result()?;
         let attribute_accessor = provider.attribute_store().attribute_accessor()?;
         let attribute_map = provider.attribute_store().attribute_map();
 
-        Ok(EncodedDocumentAccessor::new(
+        EncodedDocumentAccessor::new(
             inner_accessor,
             attribute_accessor,
             attribute_map,
+            query.filter_expr(),
             self.beta,
-        ))
+        )
     }
 }
 
@@ -74,37 +73,32 @@ where
 /// the inner strategy's default processor with [`FilterResults`].
 impl<'q, DP, Strategy, Q>
     diskann::graph::glue::DefaultPostProcessor<
+        'q,
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         &'q FilteredQuery<'_, Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<DP, Q::Target>,
-    Q: Send + Sync + Reborrow<'q>,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<'q, DP, &'q Q>,
+    Q: Send + Sync + 'q,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
-    fn default_post_processor(&self) -> Self::Processor {
+    fn default_post_processor(&'q self) -> Self::Processor {
         FilterResults {
             inner_post_processor: self.inner.default_post_processor(),
         }
     }
 }
 
-pub struct InlineBetaComputer<Inner> {
-    inner_computer: Inner,
+pub struct InlineBetaComputer {
     beta_value: f32,
     filter_expr: EncodedFilterExpr,
 }
 
-impl<Inner> InlineBetaComputer<Inner> {
-    pub(crate) fn new(
-        inner_computer: Inner,
-        beta_value: f32,
-        filter_expr: EncodedFilterExpr,
-    ) -> Self {
+impl InlineBetaComputer {
+    pub(crate) fn new(beta_value: f32, filter_expr: EncodedFilterExpr) -> Self {
         Self {
-            inner_computer,
             beta_value,
             filter_expr,
         }
@@ -113,26 +107,24 @@ impl<Inner> InlineBetaComputer<Inner> {
     pub(crate) fn filter_expr(&self) -> &EncodedFilterExpr {
         &self.filter_expr
     }
-}
 
-impl<Inner, V> PreprocessedDistanceFunction<EncodedDocument<V, &RoaringTreemap>, f32>
-    for InlineBetaComputer<Inner>
-where
-    Inner: PreprocessedDistanceFunction<V>,
-{
-    fn evaluate_similarity(&self, changing: EncodedDocument<V, &RoaringTreemap>) -> f32 {
-        let (vec, attrs) = changing.destructure();
-        let sim = self.inner_computer.evaluate_similarity(vec);
-        let pred_eval = PredicateEvaluator::new(attrs);
-        if self
-            .filter_expr
-            .encoded_filter_expr()
-            .accept(&pred_eval)
-            .expect("Expected predicate evaluation to not error out!")
-        {
-            sim * self.beta_value
-        } else {
-            sim
+    pub(crate) fn apply(&self, distance: f32, attributes: &RoaringTreemap) -> f32 {
+        let eval = PredicateEvaluator::new(attributes);
+        match self.filter_expr.encoded_filter_expr().accept(&eval) {
+            Ok(matched) => {
+                if matched {
+                    distance * self.beta_value
+                } else {
+                    distance
+                }
+            }
+            Err(_) => {
+                // TODO: If predicate evaluation fails, we are taking the approach that we
+                // will simply return the score returned by the inner computer, as though no
+                // predicate was specified.
+                tracing::warn!("Predicate evaluation failed in OnlineBetaComputer application");
+                distance
+            }
         }
     }
 }
@@ -153,17 +145,16 @@ impl<IPP> FilterResults<IPP> {
 impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<'_, Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<Q::Target>,
-    Q: Send + Sync + Reborrow<'q>,
-    IPP: SearchPostProcess<IA, Q::Target> + Send + Sync,
+    IA: HasId + Send + Sync,
+    Q: Send + Sync,
+    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<'_, Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q::Target>>::QueryComputer>,
+        query: &'q FilteredQuery<Q>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -171,27 +162,30 @@ where
         I: Iterator<Item = diskann::neighbor::Neighbor<IA::Id>> + Send,
         B: diskann::graph::SearchOutputBuffer<<IA as diskann::provider::HasId>::Id> + Send + ?Sized,
     {
-        //This is a poor implementation - we should ideally be caching attributes of a point
-        //along with neighbor. But that involves changes in the core algo, so I'm leaving it out
-        //for now.
-        //TODO: Fix for performance.
+        // This is a poor implementation - we should ideally be caching attributes of a point
+        // along with neighbor. But that involves changes in the core algo, so I'm leaving it
+        // out for now.
+        //
+        // TODO: Fix for performance.
         let mut filtered_candidates = Vec::<Neighbor<IA::Id>>::new();
         for candidate in candidates {
-            let doc = accessor.get_element(candidate.id).await?;
-            let pe = PredicateEvaluator::new(doc.attributes());
+            accessor.attributes_for(candidate.id, |computer, attributes| -> ANNResult<()> {
+                let pe = PredicateEvaluator::new(&*attributes);
 
-            if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
-                filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
-            }
+                if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
+                    filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
+                }
+                Ok(())
+            })??;
         }
 
-        //Assuming that the job of the post processor is to only forward the right set of candidates and that
-        //there will be a "terminal" post processor that copies data into "output".
+        // Assuming that the job of the post processor is to only forward the right set of
+        // candidates and that there will be a "terminal" post processor that copies data
+        // into "output".
         self.inner_post_processor
             .post_process(
                 accessor.inner_accessor(),
                 query.query(),
-                &computer.inner_computer,
                 filtered_candidates.into_iter(),
                 output,
             )

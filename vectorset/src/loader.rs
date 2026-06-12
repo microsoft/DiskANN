@@ -4,22 +4,14 @@
  */
 
 use anyhow::{Result, anyhow};
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    mem,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, marker::PhantomData, mem, path::Path, sync::Arc};
 use tokio::{fs::File, io::AsyncReadExt, sync::Mutex};
 
 const BATCH_SIZE: usize = 1024;
 
 /// Loads base or query vectors from a given path and allow iteration over them.
-#[allow(dead_code)]
 pub struct DatasetLoader<T: bytemuck::Pod> {
     file: Mutex<(File, usize)>,
-    path: PathBuf,
     num_vectors: usize,
     dim: usize,
     type_: PhantomData<T>,
@@ -36,7 +28,6 @@ impl<T: bytemuck::Pod> DatasetLoader<T> {
 
         Ok(Arc::new(Self {
             file: Mutex::new((file, 0)),
-            path,
             num_vectors,
             dim,
             type_: PhantomData,
@@ -60,34 +51,32 @@ impl<T: bytemuck::Pod> DatasetLoader<T> {
     /// Returns (count, first_id) where `count` is the number of vectors loaded
     /// and `first_id` is the id of the first vector.
     pub async fn next(&self, buffer: &mut Vec<T>) -> Result<(usize, usize)> {
+        let mut f = self.file.lock().await;
+
         let mut count;
         let mut first_id;
         loop {
-            {
-                let mut f = self.file.lock().await;
-
-                first_id = f.1;
-                if f.1 >= self.num_vectors {
-                    buffer.clear();
-                    return Ok((0, first_id));
-                }
-
-                buffer.resize(BATCH_SIZE * self.dim, T::zeroed());
-
-                let mut buf: &mut [u8] = bytemuck::cast_slice_mut::<T, u8>(&mut *buffer);
-                while let bytes_read = f.0.read(buf).await?
-                    && bytes_read > 0
-                {
-                    buf = &mut buf[bytes_read..];
-                }
-
-                let elements_left = buf.len() / mem::size_of::<T>();
-                if !buf.is_empty() && !elements_left.is_multiple_of(self.dim) {
-                    return Err(anyhow!("unexpected EOF"));
-                }
-
-                count = BATCH_SIZE - elements_left / self.dim;
+            first_id = f.1;
+            if f.1 >= self.num_vectors {
+                buffer.clear();
+                return Ok((0, first_id));
             }
+
+            buffer.resize(BATCH_SIZE * self.dim, T::zeroed());
+
+            let mut buf: &mut [u8] = bytemuck::cast_slice_mut::<T, u8>(&mut *buffer);
+            while let bytes_read = f.0.read(buf).await?
+                && bytes_read > 0
+            {
+                buf = &mut buf[bytes_read..];
+            }
+
+            let elements_left = buf.len() / mem::size_of::<T>();
+            if !buf.is_empty() && !elements_left.is_multiple_of(self.dim) {
+                return Err(anyhow!("unexpected EOF"));
+            }
+
+            count = BATCH_SIZE - elements_left / self.dim;
 
             if count == 0 {
                 continue;
@@ -96,7 +85,6 @@ impl<T: bytemuck::Pod> DatasetLoader<T> {
             break;
         }
 
-        let mut f = self.file.lock().await;
         f.1 += count;
 
         Ok((count, first_id))

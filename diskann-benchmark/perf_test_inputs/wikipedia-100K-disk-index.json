@@ -18,7 +18,7 @@
                     "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 192,
                     "quantization_type": "SQ_1_2.0",
-                    "save_path": "wikipedia_100k_benchmark_index"
+                    "save_path": "target/tmp/wikipedia_100k_benchmark_index"
                 },
                 "search_phase": {
                     "queries": "wikipedia_cohere/wikipedia_query.bin",

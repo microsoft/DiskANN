@@ -21,12 +21,6 @@ use crate::TestCallCount;
 
 pub struct QuantQueryComputer(QueryComputer<GlobalAllocator>);
 
-impl QuantQueryComputer {
-    pub(crate) fn into_inner(self) -> QueryComputer<GlobalAllocator> {
-        self.0
-    }
-}
-
 impl PreprocessedDistanceFunction<&[u8], f32> for QuantQueryComputer {
     fn evaluate_similarity(&self, x: &[u8]) -> f32 {
         self.0
@@ -155,7 +149,7 @@ impl QuantVectorProvider {
         Ok(())
     }
 
-    /// Return the quant vector at index `i`.
+    /// Return the quant vector at index `i`
     #[cfg(test)]
     pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<u8>, AccessError> {
         let mut value = vec![0u8; self.quantizer.bytes()];
@@ -218,11 +212,6 @@ impl QuantVectorProvider {
         self.quant_vector_index.insert(key, v);
 
         Ok(())
-    }
-
-    pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
-        self.quant_vector_index.delete(key);
     }
 }
 
