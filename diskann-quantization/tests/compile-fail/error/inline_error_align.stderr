@@ -1,22 +1,26 @@
 error[E0080]: evaluation panicked: error type has alignment stricter than 8
- --> src/error.rs
+ --> $RUST/core/src/panic.rs
+  |
+  = note: evaluation of `diskann_quantization::error::InlineError::new::<Error>::{constant#1}` failed here
+  |
+ ::: src/error.rs
   |
   | /             assert!(
   | |                 std::mem::align_of::<T>() <= std::mem::align_of::<&'static ErrorVTable>(),
   | |                 "error type has alignment stricter than 8"
   | |             )
-  | |_____________^ evaluation of `diskann_quantization::error::InlineError::new::<Error>::{constant#1}` failed here
+  | |_____________- in this macro invocation
 
 note: erroneous constant encountered
-   --> src/error.rs
-    |
-    | /         const {
-    | |             assert!(
-    | |                 std::mem::align_of::<T>() <= std::mem::align_of::<&'static ErrorVTable>(),
-    | |                 "error type has alignment stricter than 8"
-    | |             )
-    | |         };
-    | |_________^
+ --> src/error.rs
+  |
+  | /         const {
+  | |             assert!(
+  | |                 std::mem::align_of::<T>() <= std::mem::align_of::<&'static ErrorVTable>(),
+  | |                 "error type has alignment stricter than 8"
+  | |             )
+  | |         };
+  | |_________^
 
 note: the above error was encountered while instantiating `fn InlineError::new::<Error>`
   --> tests/compile-fail/error/inline_error_align.rs:24:13
