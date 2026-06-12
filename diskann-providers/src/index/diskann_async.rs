@@ -173,8 +173,8 @@ pub(crate) mod tests {
         },
         neighbor::Neighbor,
         provider::{
-            AsNeighbor, AsNeighborMut, DataProvider, DefaultContext, Delete, ExecutionContext,
-            Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
+            DataProvider, DefaultContext, Delete, ExecutionContext, Guard, NeighborAccessor,
+            NeighborAccessorMut, SetElement,
         },
         utils::{IntoUsize, ONE},
     };
@@ -265,7 +265,7 @@ pub(crate) mod tests {
 
     pub(crate) async fn populate_graph<NA>(accessor: &mut NA, source: &[AdjacencyList<u32>])
     where
-        NA: AsNeighborMut<Id = u32>,
+        NA: NeighborAccessorMut<Id = u32>,
     {
         for (i, v) in source.iter().enumerate() {
             accessor.set_neighbors(i as u32, v).await.unwrap();
@@ -2133,7 +2133,7 @@ pub(crate) mod tests {
 
     async fn check_graph_for_self_loops_or_duplicates<NA, Itr>(accessor: &mut NA, itr: Itr)
     where
-        NA: AsNeighbor<Id = u32>,
+        NA: NeighborAccessor<Id = u32>,
         Itr: Iterator<Item = u32>,
     {
         for id in itr {

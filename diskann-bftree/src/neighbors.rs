@@ -293,12 +293,11 @@ where
     I: VectorId,
 {
     fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send {
-        let result = self.provider.get_neighbors(id, neighbors);
-        std::future::ready(result.map(|()| self))
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.get_neighbors(id, neighbors))
     }
 }
 
@@ -307,20 +306,18 @@ where
     I: VectorId,
 {
     fn set_neighbors(
-        mut self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send {
-        let result = self.provider.set_neighbors(id, neighbors, &mut self.buf);
-        std::future::ready(result.map(|()| self))
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
     }
     fn append_vector(
-        mut self,
+        &mut self,
         id: Self::Id,
         neighbors: &[Self::Id],
-    ) -> impl std::future::Future<Output = ANNResult<Self>> + Send {
-        let result = self.provider.append_vector(id, neighbors, &mut self.buf);
-        std::future::ready(result.map(|()| self))
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }
 

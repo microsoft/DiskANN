@@ -134,8 +134,6 @@ use hashbrown::hash_map;
 
 use crate::graph::glue;
 
-use super::AsWorkingSet;
-
 /////////
 // Map //
 /////////
@@ -143,16 +141,14 @@ use super::AsWorkingSet;
 /// Default [working set](super) state backed by a `HashMap` with an optional overlay for
 /// [`multi_insert`](crate::graph::glue::MultiInsertStrategy).
 ///
-/// This struct uses [`Builder`] as its constructor, which implements [`AsWorkingSet`] for
-/// multi-insert compatibility.
+/// This struct uses [`Builder`] as its constructor.
 ///
-/// Additionally, [working set reuse](super#reuse-in-a-workingset) is optionally supported and
-/// is controlled by the [`Capacity`] enum. See the [module level docs](self#working-set-reuse)
-/// for more details.
+/// Additionally, caching is optionally supported and is controlled by the [`Capacity`] enum.
+/// See the [module level docs](self#working-set-reuse) for more details.
 ///
 /// When working set reuse is enabled, older entries are evicted using an unspecified
-/// algorithm with the guarantee that items of the [`Fill`] iterator that are already present
-/// will not be evicted.
+/// algorithm with the guarantee that items of the [`Map::fill`] iterator that are already
+/// present will not be evicted.
 ///
 /// For zero-copy multi-insert compatibility, an [`Overlay`] should be provided to the [`Builder`].
 #[derive(Debug)]
@@ -234,8 +230,7 @@ where
     /// Prepare the map for the next [`fill`](Self::fill) cycle.
     ///
     /// Pins entries whose keys appear in `itr` and evicts unpinned entries as needed
-    /// to stay within the configured [`Capacity`]. Called automatically by [`fill`](Self::fill);
-    /// only call directly if using [`fill_with`](Self::fill_with).
+    /// to stay within the configured [`Capacity`]. Called automatically by [`fill`](Self::fill).
     ///
     /// Note: When semantically correct, `itr` may not be consumed. Callers must not rely
     /// on `itr` being advanced to completion.
@@ -386,34 +381,6 @@ where
     /// assert_eq!(*view.get(1).unwrap(), 1.0);
     /// assert_eq!(*view.get(2).unwrap(), 2.0);
     /// assert!(view.get(3).is_none());
-    /// ```
-    ///
-    /// # Implementing [`Fill`](super::Fill) with `Map::fill`
-    ///
-    /// The [`Fill`](super::Fill) trait requires implementers to populate a working set
-    /// from an accessor. `Map::fill` is designed to make this straightforward:
-    ///
-    /// ```ignore
-    /// impl workingset::Fill<WorkingSet> for MyAccessor<'_> {
-    ///     type Error = ANNError;
-    ///     type View<'a> = workingset::map::View<'a, u32, Box<[f32]>, Ref<[f32]>>
-    ///     where
-    ///         Self: 'a;
-    ///
-    ///     async fn fill<'a, Itr>(
-    ///         &'a mut self,
-    ///         set: &'a mut WorkingSet,
-    ///         itr: Itr,
-    ///     ) -> Result<Self::View<'a>, Self::Error>
-    ///     where
-    ///         Itr: ExactSizeIterator<Item = u32> + Clone + Send + Sync,
-    ///         Self: 'a,
-    ///     {
-    ///         set.fill(itr, |id| {
-    ///             self.get_vector(id).allow_transient("skipping transient errors")
-    ///         })
-    ///     }
-    /// }
     /// ```
     pub fn fill<Itr, E>(
         &mut self,
@@ -818,9 +785,12 @@ where
 
 /// Builder for [`Map`]-backed working sets.
 ///
-/// Doubles as the `Seed` type for [`AsWorkingSet<Map>`]: strategies return a `Builder`
-/// from [`MultiInsertStrategy::finish`](crate::graph::glue::MultiInsertStrategy::finish),
-/// and the index calls [`as_working_set`](AsWorkingSet::as_working_set) to materialize it.
+/// Doubles as the `Seed` type for
+/// [`MultiInsertStrategy::Seed`](crate::graph::glue::MultiInsertStrategy::Seed): strategies
+/// return a `Builder` from
+/// [`MultiInsertStrategy::finish`](crate::graph::glue::MultiInsertStrategy::finish),
+/// and later provide it to
+/// [`MultiInsertStrategy::seeded_prune_accessor`](crate::graph::glue::MultiInsertStrategy::seeded_prune_accessor).
 ///
 /// # Examples
 ///
@@ -877,15 +847,6 @@ impl<K, P: Projection> Clone for Builder<K, P> {
     }
 }
 
-impl<K, V, P> AsWorkingSet<Map<K, V, P>> for Builder<K, P>
-where
-    P: Projection,
-{
-    fn as_working_set(&self, capacity: usize) -> Map<K, V, P> {
-        self.clone().build(capacity)
-    }
-}
-
 /// Controls how a [`Builder`] resolves the capacity of the constructed [`Map`].
 ///
 /// See [working set reuse](self#working-set-reuse) for a detailed description.
@@ -924,7 +885,7 @@ impl Capacity {
 /// given precedence.
 ///
 /// If [working set reuse](self#working-set-reuse) is enabled, then all elements within
-/// the [`Map`] are visible, not just those that belong to the most recent [`Fill`].
+/// the [`Map`] are visible, not just those that belong to the most recent fill.
 #[derive(Debug)]
 pub struct View<'a, K, V, P: Projection = Reborrowed<V>> {
     map: &'a Map<K, V, P>,
@@ -1845,14 +1806,6 @@ mod tests {
         let ws: TestMap = Builder::new(Capacity::Default).build(32);
         assert!(!ws.contains_key(&1));
         // No overlay.
-        let view = ws.view();
-        assert!(view.get(1).is_none());
-    }
-
-    #[test]
-    fn builder_as_working_set() {
-        let ws: TestMap = Builder::new(Capacity::Default).as_working_set(32);
-        assert!(!ws.contains_key(&1));
         let view = ws.view();
         assert!(view.get(1).is_none());
     }

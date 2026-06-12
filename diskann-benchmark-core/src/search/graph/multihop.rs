@@ -112,7 +112,7 @@ where
     {
         let context = DP::Context::default();
         let multihop_search =
-            graph::search::MultihopSearch::new(parameters.knn, &*self.labels[index]);
+            graph::search::MultihopFilterSearch::new(parameters.knn, &*self.labels[index]);
         let stats = self
             .index
             .search(
