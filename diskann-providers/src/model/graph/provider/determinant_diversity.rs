@@ -37,18 +37,14 @@
 //!
 //! # Variants
 //!
-//! The module provides two implementations:
-//!
-//! - `post_process_with_eta_f32()`: Uses ridge regularization for numerical stability
-//! - `post_process_without_eta_f32()`: Computes exact determinants (faster but less stable)
-//!
-//! These are selected automatically based on the eta parameter value.
+//! The public entry point is [`determinant_diversity_post_process`].
+//! It applies either the unregularized (`eta == 0`) or ridge-regularized (`eta > 0`)
+//! formulation internally.
 //!
 //! # Time Complexity
 //!
-//! O(m³) where m is the number of candidates, due to determinant computation.
-//! In practice, m is typically small (search returns hundreds of candidates,
-//! but only top-k ≪ m are selected).
+//! O(n * k * dim), where n is number of candidates, k is requested output size,
+//! and dim is vector dimensionality.
 //!
 //! # References
 //!

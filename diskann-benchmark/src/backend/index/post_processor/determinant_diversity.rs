@@ -8,9 +8,9 @@ use std::future::Future;
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::utils::IntoUsize;
 use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
-use diskann_providers::model::graph::provider::async_::{
+use diskann_providers::model::graph::provider::{
+    async_::inmem::{self, GetFullPrecision},
     determinant_diversity_post_process,
-    inmem::{self, GetFullPrecision},
 };
 use diskann_quantization::num::Positive;
 

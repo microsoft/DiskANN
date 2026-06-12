@@ -74,11 +74,11 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     registry.register(
         "graph-index-full-precision-f32",
         FullPrecision::<f32>::new()
-            .search(plugins::DeterminantDiversity)
             .search(plugins::Topk)
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
-            .search(plugins::TopkMultihopFilter),
+            .search(plugins::TopkMultihopFilter)
+            .search(plugins::DeterminantDiversity),
     )?;
 
     registry.register(

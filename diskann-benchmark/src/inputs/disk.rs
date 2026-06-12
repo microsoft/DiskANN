@@ -382,11 +382,7 @@ impl DiskSearchPhase {
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
         }
         match &self.post_processor {
-            Some(TopkPostProcessor::DeterminantDiversity { power, eta }) => {
-                write_field!(f, "Post Processor", "determinant-diversity")?;
-                write_field!(f, "DetDiv Power", power)?;
-                write_field!(f, "DetDiv Eta", eta)?;
-            }
+            Some(pp) => write_field!(f, "Post Processor", pp)?,
             None => write_field!(f, "Post Processor", "none")?,
         }
         Ok(())

@@ -8,10 +8,7 @@ pub mod common;
 pub use common::{PrefetchCacheLineLevel, StartPoints, VectorGuard};
 
 pub(crate) mod postprocess;
-// Re-export from parent module for backward compatibility.
-// The algorithm is not async-specific and lives in provider::determinant_diversity.
 pub mod distances;
-pub use super::determinant_diversity_post_process;
 pub mod memory_vector_provider;
 pub use memory_vector_provider::MemoryVectorProviderAsync;
 

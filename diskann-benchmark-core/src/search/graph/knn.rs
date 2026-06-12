@@ -142,13 +142,6 @@ pub struct Metrics {
     pub hops: u32,
 }
 
-impl Metrics {
-    /// Construct a new metrics value.
-    pub fn new(comparisons: u32, hops: u32) -> Self {
-        Self { comparisons, hops }
-    }
-}
-
 impl<DP, T, S> Search for KNN<DP, T, S, ()>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,

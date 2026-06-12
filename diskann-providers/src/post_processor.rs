@@ -29,8 +29,8 @@ use std::fmt;
 /// # Errors
 ///
 /// Construction fails if:
-/// - `power <= 0.0` (invalid power weighting)
-/// - `eta < 0.0` (negative stability parameter)
+/// - `power` is non-finite or `<= 0.0` (invalid power weighting)
+/// - `eta` is non-finite or `< 0.0` (negative stability parameter)
 #[derive(Debug, Clone, Copy)]
 pub struct DeterminantDiversityParams {
     /// Relevance weighting exponent. Must be > 0.0.
@@ -45,13 +45,13 @@ impl DeterminantDiversityParams {
     /// # Errors
     ///
     /// Returns an error if validation fails:
-    /// - `power <= 0.0`: invalid relevance weighting
-    /// - `eta < 0.0`: invalid numerical stability parameter
+    /// - `power` is non-finite or `<= 0.0`: invalid relevance weighting
+    /// - `eta` is non-finite or `< 0.0`: invalid numerical stability parameter
     pub fn new(power: f32, eta: f32) -> Result<Self, DeterminantDiversityError> {
-        if power <= 0.0 {
+        if !power.is_finite() || power <= 0.0 {
             return Err(DeterminantDiversityError::InvalidPower(power));
         }
-        if eta < 0.0 {
+        if !eta.is_finite() || eta < 0.0 {
             return Err(DeterminantDiversityError::InvalidEta(eta));
         }
         Ok(Self { power, eta })
@@ -124,6 +124,14 @@ mod tests {
     #[test]
     fn test_invalid_eta() {
         assert!(DeterminantDiversityParams::new(1.0, -0.1).is_err());
+    }
+
+    #[test]
+    fn test_invalid_non_finite_values() {
+        assert!(DeterminantDiversityParams::new(f32::NAN, 0.1).is_err());
+        assert!(DeterminantDiversityParams::new(f32::INFINITY, 0.1).is_err());
+        assert!(DeterminantDiversityParams::new(1.0, f32::NAN).is_err());
+        assert!(DeterminantDiversityParams::new(1.0, f32::INFINITY).is_err());
     }
 
     #[test]

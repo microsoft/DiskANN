@@ -29,7 +29,7 @@ use diskann::{
 };
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{compute_pq_distance, graph::provider::async_::determinant_diversity_post_process},
+    model::{compute_pq_distance, graph::provider::determinant_diversity_post_process},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_quantization::num::Positive;
@@ -1034,7 +1034,7 @@ where
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
     #[allow(clippy::too_many_arguments)]
-    pub fn search_internal(
+    pub(crate) fn search_internal(
         &self,
         query: &[Data::VectorDataType],
         k_value: usize,

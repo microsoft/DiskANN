@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::fmt;
+
 use diskann_benchmark_runner::Checker;
 use diskann_providers::post_processor::DeterminantDiversityParams;
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,16 @@ impl TopkPostProcessor {
                 DeterminantDiversityParams::new(*power, *eta)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Display for TopkPostProcessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TopkPostProcessor::DeterminantDiversity { power, eta } => {
+                write!(f, "determinant-diversity (power={power}, eta={eta})")
             }
         }
     }
