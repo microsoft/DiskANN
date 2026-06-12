@@ -398,10 +398,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "candidate matrix columns must equal query dimension")]
     fn test_mismatched_dimensions_panics() {
-        let candidates = vec![
-            (0u32, 0.5, vec![1.0, 2.0]),
-            (1u32, 0.3, vec![1.0]), // Wrong dimension
-        ];
+        // Candidate vectors are 2-D, but the query is 3-D. The helper builds a
+        // matrix with `ncols == 2`, so `determinant_diversity` should hit its
+        // `candidates.ncols() == query.len()` assertion.
+        let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
         let query = &[1.0, 2.0, 3.0];
         let _ = run_with_ids(candidates, query, 5, 0.5, p(1.0));
     }
