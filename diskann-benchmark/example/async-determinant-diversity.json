@@ -21,18 +21,15 @@
           "saturate_inserts": false
         },
         "search_phase": {
-          "search-type": "topk",
+          "search-type": "topk-determinant-diversity",
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
           "reps": 5,
           "num_threads": [
             1
           ],
-          "post_processor": {
-            "type": "determinant-diversity",
-            "power": 2.0,
-            "eta": 0.01
-          },
+          "power": 2.0,
+          "eta": 0.01,
           "runs": [
             {
               "search_n": 20,

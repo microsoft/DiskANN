@@ -17,16 +17,14 @@ use diskann_providers::{
         configuration::IndexConfiguration,
         graph::provider::async_::inmem::DefaultProviderParameters,
     },
+    post_processor::DeterminantDiversityParams,
     utils::load_metadata_from_file,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{
-        self, as_input, post_processor::TopkPostProcessor, save_and_load, write_field, Example,
-        PRINT_WIDTH,
-    },
+    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
 
@@ -115,7 +113,6 @@ pub(crate) struct TopkSearchPhase {
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
-    pub(crate) post_processor: Option<TopkPostProcessor>,
 }
 
 impl TopkSearchPhase {
@@ -129,12 +126,6 @@ impl TopkSearchPhase {
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
-        }
-
-        if let Some(post_processor) = self.post_processor.as_mut() {
-            post_processor
-                .validate(checker)
-                .context("invalid topk post processor")?;
         }
 
         Ok(())
@@ -164,7 +155,6 @@ impl Example for TopkSearchPhase {
             reps: REPS,
             num_threads: THREAD_COUNTS.to_vec(),
             runs,
-            post_processor: None,
         }
     }
 }
@@ -308,6 +298,53 @@ impl Example for MultiInsert {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopkDeterminantDiversityPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    pub(crate) power: f32,
+    pub(crate) eta: f32,
+}
+
+impl TopkDeterminantDiversityPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        DeterminantDiversityParams::new(self.power, self.eta)
+            .map_err(|e| anyhow::anyhow!("invalid determinant-diversity params: {e}"))?;
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        Ok(())
+    }
+}
+
+impl Example for TopkDeterminantDiversityPhase {
+    fn example() -> Self {
+        Self {
+            queries: InputFile::new("path/to/queries"),
+            groundtruth: InputFile::new("path/to/groundtruth"),
+            reps: NonZeroUsize::new(1).unwrap(),
+            num_threads: vec![NonZeroUsize::new(1).unwrap()],
+            runs: vec![GraphSearch {
+                search_n: 10,
+                search_l: vec![10, 20, 30, 40],
+                recall_k: 10,
+            }],
+            power: 1.0,
+            eta: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
@@ -315,6 +352,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
 #[derive(Debug, Error)]
@@ -341,6 +379,7 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
     }
 
@@ -385,6 +424,17 @@ impl SearchPhase {
             )),
         }
     }
+    pub(crate) fn as_topk_determinant_diversity(
+        &self,
+    ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkDeterminantDiversity(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkDeterminantDiversity,
+                self.kind(),
+            )),
+        }
+    }
 }
 
 impl SearchPhase {
@@ -394,16 +444,13 @@ impl SearchPhase {
             SearchPhase::Range(phase) => phase.validate(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
     }
 }
 
 fn has_topk_determinant_diversity(phase: &SearchPhase) -> bool {
-    phase
-        .as_topk()
-        .ok()
-        .and_then(|topk| topk.post_processor.as_ref())
-    .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity(_)))
+    matches!(phase, SearchPhase::TopkDeterminantDiversity(_))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,6 +459,7 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkDeterminantDiversity,
 }
 
 impl SearchPhaseKind {
@@ -421,6 +469,7 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
     }
 }

@@ -40,10 +40,7 @@ use diskann_providers::post_processor::DeterminantDiversityParams;
 
 use crate::{
     backend::index::result::AggregatedSearchResults,
-    inputs::{
-        graph_index::{SearchPhase, TopkSearchPhase},
-        post_processor::TopkPostProcessor,
-    },
+    inputs::graph_index::{SearchPhase, TopkDeterminantDiversityPhase},
 };
 
 /// A dyn-compatible search plugin for `DP`.
@@ -151,10 +148,7 @@ pub(crate) struct Topk;
 
 impl Topk {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase
-            .as_topk()
-            .ok()
-            .is_some_and(|topk| topk.post_processor.is_none())
+        phase.as_topk().is_ok()
     }
 
     pub(crate) const fn as_str() -> &'static str {
@@ -168,27 +162,19 @@ pub(crate) struct DeterminantDiversity;
 
 impl DeterminantDiversity {
     pub(crate) fn is_match(phase: &SearchPhase) -> bool {
-        phase
-            .as_topk()
-            .ok()
-            .and_then(|topk| topk.post_processor.as_ref())
-            .is_some_and(|pp| matches!(pp, TopkPostProcessor::DeterminantDiversity(_)))
+        phase.as_topk_determinant_diversity().is_ok()
     }
 
     pub(crate) const fn as_str() -> &'static str {
-        "topk + determinant-diversity"
+        "topk-determinant-diversity"
     }
 
     pub(crate) fn get(
         phase: &SearchPhase,
-    ) -> anyhow::Result<(&TopkSearchPhase, DeterminantDiversityParams)> {
-        let topk = phase.as_topk()?;
-        match topk.post_processor.as_ref() {
-            Some(TopkPostProcessor::DeterminantDiversity(params)) => Ok((topk, *params)),
-            _ => Err(anyhow::anyhow!(
-                "determinant-diversity plugin selected for non determinant-diversity input",
-            )),
-        }
+    ) -> anyhow::Result<(&TopkDeterminantDiversityPhase, DeterminantDiversityParams)> {
+        let phase = phase.as_topk_determinant_diversity()?;
+        let params = DeterminantDiversityParams::new(phase.power, phase.eta)?;
+        Ok((phase, params))
     }
 }
 

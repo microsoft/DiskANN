@@ -464,13 +464,15 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
         phase: &SearchPhase,
         _strategy: &Strategy<common::FullPrecision>,
     ) -> anyhow::Result<AggregatedSearchResults> {
-        let (topk, params) = plugins::DeterminantDiversity::get(phase)?;
+        let (phase, params) = plugins::DeterminantDiversity::get(phase)?;
 
         let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
-            &topk.queries,
+            &phase.queries,
         ))?);
-        let groundtruth =
-            datafiles::load_groundtruth(datafiles::BinFile(&topk.groundtruth), Some(topk.max_k()))?;
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&phase.groundtruth),
+            Some(phase.max_k()),
+        )?;
 
         let knn = benchmark_core::search::graph::KNN::with_postprocessor(
             index,
@@ -479,7 +481,7 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             post_processor::DeterminantDiversity::new(params),
         )?;
 
-        let steps = search::knn::SearchSteps::new(topk.reps, &topk.num_threads, &topk.runs);
+        let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
         let results = search::knn::run(&knn, &groundtruth, steps)?;
 
         Ok(AggregatedSearchResults::Topk(results))
