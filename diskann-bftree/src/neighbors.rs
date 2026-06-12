@@ -96,7 +96,7 @@ impl<I: VectorId> NeighborProvider<I> {
                 // If found, then re-construct the neighbor list (valid neighbors only)
                 if read_size > 0 {
                     // A retrieved neighbor list should be exactly max_degree + 1 length
-                    if read_size != (self.max_degree() + 1) * std::mem::size_of::<I>() as u32 {
+                    if read_size as usize != self.dim * std::mem::size_of::<I>() {
                         return Err(ANNError::log_index_error(
                             "Retrieved neighbor list is not expected length = max degree + 1",
                         ));
@@ -140,20 +140,21 @@ impl<I: VectorId> NeighborProvider<I> {
 
     /// Internal function for setting the neighbors for a vector id.
     ///
-    /// Each key is a `VectorId`, written in bytes. The value is a neighbor list
-    /// of length exactly `self.max_degree() + 1`. Specifically, an array of
-    /// exactly `n` neighbors is written as :  
+    /// Each key is a `VectorId`, written in bytes. The value is a
+    /// neighbor list of length exactly `self.dim`. Specifically,
+    /// an array of exactly `n` neighbors is written as :  
     /// ```text
     /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
     ///     
     /// -----------------------------------------------
     ///                     |
-    ///            self.max_degree() + 1
+    ///                 self.dim
     /// ```
-    /// where `[n; 0]` represents the u32 count `n` byte-packed into a type `I`,
-    /// and 'padding' indicates unfilled empty slots.
+    /// where `[n; 0]` represents the u32 count `n` byte-packed
+    /// into a type `I`, and 'padding' indicates unfilled empty slots.
     ///
-    /// Note: assuming all neighbors in the input list, 'neighbors', are valid.
+    /// Note: assuming all neighbors in the input list, 'neighbors',
+    /// are valid.
     fn set_neighbors_internal(
         &self,
         vector_id: I,
@@ -192,7 +193,7 @@ impl<I: VectorId> NeighborProvider<I> {
     ///  - Neighbor length is larger than `self.max_degree()`
     ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
-        if neighbors.len() > self.max_degree() as usize {
+        if neighbors.len() > self.dim - 1 {
             return Err(ANNError::log_index_error(
                 "The provided neighbor list is longer than the max degree",
             ));
@@ -220,7 +221,7 @@ impl<I: VectorId> NeighborProvider<I> {
         // Append the new neighbors
         let mut new_neighbor_added = false;
         for new_neighbor_id in new_neighbor_ids {
-            if neighbor_list.len() == self.max_degree() as usize {
+            if neighbor_list.len() == self.dim - 1 {
                 break;
             }
             new_neighbor_added |= neighbor_list.push(*new_neighbor_id);
