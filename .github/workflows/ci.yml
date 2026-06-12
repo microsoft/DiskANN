@@ -81,11 +81,10 @@ jobs:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          echo "$NEEDS_JSON"
           # Fail if any required upstream job failed or was cancelled.
           # `skipped` results (e.g. coverage excluding Dependabot) are treated
           # as passing, matching the intended behavior for conditional skips.
-          if echo "$NEEDS_JSON" | grep -E '"result": "(failure|cancelled)"'; then
+          if echo "$NEEDS_JSON" | grep -Eq '"result": "(failure|cancelled)"'; then
             echo "::error::One or more required CI jobs failed or were cancelled."
             exit 1
           fi
