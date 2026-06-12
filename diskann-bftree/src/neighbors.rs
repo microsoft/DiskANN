@@ -95,7 +95,7 @@ impl<I: VectorId> NeighborProvider<I> {
             bf_tree::LeafReadResult::Found(read_size) => {
                 // If found, then re-construct the neighbor list (valid neighbors only)
                 if read_size > 0 {
-                    // A retrieved neighbor list should be exactly max_degree + 1 length
+                    // A retrieved neighbor list should be exactly dim length
                     if read_size as usize != self.dim * std::mem::size_of::<I>() {
                         return Err(ANNError::log_index_error(
                             "Retrieved neighbor list is not expected length = max degree + 1",
