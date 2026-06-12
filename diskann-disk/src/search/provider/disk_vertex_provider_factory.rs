@@ -5,7 +5,7 @@
 use std::{cmp::min, collections::VecDeque, sync::Arc, time::Instant};
 
 use crate::data_model::GraphDataType;
-use diskann::{graph::AdjacencyList, utils::TryIntoVectorId, ANNError, ANNResult};
+use diskann::{graph::AdjacencyList, ANNError, ANNResult};
 use diskann_quantization::{
     alloc::{AlignedAllocator, Poly},
     num::PowerOfTwo,
@@ -188,7 +188,7 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
                 let node = queue.pop_front().ok_or_else(|| {
                     ANNError::log_index_error("Error while caching Nodes via BFS: Queue is empty")
                 })?;
-                nodes_in_a_batch.push(node.try_into_vector_id().map_err(ANNError::from)?);
+                nodes_in_a_batch.push(node);
             }
 
             vertex_provider.load_vertices(&nodes_in_a_batch)?;

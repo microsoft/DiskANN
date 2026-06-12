@@ -374,7 +374,7 @@ where
 
 pub struct PruneAccessor<'a, const NBITS: usize> {
     store: &'a SQStore<NBITS>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: DistanceComputer,
 }
 
@@ -385,7 +385,7 @@ where
 {
     fn new(
         store: &'a SQStore<NBITS>,
-        neighbors: &'a SimpleNeighborProviderAsync<u32>,
+        neighbors: &'a SimpleNeighborProviderAsync,
     ) -> ANNResult<Self> {
         let distance = store.distance_computer()?;
         Ok(Self {
@@ -415,7 +415,7 @@ where
     where
         Self: 'a;
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 
