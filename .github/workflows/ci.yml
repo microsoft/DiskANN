@@ -41,19 +41,19 @@ jobs:
   #
   # How it works:
   #
-  # * If no upstream job fails or is cancelled, the `if` condition is `false`
-  #   and this job is *skipped*. GitHub treats a skipped required check as
-  #   passing.
+  # * This job always runs (`if: always()`) so the required check is always
+  #   reported. This avoids a known failure mode where an upstream `skipped`
+  #   job cascades a skip onto this gate, leaving the required check
+  #   unreported and not re-evaluated on re-run.
   #
-  #   Note: jobs that are conditionally skipped (e.g. `coverage` excludes
-  #   Dependabot) are neither failed nor cancelled, so the gate will still
-  #   pass. This is intentional -- conditional skips represent expected
-  #   behavior, not failures.
+  # * If any upstream job fails or is cancelled, this job exits 1 and blocks
+  #   the merge.
+  #
+  # * Upstream jobs that are conditionally skipped (e.g. `coverage` excludes
+  #   Dependabot) are treated as passing. This is intentional -- conditional
+  #   skips represent expected behavior, not failures.
   #
   #   See: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks
-  #
-  # * If any upstream job fails or is cancelled, the `if` condition is `true`.
-  #   This job runs and exits 1, blocking the merge.
   #
   # All merge-blocking jobs should be listed in `needs` below.
   ci-gate:
@@ -71,12 +71,25 @@ jobs:
       - test-workspace
       - test-workspace-features
       - coverage
-    if: ${{ always() && (cancelled() || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'failure')) }}
+    # Always run so the required check is *always* reported. Without this,
+    # an upstream *skipped* job can cascade a skip onto this gate, leaving
+    # the required check unreported (and not re-evaluated on re-run).
+    if: ${{ always() }}
     steps:
-      - name: Gate failure
+      - name: Check CI results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
-          echo "::error::One or more required CI jobs failed or were cancelled."
-          exit 1
+          set -euo pipefail
+          echo "$NEEDS_JSON"
+          # Fail if any required upstream job failed or was cancelled.
+          # `skipped` results (e.g. coverage excluding Dependabot) are treated
+          # as passing, matching the intended behavior for conditional skips.
+          if echo "$NEEDS_JSON" | grep -E '"result": "(failure|cancelled)"'; then
+            echo "::error::One or more required CI jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "All required CI jobs passed or were intentionally skipped."
 
   # Basic checks that must pass before we kick off more expensive tests.
   basics:
