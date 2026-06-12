@@ -597,7 +597,6 @@ pub unsafe extern "C" fn search_vector(
     );
 
     let params = match search::Knn::new(
-        output_distances_len,
         search_exploration_factor as usize,
         None,
     ) {
@@ -662,7 +661,6 @@ pub unsafe extern "C" fn search_element(
     );
 
     let params = match search::Knn::new(
-        output_distances_len,
         search_exploration_factor as usize,
         None,
     ) {

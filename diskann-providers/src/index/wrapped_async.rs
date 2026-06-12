@@ -773,7 +773,7 @@ mod tests {
         let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
         let query = train_data.row(0);
-        let kind = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        let kind = graph::search::Knn::new_default(search_l).unwrap();
         let stats = loaded
             .search(kind, &FullPrecision, &DefaultContext, query, &mut output)
             .unwrap();
