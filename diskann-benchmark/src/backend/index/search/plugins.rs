@@ -219,3 +219,17 @@ impl TopkMultihopFilter {
         "topk + multihop filter"
     }
 }
+
+/// A search plugin for inline filtered search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TopkInlineFilter;
+
+impl TopkInlineFilter {
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_inline_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + inline filter"
+    }
+}

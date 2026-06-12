@@ -345,6 +345,7 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diskann_quantization::num::Positive;
     use diskann_utils::views::Matrix;
 
     fn run_with_ids(
