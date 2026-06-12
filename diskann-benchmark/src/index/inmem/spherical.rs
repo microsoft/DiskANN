@@ -11,12 +11,12 @@ crate::utils::stub_impl!(
     inputs::graph_index::SphericalQuantBuild
 );
 
-pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
+pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
     const NAME: &str = "graph-index-spherical-quantization";
 
     #[cfg(feature = "spherical-quantization")]
     {
-        use crate::backend::index::search::plugins;
+        use crate::index::search::plugins;
 
         // NOTE: Since the spherical provider is not generic on the number of bits, the
         // implementations of the search-plugins are shared by all bit-widths. Registering
@@ -83,7 +83,7 @@ mod imp {
     use std::{io::Write, sync::Arc};
 
     use crate::{
-        backend::index::{
+        index::{
             benchmarks::QueryType,
             build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,
@@ -190,19 +190,19 @@ mod imp {
                     input: &SphericalQuantBuild,
                 ) -> Result<MatchScore, FailureScore> {
                     let mut failure_score: Option<u32> = None;
-                    if input.build.multi_insert().is_some() {
+                    if input.build().multi_insert().is_some() {
                         failure_score = Some(1);
                     }
 
-                    if !f32::is_match(input.build.data_type()) {
+                    if !f32::is_match(input.build().data_type()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    if !self.search.is_match(&input.search_phase) {
+                    if !self.search.is_match(input.search_phase()) {
                         *failure_score.get_or_insert(0) += 1;
                     }
 
-                    let num_bits = input.num_bits.get();
+                    let num_bits = input.num_bits().get();
                     if num_bits != $N {
                         *failure_score.get_or_insert(0) += ($N as usize)
                             .abs_diff(num_bits)
@@ -234,31 +234,31 @@ mod imp {
                             writeln!(f, "- Search Kinds: {}", self.search.format_kinds())?;
                         }
                         Some(input) => {
-                            let num_bits = input.num_bits.get();
+                            let num_bits = input.num_bits().get();
                             if num_bits != $N {
                                 writeln!(f, "- Expected {} bits, got {}", $N, num_bits)?;
                             }
 
-                            if input.build.multi_insert().is_some() {
+                            if input.build().multi_insert().is_some() {
                                 writeln!(
                                     f,
                                     "- Spherical Quantization does not support multi-insert"
                                 )?;
                             }
 
-                            if !f32::is_match(input.build.data_type()) {
+                            if !f32::is_match(input.build().data_type()) {
                                 writeln!(
                                     f,
                                     "- Only `float32` data type is supported. Instead, got {}",
-                                    input.build.data_type()
+                                    input.build().data_type()
                                 )?;
                             }
 
-                            if !self.search.is_match(&input.search_phase) {
+                            if !self.search.is_match(input.search_phase()) {
                                 writeln!(
                                     f,
                                     "- Unsupported search phase: \"{}\" - expected one of {}",
-                                    input.search_phase.kind(),
+                                    input.search_phase().kind(),
                                     self.search.format_kinds(),
                                 )?;
                             }
@@ -274,31 +274,31 @@ mod imp {
                     mut output: &mut dyn Output,
                 ) -> anyhow::Result<SphericalBuildResult> {
                     assert_eq!(
-                        input.num_bits.get(),
+                        input.num_bits().get(),
                         $N,
                         "INTERNAL ERROR: this should not have passed the match check"
                     );
 
                     writeln!(output, "{}", input)?;
 
-                    let build = &input.build;
+                    let build = input.build();
 
                     let data: Arc<Matrix<f32>> =
                         Arc::new(datafiles::load_dataset(datafiles::BinFile(build.data()))?);
 
                     let start = std::time::Instant::now();
                     let m: diskann_vector::distance::Metric = build.distance().into();
-                    let pre_scale = match input.pre_scale {
-                        Some(v) => v.try_into()?,
+                    let pre_scale = match input.pre_scale() {
+                        Some(&v) => v.try_into()?,
                         None => diskann_quantization::spherical::PreScale::None,
                     };
 
                     let quantizer = diskann_quantization::spherical::SphericalQuantizer::train(
                         data.as_view(),
-                        (&input.transform_kind).into(),
+                        (input.transform_kind()).into(),
                         m.try_into()?,
                         pre_scale,
-                        &mut rand::rngs::StdRng::seed_from_u64(input.seed),
+                        &mut rand::rngs::StdRng::seed_from_u64(input.seed()),
                         GlobalAllocator,
                     )?;
 
@@ -340,10 +340,10 @@ mod imp {
                     // Save construction stats before running queries.
                     checkpoint.checkpoint(&result)?;
 
-                    for layout in input.query_layouts.iter() {
-                        let search = self
-                            .search
-                            .run(index.clone(), &input.search_phase, layout)?;
+                    for layout in input.query_layouts().iter() {
+                        let search =
+                            self.search
+                                .run(index.clone(), input.search_phase(), layout)?;
 
                         result.append(SearchRun {
                             layout: *layout,

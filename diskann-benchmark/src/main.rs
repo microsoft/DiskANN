@@ -4,6 +4,7 @@
  */
 
 mod backend;
+mod index;
 mod inputs;
 mod utils;
 
@@ -45,6 +46,7 @@ impl Cli {
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
         backend::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
@@ -305,8 +307,8 @@ mod tests {
     ////////////////////////////
 
     #[test]
-    fn graph_index_dynamic_integration() {
-        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+    fn graph_index_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-stream.json"));
         run_integration_test(raw);
     }
 
@@ -332,6 +334,14 @@ mod tests {
     #[cfg(feature = "bftree")]
     fn graph_index_bftree_stream_integration() {
         let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_spherical_integration() {
+        let raw =
+            value_from_file(&example_directory().join("graph-index-bftree-stream-spherical.json"));
         run_integration_test(raw);
     }
 

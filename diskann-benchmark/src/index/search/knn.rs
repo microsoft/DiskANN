@@ -8,7 +8,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann_benchmark_core::recall::GroundTruthMode;
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
-use crate::{backend::index::result::SearchResults, inputs::graph_index::GraphSearch};
+use crate::{index::result::SearchResults, inputs::graph_index::GraphSearch};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SearchSteps<'a> {

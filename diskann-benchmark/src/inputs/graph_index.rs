@@ -35,7 +35,7 @@ as_input!(IndexOperation);
 as_input!(IndexPQOperation);
 as_input!(IndexSQOperation);
 as_input!(SphericalQuantBuild);
-as_input!(DynamicIndexRun);
+as_input!(StreamingIndexRun);
 
 ////////////
 // Search //
@@ -822,13 +822,21 @@ impl IndexSource {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexOperation {
-    pub(crate) source: IndexSource, // either load or build
-    pub(crate) search_phase: SearchPhase,
+    source: IndexSource, // either load or build
+    search_phase: SearchPhase,
 }
 
 impl IndexOperation {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build"
+    }
+
+    pub(crate) fn source(&self) -> &IndexSource {
+        &self.source
+    }
+
+    pub(crate) fn search_phase(&self) -> &SearchPhase {
+        &self.search_phase
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
@@ -864,16 +872,41 @@ impl std::fmt::Display for IndexOperation {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexPQOperation {
-    pub(crate) index_operation: IndexOperation, // either load or build
-    pub(crate) num_pq_chunks: usize,
-    pub(crate) seed: u64,
-    pub(crate) max_fp_vecs_per_prune: Option<usize>,
-    pub(crate) use_fp_for_search: bool,
+    index_operation: IndexOperation, // either load or build
+    num_pq_chunks: usize,
+    seed: u64,
+    max_fp_vecs_per_prune: Option<usize>,
+    use_fp_for_search: bool,
 }
 
 impl IndexPQOperation {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build-pq"
+    }
+
+    #[cfg(feature = "product-quantization")]
+    pub(crate) fn index_operation(&self) -> &IndexOperation {
+        &self.index_operation
+    }
+
+    #[cfg(feature = "product-quantization")]
+    pub(crate) fn num_pq_chunks(&self) -> usize {
+        self.num_pq_chunks
+    }
+
+    #[cfg(feature = "product-quantization")]
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    #[cfg(feature = "product-quantization")]
+    pub(crate) fn max_fp_vecs_per_prune(&self) -> Option<usize> {
+        self.max_fp_vecs_per_prune
+    }
+
+    #[cfg(feature = "product-quantization")]
+    pub(crate) fn use_fp_for_search(&self) -> bool {
+        self.use_fp_for_search
     }
 
     #[cfg(feature = "product-quantization")]
@@ -952,15 +985,35 @@ impl std::fmt::Display for IndexPQOperation {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexSQOperation {
-    pub(crate) index_operation: IndexOperation,
-    pub(crate) num_bits: usize,
-    pub(crate) standard_deviations: f64,
-    pub(crate) use_fp_for_search: bool,
+    index_operation: IndexOperation,
+    num_bits: usize,
+    standard_deviations: f64,
+    use_fp_for_search: bool,
 }
 
 impl IndexSQOperation {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build-sq"
+    }
+
+    #[cfg(feature = "scalar-quantization")]
+    pub(crate) fn index_operation(&self) -> &IndexOperation {
+        &self.index_operation
+    }
+
+    #[cfg(feature = "scalar-quantization")]
+    pub(crate) fn num_bits(&self) -> usize {
+        self.num_bits
+    }
+
+    #[cfg(feature = "scalar-quantization")]
+    pub(crate) fn standard_deviations(&self) -> f64 {
+        self.standard_deviations
+    }
+
+    #[cfg(feature = "scalar-quantization")]
+    pub(crate) fn use_fp_for_search(&self) -> bool {
+        self.use_fp_for_search
     }
 
     #[cfg(feature = "scalar-quantization")]
@@ -1040,18 +1093,53 @@ impl std::fmt::Display for IndexSQOperation {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SphericalQuantBuild {
-    pub(crate) build: IndexBuild, // spherical does not support saving and loading
-    pub(crate) search_phase: SearchPhase,
-    pub(crate) seed: u64,
-    pub(crate) transform_kind: inputs::exhaustive::TransformKind,
-    pub(crate) query_layouts: Vec<inputs::exhaustive::SphericalQuery>,
-    pub(crate) num_bits: NonZeroUsize,
-    pub(crate) pre_scale: Option<inputs::exhaustive::PreScale>,
+    build: IndexBuild, // spherical does not support saving and loading
+    search_phase: SearchPhase,
+    seed: u64,
+    transform_kind: inputs::exhaustive::TransformKind,
+    query_layouts: Vec<inputs::exhaustive::SphericalQuery>,
+    num_bits: NonZeroUsize,
+    pre_scale: Option<inputs::exhaustive::PreScale>,
 }
 
 impl SphericalQuantBuild {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build-spherical-quantization"
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn build(&self) -> &IndexBuild {
+        &self.build
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn search_phase(&self) -> &SearchPhase {
+        &self.search_phase
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn transform_kind(&self) -> &inputs::exhaustive::TransformKind {
+        &self.transform_kind
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn query_layouts(&self) -> &[inputs::exhaustive::SphericalQuery] {
+        &self.query_layouts
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn num_bits(&self) -> NonZeroUsize {
+        self.num_bits
+    }
+
+    #[cfg(feature = "spherical-quantization")]
+    pub(crate) fn pre_scale(&self) -> Option<&inputs::exhaustive::PreScale> {
+        self.pre_scale.as_ref()
     }
 
     #[cfg(feature = "spherical-quantization")]
@@ -1153,7 +1241,7 @@ impl std::fmt::Display for SphericalQuantBuild {
 }
 
 ////////////////////////////
-// Dynamic Runbook Params //
+// Streaming Runbook Params //
 ////////////////////////////
 
 #[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1181,7 +1269,7 @@ impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
 
 /// Runbook loading and phase type definitions are in utils.datafiles
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DynamicRunbookParams {
+pub(crate) struct StreamingRunbookParams {
     pub(crate) runbook_path: InputFile,
     pub(crate) dataset_name: String,
     pub(crate) gt_directory: String,
@@ -1199,7 +1287,7 @@ pub(crate) struct DynamicRunbookParams {
 // 1. The runbook file can be parsed
 // 2. The dataset_name exists in the runbook
 // 3. All required ground truth files exist in gt_directory
-impl DynamicRunbookParams {
+impl StreamingRunbookParams {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         self.runbook_path.resolve(checker)?;
 
@@ -1266,7 +1354,7 @@ impl DynamicRunbookParams {
     }
 }
 
-impl Example for DynamicRunbookParams {
+impl Example for StreamingRunbookParams {
     fn example() -> Self {
         Self {
             runbook_path: InputFile::new("path/to/runbook"),
@@ -1283,7 +1371,7 @@ impl Example for DynamicRunbookParams {
     }
 }
 
-impl DynamicRunbookParams {
+impl StreamingRunbookParams {
     /// Example for hard-delete providers that don't use consolidation.
     #[cfg(feature = "bftree")]
     pub(crate) fn example_immediate() -> Self {
@@ -1294,9 +1382,9 @@ impl DynamicRunbookParams {
     }
 }
 
-impl std::fmt::Display for DynamicRunbookParams {
+impl std::fmt::Display for StreamingRunbookParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Dynamic Runbook Parameters")?;
+        writeln!(f, "Streaming Runbook Parameters")?;
         write_field!(f, "Runbook Path", self.runbook_path.display())?;
         write_field!(f, "Dataset Name", self.dataset_name)?;
 
@@ -1330,19 +1418,31 @@ impl std::fmt::Display for DynamicRunbookParams {
 }
 
 ///////////////////////////
-// Graph Index Dynamic //
+// Graph Index Streaming //
 ///////////////////////////
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct DynamicIndexRun {
-    pub(crate) build: IndexBuild,
-    pub(crate) search_phase: SearchPhase,
-    pub(crate) runbook_params: DynamicRunbookParams,
+pub(crate) struct StreamingIndexRun {
+    build: IndexBuild,
+    search_phase: SearchPhase,
+    runbook_params: StreamingRunbookParams,
 }
 
-impl DynamicIndexRun {
+impl StreamingIndexRun {
     pub(crate) const fn tag() -> &'static str {
-        "graph-index-dynamic-run"
+        "graph-index-stream-run"
+    }
+
+    pub(crate) fn build(&self) -> &IndexBuild {
+        &self.build
+    }
+
+    pub(crate) fn search_phase(&self) -> &SearchPhase {
+        &self.search_phase
+    }
+
+    pub(crate) fn runbook_params(&self) -> &StreamingRunbookParams {
+        &self.runbook_params
     }
 
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
@@ -1367,21 +1467,21 @@ impl DynamicIndexRun {
     }
 }
 
-impl Example for DynamicIndexRun {
+impl Example for StreamingIndexRun {
     fn example() -> Self {
         let build = IndexBuild::example();
 
         Self {
             build,
             search_phase: SearchPhase::Topk(TopkSearchPhase::example()),
-            runbook_params: DynamicRunbookParams::example(),
+            runbook_params: StreamingRunbookParams::example(),
         }
     }
 }
 
-impl std::fmt::Display for DynamicIndexRun {
+impl std::fmt::Display for StreamingIndexRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Graph Index Dynamic Run")?;
+        writeln!(f, "Graph Index Streaming Run")?;
         write_field!(f, "tag", Self::tag())?;
         writeln!(f, "Runbook Parameters:")?;
         write!(f, "{}", self.runbook_params)?;
