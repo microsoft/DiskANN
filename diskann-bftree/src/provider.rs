@@ -416,19 +416,40 @@ where
     }
 }
 
+/// Trait for types that may need cleanup during hard-delete.
+///
+/// `QuantVectorProvider` implements this to delete its quantized embedding.
+/// `NoStore` implements this as a no-op.
+pub(crate) trait DeleteQuant {
+    fn delete_vector(&self, id: usize);
+}
+
+impl DeleteQuant for QuantVectorProvider {
+    fn delete_vector(&self, id: usize) {
+        QuantVectorProvider::delete_vector(self, id);
+    }
+}
+
+impl DeleteQuant for NoStore {
+    fn delete_vector(&self, _id: usize) {}
+}
+
 /// Hard-delete implementation for `BfTreeProvider`.
 ///
 /// This provider performs **hard deletes**: vector data is immediately and irrecoverably erased
-/// from the underlying bf-tree storage when [`Delete::delete`] is called. This has an important
-/// consequence for inplace delete: the [`InplaceDeleteMethod::VisitedAndTopK`] strategy is
-/// **incompatible** with this provider because it requires reading the deleted vector's data
-/// (via [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been
-/// committed. Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`]
-/// instead, as these strategies only require neighbor topology (which remains accessible).
+/// from the underlying bf-tree storage when [`Delete::delete`] is called. When a quantized
+/// store is present, both the full-precision and quantized entries are removed.
+///
+/// This has an important consequence for inplace delete: the
+/// [`InplaceDeleteMethod::VisitedAndTopK`] strategy is **incompatible** with this provider
+/// because it requires reading the deleted vector's data (via
+/// [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been committed.
+/// Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`] instead,
+/// as these strategies only require neighbor topology (which remains accessible).
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
-    Q: AsyncFriendly,
+    Q: AsyncFriendly + DeleteQuant,
 {
     fn release(
         &self,
@@ -444,7 +465,11 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
+        // Only delete vector data here. Neighbor adjacency cleanup (zeroing the
+        // deleted vertex's edge list and patching neighbors-of-neighbors) is
+        // handled by `DiskANNIndex::inplace_delete` → `drop_adj_list`.
         self.full_vectors.delete_vector(id as usize);
+        self.quant_vectors.delete_vector(id as usize);
 
         std::future::ready(Ok(()))
     }
@@ -597,28 +622,30 @@ where
 
     /// Store the provided element in both the full-precision and quant vector stores.
     ///
-    /// The process of storing the element in the quant store will compress the vector
-    ///
+    /// Full-precision is written first as the authoritative store. This ensures that
+    /// if the quant write fails, the worst case is a vector reachable in full-precision
+    /// but not yet in quantized search (benign), rather than a quantized ghost with no
+    /// full-precision backing data.
     fn set_element(
         &self,
         _context: &Self::Context,
         id: &u32,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        // First, try adding to the quant provider.
-        //
-        if let Err(err) = self.quant_vectors.set_vector_sync(id.into_usize(), element) {
-            return std::future::ready(Err(err));
-        }
-
-        // Next, add to the full precision provider.
-        //
+        // First, write to the authoritative full-precision store.
         if let Err(err) = self.full_vectors.set_vector_sync(id.into_usize(), element) {
             return std::future::ready(Err(err));
         }
 
-        // Success
-        //
+        // Then, write the compressed representation to the quant store.
+        if let Err(err) = self.quant_vectors.set_vector_sync(id.into_usize(), element) {
+            debug_assert!(
+                false,
+                "quant write failed after full-precision success: {err}"
+            );
+            return std::future::ready(Err(err));
+        }
+
         std::future::ready(Ok(NoopGuard::new(*id)))
     }
 }
