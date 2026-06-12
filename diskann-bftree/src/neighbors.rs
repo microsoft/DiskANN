@@ -7,9 +7,8 @@
 
 use std::marker::PhantomData;
 
-use crate::AsKey;
 use bf_tree::{BfTree, Config};
-use bytemuck::{bytes_of, cast_slice, cast_slice_mut, from_bytes};
+use bytemuck::{cast_slice, cast_slice_mut};
 use diskann::{
     graph::AdjacencyList,
     provider::{self, HasId},
@@ -76,6 +75,14 @@ impl<I: VectorId> NeighborProvider<I> {
         Self::new(max_degree, adjacency_list_index)
     }
 
+    /// The length of a single `value` in the tree
+    ///
+    /// The length in bytes of the values read and set
+    /// into the bf-tree is always `max_degree + 1` I-cells long.
+    fn value_bytes(&self) -> usize {
+        (self.max_degree() + 1) as usize * std::mem::size_of::<I>()
+    }
+
     /// Retrieve the neighbor list of a vector
     /// `neighbors` is cleared first upon each invocation
     /// One data copy is involved which copies the data from bf-tree to `neighbors`
@@ -83,12 +90,11 @@ impl<I: VectorId> NeighborProvider<I> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
-        // Resize 'neighbors' to hold any full-size neighbor list
+        // Resize 'neighbors' to hold any full-size neighbor list + I-cell for length
         let mut guard = neighbors.resize(self.dim);
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let i = vector_id.into_usize();
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&vector_id);
 
         // Search and retrieve the corresponding neighbor list data as a byte string, &[u8], in the format of
         // |VectorId|VectorId|...|Invalid|Invalid|VectorId (list length)|
@@ -98,41 +104,20 @@ impl<I: VectorId> NeighborProvider<I> {
             bf_tree::LeafReadResult::Found(read_size) => {
                 // If found, then re-construct the neighbor list (valid neighbors only)
                 if read_size > 0 {
-                    // A non-empty neighbor list should at least contain one entry for the list length
-                    if (read_size as usize) < std::mem::size_of::<I>() {
+                    // A retrieved neighbor list should be exactly max_degree + 1 length
+                    if read_size != self.value_bytes() as u32 {
                         return Err(ANNError::log_index_error(
-                            "Retrieved neighbor list is shorter than a single VectorID",
+                            "Retrieved neighbor list is not expected length = max degree + 1",
                         ));
                     }
 
-                    // A retrieved neighbor list should not be longer than the max degree
-                    if (read_size as usize) > (std::mem::size_of::<I>() * self.dim) {
-                        return Err(ANNError::log_index_error(
-                            "Retrieved neighbor list is longer than the max degree",
-                        ));
-                    }
+                    // The last I-cell stores the neighbor count (see `cell_to_len`).
+                    //
+                    // SAFETY: we know this will not panic since
+                    // read_size == self.dim * std::mem::size_of::<I>().
+                    let count = cell_to_len(&guard[self.dim - 1]);
 
-                    // Retrieved data length must be in the multiple of VectorID
-                    if !(read_size as usize).is_multiple_of(std::mem::size_of::<I>()) {
-                        return Err(ANNError::log_index_error(
-                            "Retrieved neighbor list length is not in the multiple of VectorID",
-                        ));
-                    }
-
-                    // The last entry in the retrieved data stores the neighbor count as u32
-                    let count_slot_offset = (read_size as usize) - std::mem::size_of::<I>();
-                    let nbr_count = *from_bytes::<u32>(
-                        &cast_slice::<I, u8>(&guard)[count_slot_offset..count_slot_offset + 4],
-                    ) as usize;
-
-                    // The specified list length must be smaller than the retrieved data length
-                    if (read_size as usize) < (std::mem::size_of::<I>() * (nbr_count + 1)) {
-                        return Err(ANNError::log_index_error(
-                            "The length of the retrieved neighbor list is shorter than the specified length",
-                        ));
-                    }
-
-                    guard.finish(nbr_count);
+                    guard.finish(count as usize);
                 }
             }
             bf_tree::LeafReadResult::Deleted => {
@@ -155,45 +140,77 @@ impl<I: VectorId> NeighborProvider<I> {
         Ok(())
     }
 
-    /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair
-    /// K: vector id
-    /// V: |VectorId|...|VectorId|Invalid|...|count (u32 LE)|
-    /// Where count is the neighbor list length and 'Invalid' indicates unfilled empty slots
-    /// Note: assuming all neighbors in the input list, 'neighbors', are valid
-    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
+    /// Internal function for setting the neighbors for a vector id.
+    ///
+    /// Each key is a `VectorId`, written in bytes. The value is a neighbor list
+    /// of length exactly `self.max_degree() + 1`. Specifically, an array of
+    /// exactly `n` neighbors is written as :  
+    /// ```
+    /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
+    ///     
+    /// -----------------------------------------------
+    ///                     |
+    ///            self.max_degree() + 1
+    /// ```
+    /// where `[n; 0]` represents the u32 count `n` byte-packed into a type `I`,
+    /// and 'padding' indicates unfilled empty slots.
+    ///
+    /// Note: assuming all neighbors in the input list, 'neighbors', are valid.
+    fn set_neighbors_internal(
+        &self,
+        vector_id: I,
+        neighbors: &[I],
+        buf: &mut [u8],
+    ) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
 
-        if neighbors.len() > self.dim - 1 {
+        if buf.len() < self.value_bytes() {
             return Err(ANNError::log_index_error(
-                "The provided neighbor list is longer than the max degree",
+                "The provided buffer is not long enough",
             ));
         }
 
-        // Serialize the key, vector_id, into a byte string, &[u8]
-        let i = vector_id.into_usize();
-        let key = i.as_key();
+        let buf = cast_slice_mut::<u8, I>(&mut buf[..self.value_bytes()]);
 
         // Serialize the value into the reusable buffer.
-        // Format: |VectorId|...|VectorId|count (u32)|
-        let neighbor_list_edges_in_byte = cast_slice::<I, u8>(neighbors);
-        let count: u32 = neighbors.len() as u32;
+        // Format: |VectorId|...|VectorId|padding(Invalid)|padding(Invalid)|...|length cell|,
+        // where the trailing cell is one `I`-sized slot holding the count (see `len_cell`).
+        buf[..neighbors.len()].copy_from_slice(neighbors);
+        buf[buf.len() - 1] = len_to_cell(neighbors.len() as u32);
 
-        let total_len = neighbor_list_edges_in_byte.len() + std::mem::size_of::<I>();
-
-        buf[..neighbor_list_edges_in_byte.len()].copy_from_slice(neighbor_list_edges_in_byte);
-        // Zero the count slot then write the u32 count into the low bytes
-        let count_offset = neighbor_list_edges_in_byte.len();
-        buf[count_offset..total_len].fill(0);
-        buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
-
-        self.adjacency_list_index.insert(key, &buf[..total_len]);
+        let key = bytemuck::bytes_of(&vector_id);
+        let value = cast_slice::<I, u8>(buf);
+        self.adjacency_list_index.insert(key, value);
 
         Ok(())
     }
 
-    /// Append unique vectors into a neighbor list
-    /// The newly appended neighbor list will always be extended to 'dim' long to avoid frequent mem copy in bf-tree
+    /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair.
+    ///
+    /// The list of neighbors and their length is written into
+    /// the passed buffer `buf` before writing `self.value_bytes()` of it
+    /// into the bf-tree.
+    ///
+    /// # Errors
+    ///  
+    ///  - Neighbor length is larger than `self.max_degree()`
+    ///  - Buffer length is smaller than `self.value_bytes()`
+    pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [u8]) -> ANNResult<()> {
+        if neighbors.len() > self.max_degree() as usize {
+            return Err(ANNError::log_index_error(
+                "The provided neighbor list is longer than the max degree",
+            ));
+        };
+
+        self.set_neighbors_internal(vector_id, neighbors, buf)
+    }
+
+    /// Append unique vectors into a neighbor list.
+    ///
+    /// The newly appended neighbor list will always be extended to 'dim'
+    /// long to avoid frequent mem copy in bf-tree.
+    ///
     /// Note: assuming all neighbors in the input list, 'new_neighbor_ids', are valid
     pub fn append_vector(
         &self,
@@ -208,7 +225,7 @@ impl<I: VectorId> NeighborProvider<I> {
         // Append the new neighbors
         let mut new_neighbor_added = false;
         for new_neighbor_id in new_neighbor_ids {
-            if neighbor_list.len() == self.dim - 1 {
+            if neighbor_list.len() == self.max_degree() as usize {
                 break;
             }
             new_neighbor_added |= neighbor_list.push(*new_neighbor_id);
@@ -216,28 +233,7 @@ impl<I: VectorId> NeighborProvider<I> {
 
         // If unique new neighbors are appended, write back using the reusable buffer
         if new_neighbor_added {
-            let nbr_count = neighbor_list.len();
-            let i = vector_id.into_usize();
-            let key = i.as_key();
-
-            // Build the value into the scratch buffer:
-            // |neighbor_0|...|neighbor_n|padding(Invalid)|...|nbr_count|
-            // Total size is always self.dim elements to avoid bf-tree page fragmentation.
-            let id_size = std::mem::size_of::<I>();
-            let total_len = self.dim * id_size;
-
-            buf[..total_len].fill(0);
-
-            // Copy existing neighbors into the buffer
-            let neighbors_bytes = cast_slice::<I, u8>(&neighbor_list);
-            buf[..neighbors_bytes.len()].copy_from_slice(neighbors_bytes);
-
-            // Write the count at the last slot as a raw u32 (no VectorId round-trip needed)
-            let count: u32 = nbr_count as u32;
-            let count_offset = (self.dim - 1) * id_size;
-            buf[count_offset..count_offset + 4].copy_from_slice(bytes_of(&count));
-
-            self.adjacency_list_index.insert(key, &buf[..total_len]);
+            self.set_neighbors_internal(vector_id, &neighbor_list, buf)?;
         }
 
         Ok(())
@@ -245,8 +241,7 @@ impl<I: VectorId> NeighborProvider<I> {
 
     pub fn delete_vector(&self, vector_id: I) -> ANNResult<()> {
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let i = vector_id.into_usize();
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&vector_id);
 
         self.adjacency_list_index.delete(key);
         Ok(())
@@ -321,6 +316,31 @@ where
     }
 }
 
+/// Const for size in bytes of a `u32`
+const FOUR: usize = std::mem::size_of::<u32>();
+
+/// Encode a neighbor-list length as an `I`-sized cell.
+///
+/// The count is stored as a little-endian `u32` in the low 4 bytes of the cell; any
+/// remaining bytes are zero. The compile-time assertion guarantees that `I` is wide
+/// enough.
+fn len_to_cell<I: bytemuck::Pod>(len: u32) -> I {
+    const { assert!(std::mem::size_of::<I>() >= FOUR) };
+    let mut cell = I::zeroed();
+    bytemuck::bytes_of_mut(&mut cell)[..FOUR].copy_from_slice(&len.to_le_bytes());
+    cell
+}
+
+/// Decode a neighbor-list length from a cell produced by [`len_to_cell`].
+fn cell_to_len<I: bytemuck::Pod>(cell: &I) -> u32 {
+    const { assert!(std::mem::size_of::<I>() >= FOUR) };
+
+    let mut low = [0u8; FOUR];
+    low.copy_from_slice(&bytemuck::bytes_of(cell)[..FOUR]);
+
+    u32::from_le_bytes(low)
+}
+
 ///////////
 // Tests //
 ///////////
@@ -333,6 +353,15 @@ mod tests {
     use tokio::task::JoinSet;
 
     use super::*;
+
+    /// Length round-trips through an `I`-sized cell .
+    #[test]
+    fn len_cell_round_trip() {
+        for len in [0u32, 1, 42, u32::MAX] {
+            assert_eq!(cell_to_len::<u32>(&len_to_cell::<u32>(len)), len);
+            assert_eq!(cell_to_len::<u64>(&len_to_cell::<u64>(len)), len);
+        }
+    }
 
     /// Test corner cases of appending to neighbor list
     #[tokio::test]
