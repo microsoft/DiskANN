@@ -52,9 +52,9 @@ impl<P: DataProvider> FlatIndex<P> {
     /// computer, keeps the best `k` candidates in a [`NeighborPriorityQueue`], then runs
     /// `processor` over the survivors to populate `output`.
     ///
-    /// The visitor produced by `strategy` plays the role of the post-processing accessor,
-    /// so any [`SearchPostProcess`] written against accessor capabilities (rather than the
-    /// concrete graph accessor) can be reused between flat and graph search.
+    /// The post-processor [`SearchPostProcess::post_process`] outputs the number
+    /// of results that survive, which is passed through the `result_count` in
+    /// `SearchResults`.
     pub fn knn_search<S, T, O, PP, OB>(
         &self,
         k: NonZeroUsize,
@@ -123,9 +123,7 @@ mod tests {
 
     /// `knn_search` returns a `Send` future, and a shared `&FlatIndex` can serve
     /// many concurrent searches on a multi-threaded runtime, each producing the
-    /// correct output independently. Every case is driven under both the identity
-    /// processor and a filtering one, so post-processing composes with concurrency
-    /// and each result is checked against its own oracle.
+    /// correct output independently.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn multithreaded_knn_search() {
         use std::sync::Arc;

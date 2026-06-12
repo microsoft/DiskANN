@@ -90,9 +90,8 @@ impl KnnOracleRun {
         sort_neighbors(&mut top_k);
         let top_k_distances = top_k.iter().map(|n| n.distance).collect();
 
-        let mut ground_truth =
+        let ground_truth =
             oracle.expected(brute_force_topk(index.provider(), Metric::L2, query, k));
-        sort_neighbors(&mut ground_truth);
 
         Ok(Self {
             top_k: top_k.into_iter().map(Neighbor::as_tuple).collect(),

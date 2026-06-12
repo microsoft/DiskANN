@@ -21,9 +21,6 @@ use crate::{
 /// with the supplied computer `C` and invoking `f` with the resulting `(id, distance)`
 /// pair. The associated [`Self::ElementRef`] is the reference shape on which `C` must
 /// be able to compute distances.
-///
-/// The id type used to identify each scanned element is supplied by the [`HasId`]
-/// super-bound, mirroring [`crate::graph::glue::SearchAccessor`].
 pub trait DistancesUnordered<C>: HasId + Send + Sync
 where
     C: for<'a> PreprocessedDistanceFunction<Self::ElementRef<'a>, f32>,
