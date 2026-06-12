@@ -145,7 +145,7 @@ impl<I: VectorId> NeighborProvider<I> {
     /// Each key is a `VectorId`, written in bytes. The value is a neighbor list
     /// of length exactly `self.max_degree() + 1`. Specifically, an array of
     /// exactly `n` neighbors is written as :  
-    /// ```
+    /// ```text
     /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
     ///     
     /// -----------------------------------------------
