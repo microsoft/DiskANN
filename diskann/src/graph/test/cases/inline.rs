@@ -500,8 +500,7 @@ fn inline_search_three_level_adaptive_l_with_l1_finds_matches() {
     let k = 1;
     let l = 1;
     let adaptive_l = AdaptiveL::new(1, 16.0).unwrap();
-    let inline =
-        InlineFilterSearch::new(Knn::new_default(l).unwrap(), &filter, Some(adaptive_l));
+    let inline = InlineFilterSearch::new(Knn::new_default(l).unwrap(), &filter, Some(adaptive_l));
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];

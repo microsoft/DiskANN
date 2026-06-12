@@ -11,7 +11,7 @@ pub mod range;
 pub mod strategy;
 
 pub use inline::InlineFilterSearch;
-pub use knn::KNN;
+pub use knn::{KNN, KnnWrapper};
 pub use multihop::MultiHop;
 pub use range::Range;
 

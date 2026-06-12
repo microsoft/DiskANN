@@ -2,10 +2,15 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+#[cfg(feature = "experimental_diversity_search")]
+mod imports {
+    pub(super) use crate::{ANNError, ANNErrorKind};
+    pub(super) use std::num::NonZeroUsize;
+    pub(super) use thiserror::Error;
+}
 
-use std::num::NonZeroUsize;
-use thiserror::Error;
-use crate::{ANNError, ANNErrorKind};
+#[cfg(feature = "experimental_diversity_search")]
+use imports::*;
 
 // enum used to return the status of the vector that `consolidate_vector`
 // was called on: Deleted if the vector was already deleted, and Complete
@@ -77,8 +82,10 @@ where
         original_k_value: usize,
         attribute_provider: std::sync::Arc<P>,
     ) -> Result<Self, DiverseSearchError> {
-        let diverse_results_k = NonZeroUsize::new(diverse_results_k).ok_or(DiverseSearchError::DiverseKZero)?;
-        let original_k_value = NonZeroUsize::new(original_k_value).ok_or(DiverseSearchError::OriginalKZero)?;
+        let diverse_results_k =
+            NonZeroUsize::new(diverse_results_k).ok_or(DiverseSearchError::DiverseKZero)?;
+        let original_k_value =
+            NonZeroUsize::new(original_k_value).ok_or(DiverseSearchError::OriginalKZero)?;
 
         Ok(Self {
             diverse_attribute_id,

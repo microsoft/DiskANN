@@ -899,7 +899,6 @@ where
 
         let strategy = self.search_strategy(vector_filter);
         let timer = Instant::now();
-        let k = k_value;
         let l = search_list_size as usize;
         let stats = if is_flat_search {
             self.runtime.block_on(self.flat_search(
@@ -910,7 +909,7 @@ where
                 &mut result_output_buffer,
             ))?
         } else {
-            let knn_search = Knn::new(k, l, beam_width)?;
+            let knn_search = Knn::new(l, beam_width)?;
             self.runtime.block_on(self.index.search(
                 knn_search,
                 &strategy,
