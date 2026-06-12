@@ -174,7 +174,7 @@ impl<I: VectorId> NeighborProvider<I> {
         buf[self.dim - 1] = len_to_cell(neighbors.len() as u32);
 
         let key = bytemuck::bytes_of(&vector_id);
-        let value = cast_slice::<I, u8>(&mut buf[..self.dim]);
+        let value = cast_slice::<I, u8>(&buf[..self.dim]);
 
         self.adjacency_list_index.insert(key, value);
 
