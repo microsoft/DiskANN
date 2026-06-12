@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Required fields control memory sizing before data spills to disk.
 /// Optional fields tune internal behavior and default to bf_tree's defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BfTreeStoreConfig {
     /// Size of the circular buffer (in-memory write cache) in bytes.
     pub(crate) cb_size_byte: usize,
@@ -211,7 +211,7 @@ fn bftree_parameters_from(
 
 as_input!(BfTreeFullPrecisionBuild);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BfTreeFullPrecisionBuild {
     build: IndexBuild,
     search_phase: SearchPhase,
@@ -313,7 +313,7 @@ impl std::fmt::Display for BfTreeFullPrecisionBuild {
 
 as_input!(BfTreeDynamicRun);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BfTreeDynamicRun {
     build: IndexBuild,
     search_phase: SearchPhase,
@@ -423,7 +423,7 @@ impl std::fmt::Display for BfTreeDynamicRun {
 
 as_input!(BfTreeSphericalBuild);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BfTreeSphericalBuild {
     build: IndexBuild,
     search_phase: SearchPhase,
@@ -567,7 +567,7 @@ impl std::fmt::Display for BfTreeSphericalBuild {
 
 as_input!(BfTreeSphericalDynamicRun);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BfTreeSphericalDynamicRun {
     build: IndexBuild,
     search_phase: SearchPhase,

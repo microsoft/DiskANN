@@ -30,7 +30,7 @@ use crate::utils::DisplayWrapper;
 //////////////////////
 
 /// Tolerance thresholds for multi-vector benchmark regression detection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 pub(super) struct MultiVectorTolerance {
     pub(super) min_time_regression: NonNegativeFinite,
 }

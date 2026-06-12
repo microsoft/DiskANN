@@ -55,7 +55,7 @@ impl<T: ?Sized> std::ops::Deref for DisplayWrapper<'_, T> {
 // Inputs //
 ////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SimilarityMeasure {
     SquaredL2,
@@ -74,7 +74,7 @@ impl std::fmt::Display for SimilarityMeasure {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 enum Arch {
     #[serde(rename = "x86-64-v4")]
@@ -101,7 +101,7 @@ impl std::fmt::Display for Arch {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 struct Run {
     distance: SimilarityMeasure,
     dim: NonZeroUsize,
@@ -110,7 +110,7 @@ struct Run {
     num_measurements: NonZeroUsize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SimdOp {
     query_type: DataType,
     data_type: DataType,
@@ -205,7 +205,7 @@ impl Input for SimdOp {
 ///
 /// Each field specifies the maximum allowed relative increase in the corresponding metric.
 /// For example, a value of `0.10` means a 10% increase is tolerated.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }

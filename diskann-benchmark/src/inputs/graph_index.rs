@@ -41,7 +41,7 @@ as_input!(DynamicIndexRun);
 // Search //
 ////////////
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 pub(crate) struct GraphSearch {
     pub(crate) search_n: usize,
     pub(crate) search_l: Vec<usize>,
@@ -65,7 +65,7 @@ impl GraphSearch {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GraphRangeSearch {
     pub(crate) initial_search_l: Vec<usize>,
     pub(crate) radius: f32,
@@ -104,7 +104,7 @@ impl GraphRangeSearch {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct TopkSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -158,7 +158,7 @@ impl Example for TopkSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RangeSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -181,7 +181,7 @@ impl RangeSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct BetaSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -217,7 +217,7 @@ impl BetaSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -244,7 +244,7 @@ impl MultihopFilterSearchPhase {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AdaptiveL {
     pub(crate) sample_count: NonZeroUsize,
     pub(crate) scale_factor: f64,
@@ -258,7 +258,7 @@ impl AdaptiveL {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct InlineFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
@@ -302,7 +302,7 @@ impl InlineFilterSearchPhase {
 }
 
 /// A one-to-one correspondence with [`diskann::index::config::IntraBatchCandidates`].
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum IntraBatchCandidates {
     /// No intra-batch candidates will be considered.
@@ -334,7 +334,7 @@ impl From<IntraBatchCandidates> for config::IntraBatchCandidates {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MultiInsert {
     pub(crate) batch_size: NonZeroUsize,
     pub(crate) batch_parallelism: NonZeroUsize,
@@ -354,7 +354,7 @@ impl Example for MultiInsert {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
@@ -490,7 +490,7 @@ impl std::fmt::Display for SearchPhaseKind {
 // Build - Full Precision //
 ////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IndexLoad {
     pub(crate) data_type: DataType,
     pub(crate) distance: SimilarityMeasure,
@@ -567,7 +567,7 @@ impl std::fmt::Display for IndexLoad {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct InsertRetry {
     num_insert_attempts: NonZeroU32,
     retry_threshold: f32,
@@ -601,7 +601,80 @@ pub enum StartPointStrategyRef {
     FirstVector,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl schemars::JsonSchema for StartPointStrategyRef {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "StartPointStrategy".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "oneOf": [
+                {
+                    "type": "string",
+                    "const": "medoid",
+                    "description": "Use the medoid as the starting point."
+                },
+                {
+                    "type": "string",
+                    "const": "first_vector",
+                    "description": "Use the first vector in the dataset."
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "random_vectors": {
+                            "type": "object",
+                            "properties": {
+                                "norm": { "type": "number" },
+                                "nsamples": { "type": "integer", "minimum": 1 },
+                                "seed": { "type": "integer" }
+                            },
+                            "required": ["norm", "nsamples", "seed"],
+                            "description": "Randomly select vector(s) with given norm."
+                        }
+                    },
+                    "required": ["random_vectors"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "random_samples": {
+                            "type": "object",
+                            "properties": {
+                                "nsamples": { "type": "integer", "minimum": 1 },
+                                "seed": { "type": "integer" }
+                            },
+                            "required": ["nsamples", "seed"],
+                            "description": "Sample data from the dataset."
+                        }
+                    },
+                    "required": ["random_samples"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "latin_hyper_cube": {
+                            "type": "object",
+                            "properties": {
+                                "nsamples": { "type": "integer", "minimum": 1 },
+                                "seed": { "type": "integer" }
+                            },
+                            "required": ["nsamples", "seed"],
+                            "description": "Use Latin Hypercube sampling."
+                        }
+                    },
+                    "required": ["latin_hyper_cube"],
+                    "additionalProperties": false
+                }
+            ],
+            "description": "Strategy for selecting graph start points."
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IndexBuild {
     data_type: DataType,
     data: InputFile,
@@ -610,6 +683,7 @@ pub(crate) struct IndexBuild {
     l_build: usize,
     insert_retry: Option<InsertRetry>,
     #[serde(with = "StartPointStrategyRef")]
+    #[schemars(with = "StartPointStrategyRef")]
     start_point_strategy: StartPointStrategy,
     alpha: f32,
     backedge_ratio: f32,
@@ -790,7 +864,7 @@ impl std::fmt::Display for IndexBuild {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "index-source")] // Use tagged enums for JSON
 pub enum IndexSource {
     Load(IndexLoad),
@@ -820,7 +894,7 @@ impl IndexSource {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IndexOperation {
     pub(crate) source: IndexSource, // either load or build
     pub(crate) search_phase: SearchPhase,
@@ -862,7 +936,7 @@ impl std::fmt::Display for IndexOperation {
 // Graph Index Build PQ //
 //////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IndexPQOperation {
     pub(crate) index_operation: IndexOperation, // either load or build
     pub(crate) num_pq_chunks: usize,
@@ -950,7 +1024,7 @@ impl std::fmt::Display for IndexPQOperation {
 // Graph Index Build SQ //
 //////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IndexSQOperation {
     pub(crate) index_operation: IndexOperation,
     pub(crate) num_bits: usize,
@@ -1038,7 +1112,7 @@ impl std::fmt::Display for IndexSQOperation {
 // Graph Index Build Spherical //
 /////////////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SphericalQuantBuild {
     pub(crate) build: IndexBuild, // spherical does not support saving and loading
     pub(crate) search_phase: SearchPhase,
@@ -1156,7 +1230,7 @@ impl std::fmt::Display for SphericalQuantBuild {
 // Dynamic Runbook Params //
 ////////////////////////////
 
-#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params")]
 pub enum InplaceDeleteMethod {
     #[serde(rename = "visited_and_top_k")]
@@ -1180,7 +1254,7 @@ impl From<InplaceDeleteMethod> for graph::InplaceDeleteMethod {
 }
 
 /// Runbook loading and phase type definitions are in utils.datafiles
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DynamicRunbookParams {
     pub(crate) runbook_path: InputFile,
     pub(crate) dataset_name: String,
@@ -1333,7 +1407,7 @@ impl std::fmt::Display for DynamicRunbookParams {
 // Graph Index Dynamic //
 ///////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DynamicIndexRun {
     pub(crate) build: IndexBuild,
     pub(crate) search_phase: SearchPhase,
@@ -1390,5 +1464,69 @@ impl std::fmt::Display for DynamicIndexRun {
         self.build.summarize_fields(f)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This test ensures the manual `JsonSchema` impl for `StartPointStrategyRef` stays
+    /// in sync with the actual enum variants. If a variant is added to `StartPointStrategy`,
+    /// this exhaustive match will fail to compile, signaling the schema needs updating.
+    #[test]
+    fn start_point_strategy_schema_covers_all_variants() {
+        // Exhaustive match — if a variant is added, this won't compile.
+        fn assert_exhaustive(s: &StartPointStrategy) -> &'static str {
+            match s {
+                StartPointStrategy::Medoid => "medoid",
+                StartPointStrategy::FirstVector => "first_vector",
+                StartPointStrategy::RandomVectors { .. } => "random_vectors",
+                StartPointStrategy::RandomSamples { .. } => "random_samples",
+                StartPointStrategy::LatinHyperCube { .. } => "latin_hyper_cube",
+            }
+        }
+
+        // Helper to serialize via the remote wrapper.
+        #[derive(Serialize)]
+        struct Wrapper(#[serde(with = "StartPointStrategyRef")] StartPointStrategy);
+
+        // Construct all variants and verify they round-trip through serde as expected shapes.
+        let variants: Vec<StartPointStrategy> = vec![
+            StartPointStrategy::Medoid,
+            StartPointStrategy::FirstVector,
+            StartPointStrategy::RandomVectors {
+                norm: 1.0,
+                nsamples: NonZeroUsize::new(4).unwrap(),
+                seed: 42,
+            },
+            StartPointStrategy::RandomSamples {
+                nsamples: NonZeroUsize::new(4).unwrap(),
+                seed: 42,
+            },
+            StartPointStrategy::LatinHyperCube {
+                nsamples: NonZeroUsize::new(4).unwrap(),
+                seed: 42,
+            },
+        ];
+
+        for variant in &variants {
+            let json = serde_json::to_value(Wrapper(*variant)).unwrap();
+            let name = assert_exhaustive(variant);
+
+            // Unit variants serialize as strings, struct variants as objects.
+            match name {
+                "medoid" | "first_vector" => {
+                    assert!(json.is_string(), "expected string for {name}, got: {json}");
+                }
+                _ => {
+                    assert!(json.is_object(), "expected object for {name}, got: {json}");
+                    assert!(
+                        json.get(name).is_some(),
+                        "expected key \"{name}\" in {json}"
+                    );
+                }
+            }
+        }
     }
 }

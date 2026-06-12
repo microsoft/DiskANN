@@ -21,7 +21,7 @@ use super::Checker;
 ///    will be explored in-order. The first directory where `path` exists will be selected.
 ///
 /// 3. If all these steps fail, then post-deserialization checking will fail with an error.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct InputFile {
     path: PathBuf,

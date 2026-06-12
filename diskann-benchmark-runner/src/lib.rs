@@ -16,6 +16,7 @@ pub mod files;
 pub mod input;
 pub mod output;
 pub mod registry;
+pub mod schema;
 pub mod utils;
 
 pub use app::App;
