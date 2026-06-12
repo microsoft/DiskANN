@@ -442,6 +442,9 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
+        // Only delete vector data here. Neighbor adjacency cleanup (zeroing the
+        // deleted vertex's edge list and patching neighbors-of-neighbors) is
+        // handled by `DiskANNIndex::inplace_delete` → `drop_adj_list`.
         self.full_vectors.delete_vector(id as usize);
         self.quant_vectors.delete_vector(id as usize);
 

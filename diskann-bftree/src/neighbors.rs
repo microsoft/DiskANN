@@ -31,7 +31,7 @@ pub struct NeighborProvider<I: VectorId> {
 
 /// A fixed-size table of striped locks for per-vertex synchronization.
 ///
-/// Vertex IDs are mapped to lock stripes via modular hashing. This provides
+/// Vertex IDs are mapped to lock stripes via a multiply-shift hash. This provides
 /// constant memory overhead regardless of dataset size, at the cost of
 /// occasional false contention between vertices that map to the same stripe.
 ///
@@ -43,6 +43,10 @@ struct StripedLocks {
 
 impl StripedLocks {
     const DEFAULT_STRIPE_COUNT: usize = 16384;
+    // Fibonacci hashing constant for 64-bit: floor(2^64 / phi)
+    const HASH_MULTIPLIER: u64 = 0x9E3779B97F4A7C15;
+    // Shift to extract the top log2(16384) = 14 bits
+    const HASH_SHIFT: u32 = 64 - 14;
 
     fn new() -> Self {
         Self {
@@ -53,15 +57,22 @@ impl StripedLocks {
         }
     }
 
+    #[inline]
+    fn stripe_index(&self, id: usize) -> usize {
+        ((id as u64).wrapping_mul(Self::HASH_MULTIPLIER) >> Self::HASH_SHIFT) as usize
+    }
+
+    #[inline]
     fn read(&self, id: usize) -> std::sync::RwLockReadGuard<'_, ()> {
-        let stripe = id % self.stripes.len();
+        let stripe = self.stripe_index(id);
         self.stripes[stripe]
             .read()
             .unwrap_or_else(|e| e.into_inner())
     }
 
+    #[inline]
     fn write(&self, id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
-        let stripe = id % self.stripes.len();
+        let stripe = self.stripe_index(id);
         self.stripes[stripe]
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -753,6 +764,7 @@ mod tests {
         scratch.write_neighbors(0, &[]).unwrap();
 
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writers_remaining = Arc::new(std::sync::atomic::AtomicU32::new(4));
 
         // Spawn writer threads that append edges.
         let num_writers = 4u32;
@@ -762,6 +774,7 @@ mod tests {
         for t in 0..num_writers {
             let provider_clone = Arc::clone(&provider);
             let done_clone = Arc::clone(&done);
+            let remaining_clone = Arc::clone(&writers_remaining);
             set.spawn(async move {
                 let mut scratch = provider_clone.scratch();
                 let base = t * edges_per_writer + 1;
@@ -769,7 +782,10 @@ mod tests {
                     scratch.write_append(0, &[base + offset]).unwrap();
                     tokio::task::yield_now().await;
                 }
-                done_clone.store(true, std::sync::atomic::Ordering::Release);
+                // Signal done only when ALL writers have finished.
+                if remaining_clone.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                    done_clone.store(true, std::sync::atomic::Ordering::Release);
+                }
             });
         }
 
