@@ -8,12 +8,12 @@ use std::future::Future;
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::utils::IntoUsize;
 use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
+use diskann_utils::views::Matrix;
 use diskann_providers::post_processor::DeterminantDiversityParams;
 use diskann_providers::model::graph::provider::{
     async_::inmem::{self, GetFullPrecision},
     determinant_diversity,
 };
-use diskann_quantization::num::Positive;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterminantDiversity {
@@ -45,22 +45,28 @@ where
     {
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
         let store: &inmem::FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut embedded = Vec::with_capacity(candidates.len());
+        let mut vectors = Matrix::new(0.0f32, candidates.len(), query.len());
+        let mut ids = Vec::with_capacity(candidates.len());
+        let mut distances = Vec::with_capacity(candidates.len());
 
-        for candidate in &candidates {
+        for (i, candidate) in candidates.iter().enumerate() {
             // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
             // pattern used by `Rerank` in `inmem::full_precision`.
             let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
-            embedded.push((candidate.id, candidate.distance, vector.to_vec()));
+            ids.push(candidate.id);
+            distances.push(candidate.distance);
+            vectors.row_mut(i).copy_from_slice(vector);
         }
 
         let reranked = determinant_diversity(
-            embedded,
+            vectors.as_mut_view(),
+            &distances,
             query,
             candidates.len(),
-            self.params.eta(),
-            Positive::new(self.params.power()).expect("power must be > 0"),
-        );
+            &self.params,
+        )
+        .into_iter()
+        .map(|idx| (ids[idx], distances[idx]));
 
         std::future::ready(Ok(output.extend(reranked)))
     }

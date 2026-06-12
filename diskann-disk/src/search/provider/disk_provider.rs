@@ -33,8 +33,7 @@ use diskann_providers::{
     model::{compute_pq_distance, graph::provider::determinant_diversity},
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
-use diskann_quantization::num::Positive;
-use diskann_utils::object_pool::{ObjectPool, PoolOption, TryAsPooled};
+use diskann_utils::{object_pool::{ObjectPool, PoolOption, TryAsPooled}, views::Matrix};
 
 use crate::search::pq::{quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
@@ -400,10 +399,12 @@ where
 
         ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
 
-        let mut candidate_vectors = Vec::with_capacity(candidate_ids.len());
+        let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
+        let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
+        let mut ordered_ids = Vec::with_capacity(candidate_ids.len());
         let mut associated_data = HashMap::with_capacity(candidate_ids.len());
 
-        for id in candidate_ids {
+        for (row_idx, id) in candidate_ids.into_iter().enumerate() {
             let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
             let distance = provider
                 .distance_comparer
@@ -411,20 +412,26 @@ where
             let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
             let data = accessor.scratch.vertex_provider.get_associated_data(&id)?;
 
-            candidate_vectors.push((id, distance, vector_f32.to_vec()));
+            candidate_vectors
+                .row_mut(row_idx)
+                .copy_from_slice(&vector_f32);
+            candidate_distances.push(distance);
+            ordered_ids.push(id);
             associated_data.insert(id, *data);
         }
 
         let reranked = determinant_diversity(
-            candidate_vectors,
+            candidate_vectors.as_mut_view(),
+            &candidate_distances,
             &query_f32,
             usize::MAX,
-            self.params.eta(),
-            Positive::new(self.params.power()).expect("power must be > 0"),
+            &self.params,
         );
 
         Ok(
-            output.extend(reranked.into_iter().filter_map(|(id, distance)| {
+            output.extend(reranked.into_iter().filter_map(|idx| {
+                let id = ordered_ids[idx];
+                let distance = candidate_distances[idx];
                 associated_data
                     .get(&id)
                     .copied()

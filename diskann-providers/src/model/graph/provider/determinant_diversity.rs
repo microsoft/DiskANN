@@ -51,9 +51,10 @@
 //! The algorithm is based on diversity-promoting ranking methods for nearest neighbor search,
 //! as used in approximate nearest neighbor indices like DiskANN.
 
-use diskann_quantization::num::Positive;
-use diskann_utils::views::Matrix;
+use diskann_utils::views::MutMatrixView;
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
+
+use crate::post_processor::DeterminantDiversityParams;
 
 #[derive(Clone, Copy)]
 struct DistanceRange {
@@ -61,30 +62,33 @@ struct DistanceRange {
     max: f32,
 }
 
-pub fn determinant_diversity<Id: Copy>(
-    candidates: Vec<(Id, f32, Vec<f32>)>,
+pub fn determinant_diversity(
+    candidates: MutMatrixView<'_, f32>,
+    distances: &[f32],
     query: &[f32],
     k: usize,
-    determinant_diversity_eta: f32,
-    determinant_diversity_power: Positive<f32>,
-) -> Vec<(Id, f32)> {
-    if candidates.is_empty() || query.is_empty() {
+    params: &DeterminantDiversityParams,
+) -> Vec<usize> {
+    if candidates.nrows() == 0 || query.is_empty() {
         return Vec::new();
     }
 
     assert!(
-        candidates
-            .iter()
-            .all(|(_, _, vector)| vector.len() == query.len()),
-        "all candidate vectors must have the same dimension as query"
+        candidates.ncols() == query.len(),
+        "candidate matrix columns must equal query dimension"
     );
 
-    let k = k.min(candidates.len());
+    assert!(
+        distances.len() == candidates.nrows(),
+        "distances length must equal candidate rows"
+    );
+
+    let k = k.min(candidates.nrows());
     if k == 0 {
         return Vec::new();
     }
 
-    if candidates[0].2.is_empty() {
+    if candidates.ncols() == 0 {
         return Vec::new();
     }
 
@@ -92,7 +96,7 @@ pub fn determinant_diversity<Id: Copy>(
         let mut min_distance = f32::INFINITY;
         let mut max_distance = f32::NEG_INFINITY;
 
-        for (_, distance, _) in &candidates {
+        for distance in distances {
             min_distance = min_distance.min(*distance);
             max_distance = max_distance.max(*distance);
         }
@@ -105,16 +109,17 @@ pub fn determinant_diversity<Id: Copy>(
 
     // For eta=0, the inv_sqrt_eta factor is 1.0 (greedy orthogonalization without regularization).
     // For eta>0, the factor scales residuals for ridge-regularized determinant computation.
-    let inv_sqrt_eta = if determinant_diversity_eta > 0.0 {
-        1.0 / determinant_diversity_eta.sqrt()
+    let inv_sqrt_eta = if params.eta() > 0.0 {
+        1.0 / params.eta().sqrt()
     } else {
         1.0
     };
 
     greedy_orthogonal_select(
         candidates,
+        distances,
         k,
-        determinant_diversity_power.into_inner(),
+        params.power(),
         inv_sqrt_eta,
         distance_range,
     )
@@ -124,9 +129,9 @@ pub fn determinant_diversity<Id: Copy>(
 ///
 /// # Mathematical formulation
 ///
-/// Let the input candidate set be { (id_i, d_i, v_i) } for i = 1..n, where
-/// d_i is the candidate's distance to the query and v_i is its full-precision
-/// vector in R^dim. Define the per-candidate scale
+/// Let the input candidate set be represented by matrix rows v_i (for i = 1..n)
+/// and a parallel distance slice d_i, where d_i is the candidate distance to the
+/// query and v_i is the full-precision vector in R^dim. Define the per-candidate scale
 ///
 /// ```text
 /// alpha_i = similarity(d_i)^power * (1 / sqrt(eta))
@@ -189,6 +194,7 @@ pub fn determinant_diversity<Id: Copy>(
 /// - `inv_sqrt_eta`: scalar 1 / sqrt(eta) baked into the residuals so that
 ///   the residual norms reflect the regularized Gram matrix X X^T + eta * I.
 ///   Use 1.0 for the unregularized (eta == 0) variant.
+/// - `distances`: candidate distances parallel to matrix rows.
 /// - `power`: relevance exponent applied to the per-candidate similarity.
 /// - `distance_range`: min/max distances among the candidates, used to
 ///   normalize distances into similarities in [0, 1].
@@ -197,41 +203,34 @@ pub fn determinant_diversity<Id: Copy>(
 ///
 /// O(n * k * dim) -- for each of k pivots we touch all n residual rows of
 /// length `dim`. Memory is O(n * dim) for the contiguous residual matrix.
-fn greedy_orthogonal_select<Id: Copy>(
-    candidates: Vec<(Id, f32, Vec<f32>)>,
+fn greedy_orthogonal_select(
+    mut candidates: MutMatrixView<'_, f32>,
+    distances: &[f32],
     k: usize,
     power: f32,
     inv_sqrt_eta: f32,
     distance_range: DistanceRange,
-) -> Vec<(Id, f32)> {
-    let n = candidates.len();
+) -> Vec<usize> {
+    let n = candidates.nrows();
     let k = k.min(n);
     if k == 0 {
         return Vec::new();
     }
 
-    let dim = candidates[0].2.len();
-
-    // Residual matrix R has one row per candidate. Row i starts as the scaled
-    // vector x_i = alpha_i * v_i and is progressively deflated against each
-    // selected pivot direction. A contiguous Matrix is used (instead of
-    // Vec<Vec<f32>>) to keep allocations O(1) and improve cache locality
-    // during the per-pivot sweep over rows.
-    let mut residuals = Matrix::new(0.0f32, n, dim);
     // Cached squared norms ||r_i||^2 for each row. Updated in place via the
     // Pythagorean identity in step 3 above.
     let mut norms_sq = Vec::with_capacity(n);
 
-    // Step 0: initialize residuals r_i = alpha_i * v_i and their squared norms.
+    // Step 0: scale rows in-place to initialize residuals r_i = alpha_i * v_i,
+    // then compute their squared norms.
     // alpha_i = similarity(d_i)^power * inv_sqrt_eta.
-    for (i, (_, distance_to_query, v)) in candidates.iter().enumerate() {
+    for (i, distance_to_query) in distances.iter().enumerate() {
         let scale =
             distance_to_similarity(*distance_to_query, distance_range).powf(power) * inv_sqrt_eta;
-        let row = residuals.row_mut(i);
-        for (r, &x) in row.iter_mut().zip(v.iter()) {
-            *r = x * scale;
+        for value in candidates.row_mut(i) {
+            *value *= scale;
         }
-        let norm_sq = dot_product(residuals.row(i), residuals.row(i));
+        let norm_sq = dot_product(candidates.row(i), candidates.row(i));
         norms_sq.push(norm_sq);
     }
 
@@ -281,14 +280,14 @@ fn greedy_orthogonal_select<Id: Copy>(
         let inv_norm_sq = 1.0 / best_norm_sq;
         // Snapshot the pivot row r* before mutably iterating over the other
         // rows of `residuals` (they share the same backing storage).
-        let r_star_copy: Vec<f32> = residuals.row(selected_index).to_vec();
+        let r_star_copy: Vec<f32> = candidates.row(selected_index).to_vec();
 
         // --- Step 2a: Compute projection coefficients pi_i = <r_i, r*> / ||r*||^2.
         for i in 0..n {
             if !available[i] {
                 projections[i] = 0.0;
             } else {
-                projections[i] = dot_product(residuals.row(i), &r_star_copy) * inv_norm_sq;
+                projections[i] = dot_product(candidates.row(i), &r_star_copy) * inv_norm_sq;
             }
         }
 
@@ -300,7 +299,7 @@ fn greedy_orthogonal_select<Id: Copy>(
             }
 
             let projection = projections[i];
-            for (residual, &star) in residuals.row_mut(i).iter_mut().zip(r_star_copy.iter()) {
+            for (residual, &star) in candidates.row_mut(i).iter_mut().zip(r_star_copy.iter()) {
                 *residual -= projection * star;
             }
 
@@ -310,12 +309,6 @@ fn greedy_orthogonal_select<Id: Copy>(
     }
 
     selected
-        .iter()
-        .map(|&idx| {
-            let (id, dist, _) = &candidates[idx];
-            (*id, *dist)
-        })
-        .collect()
 }
 
 /// Maps a raw distance into a similarity score in `(0, 1]` using the candidate
@@ -352,6 +345,36 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diskann_utils::views::Matrix;
+
+    fn run_with_ids(
+        candidates: Vec<(u32, f32, Vec<f32>)>,
+        query: &[f32],
+        k: usize,
+        eta: f32,
+        power: Positive<f32>,
+    ) -> Vec<(u32, f32)> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let dim = candidates[0].2.len();
+        let mut matrix = Matrix::new(0.0f32, candidates.len(), dim);
+        let mut ids = Vec::with_capacity(candidates.len());
+        let mut distances = Vec::with_capacity(candidates.len());
+
+        for (i, (id, distance, vector)) in candidates.into_iter().enumerate() {
+            ids.push(id);
+            distances.push(distance);
+            matrix.row_mut(i).copy_from_slice(&vector);
+        }
+
+        let params = DeterminantDiversityParams::new(power.into_inner(), eta).unwrap();
+        determinant_diversity(matrix.as_mut_view(), &distances, query, k, &params)
+            .into_iter()
+            .map(|idx| (ids[idx], distances[idx]))
+            .collect()
+    }
 
     /// Test helper: wrap a positive f32 power value.
     fn p(value: f32) -> Positive<f32> {
@@ -360,34 +383,33 @@ mod tests {
 
     #[test]
     fn test_empty_candidates() {
-        let result =
-            determinant_diversity::<u32>(Vec::new(), &[1.0, 2.0], 5, 0.5, p(1.0));
+        let result = run_with_ids(Vec::new(), &[1.0, 2.0], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_empty_query() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
-        let result = determinant_diversity(candidates, &[], 5, 0.5, p(1.0));
+        let result = run_with_ids(candidates, &[], 5, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
     #[test]
-    #[should_panic(expected = "all candidate vectors must have the same dimension as query")]
+    #[should_panic(expected = "candidate matrix columns must equal query dimension")]
     fn test_mismatched_dimensions_panics() {
         let candidates = vec![
             (0u32, 0.5, vec![1.0, 2.0]),
             (1u32, 0.3, vec![1.0]), // Wrong dimension
         ];
         let query = &[1.0, 2.0, 3.0];
-        let _ = determinant_diversity(candidates, query, 5, 0.5, p(1.0));
+        let _ = run_with_ids(candidates, query, 5, 0.5, p(1.0));
     }
 
     #[test]
     fn test_single_candidate() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
         let query = &[1.0, 2.0];
-        let result = determinant_diversity(candidates, query, 5, 0.5, p(1.0));
+        let result = run_with_ids(candidates, query, 5, 0.5, p(1.0));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, 0);
     }
@@ -396,7 +418,7 @@ mod tests {
     fn test_k_larger_than_candidates() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 10, 0.5, p(1.0));
+        let result = run_with_ids(candidates, query, 10, 0.5, p(1.0));
         assert_eq!(result.len(), 2); // Should return min(k, candidates.len())
     }
 
@@ -408,7 +430,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 1.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 1.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on diversity metric with eta > 0
@@ -423,7 +445,7 @@ mod tests {
             (2u32, 0.3, vec![0.8, 0.2]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
 
         assert_eq!(result.len(), 2);
         // Should select based on greedy orthogonalization (eta == 0)
@@ -436,8 +458,8 @@ mod tests {
         let query = &[1.0, 1.0];
 
         // Test with different power values - should still work without panicking
-        let result1 = determinant_diversity(candidates.clone(), query, 2, 0.0, p(1.0));
-        let result2 = determinant_diversity(candidates, query, 2, 0.0, p(2.0));
+        let result1 = run_with_ids(candidates.clone(), query, 2, 0.0, p(1.0));
+        let result2 = run_with_ids(candidates, query, 2, 0.0, p(2.0));
 
         assert_eq!(result1.len(), 2);
         assert_eq!(result2.len(), 2);
@@ -447,7 +469,7 @@ mod tests {
     fn test_distances_preserved() {
         let candidates = vec![(0u32, 0.5, vec![1.0, 0.0]), (1u32, 0.3, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
 
         // Verify that distances are preserved from input
         assert!(result.iter().all(|(_, dist)| *dist == 0.5 || *dist == 0.3));
@@ -467,7 +489,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]), // nearly parallel to 0
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
 
         // Should select 2 candidates
         assert_eq!(result.len(), 2);
@@ -489,7 +511,7 @@ mod tests {
             (2u32, 0.1, vec![0.99, 0.01, 0.0]),
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 0.5, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.5, p(1.0));
 
         assert_eq!(result.len(), 2);
         let ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
@@ -511,7 +533,7 @@ mod tests {
         let query = &[1.0, 0.0];
 
         // With high power, relevance is heavily weighted so the closest candidate dominates
-        let result = determinant_diversity(candidates.clone(), query, 1, 0.0, p(10.0));
+        let result = run_with_ids(candidates.clone(), query, 1, 0.0, p(10.0));
         assert_eq!(result.len(), 1);
         // Closest candidate should be preferred due to high power weighting
         assert_eq!(
@@ -528,7 +550,7 @@ mod tests {
             (1u32, 0.5, vec![0.0, 1.0]), // same distance as 0
         ];
         let query = &[1.0, 0.0];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
 
         // Should still return candidates without panicking
         assert_eq!(result.len(), 2);
@@ -544,7 +566,7 @@ mod tests {
         ];
         let query = &[1.0, 1.0];
         // eta=0.0 must invoke greedy path, not ridge-regularized
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
     }
 
@@ -554,7 +576,7 @@ mod tests {
     fn test_k_zero_returns_empty() {
         let candidates = vec![(0u32, 0.1, vec![1.0, 0.0]), (1u32, 0.2, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 0, 0.5, p(1.0));
+        let result = run_with_ids(candidates, query, 0, 0.5, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -568,7 +590,7 @@ mod tests {
         // the empty-vector early return if the dimension check would have
         // matched (so use a 0-length query here to stay on the early path).
         let query: &[f32] = &[];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 0);
     }
 
@@ -582,7 +604,7 @@ mod tests {
             (30u32, 0.3, vec![1.0, 1.0]),
         ];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 3, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 3, 0.0, p(1.0));
         assert_eq!(result.len(), 3);
 
         // Result IDs must be a permutation of the input IDs (no duplicates,
@@ -606,7 +628,7 @@ mod tests {
             (2u32, 0.1, vec![3.0, 0.0]),
         ];
         let query = &[1.0, 0.0];
-        let result = determinant_diversity(candidates, query, 3, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 3, 0.0, p(1.0));
         assert_eq!(result.len(), 3);
 
         let mut ids: Vec<u32> = result.iter().map(|(id, _)| *id).collect();
@@ -628,7 +650,7 @@ mod tests {
             (2u32, 0.9, vec![0.0, 0.0, 1.0]),
         ];
         let query = &[1.0, 1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 3, 0.0, p(2.0));
+        let result = run_with_ids(candidates, query, 3, 0.0, p(2.0));
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].0, 0, "Most relevant candidate must be first");
     }
@@ -639,7 +661,7 @@ mod tests {
     fn test_ids_pair_with_their_input_distance() {
         let candidates = vec![(7u32, 1.5, vec![1.0, 0.0]), (9u32, 0.25, vec![0.0, 1.0])];
         let query = &[1.0, 1.0];
-        let result = determinant_diversity(candidates, query, 2, 0.0, p(1.0));
+        let result = run_with_ids(candidates, query, 2, 0.0, p(1.0));
         assert_eq!(result.len(), 2);
 
         for (id, dist) in &result {
