@@ -199,8 +199,7 @@ pub(crate) mod internal {
             Ok(serde_json::to_value(T::example())?)
         }
         fn schema(&self) -> serde_json::Value {
-            let generator =
-                schemars::generate::SchemaSettings::default().into_generator();
+            let generator = schemars::generate::SchemaSettings::default().into_generator();
             let schema = generator.into_root_schema_for::<T::Raw>();
             serde_json::to_value(schema).unwrap_or_default()
         }

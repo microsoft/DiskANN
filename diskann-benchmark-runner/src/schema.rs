@@ -20,9 +20,7 @@ use serde_json::Value;
 /// The schema should be the root schema object produced by `schemars::generate::schema_for`.
 /// It may contain `$defs` for referenced type definitions.
 pub fn render(schema: &Value, output: &mut dyn Write) -> io::Result<()> {
-    let defs = schema
-        .get("$defs")
-        .or_else(|| schema.get("definitions"));
+    let defs = schema.get("$defs").or_else(|| schema.get("definitions"));
 
     let mut buf = String::new();
     render_node(schema, defs, &mut buf, 0, true);
@@ -35,9 +33,7 @@ pub fn render(schema: &Value, output: &mut dyn Write) -> io::Result<()> {
 /// At each path segment, this descends into `properties.<segment>`, resolving any `$ref`
 /// along the way.
 pub fn resolve_path(schema: &Value, path: &str) -> Option<Value> {
-    let defs = schema
-        .get("$defs")
-        .or_else(|| schema.get("definitions"));
+    let defs = schema.get("$defs").or_else(|| schema.get("definitions"));
 
     let mut current = resolve(schema, defs);
 
@@ -59,7 +55,9 @@ pub fn resolve_path(schema: &Value, path: &str) -> Option<Value> {
             for variant in variants {
                 // For $ref + inline properties pattern, check the resolved ref.
                 let resolved_variant = resolve(variant, defs);
-                if let Some(prop) = resolved_variant.get("properties").and_then(|p| p.get(segment))
+                if let Some(prop) = resolved_variant
+                    .get("properties")
+                    .and_then(|p| p.get(segment))
                 {
                     current = resolve(prop, defs);
                     found = true;
@@ -88,13 +86,7 @@ pub fn resolve_path(schema: &Value, path: &str) -> Option<Value> {
 const MAX_DEPTH: usize = 16;
 
 /// Render a single schema node into the buffer at the given indentation depth.
-fn render_node(
-    node: &Value,
-    defs: Option<&Value>,
-    buf: &mut String,
-    depth: usize,
-    _is_last: bool,
-) {
+fn render_node(node: &Value, defs: Option<&Value>, buf: &mut String, depth: usize, _is_last: bool) {
     if depth >= MAX_DEPTH {
         write_indented(buf, depth, &format!("{}", "...".dimmed()));
         return;
@@ -283,18 +275,14 @@ fn render_variants(variants: &[Value], defs: Option<&Value>, buf: &mut String, d
         // properties containing the tag.
         if variant.get("$ref").is_some() {
             if let Some(inline_props) = variant.get("properties").and_then(Value::as_object) {
-                let tag = inline_props
-                    .values()
-                    .find_map(extract_tag_value);
+                let tag = inline_props.values().find_map(extract_tag_value);
 
                 if let Some(tag) = tag {
                     let resolved = resolve(variant, defs);
                     let desc = resolved.get("description").and_then(Value::as_str);
                     write_variant_header(buf, depth, connector, &tag, desc);
 
-                    if let Some(ref_props) =
-                        resolved.get("properties").and_then(Value::as_object)
-                    {
+                    if let Some(ref_props) = resolved.get("properties").and_then(Value::as_object) {
                         let entries: Vec<_> = ref_props.iter().collect();
                         render_field_list(&entries, resolved, defs, buf, depth, child_prefix);
                     }
@@ -328,9 +316,7 @@ fn render_variants(variants: &[Value], defs: Option<&Value>, buf: &mut String, d
                     let desc = inner.get("description").and_then(Value::as_str);
                     write_variant_header(buf, depth, connector, variant_name, desc);
 
-                    if let Some(inner_props) =
-                        inner.get("properties").and_then(Value::as_object)
-                    {
+                    if let Some(inner_props) = inner.get("properties").and_then(Value::as_object) {
                         let entries: Vec<_> = inner_props.iter().collect();
                         render_field_list(&entries, inner, defs, buf, depth, child_prefix);
                     }
@@ -363,7 +349,11 @@ fn render_field_list(
 
     for (i, (name, schema)) in entries.iter().enumerate() {
         let is_last_field = i == entries.len() - 1;
-        let field_connector = if is_last_field { "└── " } else { "├── " };
+        let field_connector = if is_last_field {
+            "└── "
+        } else {
+            "├── "
+        };
         let optional_str = if !required.contains(&name.as_str()) {
             format!(" {}", "(optional)".dimmed())
         } else {
@@ -397,7 +387,11 @@ fn render_array(
 ) {
     let resolved = resolve(items, defs);
     let item_summary = type_summary(resolved);
-    write_indented(buf, depth, &format!("{}", format!("array of {item_summary}").cyan()));
+    write_indented(
+        buf,
+        depth,
+        &format!("{}", format!("array of {item_summary}").cyan()),
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -586,10 +580,21 @@ fn write_description(buf: &mut String, depth: usize, cont_prefix: &str, desc: &s
     for (i, line) in lines_to_print.iter().enumerate() {
         let trimmed = line.trim();
         if i == 0 {
-            let _ = writeln!(buf, "{indent}{}{}", cont_prefix.dimmed(), format!("# {trimmed}").green());
+            let _ = writeln!(
+                buf,
+                "{indent}{}{}",
+                cont_prefix.dimmed(),
+                format!("# {trimmed}").green()
+            );
         } else {
             // Continuation lines: align with the text after "# "
-            let _ = writeln!(buf, "{indent}{}{}  {}", cont_prefix.dimmed(), "#".green(), trimmed.green());
+            let _ = writeln!(
+                buf,
+                "{indent}{}{}  {}",
+                cont_prefix.dimmed(),
+                "#".green(),
+                trimmed.green()
+            );
         }
     }
 }
@@ -643,7 +648,10 @@ mod tests {
 
         let text = render_to_string::<Config>();
         // required_field should NOT be marked optional
-        assert!(!text.contains("required_field: string (optional)"), "got: {text}");
+        assert!(
+            !text.contains("required_field: string (optional)"),
+            "got: {text}"
+        );
         assert!(text.contains("(optional)"), "got: {text}");
     }
 
@@ -679,11 +687,7 @@ mod tests {
             /// Use the medoid.
             Medoid,
             /// Use random vectors with given parameters.
-            RandomVectors {
-                norm: f32,
-                nsamples: u32,
-                seed: u64,
-            },
+            RandomVectors { norm: f32, nsamples: u32, seed: u64 },
         }
 
         #[derive(JsonSchema)]
