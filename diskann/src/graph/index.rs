@@ -2834,7 +2834,10 @@ where
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
 
             for id in ids {
-                accessor.neighbors().get_neighbors(id, &mut neighbors).await?;
+                accessor
+                    .neighbors()
+                    .get_neighbors(id, &mut neighbors)
+                    .await?;
                 if neighbors.len() <= self.pruned_degree() {
                     continue;
                 }
