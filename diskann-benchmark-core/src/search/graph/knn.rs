@@ -163,7 +163,10 @@ impl KnnWrapper {
     pub fn new(k_value: usize, l_value: usize) -> Result<Self, KnnWrapperError> {
         let k_value = NonZeroUsize::new(k_value).ok_or(KnnWrapperError::KZero)?;
         if l_value < k_value.get() {
-            return Err(KnnWrapperError::LLessThanK);
+            return Err(KnnWrapperError::LLessThanK {
+                l_value,
+                k_value: k_value.get(),
+            });
         }
 
         let knn = graph::search::Knn::new(l_value, None)
