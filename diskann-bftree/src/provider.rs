@@ -267,7 +267,6 @@ where
             )?,
             neighbor_provider: NeighborProvider::new_with_config(
                 params.max_degree,
-                params.max_points + params.num_start_points.get(),
                 params.neighbor_list_provider_config,
             )?,
             metric: params.metric,
@@ -394,19 +393,40 @@ where
     }
 }
 
+/// Trait for types that may need cleanup during hard-delete.
+///
+/// `QuantVectorProvider` implements this to delete its quantized embedding.
+/// `NoStore` implements this as a no-op.
+pub(crate) trait DeleteQuant {
+    fn delete_vector(&self, id: usize);
+}
+
+impl DeleteQuant for QuantVectorProvider {
+    fn delete_vector(&self, id: usize) {
+        self.delete_vector(id);
+    }
+}
+
+impl DeleteQuant for NoStore {
+    fn delete_vector(&self, _id: usize) {}
+}
+
 /// Hard-delete implementation for `BfTreeProvider`.
 ///
 /// This provider performs **hard deletes**: vector data is immediately and irrecoverably erased
-/// from the underlying bf-tree storage when [`Delete::delete`] is called. This has an important
-/// consequence for inplace delete: the [`InplaceDeleteMethod::VisitedAndTopK`] strategy is
-/// **incompatible** with this provider because it requires reading the deleted vector's data
-/// (via [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been
-/// committed. Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`]
-/// instead, as these strategies only require neighbor topology (which remains accessible).
+/// from the underlying bf-tree storage when [`Delete::delete`] is called. When a quantized
+/// store is present, both the full-precision and quantized entries are removed.
+///
+/// This has an important consequence for inplace delete: the
+/// [`InplaceDeleteMethod::VisitedAndTopK`] strategy is **incompatible** with this provider
+/// because it requires reading the deleted vector's data (via
+/// [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been committed.
+/// Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`] instead,
+/// as these strategies only require neighbor topology (which remains accessible).
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
-    Q: AsyncFriendly,
+    Q: AsyncFriendly + DeleteQuant,
 {
     fn release(
         &self,
@@ -423,6 +443,7 @@ where
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
         self.full_vectors.delete_vector(id as usize);
+        self.quant_vectors.delete_vector(id as usize);
 
         std::future::ready(Ok(()))
     }
@@ -1785,7 +1806,6 @@ where
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
-            saved_params.max_points + saved_params.frozen_points.get(),
             adjacency_list_index,
         )?;
 
@@ -1934,7 +1954,6 @@ where
         )?;
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
             saved_params.max_degree,
-            saved_params.max_points + saved_params.frozen_points.get(),
             adjacency_list_index,
         )?;
 

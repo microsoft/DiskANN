@@ -23,10 +23,49 @@ use crate::TestCallCount;
 pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
-    locks: Box<[RwLock<()>]>,
+    locks: StripedLocks,
     #[allow(dead_code)]
     pub(crate) num_get_calls: TestCallCount,
     _phantom: PhantomData<I>,
+}
+
+/// A fixed-size table of striped locks for per-vertex synchronization.
+///
+/// Vertex IDs are mapped to lock stripes via modular hashing. This provides
+/// constant memory overhead regardless of dataset size, at the cost of
+/// occasional false contention between vertices that map to the same stripe.
+///
+/// The default stripe count (16384) is chosen to keep false sharing negligible
+/// for typical workloads while using only ~128 KB of memory.
+struct StripedLocks {
+    stripes: Box<[RwLock<()>]>,
+}
+
+impl StripedLocks {
+    const DEFAULT_STRIPE_COUNT: usize = 16384;
+
+    fn new() -> Self {
+        Self {
+            stripes: (0..Self::DEFAULT_STRIPE_COUNT)
+                .map(|_| RwLock::new(()))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        }
+    }
+
+    fn read(&self, id: usize) -> std::sync::RwLockReadGuard<'_, ()> {
+        let stripe = id % self.stripes.len();
+        self.stripes[stripe]
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self, id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
+        let stripe = id % self.stripes.len();
+        self.stripes[stripe]
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl<I: VectorId> HasId for NeighborProvider<I> {
@@ -35,26 +74,19 @@ impl<I: VectorId> HasId for NeighborProvider<I> {
 
 impl<I: VectorId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly.
-    ///
-    /// `capacity` is the total number of vertex slots (max_points + start_points) and
-    /// determines the size of the per-vertex lock table.
-    pub fn new_with_config(max_degree: u32, capacity: usize, config: Config) -> ANNResult<Self> {
+    pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
-        Self::new(max_degree, capacity, adj_list_index)
+        Self::new(max_degree, adj_list_index)
     }
 
-    fn new(max_degree: u32, capacity: usize, adjacency_list_index: BfTree) -> ANNResult<Self> {
+    fn new(max_degree: u32, adjacency_list_index: BfTree) -> ANNResult<Self> {
         let dim = 1 + max_degree.into_usize();
-        let locks = (0..capacity)
-            .map(|_| RwLock::new(()))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
 
         Ok(Self {
             adjacency_list_index,
             dim,
-            locks,
+            locks: StripedLocks::new(),
             num_get_calls: TestCallCount::default(),
             _phantom: PhantomData,
         })
@@ -80,10 +112,9 @@ impl<I: VectorId> NeighborProvider<I> {
     ///
     pub(crate) fn new_from_bftree(
         max_degree: u32,
-        capacity: usize,
         adjacency_list_index: BfTree,
     ) -> ANNResult<Self> {
-        Self::new(max_degree, capacity, adjacency_list_index)
+        Self::new(max_degree, adjacency_list_index)
     }
 
     /// Retrieve the neighbor list of a vector.
@@ -99,12 +130,7 @@ impl<I: VectorId> NeighborProvider<I> {
         neighbors.clear();
 
         let idx = vector_id.into_usize();
-        if idx >= self.locks.len() {
-            return Err(ANNError::log_index_error(
-                "vector id is out of bounds for the neighbor provider",
-            ));
-        }
-        let _guard = self.locks[idx].read().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.locks.read(idx);
 
         self.get_neighbors_unlocked(vector_id, neighbors)
     }
@@ -237,12 +263,7 @@ impl<I: VectorId> NeighborProvider<I> {
         };
 
         let idx = vector_id.into_usize();
-        if idx >= self.locks.len() {
-            return Err(ANNError::log_index_error(
-                "vector id is out of bounds for the neighbor provider",
-            ));
-        }
-        let _guard = self.locks[idx].write().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.locks.write(idx);
 
         self.set_neighbors_internal(vector_id, neighbors, buf)
     }
@@ -264,12 +285,7 @@ impl<I: VectorId> NeighborProvider<I> {
         buf: &mut [I],
     ) -> ANNResult<()> {
         let idx = vector_id.into_usize();
-        if idx >= self.locks.len() {
-            return Err(ANNError::log_index_error(
-                "vector id is out of bounds for the neighbor provider",
-            ));
-        }
-        let _guard = self.locks[idx].write().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.locks.write(idx);
 
         // Retrieve existing neighborlist (no lock needed — we hold the write lock)
         let mut neighbor_list = AdjacencyList::with_capacity(self.dim);
@@ -294,12 +310,7 @@ impl<I: VectorId> NeighborProvider<I> {
 
     pub fn delete_vector(&self, vector_id: I) -> ANNResult<()> {
         let idx = vector_id.into_usize();
-        if idx >= self.locks.len() {
-            return Err(ANNError::log_index_error(
-                "vector id is out of bounds for the neighbor provider",
-            ));
-        }
-        let _guard = self.locks[idx].write().unwrap_or_else(|e| e.into_inner());
+        let _guard = self.locks.write(idx);
 
         let key = bytemuck::bytes_of(&vector_id);
         self.adjacency_list_index.delete(key);
@@ -426,7 +437,7 @@ mod tests {
     async fn test_neighbor_accessors() {
         let bf_tree_config = Config::default();
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(6, 100, bf_tree_config).unwrap();
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
         let mut scratch = neighbor_provider.scratch();
 
         // Set the neighbor list of a vector
@@ -477,7 +488,7 @@ mod tests {
     async fn test_parallel_tree_traversal() {
         let bf_tree_config = Config::default();
         let neighbor_provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(120, 200, bf_tree_config).unwrap());
+            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
 
         let mut set = JoinSet::new();
         for i in 0..100 {
@@ -515,7 +526,7 @@ mod tests {
         bf_tree_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(6, 100, bf_tree_config).unwrap();
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
         let mut scratch = neighbor_provider.scratch();
 
         // Set some neighbor lists
@@ -543,15 +554,15 @@ mod tests {
 
         // Test with various max_degree values
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(6, 100, bf_tree_config.clone()).unwrap();
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config.clone()).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 6);
 
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(120, 200, bf_tree_config.clone()).unwrap();
+            NeighborProvider::<u32>::new_with_config(120, bf_tree_config.clone()).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 120);
 
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(1, 100, bf_tree_config).unwrap();
+            NeighborProvider::<u32>::new_with_config(1, bf_tree_config).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 1);
     }
 
@@ -559,7 +570,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_from_bftree() {
         let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
-        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, 100, bftree).unwrap();
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree).unwrap();
 
         assert_eq!(neighbor_provider.max_degree(), 10);
 
@@ -576,7 +587,7 @@ mod tests {
     async fn test_parallel_neighbor_access() {
         let bf_tree_config = Config::default();
         let neighbor_provider =
-            Arc::new(NeighborProvider::<u32>::new_with_config(120, 200, bf_tree_config).unwrap());
+            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
 
         let mut set = JoinSet::new();
         for _ in 0..5 {
@@ -612,9 +623,8 @@ mod tests {
     async fn test_concurrent_append_no_lost_edges() {
         let max_degree = 120u32;
         let bf_tree_config = Config::default();
-        let provider = Arc::new(
-            NeighborProvider::<u32>::new_with_config(max_degree, 200, bf_tree_config).unwrap(),
-        );
+        let provider =
+            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0 with an empty neighbor list.
         let mut scratch = provider.scratch();
@@ -678,14 +688,8 @@ mod tests {
         let max_degree = 64u32;
         let num_vertices = 100u32;
         let bf_tree_config = Config::default();
-        let provider = Arc::new(
-            NeighborProvider::<u32>::new_with_config(
-                max_degree,
-                num_vertices as usize,
-                bf_tree_config,
-            )
-            .unwrap(),
-        );
+        let provider =
+            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize all vertices with empty neighbor lists.
         {
@@ -741,9 +745,8 @@ mod tests {
     async fn test_concurrent_read_write_consistency() {
         let max_degree = 120u32;
         let bf_tree_config = Config::default();
-        let provider = Arc::new(
-            NeighborProvider::<u32>::new_with_config(max_degree, 200, bf_tree_config).unwrap(),
-        );
+        let provider =
+            Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0.
         let mut scratch = provider.scratch();

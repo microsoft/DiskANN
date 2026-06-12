@@ -69,6 +69,11 @@ impl QuantVectorProvider {
         }
     }
 
+    pub(crate) fn delete_vector(&self, i: usize) {
+        let key = i.as_key();
+        self.quant_vector_index.delete(key);
+    }
+
     /// Return the dimension of the full-precision data associated with this provider
     pub fn full_dim(&self) -> usize {
         self.quantizer.full_dim()
