@@ -442,11 +442,6 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
-impl benchmark_core::search::graph::knn::ConfiguredPostProcessor
-    for post_processor::DeterminantDiversity
-{
-}
-
 impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
     for plugins::DeterminantDiversity
 {

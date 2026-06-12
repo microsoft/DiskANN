@@ -38,23 +38,25 @@ use crate::{
 /// - `DP`: The data provider type
 /// - `T`: The query element type
 /// - `S`: The search strategy type
-/// - `PP`: Optional post-processor type (defaults to `()` for no post-processing)
+/// - `PP`: Post-processor selector. Defaults to [`Defaulted`], which uses the
+///   strategy's default post-processor. Use [`KNN::with_postprocessor`] to
+///   supply an explicit post-processor.
 #[derive(Debug)]
-pub struct KNN<DP, T, S, PP = ()>
+pub struct KNN<DP, T, S, PP = Defaulted>
 where
     DP: provider::DataProvider,
 {
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    post_processor: Option<PP>,
+    post_processor: PP,
 }
 
-impl<DP, T, S> KNN<DP, T, S, ()>
+impl<DP, T, S> KNN<DP, T, S, Defaulted>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`KNN`] searcher without post-processing.
+    /// Construct a new [`KNN`] searcher using the strategy's default post-processor.
     ///
     /// If `strategy` is one of the container variants of [`Strategy`], its length
     /// must match the number of rows in `queries`. If this is the case, then the
@@ -76,16 +78,16 @@ where
             index,
             queries,
             strategy,
-            post_processor: None,
+            post_processor: Defaulted,
         }))
     }
 }
 
-impl<DP, T, S, PP> KNN<DP, T, S, PP>
+impl<DP, T, S, PP> KNN<DP, T, S, Forwarded<PP>>
 where
     DP: provider::DataProvider,
 {
-    /// Construct a new [`KNN`] searcher with post-processing.
+    /// Construct a new [`KNN`] searcher with an explicit post-processor.
     ///
     /// # Errors
     ///
@@ -103,30 +105,70 @@ where
             index,
             queries,
             strategy,
-            post_processor: Some(post_processor),
+            post_processor: Forwarded(post_processor),
         }))
     }
+}
 
+impl<DP, T, S, PP> KNN<DP, T, S, PP>
+where
+    DP: provider::DataProvider,
+{
     /// Access the index.
     pub fn index(&self) -> &Arc<graph::DiskANNIndex<DP>> {
         &self.index
     }
+}
 
-    /// Access the post-processor, if present.
-    pub fn post_processor(&self) -> &Option<PP> {
-        &self.post_processor
+/// Resolves a post-processor for [`KNN`] given a search strategy.
+///
+/// This trait lets [`KNN`] support both "use the strategy's default post-processor"
+/// ([`Defaulted`]) and "use this explicit post-processor" ([`Forwarded`]) without
+/// duplicating the search loop.
+pub trait AsPostProcessor<'a, S, DP, T>
+where
+    DP: provider::DataProvider,
+    S: glue::SearchStrategy<'a, DP, T>,
+{
+    /// The concrete post-processor used for a single search.
+    type Processor: glue::SearchPostProcess<S::SearchAccessor, T, DP::ExternalId> + Send + Sync;
+
+    /// Construct the post-processor to use for a single search.
+    fn as_post_processor(&'a self, strategy: &'a S) -> Self::Processor;
+}
+
+/// Marker indicating that [`KNN`] should use the strategy's default post-processor.
+#[derive(Debug, Clone, Copy)]
+pub struct Defaulted;
+
+impl<'a, S, DP, T> AsPostProcessor<'a, S, DP, T> for Defaulted
+where
+    DP: provider::DataProvider,
+    S: glue::DefaultPostProcessor<'a, DP, T, DP::ExternalId>,
+{
+    type Processor = S::Processor;
+
+    fn as_post_processor(&'a self, strategy: &'a S) -> Self::Processor {
+        strategy.default_post_processor()
     }
 }
 
-/// Marker trait for post-processors that are configured on [`KNN`] and should
-/// be applied through `index.search_with(...)` in the benchmark search pipeline.
-///
-/// Implement this for any [`glue::SearchPostProcess`] type that should be invoked
-/// via [`KNN::with_postprocessor`] / [`graph::DiskANNIndex::search_with`]. The
-/// marker is required to keep the two `Search` impls on [`KNN`] disjoint under
-/// Rust's coherence rules: a generic post-processor type parameter cannot
-/// otherwise be distinguished from the no-post-processing default `PP = ()`.
-pub trait ConfiguredPostProcessor {}
+/// Wraps an explicit post-processor for use with [`KNN::with_postprocessor`].
+#[derive(Debug, Clone, Copy)]
+pub struct Forwarded<PP>(PP);
+
+impl<'a, S, DP, T, PP> AsPostProcessor<'a, S, DP, T> for Forwarded<PP>
+where
+    DP: provider::DataProvider,
+    S: glue::SearchStrategy<'a, DP, T>,
+    PP: glue::SearchPostProcess<S::SearchAccessor, T, DP::ExternalId> + Clone + AsyncFriendly,
+{
+    type Processor = PP;
+
+    fn as_post_processor(&'a self, _strategy: &'a S) -> Self::Processor {
+        self.0.clone()
+    }
+}
 
 /// Additional metrics collected during [`KNN`] search.
 ///
@@ -142,10 +184,11 @@ pub struct Metrics {
     pub hops: u32,
 }
 
-impl<DP, T, S> Search for KNN<DP, T, S, ()>
+impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
+    PP: for<'a> AsPostProcessor<'a, S, DP, &'a [T]> + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -171,78 +214,20 @@ where
     {
         let context = DP::Context::default();
         let knn_search = *parameters;
+        let strategy = self.strategy.get(index)?;
+        let processor = self.post_processor.as_post_processor(strategy);
+
         let stats = self
             .index
-            .search(
+            .search_with(
                 knn_search,
-                self.strategy.get(index)?,
+                strategy,
+                processor,
                 &context,
                 self.queries.row(index),
                 buffer,
             )
             .await?;
-
-        Ok(Metrics {
-            comparisons: stats.cmps,
-            hops: stats.hops,
-        })
-    }
-}
-
-impl<DP, T, S, PP> Search for KNN<DP, T, S, PP>
-where
-    DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
-    PP: ConfiguredPostProcessor
-        + for<'a> glue::SearchPostProcess<
-            <S as glue::SearchStrategy<'a, DP, &'a [T]>>::SearchAccessor,
-            &'a [T],
-            DP::ExternalId,
-        > + Clone
-        + Send
-        + Sync
-        + 'static,
-    T: AsyncFriendly + Clone,
-{
-    type Id = DP::ExternalId;
-    type Parameters = graph::search::Knn;
-    type Output = Metrics;
-
-    fn num_queries(&self) -> usize {
-        self.queries.nrows()
-    }
-
-    fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Fixed(parameters.k_value())
-    }
-
-    async fn search<O>(
-        &self,
-        parameters: &Self::Parameters,
-        buffer: &mut O,
-        index: usize,
-    ) -> ANNResult<Self::Output>
-    where
-        O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
-    {
-        let context = DP::Context::default();
-        let knn_search = *parameters;
-        let processor = self
-            .post_processor
-            .as_ref()
-            .expect("configured post-processor is required for this KNN variant")
-            .clone();
-
-        let stats = graph::search::Search::search(
-            knn_search,
-            self.index.as_ref(),
-            self.strategy.get(index)?,
-            processor,
-            &context,
-            self.queries.row(index),
-            buffer,
-        )
-        .await?;
 
         Ok(Metrics {
             comparisons: stats.cmps,
