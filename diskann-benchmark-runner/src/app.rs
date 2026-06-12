@@ -200,7 +200,11 @@ impl App {
     ) -> anyhow::Result<()> {
         match &self.command {
             // If a named benchmark isn't given, then list the available benchmarks.
-            Commands::Inputs { describe, schema, field } => {
+            Commands::Inputs {
+                describe,
+                schema,
+                field,
+            } => {
                 if let Some(describe) = describe {
                     if let Some(input) = registry.input(describe) {
                         if *schema || field.is_some() {
@@ -467,7 +471,7 @@ impl App {
 
 /// Walk a dotted path (e.g. "build.start_point_strategy") into a JSON value,
 /// descending into object fields at each segment.
-fn extract_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<serde_json::Value> {
+fn extract_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
     let mut current = value;
     // The example JSON wraps in {"tag": ..., "content": {...}} — try "content" first.
     if let Some(content) = current.get("content") {
