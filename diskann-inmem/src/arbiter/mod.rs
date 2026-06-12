@@ -4,7 +4,7 @@
  */
 
 pub(crate) mod buffer;
-pub use buffer::{prefetch_cachelines, Buffer, Slice};
+pub use buffer::{Buffer, RawSlice};
 
 pub mod epoch;
 

@@ -4,7 +4,7 @@
  */
 
 use std::sync::{
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
     Mutex,
 };
 

@@ -6,7 +6,7 @@
 use diskann::{ANNError, ANNResult};
 use diskann_vector::{
     distance::{self, DistanceProvider, Metric},
-    AsUnaligned, UnalignedSlice,
+    UnalignedSlice,
 };
 use thiserror::Error;
 
@@ -46,7 +46,7 @@ where
     }
 
     pub fn bytes(&self) -> Bytes {
-        Bytes(self.dim() * std::mem::size_of::<T>())
+        Bytes::new(self.dim() * std::mem::size_of::<T>())
     }
 }
 
@@ -54,8 +54,8 @@ impl<T> layers::Layer for Full<T>
 where
     T: bytemuck::Pod + Send + Sync,
 {
-    fn bytes(&self) -> usize {
-        <Full<T>>::bytes(self).0
+    fn bytes(&self) -> Bytes {
+        <Full<T>>::bytes(self)
     }
 }
 

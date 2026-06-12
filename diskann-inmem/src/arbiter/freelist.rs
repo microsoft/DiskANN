@@ -6,7 +6,7 @@
 use std::{
     num::NonZeroU32,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Mutex,
     },
 };
