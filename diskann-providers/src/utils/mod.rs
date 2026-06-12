@@ -43,4 +43,7 @@ mod pq_path_names;
 pub use pq_path_names::PQPathNames;
 
 mod medoid;
-pub use medoid::{MAX_MEDOID_SAMPLE_SIZE, find_medoid_from_file, find_medoid_with_sampling};
+pub use medoid::{
+    MAX_MEDOID_SAMPLE_SIZE, find_medoid_from_file, find_medoid_with_sampling,
+    find_nearest_vector_with_id,
+};
