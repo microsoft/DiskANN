@@ -262,7 +262,7 @@ mod tests {
 
         let tempdir = tempfile::tempdir().unwrap();
 
-        let input_path = tempdir.path().join("graph-index.json");
+        let input_path = tempdir.path().join("input.json");
         save_to_file(&input_path, &raw);
 
         let output_path = tempdir.path().join("output.json");
@@ -297,6 +297,16 @@ mod tests {
     #[test]
     fn graph_index_integration() {
         let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    /////////////////////////
+    //    Flat Search      //
+    /////////////////////////
+
+    #[test]
+    fn flat_search_integration() {
+        let raw = value_from_file(&example_directory().join("flat-index.json"));
         run_integration_test(raw);
     }
 
