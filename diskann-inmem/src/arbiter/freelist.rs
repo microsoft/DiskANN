@@ -5,10 +5,7 @@
 
 use std::{
     num::NonZeroU32,
-    sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
-        Mutex,
-    },
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use crossbeam_queue::ArrayQueue;

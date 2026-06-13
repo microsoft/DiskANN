@@ -3,11 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    iter::repeat_n,
-    num::NonZeroU32,
-    sync::{atomic::Ordering, Mutex},
-};
+use std::{iter::repeat_n, num::NonZeroU32, sync::atomic::Ordering};
 
 use diskann::utils::IntoUsize;
 use diskann_utils::views::MatrixView;
@@ -36,6 +32,7 @@ pub struct Primary {
 }
 
 const SPLIT: Bytes = Bytes::size_of::<generation::Tag>();
+const RETRY_LIMIT: usize = 20;
 
 impl Primary {
     pub fn new(
@@ -69,7 +66,7 @@ impl Primary {
 
         // Populate frozen points.
         for (i, data) in init.row_iter().enumerate() {
-            let mut slot = this.slot((entries + i).try_into().unwrap());
+            let mut slot = this.slot((entries + i).try_into().unwrap()).unwrap();
             slot.as_mut_slice().copy_from_slice(data);
             slot.freeze();
         }
@@ -123,35 +120,39 @@ impl Primary {
     }
 
     /// Attempt to acquire new slot for writing.
-    pub fn acquire(&self) -> Slot<'_> {
-        match self.freelist.pop() {
-            freelist::Id::Found(id) => self.slot(id),
-            freelist::Id::Scan => unimplemented!("fallback scan not implemented"),
+    pub fn acquire(&self) -> Option<Slot<'_>> {
+        for _ in 0..RETRY_LIMIT {
+            match self.freelist.pop() {
+                freelist::Id::Found(id) => {
+                    if let Some(slot) = self.slot(id) {
+                        return Some(slot);
+                    }
+                }
+                freelist::Id::Scan => unimplemented!("fallback scan not implemented"),
+            }
         }
+        None
     }
 
-    fn slot(&self, i: u32) -> Slot<'_> {
+    fn slot(&self, i: u32) -> Option<Slot<'_>> {
         let tag = self.tag_mut(i.into_usize()).unwrap();
-        if let Err(got) = tag.try_set(
+        match tag.try_set(
             Generation::AVAILABLE,
             Generation::OWNED,
             Ordering::Relaxed,
             Ordering::Relaxed,
         ) {
-            panic!(
-                "CONCURRENCY VIOLATION: acquire - expected {} - got {}",
-                Generation::AVAILABLE,
-                got
-            );
-        }
-
-        let (mirror, data) = unsafe { self.data_unchecked(i.into_usize()) };
-        Slot {
-            tag,
-            mirror,
-            generation: self.registry.generation(),
-            data,
-            slot: i,
+            Ok(_) => {
+                let (mirror, data) = unsafe { self.data_unchecked(i.into_usize()) };
+                Some(Slot {
+                    tag,
+                    mirror,
+                    generation: self.registry.generation(),
+                    data,
+                    slot: i,
+                })
+            }
+            Err(_) => None,
         }
     }
 
@@ -170,7 +171,7 @@ impl Primary {
         // Even if we make this change, we can't access any data until we wait for the
         // epoch to be bumped. As such, relaxed semantics are fine.
         match tag.try_set(current, owned, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(current) => {
+            Ok(_) => {
                 // Set the metadata in the mirror as well.
                 let (mirror, _) = unsafe { self.data_unchecked(i) };
                 mirror.set(owned, Ordering::Relaxed);
