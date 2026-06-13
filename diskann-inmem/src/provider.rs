@@ -13,7 +13,7 @@ use diskann::{
     utils::IntoUsize,
     ANNError, ANNErrorKind, ANNResult,
 };
-use diskann_utils::{views::Matrix, future::{AsyncFriendly, SendFuture}};
+use diskann_utils::views::Matrix;
 
 use crate::{
     arbiter::epoch,
@@ -42,18 +42,7 @@ impl<T> Provider<T> {
             layers::Set::into_bytes(&layer, point, row).unwrap();
         }
 
-        let primary = Primary::new(
-            capacity,
-            bytes,
-            32,
-            data.as_view(),
-        );
-
-        // for v in start_points.into_iter() {
-        //     let mut writer = primary.acquire();
-        //     layers::Set::into_bytes(&layer, v, writer.as_mut_slice()).unwrap();
-        // }
-
+        let primary = Primary::new(capacity, bytes, 32, data.as_view());
         Self { primary, layer }
     }
 
@@ -83,7 +72,7 @@ where
 
     fn to_internal_id(
         &self,
-        context: &Self::Context,
+        _context: &Self::Context,
         gid: &Self::ExternalId,
     ) -> Result<Self::InternalId, Self::Error> {
         Ok(*gid)
@@ -92,7 +81,7 @@ where
     /// Translate an internal id to its corresponding external id.
     fn to_external_id(
         &self,
-        context: &Self::Context,
+        _context: &Self::Context,
         id: Self::InternalId,
     ) -> Result<Self::ExternalId, Self::Error> {
         Ok(id)
@@ -114,12 +103,12 @@ where
 
     fn set_element(
         &self,
-        context: &Self::Context,
+        _context: &Self::Context,
         id: &Self::ExternalId,
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut slot = self.primary.acquire();
+            let mut slot = self.primary.acquire().unwrap();
             <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
             Ok(diskann::provider::NoopGuard::new(slot.slot()))
         };
@@ -328,7 +317,6 @@ unsafe fn expand_beam_inner<const N: usize>(
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
     reader: store::Reader<'a>,
-    set: workingset::Map<u32, Box<[u8]>>,
     distance: &'a dyn Distance,
     ids: AdjacencyList<u32>,
 }
@@ -346,7 +334,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [u8];
 
     type View<'a>
-        = workingset::map::View<'a, u32, Box<[u8]>>
+        = &'a Self
     where
         Self: 'a;
 
@@ -361,19 +349,12 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        itr: Itr,
+        _itr: Itr,
     ) -> ANNResult<(Self::View<'a>, Self::Distance<'a>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        let v = self
-            .set
-            .fill(itr, |i| -> Result<_, Infallible> {
-                Ok(self.reader.read(i.into_usize()).map(|v| v.into()))
-            })
-            .unwrap();
-
-        Ok((v, &*self.distance))
+        Ok((self, &*self.distance))
     }
 }
 
@@ -416,20 +397,22 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
-            let current = self.reader.neighbors().lock(id.into_usize()).unwrap();
-
-            // Copy out the current neighbors.
-            let mut resize = self.ids.resize(current.len());
-            resize.copy_from_slice(current.as_slice());
-            resize.finish(current.len());
-
-            // Append the new neighbors.
-            self.ids.extend_from_slice(neighbors);
-            current.write(&self.ids).unwrap();
+            self.reader.neighbors().lock(id.into_usize()).unwrap().append(neighbors).unwrap();
             Ok(())
         };
 
         ready(work)
+    }
+}
+
+impl workingset::View<u32> for &PruneAccessor<'_> {
+    type ElementRef<'a> = &'a [u8];
+    type Element<'a>
+        = &'a [u8]
+    where
+        Self: 'a;
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        self.reader.read(id.into_usize())
     }
 }
 
@@ -450,7 +433,7 @@ where
     fn search_accessor(
         &'a self,
         provider: &'a Provider<L>,
-        context: &'a Context,
+        _context: &'a Context,
         query: T,
     ) -> ANNResult<SearchAccessor<'a>> {
         let distance = <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
@@ -483,13 +466,11 @@ where
     fn prune_accessor<'a>(
         &self,
         provider: &'a Provider<L>,
-        context: &'a Context,
+        _context: &'a Context,
         capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
-        let set = workingset::map::Builder::new(workingset::map::Capacity::Default).build(capacity);
         Ok(PruneAccessor {
             reader: provider.primary.reader()?,
-            set,
             distance: <L as layers::AsDistance>::as_distance(&provider.layer),
             ids: AdjacencyList::new(),
         })

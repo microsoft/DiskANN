@@ -5,11 +5,11 @@
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Mutex, TryLockError,
 };
 
 use crossbeam_queue::SegQueue;
 use diskann::utils::IntoUsize;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::arbiter::{
     generation::{Mut, Tag},
@@ -72,6 +72,10 @@ impl Registry {
         }
     }
 
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
     /// Return the current generation.
     ///
     /// This has [`Ordering::Acquire`] semantics.
@@ -87,19 +91,21 @@ impl Registry {
         self.register_inner(NoDelay)
     }
 
-    fn register_inner<T>(&self, _: T) -> Result<Guard<'_>, Unavailable>
+    #[inline]
+    fn register_inner<T>(&self, mut delay: T) -> Result<Guard<'_>, Unavailable>
     where
         T: RegisterDelay,
     {
         // REGISTER CHECK
         let mut generation = self.generation();
         let hint = self.hint.fetch_add(1, Ordering::Relaxed);
-
+        delay.post_register_check();
         let nslots = self.slots.len();
         for i in 0..nslots {
             let slot = (hint + i) % nslots;
 
             let m = self.slots[slot].as_mut();
+            delay.pre_cas();
             if let Ok(_) = m.try_set(
                 Generation::MAX,
                 generation,
@@ -111,7 +117,9 @@ impl Registry {
                     // REGISTER FENCE: This fence is paired with "WAITING FENCE".
                     //
                     // See that comment for details.
+                    delay.pre_fence();
                     std::sync::atomic::fence(Ordering::SeqCst);
+                    delay.post_fence();
 
                     // REGISTER RECHECK
                     let current = self.generation();
@@ -131,6 +139,8 @@ impl Registry {
                     slot: m,
                     retire: &self.retiring[queue(generation)],
                     generation,
+                    #[cfg(test)]
+                    slot_index: slot,
                 });
             }
         }
@@ -143,13 +153,13 @@ impl Registry {
     /// This uses a fast method that may be overly conservative.
     ///
     /// This is a synchronizing operation with [`Ordering::Acquire`] semantics.
-    pub fn waiting(&self) -> Generation {
-        self.waiting_inner(NoDelay)
+    pub fn can_advance(&self) -> bool {
+        self.can_advance_inner(&mut NoDelay).0
     }
 
-    fn waiting_inner<T>(&self, _: T) -> Generation
+    fn can_advance_inner<T>(&self, delay: &mut T) -> (bool, Generation)
     where
-        T: WaitingDelay,
+        T: CanAdvanceDelay,
     {
         // WAITING FENCE: This is a very important part for the correctness of the algorithm.
         //
@@ -179,10 +189,13 @@ impl Registry {
         //   It's possible that thread B observes the CAS to "REGISTER CHECK", but since
         //   thread A will monotonically decrease it before exiting, the value thread B
         //   observes is conservative and not incorrect.
+        delay.pre_fence();
         std::sync::atomic::fence(Ordering::SeqCst);
+        delay.post_fence();
 
         // WAITING CHECK
-        let mut max = self.generation();
+        let current = self.generation();
+        let mut max = current;
 
         for s in self.slots.iter() {
             let generation = s.as_ref().get(Ordering::Relaxed);
@@ -193,14 +206,14 @@ impl Registry {
 
         // This synchronizes with all the guard's `Release`s.
         std::sync::atomic::fence(Ordering::Acquire);
-        max
+        (max == current, max)
     }
 
     pub fn try_advance(&self) -> Option<Drain<'_>> {
         self.try_advance_inner(NoDelay)
     }
 
-    fn try_advance_inner<T>(&self, _: T) -> Option<Drain<'_>>
+    fn try_advance_inner<T>(&self, mut delay: T) -> Option<Drain<'_>>
     where
         T: TryAdvanceDelay,
     {
@@ -213,18 +226,13 @@ impl Registry {
         //
         // We intentionally ignore lock-poison since we expect the guarded queue to be
         // robust with respect to panics.
-        let drain = match self.drain.try_lock() {
-            Ok(drain) => drain,
-            Err(TryLockError::Poisoned(drain)) => drain.into_inner(),
-            Err(TryLockError::WouldBlock) => return None,
-        };
+        let drain = self.drain.try_lock()?;
 
-        let waiting = self.waiting();
-        let current = self.generation.as_ref().get(Ordering::Relaxed);
+        let (can_advance, current) = self.can_advance_inner(&mut delay);
 
         // All waiters belong to the current generation. Therefore, it is safe to release
         // the old array queue
-        if waiting == current {
+        if can_advance {
             // We are safe to use a `fetch_sub` here because `drain` is ensuring exclusivity
             // of the access.
             //
@@ -240,6 +248,23 @@ impl Registry {
             None
         }
     }
+
+    #[cfg(test)]
+    fn assert_no_workers(&self) {
+        for s in self.slots.iter() {
+            assert_eq!(s.as_ref().get(Ordering::Relaxed), Generation::MAX);
+        }
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> Vec<Generation> {
+        self.slots.iter().map(|s| s.as_ref().get(Ordering::Relaxed)).collect()
+    }
+
+    #[cfg(test)]
+    fn waiting(&self) -> Generation {
+        self.can_advance_inner(&mut NoDelay).1
+    }
 }
 
 #[derive(Debug)]
@@ -247,6 +272,9 @@ pub struct Guard<'a> {
     slot: Mut<'a>,
     retire: &'a SegQueue<u32>,
     generation: Generation,
+
+    #[cfg(test)]
+    slot_index: usize,
 }
 
 impl Guard<'_> {
@@ -282,7 +310,7 @@ impl Drop for Guard<'_> {
 #[derive(Debug)]
 pub struct Drain<'a> {
     queue: &'a SegQueue<u32>,
-    drain: std::sync::MutexGuard<'a, ()>,
+    drain: MutexGuard<'a, ()>,
 }
 
 impl Drain<'_> {
@@ -346,15 +374,23 @@ impl From<Unavailable> for diskann::ANNError {
 #[derive(Debug)]
 struct NoDelay;
 
-trait RegisterDelay {}
+trait RegisterDelay {
+    fn post_register_check(&mut self) {}
+    fn pre_cas(&mut self) {}
+    fn pre_fence(&mut self) {}
+    fn post_fence(&mut self) {}
+}
 
 impl RegisterDelay for NoDelay {}
 
-trait WaitingDelay {}
+trait CanAdvanceDelay {
+    fn pre_fence(&mut self) {}
+    fn post_fence(&mut self) {}
+}
 
-impl WaitingDelay for NoDelay {}
+impl CanAdvanceDelay for NoDelay {}
 
-trait TryAdvanceDelay {}
+trait TryAdvanceDelay: CanAdvanceDelay {}
 
 impl TryAdvanceDelay for NoDelay {}
 
@@ -365,4 +401,218 @@ impl TryAdvanceDelay for NoDelay {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::{thread, sync::mpsc};
+
+    fn channel() -> (Sender, Receiver) {
+        let (s, r) = mpsc::channel();
+        (Sender(s), Receiver(r))
+    }
+
+    struct Sender(mpsc::Sender<()>);
+
+    impl Sender {
+        fn send(&self) {
+            self.0.send(()).unwrap()
+        }
+    }
+
+    struct Receiver(mpsc::Receiver<()>);
+
+    impl Receiver {
+        fn recv(&self) {
+            self.0.recv().unwrap();
+        }
+    }
+
+    // This test ensures that two threads racing on `hint` will correctly resolve themselves
+    // when claiming a slot.
+    #[test]
+    fn test_cas_race() {
+        let (a_sender, a_receiver) = channel();
+        let (b_sender, b_receiver) = channel();
+        let (a_done_sender, a_done_receiver) = channel();
+
+        let delay = TestRegisterDelay::default()
+            .with_post_register_check(move || {
+                b_sender.send();
+                a_receiver.recv();
+            });
+
+        let registry = Registry::with_capacity(2);
+        assert_eq!(registry.capacity(), 2);
+
+        thread::scope(|s| {
+            let registry_ref = &registry;
+
+            // Thread A
+            s.spawn(move || {
+                let g = registry_ref.register_inner(delay).unwrap();
+                assert_eq!(g.slot_index, 1);
+                a_done_sender.send();
+            });
+
+            // Thread B
+            s.spawn(move || {
+                // wait for Thread A to let us know it's in the delay slot.
+                b_receiver.recv();
+                {
+                    let g = registry_ref.register_inner(NoDelay).unwrap();
+                    assert_eq!(g.slot_index, 1);
+                }
+                let g = registry_ref.register_inner(NoDelay).unwrap();
+                assert_eq!(g.slot_index, 0);
+                a_sender.send();
+                a_done_receiver.recv();
+            });
+        });
+
+        registry.assert_no_workers();
+    }
+
+    #[test]
+    fn test_register_wait() {
+        // This tests the case where a thread enters registration, reads a generation, then
+        // sleeps for several generation advances. It ensures that the thread recovers
+        // properly.
+        let (ready_sender, ready_receiver) = channel();
+        let (step0_sender, step0_receiver) = channel();
+
+        let delay = TestRegisterDelay::default()
+            .with_post_register_check(move || {
+                ready_sender.send();
+                step0_receiver.recv();
+            })
+            .with_pre_fence(move || {
+            });
+
+        let registry = Registry::with_capacity(2);
+
+        thread::scope(|s| {
+            let registry_ref = &registry;
+
+            let handle = s.spawn(move || registry_ref.register_inner(delay).unwrap());
+
+            // Wait for the spawned thread to reach the critical section.
+            ready_receiver.recv();
+
+            assert_eq!(registry.waiting(), Generation::MAX.sub(1));
+            {
+                let drain = registry.try_advance().unwrap();
+                assert!(drain.is_empty());
+                assert_eq!(registry.generation(), Generation::MAX.sub(2));
+            }
+
+            {
+                let drain = registry.try_advance().unwrap();
+                assert!(drain.is_empty());
+                assert_eq!(registry.generation(), Generation::MAX.sub(3));
+            }
+
+            step0_sender.send();
+
+            let expected = Generation::MAX.sub(3);
+
+            // The generation should be the last set one - even though this thread was
+            // parked during the transition.
+            let r = handle.join().unwrap();
+            assert_eq!(r.generation(), expected);
+            assert_eq!(registry.waiting(), expected);
+        });
+
+        registry.assert_no_workers();
+    }
+
+    //-------------//
+    // Test Delays //
+    //-------------//
+
+    macro_rules! tester {
+        ($struct:ident, $trait:ident, $($with:ident => $f:ident),* $(,)?) => {
+            #[derive(Default)]
+            struct $struct<'a> {
+                $($f: Option<Box<dyn FnMut() + Send + 'a>>,)*
+            }
+
+            impl<'a> $struct<'a> {
+                $(
+                    fn $with<F>(mut self, f: F) -> Self
+                    where
+                        F: FnMut() + Send + 'a
+                    {
+                        self.$f = Some(Box::new(f));
+                        self
+                    }
+                )*
+            }
+
+            impl $trait for $struct<'_> {
+                $(
+                    fn $f(&mut self) {
+                        if let Some(f) = self.$f.as_mut() {
+                            f()
+                        }
+                    }
+                )*
+            }
+        }
+    }
+
+    tester! {
+        TestRegisterDelay,
+        RegisterDelay,
+        with_post_register_check => post_register_check,
+        with_pre_cas => pre_cas,
+        with_pre_fenct => pre_fence,
+        with_post_fence => post_fence,
+    }
+
+    // #[derive(Default)]
+    // struct TestRegisterDelay<'a> {
+    //     post_register_check: Option<&'a mut dyn FnMut()>,
+    //     pre_cas: Option<&'a mut dyn FnMut()>,
+    //     pre_fence: Option<&'a mut dyn FnMut()>,
+    //     post_fence: Option<&'a mut dyn FnMut()>,
+    // }
+
+    // macro_rules! builder {
+    //     ($f:ident, $field:ident) => {
+    //         fn $f(mut self, f: &'a mut dyn FnMut()) -> Self {
+    //             self.$field = Some(f);
+    //             self
+    //         }
+    //     }
+    // }
+
+    // macro_rules! forward {
+    //     ($f:ident) => {
+    //         fn $f(&mut self) {
+    //             if let Some(f) = self.$f.as_mut() {
+    //                 f()
+    //             }
+    //         }
+    //     }
+    // }
+
+    // impl<'a> TestRegisterDelay<'a> {
+    //     builder!(with_post_register_check, post_register_check);
+    //     builder!(with_pre_cas, pre_cas);
+    //     builder!(with_pre_fence, pre_fence);
+    //     builder!(with_post_fence, post_fence);
+    // }
+
+    // impl RegisterDelay for TestRegisterDelay<'_> {
+    //     forward!(post_register_check);
+    //     forward!(pre_cas);
+    //     forward!(pre_fence);
+    //     forward!(post_fence);
+    // }
+
+    // struct CanAdvanceDelay;
+
+    // impl CanAdvanceDelay for TestWaitingDelay {}
+
+    // struct TestTryAdvanceDelay;
+
+    // impl TryAdvanceDelay for TestTryAdvanceDelay {}
 }

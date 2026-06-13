@@ -815,6 +815,7 @@ dependencies = [
  "diskann",
  "diskann-utils",
  "diskann-vector",
+ "parking_lot",
  "thiserror 2.0.17",
  "tokio",
 ]

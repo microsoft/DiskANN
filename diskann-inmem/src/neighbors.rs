@@ -3,9 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::RwLock;
-
 use diskann::{graph::AdjacencyList, utils::IntoUsize};
+use parking_lot::{RawRwLock, RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 use crate::{
@@ -54,7 +53,7 @@ impl Neighbors {
 
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) };
 
-        let _guard = dismiss_poison(lock.read());
+        let _guard = lock.read();
 
         // SAFETY: By consruction `self.buffer` has the same number of entries as
         // `self.locks` and we have already checked that `i` is in-bounds there.
@@ -88,7 +87,7 @@ impl Neighbors {
     }
 
     unsafe fn lock_unchecked(&self, i: usize) -> Lock<'_> {
-        let lock = dismiss_poison(unsafe { self.locks.get_unchecked(lock_index(i)) }.write());
+        let lock = unsafe { self.locks.get_unchecked(lock_index(i)) }.write();
 
         // SAFETY: By consruction `self.buffer` has the same number of entries as
         // `self.locks` and we have already checked that `i` is in-bounds there.
@@ -140,17 +139,7 @@ pub enum SetError {
     TooLong(TooLong),
 }
 
-// We carefully guard where locks are acquired in this function, so that panicking while
-// holding a lock won't happen and if it does, we know we're still in decent shape.
-fn dismiss_poison<T>(r: std::sync::LockResult<T>) -> T {
-    match r {
-        Ok(v) => v,
-        Err(poison) => poison.into_inner(),
-    }
-}
-
 /// A locked adjacency list to implement atomic read-modify-write operations.
-#[derive(Debug)]
 pub struct Lock<'a> {
     // The raw adjacency list with the actual length stored as the first element.
     //
@@ -160,7 +149,7 @@ pub struct Lock<'a> {
     raw: &'a mut [u32],
     // VERY IMPORTANT: `lock` has to be **after** `raw` because `lock` is guarding `raw`
     // and thus must be dropped **after** `raw`.
-    lock: std::sync::RwLockWriteGuard<'a, ()>,
+    lock: RwLockWriteGuard<'a, ()>,
 }
 
 impl Lock<'_> {
@@ -200,6 +189,20 @@ impl Lock<'_> {
         Ok(())
     }
 
+    pub fn append(self, neighbors: &[u32]) -> Result<(), TooLong> {
+        let len = self.len();
+        let newlen = len.saturating_add(neighbors.len());
+
+        if newlen > self.capacity() {
+            return Err(TooLong);
+        }
+
+        unsafe { self.raw.get_unchecked_mut(len..newlen) }.copy_from_slice(neighbors);
+        *unsafe { self.raw.get_unchecked_mut(0) } = newlen as u32;
+        Ok(())
+        // `self.raw` is dropped first, then `self.lock` which was guarding it.
+    }
+
     unsafe fn write_unchecked(self, neighbors: &[u32]) {
         let len = neighbors.len();
         debug_assert!(len <= self.capacity());
@@ -208,6 +211,15 @@ impl Lock<'_> {
         }
         *unsafe { self.raw.get_unchecked_mut(0) } = len as u32;
         // `self.raw` is dropped first, then `self.lock` which was guarding it.
+    }
+}
+
+impl std::fmt::Debug for Lock<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lock")
+            .field("raw", &self.raw)
+            .field("lock", &())
+            .finish()
     }
 }
 
