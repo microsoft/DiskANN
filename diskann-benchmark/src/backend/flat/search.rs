@@ -38,11 +38,13 @@ use crate::{
 // Benchmark Registration //
 ////////////////////////////
 
+const NAME: &str = "flat-index";
+
 pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-    registry.register("flat-index-f32", FlatBenchmark::<f32>::new())?;
-    registry.register("flat-index-f16", FlatBenchmark::<f16>::new())?;
-    registry.register("flat-index-u8", FlatBenchmark::<u8>::new())?;
-    registry.register("flat-index-i8", FlatBenchmark::<i8>::new())?;
+    registry.register(NAME, FlatBenchmark::<f32>::new())?;
+    registry.register(NAME, FlatBenchmark::<f16>::new())?;
+    registry.register(NAME, FlatBenchmark::<u8>::new())?;
+    registry.register(NAME, FlatBenchmark::<i8>::new())?;
     Ok(())
 }
 
