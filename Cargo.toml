@@ -40,7 +40,7 @@ resolver = "3"
 version = "0.53.0"      # Obeying semver
 description = "DiskANN is a fast approximate nearest neighbor search library for high dimensional data"
 authors = ["Microsoft"]
-documentation = "https://github.com/microsoft/DiskANN"
+repository = "https://github.com/microsoft/DiskANN"
 license = "MIT"
 edition = "2021"
 
