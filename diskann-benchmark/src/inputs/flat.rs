@@ -60,7 +60,16 @@ impl std::fmt::Display for FlatSearch {
         write_field!(f, "Queries", self.search.queries.display())?;
         write_field!(f, "Groundtruth", self.search.groundtruth.display())?;
         write_field!(f, "K", self.search.k)?;
-        write_field!(f, "Threads", self.search.num_threads.len())?;
+        write_field!(
+            f,
+            "Threads",
+            self.search
+                .num_threads
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
         write_field!(f, "Reps", self.search.reps)?;
         Ok(())
     }
