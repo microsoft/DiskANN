@@ -219,7 +219,7 @@ impl BetaSearchPhase {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct MultiHopSearchPhase {
+pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -230,7 +230,7 @@ pub(crate) struct MultiHopSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl MultiHopSearchPhase {
+impl MultihopFilterSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
         self.query_predicates.resolve(checker)?;
@@ -260,7 +260,7 @@ impl AdaptiveL {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct InlineSearchPhase {
+pub(crate) struct InlineFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -272,7 +272,7 @@ pub(crate) struct InlineSearchPhase {
     pub(crate) adaptive_l: Option<AdaptiveL>,
 }
 
-impl InlineSearchPhase {
+impl InlineFilterSearchPhase {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.queries.resolve(checker)?;
         self.query_predicates.resolve(checker)?;
@@ -408,8 +408,8 @@ pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
-    TopkMultihopFilter(MultiHopSearchPhase),
-    TopkInlineFilter(InlineSearchPhase),
+    TopkMultihopFilter(MultihopFilterSearchPhase),
+    TopkInlineFilter(InlineFilterSearchPhase),
     TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
@@ -474,7 +474,7 @@ impl SearchPhase {
 
     pub(crate) fn as_topk_multihop_filter(
         &self,
-    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
         match self {
             Self::TopkMultihopFilter(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
@@ -484,7 +484,9 @@ impl SearchPhase {
         }
     }
 
-    pub(crate) fn as_topk_inline_filter(&self) -> Result<&InlineSearchPhase, WrongSearchPhaseKind> {
+    pub(crate) fn as_topk_inline_filter(
+        &self,
+    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
         match self {
             Self::TopkInlineFilter(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(

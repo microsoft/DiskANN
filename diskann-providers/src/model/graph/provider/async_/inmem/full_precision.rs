@@ -108,7 +108,7 @@ where
     T: VectorRepr,
 {
     store: &'a FastMemoryVectorProviderAsync<T>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: <T as VectorRepr>::Distance,
 }
 
@@ -136,7 +136,7 @@ where
         Self: 'a;
 
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 

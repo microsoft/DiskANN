@@ -34,14 +34,14 @@ use crate::{
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
 #[derive(Debug)]
-pub struct MultihopSearch<'q, InternalId> {
+pub struct MultihopFilterSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: Knn,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
-impl<'q, InternalId> MultihopSearch<'q, InternalId> {
+impl<'q, InternalId> MultihopFilterSearch<'q, InternalId> {
     /// Create new multihop search parameters.
     pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
         Self {
@@ -51,7 +51,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopSearch<'b, DP::InternalId>
+impl<'a, 'b, DP, S, T> Search<'a, DP, S, T> for MultihopFilterSearch<'b, DP::InternalId>
 where
     DP: DataProvider,
     S: SearchStrategy<'a, DP, T>,

@@ -84,7 +84,7 @@ where
 
 pub struct PruneAccessor<'a> {
     provider: &'a FastMemoryQuantVectorProviderAsync,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>,
 }
 
@@ -106,7 +106,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Self: 'a;
 
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 
@@ -147,7 +147,7 @@ where
 {
     full: &'a FastMemoryVectorProviderAsync<T>,
     quant: &'a FastMemoryQuantVectorProviderAsync,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: distances::pq::HybridComputer<T>,
 
     // During pruning, we make the first `max_fp_vecs_per_prune` are full-precision with
@@ -177,7 +177,7 @@ where
     where
         Self: 'a;
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 

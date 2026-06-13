@@ -49,7 +49,7 @@ use crate::{
     },
     tracked_debug, tracked_error, tracked_trace,
     utils::{
-        IntoUsize, TryIntoVectorId, VectorId,
+        IntoUsize, VectorId,
         async_tools::{self, DynamicBalancer},
     },
 };
@@ -2042,7 +2042,8 @@ where
     /// # Supported Search Types
     ///
     /// - [`search::Knn`]: Standard k-NN graph-based search
-    /// - [`search::MultihopSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`search::MultihopFilterSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`search::InlineFilterSearch`]: Inline filtered search with optional adaptive L sizing
     /// - [`search::Range`]: Range-based search within a distance radius
     /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
     ///
@@ -2809,22 +2810,22 @@ where
         }
     }
 
-    /// Prune all nodes in the graph.
+    /// Prune all nodes in `ids`.
     ///
-    /// This is used as the final step of graph construction.
-    pub fn prune_range<S>(
+    /// This is used as the final step of graph construction. `ids` yields the
+    /// [`DataProvider::InternalId`] of every point to prune.
+    pub fn prune_range<S, I>(
         &self,
         strategy: &S,
         context: &DP::Context,
-        range: Range<DP::InternalId>,
+        ids: I,
     ) -> impl SendFuture<ANNResult<()>>
     where
         S: PruneStrategy<DP>,
+        I: IntoIterator<Item = DP::InternalId> + Send,
+        I::IntoIter: Send,
     {
         async move {
-            let start: u64 = range.start.into();
-            let end: u64 = range.end.into();
-
             let mut accessor = strategy
                 .prune_accessor(&self.data_provider, context, self.max_occlusion_size())
                 .into_ann_result()?;
@@ -2832,8 +2833,7 @@ where
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();
 
-            for id in start..end {
-                let id = id.try_into_vector_id()?;
+            for id in ids {
                 accessor
                     .neighbors()
                     .get_neighbors(id, &mut neighbors)
