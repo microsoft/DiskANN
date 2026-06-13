@@ -3,14 +3,17 @@
  * Licensed under the MIT license.
  */
 
+use std::hash::Hash;
+
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
-    error::Infallible,
     graph::{
         AdjacencyList,
         glue::{self, HybridPredicate},
         workingset,
+        SearchOutputBuffer,
     },
+    neighbor::Neighbor,
     provider,
     utils::IntoUsize,
 };
@@ -18,18 +21,29 @@ use diskann_utils::views::Matrix;
 
 use crate::{
     arbiter::epoch,
+    ids,
     layers::{self, Distance, QueryDistance},
     num::Bytes,
     store::{self, Primary},
 };
 
+pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
+impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
+
 #[derive(Debug)]
-pub struct Provider<T> {
+pub struct Provider<T, M = u32>
+where
+    M: Id,
+{
     primary: Primary,
     layer: T,
+    mapping: ids::Sharded<M>,
 }
 
-impl<T> Provider<T> {
+impl<T, M> Provider<T, M>
+where
+    M: Id,
+{
     pub fn new<I, V>(layer: T, capacity: usize, start_points: I) -> Self
     where
         I: IntoIterator<Item = V>,
@@ -44,7 +58,12 @@ impl<T> Provider<T> {
         }
 
         let primary = Primary::new(capacity, bytes, 32, data.as_view());
-        Self { primary, layer }
+        let mapping = ids::Sharded::new(capacity);
+        Self {
+            primary,
+            layer,
+            mapping,
+        }
     }
 
     fn reader(&self) -> Result<store::Reader<'_>, epoch::Unavailable> {
@@ -61,22 +80,24 @@ pub struct Context;
 
 impl diskann::provider::ExecutionContext for Context {}
 
-impl<T> diskann::provider::DataProvider for Provider<T>
+impl<T, M> diskann::provider::DataProvider for Provider<T, M>
 where
     T: Send + Sync + 'static,
+    M: Id,
 {
     type Context = Context;
     type InternalId = u32;
-    type ExternalId = u32;
-    type Error = diskann::error::Infallible;
+    type ExternalId = M;
+    type Error = ANNError;
     type Guard = diskann::provider::NoopGuard<u32>;
 
     fn to_internal_id(
         &self,
         _context: &Self::Context,
-        gid: &Self::ExternalId,
+        gid: &M,
     ) -> Result<Self::InternalId, Self::Error> {
-        Ok(*gid)
+        let id = self.mapping.to_internal(gid).unwrap();
+        Ok(id)
     }
 
     /// Translate an internal id to its corresponding external id.
@@ -85,7 +106,8 @@ where
         _context: &Self::Context,
         id: Self::InternalId,
     ) -> Result<Self::ExternalId, Self::Error> {
-        Ok(id)
+        let gid = self.mapping.to_external(id).unwrap();
+        Ok(gid)
     }
 }
 
@@ -96,21 +118,27 @@ where
     std::future::ready(f())
 }
 
-impl<T, L> diskann::provider::SetElement<T> for Provider<L>
+impl<T, L, M> diskann::provider::SetElement<T> for Provider<L, M>
 where
     L: layers::Layer + layers::Set<T>,
+    M: Id,
 {
     type SetError = ANNError;
 
     fn set_element(
         &self,
         _context: &Self::Context,
-        id: &Self::ExternalId,
+        id: &M,
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
             let mut slot = self.primary.acquire().unwrap();
+
+            // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
+            // insert failure.
             <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
+            self.mapping.insert(id.clone(), slot.slot()).unwrap();
+
             Ok(diskann::provider::NoopGuard::new(slot.slot()))
         };
 
@@ -132,6 +160,9 @@ pub struct SearchAccessor<'a> {
     distance: Box<dyn QueryDistance + 'a>,
     ids: AdjacencyList<u32>,
     expand_beam: FExpandBeam,
+
+    // The parent provider for the accessor.
+    provider: &'a (dyn std::any::Any + Send + Sync),
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -319,7 +350,6 @@ unsafe fn expand_beam_inner<const N: usize>(
 pub struct PruneAccessor<'a> {
     reader: store::Reader<'a>,
     distance: &'a dyn Distance,
-    ids: AdjacencyList<u32>,
 }
 
 impl diskann::provider::HasId for PruneAccessor<'_> {
@@ -429,16 +459,17 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy;
 
-impl<'a, T, L> glue::SearchStrategy<'a, Provider<L>, T> for Strategy
+impl<'a, T, L, M> glue::SearchStrategy<'a, Provider<L, M>, T> for Strategy
 where
     L: layers::Search<'a, T>,
+    M: Id,
 {
     type SearchAccessor = SearchAccessor<'a>;
     type SearchAccessorError = ANNError;
 
     fn search_accessor(
         &'a self,
-        provider: &'a Provider<L>,
+        provider: &'a Provider<L, M>,
         _context: &'a Context,
         query: T,
     ) -> ANNResult<SearchAccessor<'a>> {
@@ -450,42 +481,92 @@ where
             distance,
             ids: AdjacencyList::new(),
             expand_beam,
+            provider,
         };
         Ok(accessor)
     }
 }
 
-impl<'a, T, L> glue::DefaultPostProcessor<'a, Provider<L>, T> for Strategy
-where
-    L: layers::Search<'a, T>,
-{
-    diskann::default_post_processor!(glue::CopyIds);
+#[derive(Debug, Clone, Copy)]
+pub struct Translate<L, M>(std::marker::PhantomData<(L, M)>);
+
+impl<L, M> Default for Translate<L, M> {
+    fn default() -> Self {
+        Self(std::marker::PhantomData)
+    }
 }
 
-impl<L> glue::PruneStrategy<Provider<L>> for Strategy
+impl<'a, T, L, M> glue::SearchPostProcess<SearchAccessor<'a>, T, M> for Translate<L, M>
+where
+    L: layers::Search<'a, T>,
+    M: Id,
+{
+    type Error = ANNError;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut SearchAccessor<'_>,
+        query: T,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<M> + Send + ?Sized {
+
+        let work = move || {
+            // By construction - the downcast should succeed. Otherwise, this is a program bug.
+            let provider = accessor.provider.downcast_ref::<Provider<L, M>>().unwrap();
+            let mut count = 0;
+            for c in candidates {
+                if let Some(ext) = provider.mapping.to_external(c.id) {
+                    if output.push(ext, c.distance).is_available() {
+                        count += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Ok(count)
+        };
+
+        ready(work)
+    }
+}
+
+impl<'a, T, L, M> glue::DefaultPostProcessor<'a, Provider<L, M>, T, M> for Strategy
+where
+    L: layers::Search<'a, T>,
+    M: Id,
+{
+    diskann::default_post_processor!(Translate<L, M>);
+}
+
+impl<L, M> glue::PruneStrategy<Provider<L, M>> for Strategy
 where
     L: layers::Layer + layers::AsDistance,
+    M: Id,
 {
     type PruneAccessor<'a> = PruneAccessor<'a>;
     type PruneAccessorError = ANNError;
 
     fn prune_accessor<'a>(
         &self,
-        provider: &'a Provider<L>,
+        provider: &'a Provider<L, M>,
         _context: &'a Context,
         capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
         Ok(PruneAccessor {
             reader: provider.primary.reader()?,
             distance: <L as layers::AsDistance>::as_distance(&provider.layer),
-            ids: AdjacencyList::new(),
         })
     }
 }
 
-impl<'a, L, T> glue::InsertStrategy<'a, Provider<L>, T> for Strategy
+impl<'a, L, M, T> glue::InsertStrategy<'a, Provider<L, M>, T> for Strategy
 where
     L: layers::Insert<'a, T>,
+    M: Id,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {

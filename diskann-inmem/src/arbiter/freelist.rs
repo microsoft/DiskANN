@@ -5,7 +5,7 @@
 
 use std::{
     num::NonZeroU32,
-    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use crossbeam_queue::ArrayQueue;
@@ -77,7 +77,7 @@ impl Freelist {
         Scan {
             current,
             max: self.max,
-            len: SCAN_SIZE.into_usize()
+            len: SCAN_SIZE.into_usize(),
         }
     }
 
@@ -132,7 +132,7 @@ impl Iterator for Scan {
         if self.len == 0 {
             None
         } else {
-            let mut i = self.current;
+            let i = self.current;
             self.current += 1;
             self.len -= 1;
             if self.current == self.max {

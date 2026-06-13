@@ -130,7 +130,9 @@ impl Primary {
                 }
                 freelist::Id::Scan => match self.scan_acquire() {
                     Some(slot) => return Some(slot),
-                    None => { self.try_drain(); },
+                    None => {
+                        self.try_drain();
+                    }
                 },
             }
         }
@@ -277,6 +279,19 @@ impl<'a> Reader<'a> {
     #[must_use = "this function has no side-effects"]
     pub fn is_in_bounds(&self, i: usize) -> bool {
         i < self.buffer.len()
+    }
+
+    pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
+        if !self.is_in_bounds(i) {
+            return None;
+        }
+
+        let generation = unsafe { self.buffer.get_unchecked(i).truncate_unchecked(SPLIT) };
+        let generation = unsafe { generation::Tag::from_ptr(generation.as_mut_ptr().cast()) }
+            .as_ref()
+            .get(Ordering::Acquire);
+
+        Some(generation >= self.epoch.generation())
     }
 
     #[inline]

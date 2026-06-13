@@ -4,7 +4,7 @@
  */
 
 use diskann::{graph::AdjacencyList, utils::IntoUsize};
-use parking_lot::{RawRwLock, RwLock, RwLockWriteGuard};
+use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 use crate::{
@@ -226,12 +226,3 @@ impl std::fmt::Debug for Lock<'_> {
 #[derive(Debug, Clone, Copy, Error)]
 #[error("too long")]
 pub struct TooLong;
-
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}
