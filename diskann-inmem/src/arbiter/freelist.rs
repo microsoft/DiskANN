@@ -11,12 +11,11 @@ use std::{
 use crossbeam_queue::ArrayQueue;
 use diskann::utils::IntoUsize;
 
+const SCAN_SIZE: u32 = 16;
+
 #[derive(Debug)]
 pub struct Freelist {
     recycled: ArrayQueue<u32>,
-
-    /// An (approximate) number of recycled IDs that exist outside the freelist.
-    orphaned: AtomicUsize,
 
     /// The highest ID the freelist manages. This is used when in "append" to determine the
     /// maximum ID we can return this way.
@@ -24,6 +23,8 @@ pub struct Freelist {
 
     /// The number of "unallocated" IDs remaining.
     current: AtomicU32,
+
+    scan_cursor: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,9 +37,9 @@ impl Freelist {
     pub fn new(max: u32, capacity: NonZeroU32) -> Self {
         Self {
             recycled: ArrayQueue::new(capacity.get().into_usize()),
-            orphaned: AtomicUsize::new(0),
             max,
             current: AtomicU32::new(0),
+            scan_cursor: AtomicU32::new(0),
         }
     }
 
@@ -67,16 +68,26 @@ impl Freelist {
         Id::Scan
     }
 
+    pub fn pop_recycled(&self) -> Option<u32> {
+        self.recycled.pop()
+    }
+
+    pub fn scan(&self) -> Scan {
+        let current = self.scan_cursor.fetch_add(SCAN_SIZE, Ordering::Relaxed) % self.max;
+        Scan {
+            current,
+            max: self.max,
+            len: SCAN_SIZE.into_usize()
+        }
+    }
+
     /// Attempt to push `id` into the recycled list. Return `true` if `id` was
     /// inserted. If `false` is returned, it is likely because the internal recycle
     /// buffer is full.
     pub fn push(&self, id: u32) -> bool {
         match self.recycled.push(id) {
             Ok(()) => true,
-            Err(_) => {
-                self.orphaned.fetch_add(1, Ordering::Relaxed);
-                false
-            }
+            Err(_) => false,
         }
     }
 
@@ -90,11 +101,6 @@ impl Freelist {
         let mut count = 0;
         while let Some(id) = itr.next() {
             if let Err(_) = self.recycled.push(id) {
-                let (lower, _) = itr.size_hint();
-
-                // Add 1 to "put back" the last ID.
-                self.orphaned
-                    .fetch_add(lower.saturating_add(1), Ordering::Relaxed);
                 break;
             } else {
                 count += 1;
@@ -112,3 +118,33 @@ impl Freelist {
         self.recycled.capacity()
     }
 }
+
+#[derive(Debug)]
+pub struct Scan {
+    current: u32,
+    max: u32,
+    len: usize,
+}
+
+impl Iterator for Scan {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.len == 0 {
+            None
+        } else {
+            let mut i = self.current;
+            self.current += 1;
+            self.len -= 1;
+            if self.current == self.max {
+                self.current -= self.max;
+            }
+            Some(i)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+impl ExactSizeIterator for Scan {}

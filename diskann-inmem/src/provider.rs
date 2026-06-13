@@ -4,14 +4,15 @@
  */
 
 use diskann::{
+    ANNError, ANNErrorKind, ANNResult,
     error::Infallible,
     graph::{
+        AdjacencyList,
         glue::{self, HybridPredicate},
-        workingset, AdjacencyList,
+        workingset,
     },
     provider,
     utils::IntoUsize,
-    ANNError, ANNErrorKind, ANNResult,
 };
 use diskann_utils::views::Matrix;
 
@@ -397,7 +398,12 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
-            self.reader.neighbors().lock(id.into_usize()).unwrap().append(neighbors).unwrap();
+            self.reader
+                .neighbors()
+                .lock(id.into_usize())
+                .unwrap()
+                .append(neighbors)
+                .unwrap();
             Ok(())
         };
 

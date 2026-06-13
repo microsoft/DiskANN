@@ -5,8 +5,8 @@
 
 use diskann::{ANNError, ANNResult};
 use diskann_vector::{
-    distance::{self, DistanceProvider, Metric},
     UnalignedSlice,
+    distance::{self, DistanceProvider, Metric},
 };
 use thiserror::Error;
 

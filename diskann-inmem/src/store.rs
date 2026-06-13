@@ -9,9 +9,9 @@ use diskann::utils::IntoUsize;
 use diskann_utils::views::MatrixView;
 
 use crate::{
-    arbiter::{epoch, freelist, generation, Buffer, Freelist, Generation, RawSlice},
-    num::{Align, Bytes},
     Neighbors,
+    arbiter::{Buffer, Freelist, Generation, RawSlice, epoch, freelist, generation},
+    num::{Align, Bytes},
 };
 
 #[derive(Debug)]
@@ -128,7 +128,53 @@ impl Primary {
                         return Some(slot);
                     }
                 }
-                freelist::Id::Scan => unimplemented!("fallback scan not implemented"),
+                freelist::Id::Scan => match self.scan_acquire() {
+                    Some(slot) => return Some(slot),
+                    None => { self.try_drain(); },
+                },
+            }
+        }
+        None
+    }
+
+    fn scan_acquire(&self) -> Option<Slot<'_>> {
+        // This is potentially quite slow - but stop if we've scanned the entire range
+        // without finding anything.
+        let mut remaining = self.unfrozen;
+        let mut chunks_since_freelist_check = 0;
+        let mut acquired: Option<Slot<'_>> = None;
+
+        while remaining != 0 {
+            let chunk = self.freelist.scan();
+            remaining = remaining.saturating_sub(chunk.len());
+
+            for slot in chunk {
+                let tag = self.tag_mut(slot.into_usize()).unwrap();
+
+                // If this slot is available and we haven't claimed a slot yet, try to
+                // claim it. Otherwise, continue with the scan to partially repopulate the
+                // freelist for other threads.
+                if tag.get(Ordering::Relaxed) == Generation::AVAILABLE {
+                    if acquired.is_none() {
+                        acquired = unsafe { self.try_acquire(tag, slot) };
+                    } else {
+                        self.freelist.push(slot);
+                    }
+                }
+            }
+
+            if acquired.is_some() {
+                return acquired;
+            }
+
+            chunks_since_freelist_check += 1;
+            if chunks_since_freelist_check == 4 {
+                if let Some(id) = self.freelist.pop_recycled()
+                    && let Some(slot) = self.slot(id)
+                {
+                    return Some(slot);
+                }
+                chunks_since_freelist_check = 0;
             }
         }
         None
@@ -136,6 +182,10 @@ impl Primary {
 
     fn slot(&self, i: u32) -> Option<Slot<'_>> {
         let tag = self.tag_mut(i.into_usize()).unwrap();
+        unsafe { self.try_acquire(tag, i) }
+    }
+
+    unsafe fn try_acquire<'a>(&'a self, tag: generation::Mut<'a>, slot: u32) -> Option<Slot<'a>> {
         match tag.try_set(
             Generation::AVAILABLE,
             Generation::OWNED,
@@ -143,13 +193,13 @@ impl Primary {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
-                let (mirror, data) = unsafe { self.data_unchecked(i.into_usize()) };
+                let (mirror, data) = unsafe { self.data_unchecked(slot.into_usize()) };
                 Some(Slot {
                     tag,
                     mirror,
                     generation: self.registry.generation(),
                     data,
-                    slot: i,
+                    slot,
                 })
             }
             Err(_) => None,
