@@ -33,7 +33,7 @@ as_input!(MinMax);
 // Search //
 ////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SearchValues {
     pub(crate) recall_k: Vec<usize>,
     pub(crate) recall_n: Vec<usize>,
@@ -85,7 +85,7 @@ impl SearchValues {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -124,7 +124,7 @@ impl Example for SearchPhase {
 ////////////////////////////////
 // Transforms related methods //
 ///////////////////////////////
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TargetDim {
     Same,
@@ -152,7 +152,7 @@ impl From<TargetDim> for diskann_quantization::algorithms::transforms::TargetDim
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TransformKind {
     PaddingHadamard(TargetDim),
@@ -200,7 +200,7 @@ impl From<&TransformKind> for diskann_quantization::algorithms::transforms::Tran
 // Product Quantization Methods //
 //////////////////////////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct Product {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,
@@ -272,7 +272,7 @@ impl std::fmt::Display for Product {
 // Spherical-quantization-based methods //
 //////////////////////////////////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SphericalQuery {
     SameAsData,
@@ -333,7 +333,7 @@ pub(super) fn check_compatibility(num_bits: usize, query: SphericalQuery) -> any
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PreScale {
     None,
@@ -378,7 +378,7 @@ impl PreScale {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct Spherical {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,
@@ -461,7 +461,7 @@ impl std::fmt::Display for Spherical {
 // MinMax-quantization-based methods //
 ///////////////////////////////////////
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MinMaxQuery {
     SameAsData,
@@ -480,7 +480,7 @@ impl std::fmt::Display for MinMaxQuery {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MinMax {
     pub(crate) data: InputFile,
     pub(crate) data_type: DataType,

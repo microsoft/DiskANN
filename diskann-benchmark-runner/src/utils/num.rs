@@ -106,6 +106,20 @@ impl Serialize for NonNegativeFinite {
     }
 }
 
+impl schemars::JsonSchema for NonNegativeFinite {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "NonNegativeFinite".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "number",
+            "minimum": 0.0,
+            "description": "A non-negative, finite floating-point number."
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for NonNegativeFinite {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

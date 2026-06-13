@@ -24,7 +24,7 @@ pub(crate) struct TypeInput {
     error_when_checked: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct TypeInputRaw {
     data_type: DataType,
     dim: usize,
@@ -78,7 +78,7 @@ impl Input for TypeInput {
 // Tolerance //
 ///////////////
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub(super) struct Tolerance {
     // Should we return an error when `from_raw` is called?
     pub(super) error_when_checked: bool,

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// An enum representation for common DiskANN data types.
 ///
 /// See also: [`AsDataType`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
     Float64,
