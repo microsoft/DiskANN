@@ -206,7 +206,7 @@ where
     let pq_data_path = get_compressed_pq_file(&index_load.load_path);
     let disk_index_path = get_disk_index_file(&index_load.load_path);
 
-    let index_reader = DiskIndexReader::<T>::new(pivot_path, pq_data_path, &FileStorageProvider)?;
+    let index_reader = DiskIndexReader::new(pivot_path, pq_data_path, &FileStorageProvider)?;
 
     let caching_strategy = if let Some(num_nodes) = search_params.num_nodes_to_cache {
         CachingStrategy::StaticCacheWithBfsNodes(num_nodes)
