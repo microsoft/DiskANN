@@ -3,17 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_queue::SegQueue;
 use diskann::utils::IntoUsize;
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::arbiter::{
-    generation::{Mut, Tag},
     Generation,
+    generation::{Mut, Tag},
 };
 
 const CAPACITY: usize = 256;
@@ -112,6 +110,7 @@ impl Registry {
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
+                delay.post_cas();
                 let mut reset = false;
                 loop {
                     // REGISTER FENCE: This fence is paired with "WAITING FENCE".
@@ -258,7 +257,10 @@ impl Registry {
 
     #[cfg(test)]
     fn snapshot(&self) -> Vec<Generation> {
-        self.slots.iter().map(|s| s.as_ref().get(Ordering::Relaxed)).collect()
+        self.slots
+            .iter()
+            .map(|s| s.as_ref().get(Ordering::Relaxed))
+            .collect()
     }
 
     #[cfg(test)]
@@ -324,7 +326,7 @@ impl Drain<'_> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.queue.is_empty()
     }
 }
 
@@ -377,6 +379,7 @@ struct NoDelay;
 trait RegisterDelay {
     fn post_register_check(&mut self) {}
     fn pre_cas(&mut self) {}
+    fn post_cas(&mut self) {}
     fn pre_fence(&mut self) {}
     fn post_fence(&mut self) {}
 }
@@ -402,26 +405,85 @@ impl TryAdvanceDelay for NoDelay {}
 mod tests {
     use super::*;
 
-    use std::{thread, sync::mpsc};
+    use std::{sync::Arc, thread};
 
-    fn channel() -> (Sender, Receiver) {
-        let (s, r) = mpsc::channel();
-        (Sender(s), Receiver(r))
+    use parking_lot::Condvar;
+
+    #[derive(Clone)]
+    struct Sequencer(Arc<SequencerInner>);
+
+    struct SequencerInner {
+        state: Mutex<State>,
+        condvar: Condvar,
     }
 
-    struct Sender(mpsc::Sender<()>);
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum State {
+        Empty,
+        Parked(usize),
+        Released(usize),
+    }
 
-    impl Sender {
-        fn send(&self) {
-            self.0.send(()).unwrap()
+    impl Sequencer {
+        fn new() -> Self {
+            Self(Arc::new(SequencerInner {
+                state: Mutex::new(State::Empty),
+                condvar: Condvar::new(),
+            }))
         }
-    }
 
-    struct Receiver(mpsc::Receiver<()>);
+        fn wait_for(&self, stage: usize) {
+            let mut state = self.0.state.lock();
+            if stage == 0 {
+                assert_eq!(*state, State::Empty)
+            } else {
+                assert_eq!(*state, State::Released(stage - 1))
+            }
 
-    impl Receiver {
-        fn recv(&self) {
-            self.0.recv().unwrap();
+            *state = State::Parked(stage);
+            self.0.condvar.notify_all();
+            self.0
+                .condvar
+                .wait_while(&mut state, move |s| *s != State::Released(stage));
+        }
+
+        fn advance_past(&self, stage: usize) {
+            let mut state = self.0.state.lock();
+            self.0
+                .condvar
+                .wait_while(&mut state, move |s| Self::check_release(*s, stage));
+            *state = State::Released(stage);
+            self.0.condvar.notify_all();
+        }
+
+        fn until_waiting_for(&self, stage: usize) {
+            let mut state = self.0.state.lock();
+            if *state != State::Parked(stage) {
+                self.0
+                    .condvar
+                    .wait_while(&mut state, move |s| Self::check_release(*s, stage))
+            }
+        }
+
+        fn check_release(current: State, stage: usize) -> bool {
+            match current {
+                State::Empty => {
+                    assert_eq!(stage, 0);
+                    true
+                }
+                State::Released(s) => {
+                    if s + 1 != stage {
+                        panic!("observed {:?} while releasing stage {}", current, stage);
+                    }
+                    true
+                }
+                State::Parked(s) => {
+                    if s != stage {
+                        panic!("observed {:?} while releasing stage {}", current, stage)
+                    }
+                    false
+                }
+            }
         }
     }
 
@@ -429,41 +491,33 @@ mod tests {
     // when claiming a slot.
     #[test]
     fn test_cas_race() {
-        let (a_sender, a_receiver) = channel();
-        let (b_sender, b_receiver) = channel();
-        let (a_done_sender, a_done_receiver) = channel();
+        let seq = Sequencer::new();
 
-        let delay = TestRegisterDelay::default()
-            .with_post_register_check(move || {
-                b_sender.send();
-                a_receiver.recv();
-            });
+        let delay = TestRegisterDelay::default().with_post_register_check(|| seq.wait_for(0));
 
         let registry = Registry::with_capacity(2);
         assert_eq!(registry.capacity(), 2);
 
         thread::scope(|s| {
-            let registry_ref = &registry;
-
             // Thread A
-            s.spawn(move || {
-                let g = registry_ref.register_inner(delay).unwrap();
+            s.spawn(|| {
+                let g = registry.register_inner(delay).unwrap();
                 assert_eq!(g.slot_index, 1);
-                a_done_sender.send();
+                seq.wait_for(1);
             });
 
             // Thread B
-            s.spawn(move || {
-                // wait for Thread A to let us know it's in the delay slot.
-                b_receiver.recv();
+            s.spawn(|| {
+                // wait for Thread A to reach the delay point.
+                seq.until_waiting_for(0);
                 {
-                    let g = registry_ref.register_inner(NoDelay).unwrap();
+                    let g = registry.register_inner(NoDelay).unwrap();
                     assert_eq!(g.slot_index, 1);
                 }
-                let g = registry_ref.register_inner(NoDelay).unwrap();
+                let g = registry.register_inner(NoDelay).unwrap();
                 assert_eq!(g.slot_index, 0);
-                a_sender.send();
-                a_done_receiver.recv();
+                seq.advance_past(0);
+                seq.advance_past(1);
             });
         });
 
@@ -473,28 +527,30 @@ mod tests {
     #[test]
     fn test_register_wait() {
         // This tests the case where a thread enters registration, reads a generation, then
-        // sleeps for several generation advances. It ensures that the thread recovers
-        // properly.
-        let (ready_sender, ready_receiver) = channel();
-        let (step0_sender, step0_receiver) = channel();
+        // sleeps for several generation advances. It ensures that the thread recovers properly.
+        let seq = Sequencer::new();
 
+        let mut loop_count = 0;
         let delay = TestRegisterDelay::default()
-            .with_post_register_check(move || {
-                ready_sender.send();
-                step0_receiver.recv();
-            })
-            .with_pre_fence(move || {
-            });
+            .with_post_register_check(|| seq.wait_for(0))
+            .with_post_cas(|| seq.wait_for(1))
+            .with_pre_fence(|| loop_count += 1);
 
         let registry = Registry::with_capacity(2);
 
         thread::scope(|s| {
-            let registry_ref = &registry;
+            let handle = s.spawn(|| {
+                let guard = registry.register_inner(delay).unwrap();
 
-            let handle = s.spawn(move || registry_ref.register_inner(delay).unwrap());
+                // Since we hit the CAS loop - this serves as a sanity check that we have
+                // the correct drain buffer.
+                guard.retire(10);
+                guard.retire_all([1, 2, 3]);
+                guard
+            });
 
             // Wait for the spawned thread to reach the critical section.
-            ready_receiver.recv();
+            seq.until_waiting_for(0);
 
             assert_eq!(registry.waiting(), Generation::MAX.sub(1));
             {
@@ -509,7 +565,19 @@ mod tests {
                 assert_eq!(registry.generation(), Generation::MAX.sub(3));
             }
 
-            step0_sender.send();
+            // We allow the registering thread to make it past the CAS.
+            //
+            // We pause it again because we want to verify that it registers an old generation.
+            seq.advance_past(0);
+            seq.until_waiting_for(1);
+            let (can_advance, waiter) = registry.can_advance_inner(&mut NoDelay);
+            assert!(!can_advance);
+            assert_eq!(
+                waiter,
+                Generation::MAX.sub(1),
+                "waiting thread registers an older generation before observing the change"
+            );
+            seq.advance_past(1);
 
             let expected = Generation::MAX.sub(3);
 
@@ -520,7 +588,26 @@ mod tests {
             assert_eq!(registry.waiting(), expected);
         });
 
+        assert_eq!(
+            loop_count, 2,
+            "the registering thread should have looped to update its generation"
+        );
+
         registry.assert_no_workers();
+
+        // Verify that we reclaim the ID flushed by the registering thread.
+        //
+        // This requires two epoch advancements.
+        {
+            let drain = registry.try_advance().unwrap();
+            assert!(drain.is_empty());
+        }
+
+        {
+            let drain = registry.try_advance().unwrap();
+            let ids: Vec<_> = drain.collect();
+            assert_eq!(ids, &[10, 1, 2, 3]);
+        }
     }
 
     //-------------//
@@ -563,7 +650,8 @@ mod tests {
         RegisterDelay,
         with_post_register_check => post_register_check,
         with_pre_cas => pre_cas,
-        with_pre_fenct => pre_fence,
+        with_post_cas => post_cas,
+        with_pre_fence => pre_fence,
         with_post_fence => post_fence,
     }
 
