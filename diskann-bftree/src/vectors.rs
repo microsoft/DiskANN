@@ -43,8 +43,8 @@ impl<T: VectorRepr> VectorProvider<T> {
             return Err(ANNError::log_index_error(format!(
                 "cb_max_record_size ({configured_max}) is too small for {dim}-dimensional vectors \
                  of {} bytes each; a record requires {required_record_size} bytes \
-                 ({key_size}-byte key + {value_size}-byte value) but cb_max_record_size is only \
-                 {configured_max}; increase cb_max_record_size to at least {required_record_size}",
+                 ({key_size}-byte key + {value_size}-byte value); \
+                 increase cb_max_record_size to at least {required_record_size}",
                 std::mem::size_of::<T>()
             )));
         }
@@ -339,8 +339,9 @@ mod tests {
     /// reads to return `NotFound` instead of the expected vector.
     #[test]
     fn test_new_with_config_rejects_undersized_record_size() {
-        // 1536D f32 vectors need 6152 bytes per record (8-byte key + 6144-byte value).
-        // The default bf-tree cb_max_record_size of 1952 is far too small.
+        // 1536D f32 vectors need 6144 bytes for the value plus an 8-byte key,
+        // totaling 6152 bytes per record. The default bf-tree cb_max_record_size of 1952
+        // is far too small.
         let dim = 1536;
         let config = Config::default(); // cb_max_record_size = 1952
         let result = VectorProvider::<f32>::new_with_config(100, dim, 1, config);
