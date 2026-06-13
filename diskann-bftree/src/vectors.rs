@@ -8,7 +8,7 @@
 use std::marker::PhantomData;
 
 use crate::{AccessError, VectorError, VectorUnavailable};
-use bf_tree::{BfTree, Config};
+use bf_tree::{BfTree, Config, LeafInsertResult};
 use bytemuck::cast_slice;
 use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNErrorKind, ANNResult};
 use thiserror::Error;
@@ -33,6 +33,22 @@ impl<T: VectorRepr> VectorProvider<T> {
         num_start_points: usize,
         config: Config,
     ) -> ANNResult<Self> {
+        // Validate early that the record size is large enough to store the vectors.
+        // Each record consists of an 8-byte usize key and the full vector value.
+        let key_size = std::mem::size_of::<usize>();
+        let value_size = dim * std::mem::size_of::<T>();
+        let required_record_size = key_size + value_size;
+        let configured_max = config.get_cb_max_record_size();
+        if required_record_size > configured_max {
+            return Err(ANNError::log_index_error(format!(
+                "cb_max_record_size ({configured_max}) is too small for {dim}-dimensional vectors \
+                 of {} bytes each; a record requires {required_record_size} bytes \
+                 ({key_size}-byte key + {value_size}-byte value); \
+                 increase cb_max_record_size to at least {required_record_size}",
+                std::mem::size_of::<T>()
+            )));
+        }
+
         let vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {
@@ -131,7 +147,14 @@ impl<T: VectorRepr> VectorProvider<T> {
         let key = bytemuck::bytes_of(&i);
         let value = cast_slice::<T, u8>(v);
 
-        self.vector_index.insert(key, value);
+        match self.vector_index.insert(key, value) {
+            LeafInsertResult::Success => {}
+            LeafInsertResult::InvalidKV(msg) => {
+                return Err(ANNError::log_index_error(format!(
+                    "Failed to insert vector id {i}: {msg}"
+                )));
+            }
+        }
 
         Ok(())
     }
@@ -305,5 +328,30 @@ mod tests {
         provider.set_vector_sync(0, &[1.0, 2.0, 3.0]).unwrap();
         let result = provider.get_vector_sync(0).unwrap();
         assert_eq!(result, vec![1.0, 2.0, 3.0]);
+    }
+
+    /// Verify that `new_with_config` returns a clear error when `cb_max_record_size` is smaller
+    /// than the space needed for the configured dimension.
+    ///
+    /// This is the root cause of the "vector N not found" error reported in issue #1159:
+    /// with the default bf-tree config (`cb_max_record_size = 1952`), inserting 1536-dimensional
+    /// f32 vectors (6144 bytes + 8-byte key = 6152 bytes) silently failed, causing subsequent
+    /// reads to return `NotFound` instead of the expected vector.
+    #[test]
+    fn test_new_with_config_rejects_undersized_record_size() {
+        // 1536D f32 vectors need 6144 bytes for the value plus an 8-byte key,
+        // totaling 6152 bytes per record. The default bf-tree cb_max_record_size of 1952
+        // is far too small.
+        let dim = 1536;
+        let config = Config::default(); // cb_max_record_size = 1952
+        let result = VectorProvider::<f32>::new_with_config(100, dim, 1, config);
+        let err_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected an error when cb_max_record_size is smaller than the vector record size"),
+        };
+        assert!(
+            err_msg.contains("cb_max_record_size"),
+            "error message should mention cb_max_record_size; got: {err_msg}"
+        );
     }
 }
