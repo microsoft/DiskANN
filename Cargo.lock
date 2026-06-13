@@ -812,6 +812,7 @@ version = "0.53.0"
 dependencies = [
  "bytemuck",
  "crossbeam-queue",
+ "dashmap",
  "diskann",
  "diskann-utils",
  "diskann-vector",

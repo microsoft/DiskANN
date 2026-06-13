@@ -273,3 +273,4 @@ impl Benchmark for Inmem2 {
         Ok(())
     }
 }
+
