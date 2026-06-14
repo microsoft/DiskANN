@@ -61,7 +61,7 @@ impl Primary {
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
             registry: epoch::Registry::new(),
-            neighbors: Neighbors::new(entries, max_neighbors),
+            neighbors: Neighbors::new(total, max_neighbors),
         };
 
         // Populate frozen points.
@@ -72,6 +72,10 @@ impl Primary {
         }
 
         this
+    }
+
+    pub fn frozen(&self) -> std::ops::Range<u32> {
+        (self.unfrozen as u32)..(self.buffer.len() as u32)
     }
 
     pub fn capacity(&self) -> usize {
