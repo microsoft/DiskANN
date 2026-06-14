@@ -83,6 +83,14 @@ where
         Ok(())
     }
 
+    pub(crate) fn contains_external<Q>(&self, external: &Q) -> bool
+    where
+        I: std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.forward.contains_key(external)
+    }
+
     /// Look up the internal id for an external id.
     pub(crate) fn to_internal<Q>(&self, external: &Q) -> Option<u32>
     where

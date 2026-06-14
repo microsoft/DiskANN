@@ -8,10 +8,9 @@ use std::hash::Hash;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     graph::{
-        AdjacencyList,
+        AdjacencyList, SearchOutputBuffer,
         glue::{self, HybridPredicate},
         workingset,
-        SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider,
@@ -111,6 +110,84 @@ where
     }
 }
 
+// TODO: The element-status checks here are profoundly expensive as they require epoch
+// registration for each check!
+//
+// `diskann` has plans to move deletion checks behind an accessor trait, which will help
+// with this situation.
+impl<L, M> diskann::provider::Delete for Provider<L, M>
+where
+    L: Send + Sync + 'static,
+    M: Id,
+{
+    async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
+        // TODO: These need to actually happen in lock-step.
+        let internal = self.mapping.remove(gid).unwrap();
+        assert!(self.primary.delete(internal.into_usize()));
+        Ok(())
+    }
+
+    async fn release(&self, _context: &Context, id: Self::InternalId) -> ANNResult<()> {
+        Ok(())
+    }
+
+    async fn status_by_internal_id(
+        &self,
+        _context: &Context,
+        id: u32,
+    ) -> ANNResult<diskann::provider::ElementStatus> {
+        if self
+            .primary
+            .reader()
+            .unwrap()
+            .can_read(id.into_usize())
+            .unwrap()
+        {
+            Ok(diskann::provider::ElementStatus::Valid)
+        } else {
+            Ok(diskann::provider::ElementStatus::Deleted)
+        }
+    }
+
+    /// Check the status via external ID.
+    async fn status_by_external_id(
+        &self,
+        _context: &Context,
+        gid: &M,
+    ) -> ANNResult<diskann::provider::ElementStatus> {
+        if self.mapping.contains_external(gid) {
+            Ok(diskann::provider::ElementStatus::Valid)
+        } else {
+            Ok(diskann::provider::ElementStatus::Deleted)
+        }
+    }
+
+    fn statuses_unordered<Itr, F>(
+        &self,
+        context: &Self::Context,
+        itr: Itr,
+        mut f: F,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send
+    where
+        Itr: Iterator<Item = Self::InternalId> + Send,
+        F: FnMut(ANNResult<diskann::provider::ElementStatus>, Self::InternalId) + Send,
+    {
+        let work = move || {
+            let reader = self.primary.reader().unwrap();
+            for i in itr {
+                if reader.can_read(i.into_usize()).unwrap() {
+                    f(Ok(diskann::provider::ElementStatus::Valid), i)
+                } else {
+                    f(Ok(diskann::provider::ElementStatus::Deleted), i)
+                }
+            }
+            Ok(())
+        };
+
+        ready(work)
+    }
+}
+
 fn ready<F, R>(f: F) -> std::future::Ready<R>
 where
     F: FnOnce() -> R,
@@ -150,10 +227,6 @@ where
 // Search //
 ////////////
 
-const fn start_point() -> u32 {
-    0
-}
-
 #[derive(Debug)]
 pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
@@ -163,6 +236,7 @@ pub struct SearchAccessor<'a> {
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
+    start_points: std::ops::Range<u32>,
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -173,7 +247,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     fn starting_points(
         &self,
     ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send {
-        std::future::ready(Ok(vec![start_point()]))
+        std::future::ready(Ok(self.start_points.clone().collect()))
     }
 
     fn start_point_distances<F>(
@@ -184,18 +258,20 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
         F: FnMut(Self::Id, f32) + Send,
     {
         let work = move || {
-            let start = start_point();
-            match self.reader.read(start.into_usize()) {
-                Some(point) => {
-                    f(start, self.distance.evaluate(point)?);
-                    Ok(())
+            for p in self.start_points.clone() {
+                match self.reader.read(p.into_usize()) {
+                    Some(point) => {
+                        f(p, self.distance.evaluate(point)?);
+                    }
+                    None => {
+                        return Err(ANNError::message(
+                            ANNErrorKind::Opaque,
+                            "could not retrieve start point",
+                        ));
+                    }
                 }
-                // TODO: "lock" start points.
-                None => Err(ANNError::message(
-                    ANNErrorKind::Opaque,
-                    "could not retrieve start point",
-                )),
             }
+            Ok(())
         };
 
         ready(work)
@@ -482,6 +558,7 @@ where
             ids: AdjacencyList::new(),
             expand_beam,
             provider,
+            start_points: provider.primary.frozen(),
         };
         Ok(accessor)
     }
@@ -512,8 +589,8 @@ where
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<M> + Send + ?Sized {
-
+        B: SearchOutputBuffer<M> + Send + ?Sized,
+    {
         let work = move || {
             // By construction - the downcast should succeed. Otherwise, this is a program bug.
             let provider = accessor.provider.downcast_ref::<Provider<L, M>>().unwrap();
@@ -571,6 +648,51 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+// TODO: This is such a hack.
+impl<M> glue::InplaceDeleteStrategy<Provider<layers::Full<f32>, M>> for Strategy
+where
+    Self: glue::PruneStrategy<Provider<layers::Full<f32>, M>>,
+    Self: for<'a> glue::InsertStrategy<'a, Provider<layers::Full<f32>, M>, &'a [f32], SearchAccessor = SearchAccessor<'a>>,
+    M: Id,
+{
+    type DeleteElement<'a> = &'a [f32];
+    type DeleteElementGuard = Box<[f32]>;
+    type DeleteElementError = ANNError;
+
+    type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = SearchAccessor<'a>;
+    type SearchPostProcessor = glue::CopyIds;
+    type SearchStrategy = Self;
+
+    fn prune_strategy(&self) -> Self {
+        *self
+    }
+
+    fn search_strategy(&self) -> Self {
+        *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        glue::CopyIds
+    }
+
+    fn get_delete_element<'a>(
+        &'a self,
+        provider: &'a Provider<layers::Full<f32>, M>,
+        context: &'a Context,
+        id: u32
+    ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send {
+        let work = move || {
+            let reader = provider.primary.reader().unwrap();
+            let mut buf: Box<[_]> = std::iter::repeat_n(0.0, provider.layer.dim()).collect();
+            let data = reader.read(id.into_usize()).unwrap();
+            bytemuck::must_cast_slice_mut::<f32, u8>(&mut buf).copy_from_slice(data);
+            Ok(buf)
+        };
+        ready(work)
     }
 }
 

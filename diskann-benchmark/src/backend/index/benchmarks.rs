@@ -92,11 +92,11 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
     //     FullPrecision::<i8>::new().search(plugins::Topk),
     // )?;
 
-    // // Dynamic Full Precision
-    // registry.register(
-    //     "graph-index-dynamic-full-precision-f32",
-    //     DynamicFullPrecision::<f32>::new(),
-    // )?;
+    // Dynamic Full Precision
+    registry.register(
+        "graph-index-dynamic-full-precision-f32",
+        DynamicFullPrecision::<f32>::new(),
+    )?;
     // registry.register(
     //     "graph-index-dynamic-full-precision-f16",
     //     DynamicFullPrecision::<f16>::new(),

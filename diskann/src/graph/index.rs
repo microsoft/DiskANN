@@ -2340,7 +2340,7 @@ where
 
                 self.robust_prune_list(accessor, source, &adj_list, scratch, options)
                     .await
-                    .escalate("retrieving inserted vector must succeed")?;
+                    .allow_transient("vector may have been deleted")?;
 
                 tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
