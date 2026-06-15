@@ -38,9 +38,9 @@ resolver = "3"
 
 [workspace.package]
 version = "0.53.0"      # Obeying semver
-description = "DiskANN is a fast approximate nearest neighbor search library for high dimensional data"
+description = "DiskANN3 is a composable library for bringing scalable, accurate and cost-effective vector indexing to multiple databases."
 authors = ["Microsoft"]
-documentation = "https://github.com/microsoft/DiskANN"
+repository = "https://github.com/microsoft/DiskANN"
 license = "MIT"
 edition = "2021"
 
