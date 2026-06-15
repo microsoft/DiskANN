@@ -12,7 +12,6 @@
                     "data_type": "uint8",
                     "data": "base.10M.u8bin",
                     "data_labels": "base.10M.label.jsonl",
-                    "use_ast_filters": false,
                     "distance": "squared_l2",
                     "max_degree": 64,
                     "l_build": 100,
@@ -23,7 +22,7 @@
                     "queries": "single_low_query_10k.u8bin",
                     "query_predicates": "single_low_query_10k.label.jsonl",
                     "groundtruth": "10M_single_low_query_10k.gt",
-                    "use_ast_filters": false,
+                    "search_algorithm": "bitmap",
                     "beta": 0.5,
                     "reps": 5,
                     "num_threads": [

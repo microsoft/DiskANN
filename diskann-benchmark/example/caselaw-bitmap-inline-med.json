@@ -18,15 +18,13 @@
                     "num_threads": 128
                 },
                 "search": {
-                    "queries": "caselaw_singlevec_query_high_sel.bin",
-                    "query_predicates": "caselaw_singlevec_query_high_sel_filters.jsonl",
-                    "groundtruth": "caselaw_singlevec_query_filters_high_sel.gt",
-                    "search_algorithm": "inline-beta",
-                    "beta": 0.8,
+                    "queries": "caselaw_singlevec_query_mid_sel.bin",
+                    "query_predicates": "caselaw_singlevec_query_mid_sel_filters.jsonl",
+                    "groundtruth": "caselaw_singlevec_query_filters_mid_sel.gt",
+                    "search_algorithm": "bitmap-inline",
+                    "beta": 0.0,
                     "reps": 5,
-                    "num_threads": [
-                        32
-                    ],
+                    "num_threads": [32],
                     "runs": [
                         {
                             "search_n": 20,

@@ -21,8 +21,12 @@
                     "queries": "caselaw_singlevec_query_high_sel.bin",
                     "query_predicates": "caselaw_singlevec_query_high_sel_filters.jsonl",
                     "groundtruth": "caselaw_singlevec_query_filters_high_sel.gt",
-                    "search_algorithm": "inline-beta",
-                    "beta": 0.8,
+                    "search_algorithm": "ast-label-provider",
+                    "adaptive_l": {
+                        "sample_count": 1000,
+                        "scale_factor": 16.0
+                    },
+                    "beta": 0.0,
                     "reps": 5,
                     "num_threads": [
                         32

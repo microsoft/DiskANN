@@ -19,15 +19,17 @@
                     "num_threads": 128
                 },
                 "search": {
-                    "queries": "single_medium_query_10k.u8bin",
-                    "query_predicates": "single_medium_query_10k.label.jsonl",
-                    "groundtruth": "10M_single_medium_query_10k.gt",
-                    "search_algorithm": "inline-beta",
-                    "beta": 0.7,
+                    "queries": "single_low_query_10k.u8bin",
+                    "query_predicates": "single_low_query_10k.label.jsonl",
+                    "groundtruth": "10M_single_low_query_10k.gt",
+                    "search_algorithm": "bitmap-inline",
+                    "adaptive_l": {
+                        "sample_count": 1000,
+                        "scale_factor": 16.0
+                    },
+                    "beta": 0.0,
                     "reps": 5,
-                    "num_threads": [
-                        32
-                    ],
+                    "num_threads": [32],
                     "runs": [
                         {
                             "search_n": 20,

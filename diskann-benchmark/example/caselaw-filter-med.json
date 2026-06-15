@@ -11,7 +11,6 @@
                     "data_type": "float32",
                     "data": "caselaw_singlevec_base_embeddings.bin",
                     "data_labels": "caselaw_singlevec_base_metadata.jsonl",
-                    "use_ast_filters": true,
                     "distance": "squared_l2",
                     "max_degree": 64,
                     "l_build": 100,
@@ -22,7 +21,7 @@
                     "queries": "caselaw_singlevec_query_mid_sel.bin",
                     "query_predicates": "caselaw_singlevec_query_mid_sel_filters.jsonl",
                     "groundtruth": "caselaw_singlevec_query_filters_mid_sel.gt",
-                    "use_ast_filters": true,
+                    "search_algorithm": "inline-beta",
                     "beta": 0.7,
                     "reps": 5,
                     "num_threads": [
