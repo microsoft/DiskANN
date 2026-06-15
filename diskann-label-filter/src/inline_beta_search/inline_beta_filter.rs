@@ -3,16 +3,20 @@
  * Licensed under the MIT license.
  */
 
+use std::sync::{Arc, RwLock};
+
 use diskann::error::IntoANNResult;
 use diskann::graph::glue::{SearchPostProcess, SearchStrategy};
 use diskann::neighbor::Neighbor;
 use diskann::provider::{DataProvider, HasId};
+use diskann_utils::Reborrow;
 
 use diskann::{ANNError, ANNResult};
 use roaring::RoaringTreemap;
 
 use crate::encoded_attribute_provider::{
-    document_provider::DocumentProvider, encoded_filter_expr::EncodedFilterExpr,
+    attribute_encoder::AttributeEncoder, document_provider::DocumentProvider,
+    encoded_filter_expr::EncodedFilterExpr,
     roaring_attribute_store::RoaringAttributeStore,
 };
 use crate::inline_beta_search::encoded_document_accessor::EncodedDocumentAccessor;
@@ -40,8 +44,8 @@ impl<'q, DP, Strategy, Q>
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<'q, DP, &'q Q>,
-    Q: Send + Sync + 'q,
+    Strategy: SearchStrategy<'q, DP, <Q as Reborrow<'q>>::Target>,
+    Q: Reborrow<'q> + Send + Sync + 'q,
 {
     type SearchAccessorError = ANNError;
     type SearchAccessor = EncodedDocumentAccessor<Strategy::SearchAccessor>;
@@ -50,7 +54,7 @@ where
         &'q self,
         provider: &'q DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         context: &'q DP::Context,
-        query: &'q FilteredQuery<Q>,
+        query: &'q FilteredQuery<'_, Q>,
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         let inner_accessor = self
             .inner
@@ -62,7 +66,7 @@ where
         EncodedDocumentAccessor::new(
             inner_accessor,
             attribute_accessor,
-            attribute_map,
+            attribute_map.clone(),
             query.filter_expr(),
             self.beta,
         )
@@ -79,8 +83,8 @@ impl<'q, DP, Strategy, Q>
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::DefaultPostProcessor<'q, DP, &'q Q>,
-    Q: Send + Sync + 'q,
+    Strategy: diskann::graph::glue::DefaultPostProcessor<'q, DP, <Q as Reborrow<'q>>::Target>,
+    Q: Reborrow<'q> + Send + Sync + 'q,
 {
     type Processor = FilterResults<Strategy::Processor>;
 
@@ -94,13 +98,19 @@ where
 pub struct InlineBetaComputer {
     beta_value: f32,
     filter_expr: EncodedFilterExpr,
+    attribute_map: Arc<RwLock<AttributeEncoder>>,
 }
 
 impl InlineBetaComputer {
-    pub(crate) fn new(beta_value: f32, filter_expr: EncodedFilterExpr) -> Self {
+    pub(crate) fn new(
+        beta_value: f32,
+        filter_expr: EncodedFilterExpr,
+        attribute_map: Arc<RwLock<AttributeEncoder>>,
+    ) -> Self {
         Self {
             beta_value,
             filter_expr,
+            attribute_map,
         }
     }
 
@@ -108,8 +118,12 @@ impl InlineBetaComputer {
         &self.filter_expr
     }
 
+    pub(crate) fn attribute_map(&self) -> &Arc<RwLock<AttributeEncoder>> {
+        &self.attribute_map
+    }
+
     pub(crate) fn apply(&self, distance: f32, attributes: &RoaringTreemap) -> f32 {
-        let eval = PredicateEvaluator::new(attributes);
+        let eval = PredicateEvaluator::new(attributes, &self.attribute_map);
         match self.filter_expr.encoded_filter_expr().accept(&eval) {
             Ok(matched) => {
                 if matched {
@@ -146,15 +160,15 @@ impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q Filtered
     for FilterResults<IPP>
 where
     IA: HasId + Send + Sync,
-    Q: Send + Sync,
-    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
+    Q: Reborrow<'q> + Send + Sync,
+    IPP: SearchPostProcess<IA, <Q as Reborrow<'q>>::Target> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &'q FilteredQuery<Q>,
+        query: &'q FilteredQuery<'_, Q>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
@@ -170,7 +184,7 @@ where
         let mut filtered_candidates = Vec::<Neighbor<IA::Id>>::new();
         for candidate in candidates {
             accessor.attributes_for(candidate.id, |computer, attributes| -> ANNResult<()> {
-                let pe = PredicateEvaluator::new(&*attributes);
+                let pe = PredicateEvaluator::new(&*attributes, computer.attribute_map());
 
                 if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
                     filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));

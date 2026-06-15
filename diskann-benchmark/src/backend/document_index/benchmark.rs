@@ -7,7 +7,6 @@
 //! (vector + attributes) into a DiskANN index built with DocumentProvider.
 //! Also benchmarks filtered search using InlineBetaStrategy.
 
-use std::collections::HashMap;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -16,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use diskann::{
     graph::{
-        glue, index::QueryLabelProvider, search::Knn, search_output_buffer, DiskANNIndex,
+        glue, index::QueryLabelProvider, search::{AdaptiveL, Knn}, search_output_buffer, DiskANNIndex,
         SearchOutputBuffer,
         StartPointStrategy,
     },
@@ -44,6 +43,7 @@ use diskann_label_filter::{
         document_insert_strategy::DocumentInsertStrategy, document_provider::DocumentProvider,
         roaring_attribute_store::RoaringAttributeStore,
     },
+    filtered_query_label_provider::FilteredQueryLabelProvider,
     inline_beta_search::inline_beta_filter::InlineBetaStrategy,
     inline_beta_search::inverted_bitmap_evaluator::InvertedBitmapEvaluator,
     parser::format::Document as LabelDocument,
@@ -63,7 +63,6 @@ use diskann_providers::{
         },
         layers::BetaFilter,
     },
-    utils::find_nearest_vector_with_id,
     utils::Timer,
 };
 use diskann_utils::views::Matrix;
@@ -71,7 +70,6 @@ use diskann_utils::views::MatrixView;
 use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
 use diskann_vector::distance::SquaredL2;
 use diskann_vector::PureDistanceFunction;
-use rand::{distr::{Distribution, StandardUniform}, rngs::StdRng, SeedableRng};
 #[cfg(feature = "precompute-query-bitmaps")]
 use rayon::prelude::*;
 #[cfg(feature = "precompute-query-bitmaps")]
@@ -82,8 +80,11 @@ use serde::Serialize;
 use crate::{
     backend::index::build::ProgressMeter,
     inputs::{
+        document_index::{
+            AdaptiveLConfig, DocumentBuildParams, DocumentIndexBuild, DocumentSearchAlgorithm,
+            DocumentSearchParams,
+        },
         graph_index::GraphSearch,
-        document_index::{DocumentBuildParams, DocumentIndexBuild, DocumentSearchParams},
     },
     utils::{
         self,
@@ -202,82 +203,6 @@ where
         .ok_or_else(|| anyhow::anyhow!("Failed to find medoid index: no closest row found"))
 }
 
-const ATTRIBUTE_MEDOID_SAMPLE_SIZE: usize = 50_000;
-
-fn compute_attribute_medoids<T>(
-    data: &Matrix<T>,
-    attribute_store: &RoaringAttributeStore<u32>,
-) -> anyhow::Result<Arc<HashMap<u64, u32>>>
-where
-    T: VectorRepr + bytemuck::Pod + Copy + 'static + ComputeMedoid,
-    for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
-{
-    let mut attribute_medoids = HashMap::new();
-
-    for (attr_id, postings) in attribute_store
-        .inverted_postings()
-        .context("failed to read inverted postings for attribute medoids")?
-    {
-        if postings.is_empty() {
-            continue;
-        }
-
-        let sampling_rate = if postings.len() <= ATTRIBUTE_MEDOID_SAMPLE_SIZE as u64 {
-            1.0
-        } else {
-            ATTRIBUTE_MEDOID_SAMPLE_SIZE as f64 / postings.len() as f64
-        };
-
-        let distribution = StandardUniform;
-        let mut rng = StdRng::seed_from_u64(0x5eed_f00d_u64 ^ attr_id);
-
-        let sampled_ids = postings.iter().filter(|_| {
-            let p: f64 = distribution.sample(&mut rng);
-            p < sampling_rate
-        });
-
-        let sampled_ids = sampled_ids.collect::<Vec<_>>();
-
-        if sampled_ids.is_empty() {
-            continue;
-        }
-
-        let mut sampled_vectors = Vec::with_capacity(sampled_ids.len() * data.ncols());
-        for &sampled_id in &sampled_ids {
-            let row = data.get_row(sampled_id as usize).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "sampled label id {} out of range for medoid computation",
-                    sampled_id
-                )
-            })?;
-            sampled_vectors.extend_from_slice(row);
-        }
-
-        let sample_matrix = Matrix::<T>::try_from(
-            sampled_vectors.into(),
-            sampled_ids.len(),
-            data.ncols(),
-        )
-        .map_err(|e| anyhow::anyhow!("failed to build sample matrix for attribute {attr_id}: {e}"))?;
-
-        let medoid = T::compute_medoid(sample_matrix.as_view());
-        let medoid_f32 = T::as_f32(medoid.as_slice())
-            .map_err(|err| anyhow::Error::new(err))?;
-        let (_, medoid_index) = find_nearest_vector_with_id(
-            sample_matrix
-                .row_iter()
-                .map(|row| (row.to_vec().into_boxed_slice(), ())),
-            medoid_f32.as_ref(),
-        )
-        .map_err(|err| anyhow::Error::new(err))?
-        .ok_or_else(|| anyhow::anyhow!("failed to find sampled medoid for attribute {attr_id}"))?;
-
-        attribute_medoids.insert(attr_id, sampled_ids[medoid_index].try_into()?);
-    }
-
-    Ok(Arc::new(attribute_medoids))
-}
-
 #[derive(Debug, Clone)]
 struct BitmapQueryLabelProvider {
     #[cfg(not(feature = "precompute-query-bitmaps"))]
@@ -358,6 +283,23 @@ impl QueryLabelProvider<u32> for BitmapQueryLabelProvider {
             self.precomputed_bitmaps[self.query_index].contains(u64::from(vec_id))
         }
     }
+}
+
+enum InlineLabelProviderSource {
+    Ast {
+        predicates: Arc<Vec<(usize, ASTExpr)>>,
+        attribute_store: Arc<RoaringAttributeStore<u32>>,
+    },
+    Bitmap {
+        #[cfg(not(feature = "precompute-query-bitmaps"))]
+        predicates: Arc<Vec<(usize, ASTExpr)>>,
+        #[cfg(not(feature = "precompute-query-bitmaps"))]
+        attribute_store: Arc<RoaringAttributeStore<u32>>,
+        #[cfg(not(feature = "precompute-query-bitmaps"))]
+        label_universe: Arc<RoaringTreemap>,
+        #[cfg(feature = "precompute-query-bitmaps")]
+        precomputed_bitmaps: Arc<[RoaringTreemap]>,
+    },
 }
 
 fn load_search_inputs<T>(
@@ -507,161 +449,196 @@ impl<T> DocumentIndexJob<T> {
             .collect();
 
         let search_input = &input.search;
-        let (build_time, insert_percentiles, search_results) = if build.use_ast_filters {
-            writeln!(output, "Creating index...")?;
-            let params = default_provider_parameters(build, num_vectors, dim);
-            let fp_precursor = CreateFullPrecision::<T>::new(dim, None);
-            let inner_provider =
-                DefaultProvider::new_empty(params, fp_precursor, NoStore, TableBasedDeletes)?;
+        let (build_time, insert_percentiles, search_results) = match search_input.search_algorithm {
+            // DocumentProvider path: attributes embedded in the index, InlineBeta strategy.
+            DocumentSearchAlgorithm::Auto | DocumentSearchAlgorithm::InlineBeta => {
+                writeln!(output, "Creating index...")?;
+                let params = default_provider_parameters(build, num_vectors, dim);
+                let fp_precursor = CreateFullPrecision::<T>::new(dim, None);
+                let inner_provider =
+                    DefaultProvider::new_empty(params, fp_precursor, NoStore, TableBasedDeletes)?;
 
-            let start_points = StartPointStrategy::Medoid
-                .compute(data.as_view())
-                .map_err(|e| anyhow::anyhow!("Failed to compute start points: {}", e))?;
-            inner_provider.set_start_points(start_points.row_iter())?;
+                let start_points = StartPointStrategy::Medoid
+                    .compute(data.as_view())
+                    .map_err(|e| anyhow::anyhow!("Failed to compute start points: {}", e))?;
+                inner_provider.set_start_points(start_points.row_iter())?;
 
-            let (medoid_attribute_store, _) = build_label_attribute_store(&labels)?;
-            let attribute_medoids =
-                compute_attribute_medoids(&data, medoid_attribute_store.as_ref())?;
+                let attribute_store = RoaringAttributeStore::<u32>::new();
+                let medoid_idx = compute_medoid_index(&data)?;
+                let start_point_id = num_vectors as u32;
+                let default_attrs = vec![];
+                let medoid_attrs = attributes.get(medoid_idx).unwrap_or(&default_attrs);
+                attribute_store.set_element(&start_point_id, medoid_attrs)?;
 
-            let attribute_store = RoaringAttributeStore::<u32>::new();
-            let medoid_idx = compute_medoid_index(&data)?;
-            let start_point_id = num_vectors as u32;
-            let default_attrs = vec![];
-            let medoid_attrs = attributes.get(medoid_idx).unwrap_or(&default_attrs);
-            attribute_store.set_element(&start_point_id, medoid_attrs)?;
+                let doc_provider = DocumentProvider::new(inner_provider, attribute_store);
+                let doc_index =
+                    Arc::new(DiskANNIndex::new(build.build_config()?, doc_provider, None));
 
-            let doc_provider = DocumentProvider::new_with_attribute_medoids(
-                inner_provider,
-                attribute_store,
-                attribute_medoids,
-            );
-            let doc_index = Arc::new(DiskANNIndex::new(build.build_config()?, doc_provider, None));
+                writeln!(
+                    output,
+                    "Building index with {} vectors using {} threads...",
+                    num_vectors, build.num_threads
+                )?;
+                let timer = Timer::new();
 
-            writeln!(
-                output,
-                "Building index with {} vectors using {} threads...",
-                num_vectors, build.num_threads
-            )?;
-            let timer = Timer::new();
+                let rt = tokio::runtime(build.num_threads)?;
+                let data_arc = Arc::new(data);
+                let attributes_arc = Arc::new(attributes);
 
-            let rt = tokio::runtime(build.num_threads)?;
-            let data_arc = Arc::new(data);
-            let attributes_arc = Arc::new(attributes);
+                let builder = DocumentIndexBuilder::new(
+                    doc_index.clone(),
+                    data_arc,
+                    attributes_arc,
+                    DocumentInsertStrategy::new(common::FullPrecision),
+                );
+                let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
+                let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
+                let build_results = build::build_tracked(
+                    builder,
+                    parallelism,
+                    &rt,
+                    Some(&ProgressMeter::new(output)),
+                )?;
+                let mut insert_latencies: Vec<MicroSeconds> = build_results
+                    .take_output()
+                    .into_iter()
+                    .map(|r| r.latency)
+                    .collect();
 
-            let builder = DocumentIndexBuilder::new(
-                doc_index.clone(),
-                data_arc,
-                attributes_arc,
-                DocumentInsertStrategy::new(common::FullPrecision),
-            );
-            let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
-            let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
-            let build_results = build::build_tracked(
-                builder,
-                parallelism,
-                &rt,
-                Some(&ProgressMeter::new(output)),
-            )?;
-            let mut insert_latencies: Vec<MicroSeconds> = build_results
-                .take_output()
-                .into_iter()
-                .map(|r| r.latency)
-                .collect();
+                let build_time: MicroSeconds = timer.elapsed().into();
+                writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
+                writeln!(
+                    output,
+                    "  Peak memory usage: {:.3} GB",
+                    timer.get_peak_memory_usage()
+                )?;
 
-            let build_time: MicroSeconds = timer.elapsed().into();
-            writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
-            writeln!(
-                output,
-                "  Peak memory usage: {:.3} GB",
-                timer.get_peak_memory_usage()
-            )?;
+                let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
+                let (queries, parsed_predicates, groundtruth) =
+                    load_search_inputs(search_input, output)?;
+                let search_results =
+                    execute_search_runs(output, search_input, |num_threads, run, search_l| {
+                        run_filtered_search(
+                            &doc_index,
+                            &queries,
+                            &parsed_predicates,
+                            &groundtruth,
+                            search_input.beta,
+                            num_threads,
+                            run.search_n,
+                            search_l,
+                            run.recall_k,
+                            search_input.reps,
+                        )
+                    })?;
 
-            let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
-            let (queries, parsed_predicates, groundtruth) = load_search_inputs(search_input, output)?;
-            let search_results = execute_search_runs(output, search_input, |num_threads, run, search_l| {
-                run_filtered_search(
-                    &doc_index,
-                    &queries,
-                    &parsed_predicates,
-                    &groundtruth,
-                    search_input.beta,
-                    num_threads,
-                    run.search_n,
-                    search_l,
-                    run.recall_k,
-                    search_input.reps,
-                )
-            })?;
+                (build_time, insert_percentiles, search_results)
+            }
 
-            (build_time, insert_percentiles, search_results)
-        } else {
-            writeln!(output, "Creating index...")?;
-            let params = default_provider_parameters(build, num_vectors, dim);
-            let fp_precursor = CreateFullPrecision::<T>::new(dim, None);
-            let inner_provider =
-                DefaultProvider::new_empty(params, fp_precursor, NoStore, TableBasedDeletes)?;
+            // Plain provider path: attributes loaded from labels file at search time.
+            algo @ (DocumentSearchAlgorithm::AstLabelProvider
+                | DocumentSearchAlgorithm::Bitmap
+                | DocumentSearchAlgorithm::BitmapInline) => {
+                writeln!(output, "Creating index...")?;
+                let params = default_provider_parameters(build, num_vectors, dim);
+                let fp_precursor = CreateFullPrecision::<T>::new(dim, None);
+                let inner_provider =
+                    DefaultProvider::new_empty(params, fp_precursor, NoStore, TableBasedDeletes)?;
 
-            let start_points = StartPointStrategy::Medoid
-                .compute(data.as_view())
-                .map_err(|e| anyhow::anyhow!("Failed to compute start points: {}", e))?;
-            inner_provider.set_start_points(start_points.row_iter())?;
+                let start_points = StartPointStrategy::Medoid
+                    .compute(data.as_view())
+                    .map_err(|e| anyhow::anyhow!("Failed to compute start points: {}", e))?;
+                inner_provider.set_start_points(start_points.row_iter())?;
 
-            let index = Arc::new(DiskANNIndex::new(build.build_config()?, inner_provider, None));
+                let index = Arc::new(DiskANNIndex::new(build.build_config()?, inner_provider, None));
 
-            writeln!(
-                output,
-                "Building index with {} vectors using {} threads...",
-                num_vectors, build.num_threads
-            )?;
-            let timer = Timer::new();
+                writeln!(
+                    output,
+                    "Building index with {} vectors using {} threads...",
+                    num_vectors, build.num_threads
+                )?;
+                let timer = Timer::new();
 
-            let rt = tokio::runtime(build.num_threads)?;
-            let data_arc = Arc::new(data);
-            let builder = DefaultIndexBuilder::new(index.clone(), data_arc, common::FullPrecision);
-            let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
-            let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
-            let build_results = build::build_tracked(
-                builder,
-                parallelism,
-                &rt,
-                Some(&ProgressMeter::new(output)),
-            )?;
-            let mut insert_latencies: Vec<MicroSeconds> = build_results
-                .take_output()
-                .into_iter()
-                .map(|r| r.latency)
-                .collect();
+                let rt = tokio::runtime(build.num_threads)?;
+                let data_arc = Arc::new(data);
+                let builder =
+                    DefaultIndexBuilder::new(index.clone(), data_arc, common::FullPrecision);
+                let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
+                let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
+                let build_results = build::build_tracked(
+                    builder,
+                    parallelism,
+                    &rt,
+                    Some(&ProgressMeter::new(output)),
+                )?;
+                let mut insert_latencies: Vec<MicroSeconds> = build_results
+                    .take_output()
+                    .into_iter()
+                    .map(|r| r.latency)
+                    .collect();
 
-            let build_time: MicroSeconds = timer.elapsed().into();
-            writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
-            writeln!(
-                output,
-                "  Peak memory usage: {:.3} GB",
-                timer.get_peak_memory_usage()
-            )?;
+                let build_time: MicroSeconds = timer.elapsed().into();
+                writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
+                writeln!(
+                    output,
+                    "  Peak memory usage: {:.3} GB",
+                    timer.get_peak_memory_usage()
+                )?;
 
-            let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
-            let (queries, parsed_predicates, groundtruth) = load_search_inputs(search_input, output)?;
-            // let queries_top10 = queries
-            //     .subview(0..500)
-            //     .ok_or_else(|| anyhow::anyhow!("failed to create 10-row query subview"))?;
-            let search_results = execute_search_runs(output, search_input, |num_threads, run, search_l| {
-                run_bitmap_filtered_search(
-                    &index,
-                    &queries,
-                    &labels,
-                    &groundtruth,
-                    &parsed_predicates,
-                    search_input.beta,
-                    num_threads,
-                    run.search_n,
-                    search_l,
-                    run.recall_k,
-                    search_input.reps,
-                )
-            })?;
+                let insert_percentiles = percentiles::compute_percentiles(&mut insert_latencies)?;
+                let (queries, parsed_predicates, groundtruth) =
+                    load_search_inputs(search_input, output)?;
+                let search_results =
+                    execute_search_runs(output, search_input, |num_threads, run, search_l| {
+                        match algo {
+                            DocumentSearchAlgorithm::AstLabelProvider => {
+                                run_filtered_search_with_label_provider(
+                                    &index,
+                                    &queries,
+                                    &labels,
+                                    &parsed_predicates,
+                                    &groundtruth,
+                                    search_input.adaptive_l.as_ref(),
+                                    num_threads,
+                                    run.search_n,
+                                    search_l,
+                                    run.recall_k,
+                                    search_input.reps,
+                                )
+                            }
+                            DocumentSearchAlgorithm::BitmapInline => {
+                                run_bitmap_inline_search(
+                                    &index,
+                                    &queries,
+                                    &labels,
+                                    &groundtruth,
+                                    &parsed_predicates,
+                                    search_input.adaptive_l.as_ref(),
+                                    num_threads,
+                                    run.search_n,
+                                    search_l,
+                                    run.recall_k,
+                                    search_input.reps,
+                                )
+                            }
+                            _ => run_bitmap_filtered_search(
+                                &index,
+                                &queries,
+                                &labels,
+                                &groundtruth,
+                                &parsed_predicates,
+                                search_input.beta,
+                                num_threads,
+                                run.search_n,
+                                search_l,
+                                run.recall_k,
+                                search_input.reps,
+                            ),
+                        }
+                    })?;
 
-            (build_time, insert_percentiles, search_results)
+                (build_time, insert_percentiles, search_results)
+            }
         };
 
         let stats = DocumentIndexStats {
@@ -702,6 +679,25 @@ where
     beta: f32,
 }
 
+/// Implements [`search_api::Search`] using any [`QueryLabelProvider`] + `InlineFilterSearch`.
+///
+/// Label providers are pre-built (one per query) by the caller — use [`FilteredQueryLabelProvider`]
+/// for per-node AST evaluation or [`BitmapProvider`] for O(1) bitmap lookup.
+struct InlineLabelProviderSearcher<DP, T>
+where
+    DP: diskann::provider::DataProvider,
+{
+    index: Arc<DiskANNIndex<DP>>,
+    queries: Arc<Matrix<T>>,
+    provider_source: InlineLabelProviderSource,
+    adaptive_l: Option<AdaptiveL>,
+}
+
+/// Implements [`search_api::Search`] using [`BitmapQueryLabelProvider`] + `InlineFilterSearch`.
+///
+/// The bitmap is computed once per-query for O(1) per-node lookup, and
+/// [`diskann::graph::search::InlineFilterSearch`] applies hard rejection (no beta biasing).
+/// Optionally scales `l_search` via adaptive L for low-selectivity filters.
 /// Implements [`search_api::Search`] for bitmap-backed beta filtering on a plain provider.
 struct BitmapFilteredSearcher<DP, T>
 where
@@ -734,7 +730,8 @@ where
         + Sync
         + 'static,
     for<'a> BetaFilter<common::FullPrecision, u32>:
-        glue::SearchStrategy<DP, &'a [T]> + glue::DefaultPostProcessor<DP, &'a [T], u32>,
+        glue::SearchStrategy<'a, DP, &'a [T]>
+        + glue::DefaultPostProcessor<'a, DP, &'a [T], u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -822,8 +819,9 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, &'a [T]>>
-        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>:
+        glue::SearchStrategy<'a, DP, &'a FilteredQuery<'a, &'a [T]>>
+        + glue::DefaultPostProcessor<'a, DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -863,6 +861,117 @@ where
         let stats = &self
             .index
             .search(*parameters, &strategy, &ctx, &filtered_query, &mut scratch)
+            .await?;
+
+        let count = scratch.current_len();
+        for (&id, &dist) in std::iter::zip(&ids[..count], &distances[..count]) {
+            if buffer.push(id, dist).is_full() {
+                break;
+            }
+        }
+
+        Ok(FilteredSearchOutput {
+            distances: distances[..count].to_vec(),
+            comparisons: stats.cmps,
+            hops: stats.hops,
+        })
+    }
+}
+
+impl<DP, T> search_api::Search for InlineLabelProviderSearcher<DP, T>
+where
+    DP: diskann::provider::DataProvider<
+            Context = DefaultContext,
+            ExternalId = u32,
+            InternalId = u32,
+        > + Send
+        + Sync
+        + 'static,
+    for<'a> common::FullPrecision:
+        glue::SearchStrategy<'a, DP, &'a [T]>
+        + glue::DefaultPostProcessor<'a, DP, &'a [T], u32>,
+    T: bytemuck::Pod + Copy + Send + Sync + 'static,
+{
+    type Id = u32;
+    type Parameters = Knn;
+    type Output = FilteredSearchOutput;
+
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn id_count(&self, parameters: &Knn) -> search_api::IdCount {
+        search_api::IdCount::Fixed(parameters.k_value())
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &Knn,
+        buffer: &mut O,
+        index: usize,
+    ) -> diskann::ANNResult<FilteredSearchOutput>
+    where
+        O: diskann::graph::SearchOutputBuffer<Self::Id> + Send,
+    {
+        let ctx = DefaultContext;
+        let query_vec = self.queries.row(index);
+        let label_provider: Arc<dyn QueryLabelProvider<u32>> = match &self.provider_source {
+            InlineLabelProviderSource::Ast {
+                predicates,
+                attribute_store,
+            } => {
+                let (_, ref ast_expr) = predicates[index];
+                Arc::new(
+                    FilteredQueryLabelProvider::new(ast_expr.clone(), attribute_store.clone())
+                        .map_err(ANNError::log_async_error)?,
+                )
+            }
+            InlineLabelProviderSource::Bitmap {
+                #[cfg(not(feature = "precompute-query-bitmaps"))]
+                predicates,
+                #[cfg(not(feature = "precompute-query-bitmaps"))]
+                attribute_store,
+                #[cfg(not(feature = "precompute-query-bitmaps"))]
+                label_universe,
+                #[cfg(feature = "precompute-query-bitmaps")]
+                precomputed_bitmaps,
+            } => {
+                #[cfg(not(feature = "precompute-query-bitmaps"))]
+                {
+                    let (_, ref expr) = predicates[index];
+                    Arc::new(
+                        BitmapQueryLabelProvider::from_ast(
+                            expr,
+                            attribute_store.as_ref(),
+                            label_universe.as_ref(),
+                        )
+                        .map_err(ANNError::log_async_error)?,
+                    )
+                }
+                #[cfg(feature = "precompute-query-bitmaps")]
+                {
+                    Arc::new(BitmapQueryLabelProvider {
+                        query_index: index,
+                        precomputed_bitmaps: precomputed_bitmaps.clone(),
+                    })
+                }
+            }
+        };
+
+        let k = parameters.k_value().get();
+        let mut ids = vec![0u32; k];
+        let mut distances = vec![0.0f32; k];
+        let mut scratch = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+        let inline = diskann::graph::search::InlineFilterSearch::new(
+            *parameters,
+            &*label_provider,
+            self.adaptive_l.clone(),
+        );
+
+        let stats = self
+            .index
+            .search(inline, &common::FullPrecision, &ctx, query_vec, &mut scratch)
             .await?;
 
         let count = scratch.current_len();
@@ -1031,14 +1140,172 @@ where
         > + Send
         + Sync
         + 'static,
-    for<'a> InlineBetaStrategy<common::FullPrecision>: glue::SearchStrategy<DP, &'a FilteredQuery<'a, &'a [T]>>
-        + glue::DefaultPostProcessor<DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>:
+        glue::SearchStrategy<'a, DP, &'a FilteredQuery<'a, &'a [T]>>
+        + glue::DefaultPostProcessor<'a, DP, &'a FilteredQuery<'a, &'a [T]>, u32>,
 {
     let searcher = Arc::new(FilteredSearcher {
         index: index.clone(),
         queries: Arc::new(queries.clone()),
         predicates: Arc::new(predicates.to_vec()),
         beta,
+    });
+
+    let parameters = Knn::new_default(search_n, search_l)?;
+    let setup = search_api::Setup {
+        threads: num_threads,
+        tasks: num_threads,
+        reps,
+    };
+
+    let mut results = search_api::search_all(
+        searcher,
+        [search_api::Run::new(parameters, setup)],
+        FilteredSearchAggregator {
+            groundtruth,
+            predicates,
+            recall_k,
+        },
+    )?;
+
+    results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("no search results"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_filtered_search_with_label_provider<DP, T>(
+    index: &Arc<DiskANNIndex<DP>>,
+    queries: &Matrix<T>,
+    labels: &[LabelDocument],
+    predicates: &[(usize, ASTExpr)],
+    groundtruth: &Vec<Vec<u32>>,
+    adaptive_l_config: Option<&AdaptiveLConfig>,
+    num_threads: NonZeroUsize,
+    search_n: usize,
+    search_l: usize,
+    recall_k: usize,
+    reps: NonZeroUsize,
+) -> anyhow::Result<SearchRunStats>
+where
+    T: bytemuck::Pod + Copy + Send + Sync + 'static,
+    DP: diskann::provider::DataProvider<
+            Context = DefaultContext,
+            ExternalId = u32,
+            InternalId = u32,
+        > + Send
+        + Sync
+        + 'static,
+    for<'a> common::FullPrecision:
+        glue::SearchStrategy<'a, DP, &'a [T]>
+        + glue::DefaultPostProcessor<'a, DP, &'a [T], u32>,
+{
+    let (attribute_store, _) = build_label_attribute_store(labels)?;
+
+    let adaptive_l = adaptive_l_config
+        .map(|cfg| AdaptiveL::new(cfg.sample_count, cfg.scale_factor))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("invalid adaptive_l config: {}", e))?;
+
+    let searcher = Arc::new(InlineLabelProviderSearcher {
+        index: index.clone(),
+        queries: Arc::new(queries.clone()),
+        provider_source: InlineLabelProviderSource::Ast {
+            predicates: Arc::new(predicates.to_vec()),
+            attribute_store,
+        },
+        adaptive_l,
+    });
+
+    let parameters = Knn::new_default(search_n, search_l)?;
+    let setup = search_api::Setup {
+        threads: num_threads,
+        tasks: num_threads,
+        reps,
+    };
+
+    let mut results = search_api::search_all(
+        searcher,
+        [search_api::Run::new(parameters, setup)],
+        FilteredSearchAggregator {
+            groundtruth,
+            predicates,
+            recall_k,
+        },
+    )?;
+
+    results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("no search results"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_bitmap_inline_search<DP, T>(
+    index: &Arc<DiskANNIndex<DP>>,
+    queries: &Matrix<T>,
+    labels: &[LabelDocument],
+    groundtruth: &Vec<Vec<u32>>,
+    predicates: &[(usize, ASTExpr)],
+    adaptive_l_config: Option<&AdaptiveLConfig>,
+    num_threads: NonZeroUsize,
+    search_n: usize,
+    search_l: usize,
+    recall_k: usize,
+    reps: NonZeroUsize,
+) -> anyhow::Result<SearchRunStats>
+where
+    T: bytemuck::Pod + Copy + Send + Sync + 'static,
+    DP: diskann::provider::DataProvider<
+            Context = DefaultContext,
+            ExternalId = u32,
+            InternalId = u32,
+        > + Send
+        + Sync
+        + 'static,
+    for<'a> common::FullPrecision:
+        glue::SearchStrategy<'a, DP, &'a [T]>
+        + glue::DefaultPostProcessor<'a, DP, &'a [T], u32>,
+{
+    let adaptive_l = adaptive_l_config
+        .map(|cfg| AdaptiveL::new(cfg.sample_count, cfg.scale_factor))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("invalid adaptive_l config: {}", e))?;
+
+    let (attribute_store, label_ids) = build_label_attribute_store(labels)?;
+    let mut universe = RoaringTreemap::new();
+    universe.extend(label_ids.iter().copied().map(u64::from));
+    let universe = Arc::new(universe);
+
+    #[cfg(feature = "precompute-query-bitmaps")]
+    let precomputed_bitmaps: Arc<[RoaringTreemap]> = {
+        let evaluator = InvertedBitmapEvaluator::new(&attribute_store, universe.as_ref());
+        let bitmaps = predicates
+            .iter()
+            .map(|(_, expr)| -> anyhow::Result<RoaringTreemap> {
+                let encoded = EncodedFilterExpr::from_attribute_store(expr, &attribute_store)
+                    .context("failed to encode filter expression")?;
+                evaluator
+                    .evaluate(&encoded)
+                    .context("failed to evaluate encoded expression")
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Arc::from(bitmaps.into_boxed_slice())
+    };
+
+    let searcher = Arc::new(InlineLabelProviderSearcher {
+        index: index.clone(),
+        queries: Arc::new(queries.to_owned()),
+        provider_source: InlineLabelProviderSource::Bitmap {
+            #[cfg(not(feature = "precompute-query-bitmaps"))]
+            predicates: Arc::new(predicates.to_vec()),
+            #[cfg(not(feature = "precompute-query-bitmaps"))]
+            attribute_store,
+            #[cfg(not(feature = "precompute-query-bitmaps"))]
+            label_universe: universe,
+            #[cfg(feature = "precompute-query-bitmaps")]
+            precomputed_bitmaps,
+        },
+        adaptive_l,
     });
 
     let parameters = Knn::new_default(search_n, search_l)?;
@@ -1087,7 +1354,8 @@ where
         + Sync
         + 'static,
     for<'a> BetaFilter<common::FullPrecision, u32>:
-        glue::SearchStrategy<DP, &'a [T]> + glue::DefaultPostProcessor<DP, &'a [T], u32>,
+        glue::SearchStrategy<'a, DP, &'a [T]>
+        + glue::DefaultPostProcessor<'a, DP, &'a [T], u32>,
 {
     let (attribute_store, label_ids) = build_label_attribute_store(labels)?;
     let mut universe = RoaringTreemap::new();
@@ -1341,7 +1609,7 @@ where
     DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32>
         + for<'b> diskann::provider::SetElement<&'b [T]>
         + AsyncFriendly,
-    for<'b> common::FullPrecision: diskann::graph::glue::InsertStrategy<DP, &'b [T]>,
+    for<'b> common::FullPrecision: diskann::graph::glue::InsertStrategy<'b, DP, &'b [T]>,
     common::FullPrecision: AsyncFriendly,
     T: AsyncFriendly,
 {
@@ -1355,7 +1623,7 @@ where
         let ctx = DefaultContext;
         for i in range {
             self.index
-                .insert(self.strategy, &ctx, &(i as u32), self.data.row(i))
+                .insert(&self.strategy, &ctx, &(i as u32), self.data.row(i))
                 .await?;
         }
         Ok(())
@@ -1368,7 +1636,7 @@ where
         + for<'a> diskann::provider::SetElement<&'a Document<'a, [T]>>
         + AsyncFriendly,
     for<'a> DocumentInsertStrategy<common::FullPrecision>:
-        diskann::graph::glue::InsertStrategy<DP, &'a Document<'a, [T]>>,
+        diskann::graph::glue::InsertStrategy<'a, DP, &'a Document<'a, [T]>>,
     DocumentInsertStrategy<common::FullPrecision>: AsyncFriendly,
     T: AsyncFriendly,
 {
@@ -1389,7 +1657,7 @@ where
             })?;
             let doc = Document::new(self.data.row(i), attrs);
             self.index
-                .insert(self.strategy, &ctx, &(i as u32), &doc)
+                .insert(&self.strategy, &ctx, &(i as u32), &doc)
                 .await?;
         }
         Ok(())

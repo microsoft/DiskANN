@@ -19,6 +19,7 @@ use diskann_utils::future::AsyncFriendly;
 use roaring::RoaringTreemap;
 use std::{ops::Deref, sync::{Arc, RwLock}};
 
+#[derive(Clone)]
 pub struct RoaringAttributeStore<IT>
 where
     IT: VectorId + AsyncFriendly,

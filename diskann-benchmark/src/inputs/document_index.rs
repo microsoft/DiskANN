@@ -29,8 +29,6 @@ pub(crate) struct DocumentBuildParams {
     pub(crate) data_type: DataType,
     pub(crate) data: InputFile,
     pub(crate) data_labels: InputFile,
-    #[serde(default = "default_use_ast_filters")]
-    pub(crate) use_ast_filters: bool,
     pub(crate) distance: crate::utils::SimilarityMeasure,
     pub(crate) max_degree: usize,
     pub(crate) l_build: usize,
@@ -66,8 +64,11 @@ pub(crate) struct DocumentSearchParams {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
-    #[serde(default = "default_use_ast_filters")]
-    pub(crate) use_ast_filters: bool,
+    #[serde(default)]
+    pub(crate) search_algorithm: DocumentSearchAlgorithm,
+    /// Adaptive-L scaling for `ast-label-provider` search. Omit to disable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) adaptive_l: Option<AdaptiveLConfig>,
     pub(crate) beta: f32,
     pub(crate) reps: NonZeroUsize,
     pub(crate) num_threads: Vec<NonZeroUsize>,
@@ -79,12 +80,44 @@ impl DocumentSearchParams {
         self.queries.resolve(checker)?;
         self.query_predicates.resolve(checker)?;
         self.groundtruth.resolve(checker)?;
+        if let Some(ref al) = self.adaptive_l {
+            if al.scale_factor < 1.0 {
+                return Err(anyhow::anyhow!(
+                    "adaptive_l.scale_factor must be >= 1.0, got {}",
+                    al.scale_factor
+                ));
+            }
+            if al.sample_count == 0 {
+                return Err(anyhow::anyhow!("adaptive_l.sample_count must be > 0"));
+            }
+        }
         Ok(())
     }
 }
 
-fn default_use_ast_filters() -> bool {
-    true
+/// Configuration for adaptive-L scaling during inline filtered search.
+///
+/// After visiting `sample_count` nodes, specificity is estimated from matched
+/// results and `l_search` is scaled up by up to `scale_factor`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AdaptiveLConfig {
+    /// Number of nodes to visit before estimating filter specificity.
+    pub(crate) sample_count: usize,
+    /// Maximum multiplier applied to `l_search` (must be ≥ 1.0).
+    pub(crate) scale_factor: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DocumentSearchAlgorithm {
+    #[default]
+    Auto,
+    InlineBeta,
+    AstLabelProvider,
+    Bitmap,
+    /// Bitmap-precomputed label provider with InlineFilterSearch hard-rejection traversal.
+    /// Combines O(1) per-node bitmap lookup with adaptive-L support.
+    BitmapInline,
 }
 
 fn default_reps() -> NonZeroUsize {
@@ -119,7 +152,6 @@ impl Example for DocumentIndexBuild {
                 data_type: DataType::Float32,
                 data: InputFile::new("data.fbin"),
                 data_labels: InputFile::new("data.label.jsonl"),
-                use_ast_filters: default_use_ast_filters(),
                 distance: crate::utils::SimilarityMeasure::SquaredL2,
                 max_degree: 32,
                 l_build: 50,
@@ -130,7 +162,8 @@ impl Example for DocumentIndexBuild {
                 queries: InputFile::new("queries.fbin"),
                 query_predicates: InputFile::new("query.label.jsonl"),
                 groundtruth: InputFile::new("groundtruth.bin"),
-                use_ast_filters: default_use_ast_filters(),
+                search_algorithm: DocumentSearchAlgorithm::default(),
+                adaptive_l: None,
                 beta: 0.5,
                 reps: default_reps(),
                 num_threads: default_thread_counts(),
@@ -159,9 +192,10 @@ impl std::fmt::Display for DocumentIndexBuild {
         )?;
         writeln!(
             f,
-            "Search: queries={}, beta={}",
+            "Search: queries={}, beta={}, algorithm={:?}",
             self.search.queries.display(),
-            self.search.beta
+            self.search.beta,
+            self.search.search_algorithm
         )?;
         Ok(())
     }

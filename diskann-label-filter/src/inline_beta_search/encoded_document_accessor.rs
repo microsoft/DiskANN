@@ -44,8 +44,8 @@ where
         filter_expr: &ASTExpr,
         beta_value: f32,
     ) -> ANNResult<Self> {
-        let id_query = EncodedFilterExpr::new(filter_expr, attribute_map)?;
-        let computer = InlineBetaComputer::new(beta_value, id_query);
+        let id_query = EncodedFilterExpr::new(filter_expr, attribute_map.clone())?;
+        let computer = InlineBetaComputer::new(beta_value, id_query, attribute_map.clone());
         Ok(Self {
             inner_accessor,
             attribute_accessor,
@@ -92,6 +92,36 @@ where
         &self,
     ) -> impl std::future::Future<Output = diskann::ANNResult<Vec<Self::Id>>> + Send {
         self.inner_accessor.starting_points()
+        // let filter_expr = self.current_filter_expr.clone();
+        // let attribute_medoids = self.attribute_medoids.clone();
+        // let inner = &self.inner_accessor;
+        // async move {
+        //     // Extract the expression and compute start points while holding the lock,
+        //     // then drop the lock before awaiting
+        //     let start_points = {
+        //         let expr_guard = filter_expr.read().map_err(|_| {
+        //             ANNError::message(
+        //                 ANNErrorKind::LockPoisonError,
+        //                 "Failed to acquire read lock on filter expression",
+        //             )
+        //         })?;
+
+        //         if let Some(expr) = expr_guard.as_ref() {
+        //             // Compute medoid start points from the stored filter expression
+        //             let mut start_points = Vec::new();
+        //             Self::collect_start_points_static(expr, &attribute_medoids, &mut start_points);
+        //             start_points
+        //         } else {
+        //             Vec::new()
+        //         }
+        //         // expr_guard is dropped here
+        //     };
+
+        //     let mut inner = inner.starting_points().await?;
+        //     inner.extend_from_slice(&start_points);
+        //     // Fallback to inner accessor's start points if no expression or no medoids found
+        //     Ok(inner)
+        // }
     }
 
     async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>

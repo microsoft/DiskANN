@@ -10,22 +10,39 @@ use diskann::{
 };
 
 use diskann_utils::future::AsyncFriendly;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{document::Document, traits::attribute_store::AttributeStore};
 
 /// Manage [`Document`]s which are a combination of a vector
 /// and its attributes for DiskANN. Uses an underlying data
 /// provider and attribute store for the functionality.
-pub struct DocumentProvider<DP, AS> {
+pub struct DocumentProvider<DP, AS>
+where
+    DP: DataProvider,
+{
     inner_provider: DP,
     attribute_store: AS,
+    attribute_medoids: Arc<HashMap<u64, DP::InternalId>>,
 }
 
-impl<DP, AS> DocumentProvider<DP, AS> {
+impl<DP, AS> DocumentProvider<DP, AS>
+where
+    DP: DataProvider,
+{
     pub fn new(data_provider: DP, attribute_store: AS) -> Self {
+        Self::new_with_attribute_medoids(data_provider, attribute_store, Arc::default())
+    }
+
+    pub fn new_with_attribute_medoids(
+        data_provider: DP,
+        attribute_store: AS,
+        attribute_medoids: Arc<HashMap<u64, DP::InternalId>>,
+    ) -> Self {
         Self {
             inner_provider: data_provider,
             attribute_store,
+            attribute_medoids,
         }
     }
 
@@ -43,6 +60,10 @@ impl<DP, AS> DocumentProvider<DP, AS> {
 
     pub fn attribute_store(&self) -> &AS {
         &self.attribute_store
+    }
+
+    pub fn attribute_medoids(&self) -> &Arc<HashMap<u64, DP::InternalId>> {
+        &self.attribute_medoids
     }
 }
 

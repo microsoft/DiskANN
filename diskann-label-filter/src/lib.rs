@@ -20,8 +20,11 @@ pub mod utils {
 pub mod inline_beta_search {
     pub mod encoded_document_accessor;
     pub mod inline_beta_filter;
+    pub mod inverted_bitmap_evaluator;
     pub mod predicate_evaluator;
 }
+
+pub mod filtered_query_label_provider;
 
 // Persisent Index Traits
 pub mod traits {
@@ -43,7 +46,7 @@ pub mod encoded_attribute_provider {
     pub mod document_insert_strategy;
     pub mod document_provider;
     pub mod encoded_attribute_accessor;
-    pub(crate) mod encoded_filter_expr;
+    pub mod encoded_filter_expr;
     pub mod roaring_attribute_store;
 }
 
@@ -77,6 +80,7 @@ pub use parser::evaluator::eval_query_expr;
 pub use parser::query_parser::{get_value_by_path, parse_query_filter};
 pub use traits::inverted_index_trait::InvertedIndexProvider;
 pub use traits::key_codec::DefaultKeyCodec;
+pub use filtered_query_label_provider::FilteredQueryLabelProvider;
 pub use traits::kv_store_traits::KvStore;
 pub use utils::flatten_utils::Attributes;
 pub use utils::jsonl_reader::{
