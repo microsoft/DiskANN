@@ -774,6 +774,8 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     // contention-prone at high thread count; thread-local reuse removes that.
     thread_local! {
         static FP_CAND_F32: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static FP_NODE_F32: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static FP_ORDER: std::cell::RefCell<Vec<(f32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
         static FP_STATE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
         static FP_SELECTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -782,12 +784,24 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     // (the BigANN production shape); everything else falls back to the
     // DistanceProvider dispatch.
     let use_inline_l2 = matches!(metric, Metric::L2);
-    let inline_tier = if use_inline_l2 { tier() } else { SimdTier::Scalar };
+    // InnerProduct's distance comparer returns the *negative* dot product, so for
+    // similar pairs the distance is negative. The canonical occlusion test
+    // `alpha * d(y,z) < d(x,z)` then inverts (alpha scales a negative term),
+    // pruning almost everything. Mirror Vamana's `PruneKind::Occluding` for IP —
+    // `d(y,z) < alpha * d(x,z)`. L2 / Cosine / CosineNormalized all return
+    // non-negative distances and keep the canonical rule unchanged.
+    let ip_occlude = matches!(metric, Metric::InnerProduct);
+    let inline_tier = if use_inline_l2 {
+        tier()
+    } else {
+        SimdTier::Scalar
+    };
     let generic_dist = <f32 as DistanceProvider<f32>>::distance_comparer(metric, Some(ndims));
 
     candidates_per_node
         .par_iter()
-        .map(|candidates| {
+        .enumerate()
+        .map(|(node_idx, candidates)| {
             if candidates.is_empty() {
                 return Vec::new();
             }
@@ -804,96 +818,132 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             };
 
             FP_CAND_F32.with(|cf_cell| {
-            FP_STATE.with(|st_cell| {
-            FP_SELECTED.with(|sel_cell| {
-                let mut cf = cf_cell.borrow_mut();
-                if cf.len() < nc * ndims { cf.resize(nc * ndims, 0.0); }
-                let cand_f32 = &mut cf[..nc * ndims];
-                for (ci, &(id, _)) in candidates.iter().enumerate() {
-                    let src = &data[id as usize * ndims..(id as usize + 1) * ndims];
-                    T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
-                        .unwrap_or_else(|e| {
-                            panic!("VectorRepr::as_f32_into failed during final_prune: {}", e)
-                        });
-                }
+                FP_NODE_F32.with(|nf_cell| {
+                    FP_ORDER.with(|ord_cell| {
+                        FP_STATE.with(|st_cell| {
+                            FP_SELECTED.with(|sel_cell| {
+                                let mut cf = cf_cell.borrow_mut();
+                                if cf.len() < nc * ndims {
+                                    cf.resize(nc * ndims, 0.0);
+                                }
+                                let cand_f32 = &mut cf[..nc * ndims];
+                                for (ci, &(id, _)) in candidates.iter().enumerate() {
+                                    let src =
+                                        &data[id as usize * ndims..(id as usize + 1) * ndims];
+                                    T::as_f32_into(src, &mut cand_f32[ci * ndims..(ci + 1) * ndims])
+                                        .unwrap_or_else(|e| {
+                                            panic!(
+                                                "VectorRepr::as_f32_into failed during final_prune: {}",
+                                                e
+                                            )
+                                        });
+                                }
 
-                // Lazy RobustPrune (paper "Optimizing RobustPrune" section).
-                // Standard form admits the closest unvisited neighbor and
-                // then scans ALL remaining candidates to mark occluded ones —
-                // O(R·N) per node where R=max_degree, N=nc. With nc averaging
-                // ~67 on this workload and R=64, that's ~1300 distance
-                // computes per node × 10M nodes = the dominant final_prune
-                // cost.
-                //
-                // Lazy form: walk candidates in ascending-distance-to-x
-                // order; for each candidate c, check against the already-
-                // admitted neighbors and EARLY-EXIT on the first occluder.
-                // Output is identical (same admission order, same admission
-                // rule) — only the work distribution differs. Most rejects
-                // are occluded by one of the first few admitted neighbors,
-                // so the early-exit collapses the inner-loop cost on
-                // average.
-                //
-                // `selected_local` holds local candidate indices (not global
-                // neighbor IDs) so the next candidate can be compared against
-                // each admitted neighbor's f32 row by indexing `cand_f32`.
-                let mut sel_local = st_cell.borrow_mut();
-                sel_local.clear();
-                sel_local.reserve(max_degree);
+                                // Node x's own vector as fresh f32. final_prune
+                                // recomputes EVERY distance from the f32 data — the
+                                // reservoir's bf16 candidate distances are lossy and,
+                                // for InnerProduct, stored as sign-incorrect u16 sort
+                                // keys, so they are never trusted here.
+                                let mut nf = nf_cell.borrow_mut();
+                                if nf.len() < ndims {
+                                    nf.resize(ndims, 0.0);
+                                }
+                                let x_f32 = &mut nf[..ndims];
+                                {
+                                    let src = &data[node_idx * ndims..(node_idx + 1) * ndims];
+                                    T::as_f32_into(src, x_f32).unwrap_or_else(|e| {
+                                        panic!(
+                                            "VectorRepr::as_f32_into failed during final_prune: {}",
+                                            e
+                                        )
+                                    });
+                                }
 
-                let mut sel = sel_cell.borrow_mut();
-                sel.clear();
-                sel.reserve(max_degree);
+                                // Fresh f32 distance-to-x for every candidate, sorted
+                                // closest-first. Replaces relying on the reservoir's
+                                // (lossy / IP-mis-ordered) ordering.
+                                let mut order = ord_cell.borrow_mut();
+                                order.clear();
+                                order.reserve(nc);
+                                for i in 0..nc {
+                                    let z = &cand_f32[i * ndims..(i + 1) * ndims];
+                                    order.push((kernel.call(x_f32, z), i as u32));
+                                }
+                                order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
 
-                for i in 0..nc {
-                    if sel.len() >= max_degree { break; }
-                    let dist_x_z = candidates[i].1;
-                    let z_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
+                                // Lazy RobustPrune (paper "Optimizing RobustPrune"):
+                                // walk candidates in ascending fresh-distance-to-x
+                                // order; for each candidate z, check against the
+                                // already-admitted neighbors and EARLY-EXIT on the
+                                // first occluder. `sel_local` holds local candidate
+                                // indices so the next candidate compares against each
+                                // admitted neighbor's f32 row by indexing `cand_f32`.
+                                let mut sel_local = st_cell.borrow_mut();
+                                sel_local.clear();
+                                sel_local.reserve(max_degree);
 
-                    let mut occluded = false;
-                    // SAFETY: sel_local stores u8 candidate indices in [0,nc);
-                    // cand_f32 has nc*ndims rows so the slice index is in
-                    // bounds.
-                    for &local in sel_local.iter() {
-                        let li = local as usize;
-                        let y_f32 = &cand_f32[li * ndims..(li + 1) * ndims];
-                        let dist_y_z = kernel.call(y_f32, z_f32);
-                        if alpha * dist_y_z < dist_x_z {
-                            occluded = true;
-                            break;
-                        }
-                    }
+                                let mut sel = sel_cell.borrow_mut();
+                                sel.clear();
+                                sel.reserve(max_degree);
 
-                    if !occluded {
-                        sel_local.push(i as u8);
-                        sel.push(candidates[i].0);
-                    }
-                }
+                                for &(dist_x_z, oi) in order.iter() {
+                                    if sel.len() >= max_degree {
+                                        break;
+                                    }
+                                    let i = oi as usize;
+                                    let z_f32 = &cand_f32[i * ndims..(i + 1) * ndims];
 
-                if saturate && sel.len() < max_degree {
-                    // Pad with closest-to-x candidates not already admitted.
-                    // sel_local is monotonic in candidate distance (admitted
-                    // in sorted order), so a two-pointer walk catches the
-                    // gaps.
-                    let mut next_admitted = 0usize;
-                    for i in 0..nc {
-                        if sel.len() >= max_degree { break; }
-                        let is_admitted = next_admitted < sel_local.len()
-                            && sel_local[next_admitted] as usize == i;
-                        if is_admitted {
-                            next_admitted += 1;
-                        } else {
-                            sel.push(candidates[i].0);
-                        }
-                    }
-                }
+                                    let mut occluded = false;
+                                    // SAFETY: sel_local stores u8 candidate indices in
+                                    // [0,nc); cand_f32 has nc*ndims rows so the slice
+                                    // index is in bounds.
+                                    for &local in sel_local.iter() {
+                                        let li = local as usize;
+                                        let y_f32 = &cand_f32[li * ndims..(li + 1) * ndims];
+                                        let dist_y_z = kernel.call(y_f32, z_f32);
+                                        // IP: d(y,z) < alpha*d(x,z) (Vamana Occluding,
+                                        // negative-distance-safe). Otherwise the
+                                        // canonical alpha*d(y,z) < d(x,z).
+                                        let occ = if ip_occlude {
+                                            dist_y_z < alpha * dist_x_z
+                                        } else {
+                                            alpha * dist_y_z < dist_x_z
+                                        };
+                                        if occ {
+                                            occluded = true;
+                                            break;
+                                        }
+                                    }
 
-                sel.clone()
-            })})})
+                                    if !occluded {
+                                        sel_local.push(i as u8);
+                                        sel.push(candidates[i].0);
+                                    }
+                                }
+
+                                if saturate && sel.len() < max_degree {
+                                    // Pad with the closest not-yet-admitted
+                                    // candidates, still in fresh-distance order.
+                                    for &(_, oi) in order.iter() {
+                                        if sel.len() >= max_degree {
+                                            break;
+                                        }
+                                        let i = oi as usize;
+                                        if !sel_local.iter().any(|&l| l as usize == i) {
+                                            sel.push(candidates[i].0);
+                                        }
+                                    }
+                                }
+
+                                sel.clone()
+                            })
+                        })
+                    })
+                })
+            })
         })
         .collect_installed()
 }
-
 
 /// Standalone benchmark entry point: runs ONLY the leaf-build + HashPrune-insert
 /// loop given pre-computed partition leaves and an initialised [`HashPrune`].
@@ -903,6 +953,21 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 ///
 /// Gated behind the `bench` feature so it is not part of the production API
 /// surface; callers exercising it must opt in.
+#[cfg(any(test, feature = "bench"))]
+#[derive(Debug, Clone, Copy)]
+pub struct BenchLeafHpStats {
+    pub wall_secs: f64,
+    pub leaf_build_cpu_secs: f64,
+    pub leaf_gather_cpu_secs: f64,
+    pub leaf_gemm_cpu_secs: f64,
+    pub leaf_norms_cpu_secs: f64,
+    pub leaf_topk_cpu_secs: f64,
+    pub leaf_csr_cpu_secs: f64,
+    pub sketch_gather_cpu_secs: f64,
+    pub hp_insert_cpu_secs: f64,
+    pub total_edges: usize,
+}
+
 #[cfg(any(test, feature = "bench"))]
 pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
     data: &[T],
