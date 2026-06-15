@@ -7,6 +7,7 @@ use diskann::error::IntoANNResult;
 use diskann::graph::glue::{SearchPostProcess, SearchStrategy};
 use diskann::neighbor::Neighbor;
 use diskann::provider::{DataProvider, HasId};
+use diskann::utils::IntoUsize;
 
 use diskann::{ANNError, ANNResult};
 use roaring::RoaringTreemap;
@@ -33,6 +34,7 @@ impl<'q, DP, Strategy, Q>
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
+    DP::InternalId: IntoUsize,
     Strategy: SearchStrategy<'q, DP, &'q Q>,
     Q: Send + Sync + 'q,
 {
@@ -72,6 +74,7 @@ impl<'q, DP, Strategy, Q>
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
+    DP::InternalId: IntoUsize,
     Strategy: diskann::graph::glue::DefaultPostProcessor<'q, DP, &'q Q>,
     Q: Send + Sync + 'q,
 {

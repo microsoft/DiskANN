@@ -297,7 +297,7 @@ type Distance = UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::
 
 pub struct PruneAccessor<'a> {
     store: &'a SphericalStore,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
     distance: Distance,
 }
 
@@ -319,7 +319,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Self: 'a;
 
     type Neighbors<'a>
-        = &'a SimpleNeighborProviderAsync<u32>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 

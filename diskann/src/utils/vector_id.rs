@@ -4,9 +4,8 @@
  */
 
 use diskann_vector::contains::ContainsSimd;
-use num_traits::FromPrimitive;
 
-use crate::utils::{IntoUsize, TryIntoInteger, TypeStr, VectorIdTryFrom};
+use crate::utils::TypeStr;
 
 /// The data type used to assign an identity to vectors. Canonically, this is either a
 /// `u32` or a `u64`. Since this type is used to stored neighbor information in graphs,
@@ -18,13 +17,6 @@ pub trait VectorId:
     + std::cmp::Ord
     + std::hash::Hash
     + TypeStr
-    + VectorIdTryFrom<u32>
-    + VectorIdTryFrom<u64>
-    + VectorIdTryFrom<usize>
-    + TryIntoInteger<u32>
-    + Into<u64>
-    + IntoUsize
-    + FromPrimitive
     + Copy
     + Sized
     + Send
@@ -44,13 +36,6 @@ impl<T> VectorId for T where
         + std::cmp::Ord
         + std::hash::Hash
         + TypeStr
-        + Into<u64>
-        + IntoUsize
-        + VectorIdTryFrom<u32>
-        + VectorIdTryFrom<u64>
-        + VectorIdTryFrom<usize>
-        + TryIntoInteger<u32>
-        + FromPrimitive
         + Copy
         + Sized
         + Send
