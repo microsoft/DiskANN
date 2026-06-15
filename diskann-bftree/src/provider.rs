@@ -268,19 +268,6 @@ impl BfTreeProviderParameters {
         Ok(())
     }
 
-    /// Validate the quant vector provider config against a known quantized dimension.
-    ///
-    /// This must be called after the quantizer is constructed, since the compressed
-    /// vector size is only known at that point.
-    pub fn validate_quant(&self, quant_bytes: usize) -> ANNResult<()> {
-        Self::check_record_size(
-            "quant_vector_provider_config",
-            &self.quant_vector_provider_config,
-            std::mem::size_of::<usize>(),
-            quant_bytes,
-        )
-    }
-
     fn check_record_size(
         config_name: &str,
         config: &Config,
@@ -558,6 +545,17 @@ impl CreateQuantProvider for NoStore {
 impl CreateQuantProvider for Poly<dyn Quantizer> {
     type Target = QuantVectorProvider;
     fn create(self, bf_tree_config: Config) -> ANNResult<Self::Target> {
+        let key_size = std::mem::size_of::<usize>();
+        let value_size = self.bytes();
+        let required = key_size + value_size;
+        let configured_max = bf_tree_config.get_cb_max_record_size();
+        if required > configured_max {
+            return Err(ANNError::log_index_error(format!(
+                "quant_vector_provider_config: cb_max_record_size ({configured_max}) is too small; \
+                 a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
+                 increase cb_max_record_size to at least {required}"
+            )));
+        }
         QuantVectorProvider::new_with_config(self, bf_tree_config)
     }
 }
