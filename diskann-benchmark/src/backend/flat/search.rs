@@ -164,7 +164,6 @@ where
                 index: index.clone(),
                 queries: Arc::new(queries.clone()),
                 metric,
-                k,
             });
 
             let setup = search::Setup {
@@ -173,7 +172,7 @@ where
                 reps,
             };
 
-            let run = search::Run::new(k, setup);
+            let run = search::Run::new(FlatSearchParameters { k }, setup);
             let aggregated = search::search_all(
                 searcher,
                 std::iter::once(run),
@@ -287,6 +286,11 @@ struct FlatSearcher<T: VectorRepr> {
     index: Arc<FlatIndex<InMemProvider<T>>>,
     queries: Arc<Matrix<T>>,
     metric: Metric,
+}
+
+/// Search parameters for flat-index benchmarks.
+#[derive(Debug, Clone, Copy)]
+struct FlatSearchParameters {
     k: NonZeroUsize,
 }
 
@@ -302,7 +306,7 @@ where
     T: VectorRepr,
 {
     type Id = u32;
-    type Parameters = NonZeroUsize; // k value
+    type Parameters = FlatSearchParameters;
     type Output = FlatMetrics;
 
     fn num_queries(&self) -> usize {
@@ -310,12 +314,12 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Fixed(*parameters)
+        search::IdCount::Fixed(parameters.k)
     }
 
     async fn search<O>(
         &self,
-        _parameters: &Self::Parameters,
+        parameters: &Self::Parameters,
         buffer: &mut O,
         index: usize,
     ) -> ANNResult<Self::Output>
@@ -328,7 +332,7 @@ where
 
         let stats = self
             .index
-            .knn_search(self.k, &strategy, &context, query, buffer)
+            .knn_search(parameters.k, &strategy, &context, query, buffer)
             .await?;
 
         Ok(FlatMetrics {
@@ -370,12 +374,12 @@ struct FlatSearchResults {
     mean_cmps: f32,
 }
 
-impl search::Aggregate<NonZeroUsize, u32, FlatMetrics> for FlatAggregator<'_> {
+impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregator<'_> {
     type Output = FlatSearchResults;
 
     fn aggregate(
         &mut self,
-        run: search::Run<NonZeroUsize>,
+        run: search::Run<FlatSearchParameters>,
         mut results: Vec<search::SearchResults<u32, FlatMetrics>>,
     ) -> anyhow::Result<FlatSearchResults> {
         // Compute recall using the first repetition's results.
@@ -385,7 +389,7 @@ impl search::Aggregate<NonZeroUsize, u32, FlatMetrics> for FlatAggregator<'_> {
                 None,
                 first.ids().as_rows(),
                 self.recall_k,
-                run.parameters().get(),
+                run.parameters().k.get(),
                 GroundTruthMode::Fixed,
             )?,
             None => anyhow::bail!("Results must be non-empty"),
@@ -430,7 +434,7 @@ impl search::Aggregate<NonZeroUsize, u32, FlatMetrics> for FlatAggregator<'_> {
 
         Ok(FlatSearchResults {
             num_tasks: run.setup().tasks.into(),
-            k: run.parameters().get(),
+            k: run.parameters().k.get(),
             qps,
             search_latencies: results.iter().map(|r| r.end_to_end_latency()).collect(),
             mean_latencies,
