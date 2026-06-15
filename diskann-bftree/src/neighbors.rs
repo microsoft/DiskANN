@@ -34,6 +34,10 @@ impl<I: VectorId> HasId for NeighborProvider<I> {
 impl<I: VectorId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly
     pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
+        let key_size = std::mem::size_of::<u32>();
+        let value_size = (max_degree as usize + 1) * std::mem::size_of::<u32>();
+        crate::validate_record_size("neighbor_provider", &config, key_size, value_size)?;
+
         let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Self::new(max_degree, adj_list_index)

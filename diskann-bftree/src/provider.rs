@@ -235,58 +235,6 @@ pub struct BfTreeProviderParameters {
     pub graph_params: Option<GraphParams>,
 }
 
-impl BfTreeProviderParameters {
-    /// Validate that the bf-tree configurations are compatible with the configured
-    /// dimensions and degree.
-    ///
-    /// Each bf-tree record must fit within `cb_max_record_size`. This check catches
-    /// misconfiguration early (at provider construction) rather than silently dropping
-    /// inserts at runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `vector_provider_config` or `neighbor_list_provider_config`
-    /// has a `cb_max_record_size` too small for the configured dimensions.
-    pub fn validate<T: VectorRepr>(&self) -> ANNResult<()> {
-        Self::check_record_size(
-            "vector_provider_config",
-            &self.vector_provider_config,
-            std::mem::size_of::<usize>(),
-            self.dim * std::mem::size_of::<T>(),
-        )?;
-
-        // Neighbor key is sizeof(u32), value is (max_degree + 1) * sizeof(u32)
-        let neighbor_key_size = std::mem::size_of::<u32>();
-        let neighbor_value_size = (self.max_degree as usize + 1) * std::mem::size_of::<u32>();
-        Self::check_record_size(
-            "neighbor_list_provider_config",
-            &self.neighbor_list_provider_config,
-            neighbor_key_size,
-            neighbor_value_size,
-        )?;
-
-        Ok(())
-    }
-
-    fn check_record_size(
-        config_name: &str,
-        config: &Config,
-        key_size: usize,
-        value_size: usize,
-    ) -> ANNResult<()> {
-        let required = key_size + value_size;
-        let configured_max = config.get_cb_max_record_size();
-        if required > configured_max {
-            return Err(ANNError::log_index_error(format!(
-                "{config_name}: cb_max_record_size ({configured_max}) is too small; \
-                 a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
-                 increase cb_max_record_size to at least {required}"
-            )));
-        }
-        Ok(())
-    }
-}
-
 impl<T, Q> BfTreeProvider<T, Q>
 where
     T: VectorRepr,
@@ -309,8 +257,6 @@ where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
     {
-        params.validate::<T>()?;
-
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -545,17 +491,6 @@ impl CreateQuantProvider for NoStore {
 impl CreateQuantProvider for Poly<dyn Quantizer> {
     type Target = QuantVectorProvider;
     fn create(self, bf_tree_config: Config) -> ANNResult<Self::Target> {
-        let key_size = std::mem::size_of::<usize>();
-        let value_size = self.bytes();
-        let required = key_size + value_size;
-        let configured_max = bf_tree_config.get_cb_max_record_size();
-        if required > configured_max {
-            return Err(ANNError::log_index_error(format!(
-                "quant_vector_provider_config: cb_max_record_size ({configured_max}) is too small; \
-                 a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
-                 increase cb_max_record_size to at least {required}"
-            )));
-        }
         QuantVectorProvider::new_with_config(self, bf_tree_config)
     }
 }
@@ -2046,7 +1981,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::neighbors::NeighborProvider;
     use crate::quant::create_test_quantizer;
+    use crate::vectors::VectorProvider;
     use diskann::{
         graph::DiskANNIndex,
         graph::{self, search::Knn},
@@ -3040,21 +2977,16 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_undersized_vector_config() {
-        let params = BfTreeProviderParameters {
-            max_points: 100,
-            num_start_points: NonZeroUsize::new(1).unwrap(),
-            dim: 1536, // 1536 * 4 = 6144 bytes + 8-byte key = 6152 bytes needed
-            metric: Metric::L2,
-            max_degree: 8,
-            vector_provider_config: Config::default(), // cb_max_record_size = 1952
-            quant_vector_provider_config: Config::default(),
-            neighbor_list_provider_config: Config::default(),
-            graph_params: None,
-        };
-        let result = params.validate::<f32>();
-        let err = result.unwrap_err().to_string();
+        // 1536 * 4 = 6144 bytes + 8-byte key = 6152 bytes needed
+        let result = VectorProvider::<f32>::new_with_config(
+            100,
+            1536,
+            1,
+            Config::default(), // cb_max_record_size = 1952
+        );
+        let err = result.err().expect("should fail").to_string();
         assert!(
-            err.contains("vector_provider_config"),
+            err.contains("vector_provider"),
             "should name the failing config; got: {err}"
         );
         assert!(
@@ -3066,47 +2998,26 @@ mod tests {
     #[test]
     fn test_validate_rejects_undersized_neighbor_config() {
         // max_degree=500 → value = (500+1)*4 = 2004 bytes + 4-byte key = 2008 bytes
-        let mut neighbor_config = Config::default(); // cb_max_record_size = 1952
-                                                     // Vector config is fine (dim=4, so 4*4+8=24 bytes)
-        let mut vector_config = Config::default();
-        vector_config.cb_max_record_size(4096);
+        let mut neighbor_config = Config::default();
         neighbor_config.cb_max_record_size(1952);
 
-        let params = BfTreeProviderParameters {
-            max_points: 100,
-            num_start_points: NonZeroUsize::new(1).unwrap(),
-            dim: 4,
-            metric: Metric::L2,
-            max_degree: 500,
-            vector_provider_config: vector_config,
-            quant_vector_provider_config: Config::default(),
-            neighbor_list_provider_config: neighbor_config,
-            graph_params: None,
-        };
-        let result = params.validate::<f32>();
-        let err = result.unwrap_err().to_string();
+        let result = NeighborProvider::<u32>::new_with_config(500, neighbor_config);
+        let err = result.err().expect("should fail").to_string();
         assert!(
-            err.contains("neighbor_list_provider_config"),
+            err.contains("neighbor_provider"),
             "should name the failing config; got: {err}"
         );
     }
 
     #[test]
     fn test_validate_accepts_valid_config() {
-        let mut config = Config::default();
-        config.cb_max_record_size(8192);
-
-        let params = BfTreeProviderParameters {
-            max_points: 100,
-            num_start_points: NonZeroUsize::new(1).unwrap(),
-            dim: 128,
-            metric: Metric::L2,
-            max_degree: 64,
-            vector_provider_config: config.clone(),
-            quant_vector_provider_config: config.clone(),
-            neighbor_list_provider_config: config,
-            graph_params: None,
-        };
-        params.validate::<f32>().unwrap();
+        // dim=128, f32 → key=8 + value=512 = 520 bytes, fits default 1952
+        if let Err(e) = VectorProvider::<f32>::new_with_config(100, 128, 1, Config::default()) {
+            panic!("VectorProvider should succeed: {e}");
+        }
+        // max_degree=64 → key=4 + value=(64+1)*4 = 264 bytes, fits default 1952
+        if let Err(e) = NeighborProvider::<u32>::new_with_config(64, Config::default()) {
+            panic!("NeighborProvider should succeed: {e}");
+        }
     }
 }

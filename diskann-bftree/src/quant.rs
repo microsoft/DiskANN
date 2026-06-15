@@ -38,6 +38,13 @@ pub struct QuantVectorProvider {
 
 impl QuantVectorProvider {
     pub fn new_with_config(quantizer: Poly<dyn Quantizer>, config: Config) -> ANNResult<Self> {
+        crate::validate_record_size(
+            "quant_vector_provider",
+            &config,
+            std::mem::size_of::<usize>(),
+            quantizer.bytes(),
+        )?;
+
         let quant_vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {

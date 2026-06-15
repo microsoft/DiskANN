@@ -33,6 +33,13 @@ impl<T: VectorRepr> VectorProvider<T> {
         num_start_points: usize,
         config: Config,
     ) -> ANNResult<Self> {
+        crate::validate_record_size(
+            "vector_provider",
+            &config,
+            std::mem::size_of::<usize>(),
+            dim * std::mem::size_of::<T>(),
+        )?;
+
         let vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
         Ok(Self {
