@@ -275,7 +275,7 @@ where
     I: VectorId,
 {
     fn eval(&self, item: &I) -> bool {
-        self.inner.eval(item) && self.labels.is_match(*item)
+        self.labels.is_match(*item) && self.inner.eval(item)
     }
 }
 
@@ -285,7 +285,7 @@ where
     I: VectorId,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        self.inner.eval_mut(item) && self.labels.is_match(*item)
+        self.labels.is_match(*item) && self.inner.eval_mut(item)
     }
 }
 
