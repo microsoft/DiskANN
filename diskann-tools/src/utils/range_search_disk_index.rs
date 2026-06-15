@@ -74,7 +74,7 @@ where
         );
     }
 
-    let index_reader = DiskIndexReader::<<Data as GraphDataType>::VectorDataType>::new(
+    let index_reader = DiskIndexReader::new(
         format!("{}_pq_pivots.bin", index_path_prefix),
         format!("{}_pq_compressed.bin", index_path_prefix),
         &storage_provider,

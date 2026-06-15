@@ -3,8 +3,13 @@
  * Licensed under the MIT license.
  */
 
-mod backend;
+mod disk_index;
+mod exhaustive;
+mod filters;
+mod flat;
+mod index;
 mod inputs;
+mod multi_vector;
 mod utils;
 
 use diskann_benchmark_runner as runner;
@@ -44,7 +49,12 @@ impl Cli {
 
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
-        backend::register_benchmarks(&mut registry)?;
+        exhaustive::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
+        flat::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
+        filters::register_benchmarks(&mut registry)?;
+        multi_vector::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
