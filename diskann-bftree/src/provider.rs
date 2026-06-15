@@ -235,6 +235,71 @@ pub struct BfTreeProviderParameters {
     pub graph_params: Option<GraphParams>,
 }
 
+impl BfTreeProviderParameters {
+    /// Validate that the bf-tree configurations are compatible with the configured
+    /// dimensions and degree.
+    ///
+    /// Each bf-tree record must fit within `cb_max_record_size`. This check catches
+    /// misconfiguration early (at provider construction) rather than silently dropping
+    /// inserts at runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `vector_provider_config` or `neighbor_list_provider_config`
+    /// has a `cb_max_record_size` too small for the configured dimensions.
+    pub fn validate<T: VectorRepr>(&self) -> ANNResult<()> {
+        Self::check_record_size(
+            "vector_provider_config",
+            &self.vector_provider_config,
+            std::mem::size_of::<usize>(),
+            self.dim * std::mem::size_of::<T>(),
+        )?;
+
+        // Neighbor key is sizeof(u32), value is (max_degree + 1) * sizeof(u32)
+        let neighbor_key_size = std::mem::size_of::<u32>();
+        let neighbor_value_size = (self.max_degree as usize + 1) * std::mem::size_of::<u32>();
+        Self::check_record_size(
+            "neighbor_list_provider_config",
+            &self.neighbor_list_provider_config,
+            neighbor_key_size,
+            neighbor_value_size,
+        )?;
+
+        Ok(())
+    }
+
+    /// Validate the quant vector provider config against a known quantized dimension.
+    ///
+    /// This must be called after the quantizer is constructed, since the compressed
+    /// vector size is only known at that point.
+    pub fn validate_quant(&self, quant_bytes: usize) -> ANNResult<()> {
+        Self::check_record_size(
+            "quant_vector_provider_config",
+            &self.quant_vector_provider_config,
+            std::mem::size_of::<usize>(),
+            quant_bytes,
+        )
+    }
+
+    fn check_record_size(
+        config_name: &str,
+        config: &Config,
+        key_size: usize,
+        value_size: usize,
+    ) -> ANNResult<()> {
+        let required = key_size + value_size;
+        let configured_max = config.get_cb_max_record_size();
+        if required > configured_max {
+            return Err(ANNError::log_index_error(format!(
+                "{config_name}: cb_max_record_size ({configured_max}) is too small; \
+                 a record requires {required} bytes ({key_size}-byte key + {value_size}-byte value); \
+                 increase cb_max_record_size to at least {required}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl<T, Q> BfTreeProvider<T, Q>
 where
     T: VectorRepr,
@@ -257,6 +322,8 @@ where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
     {
+        params.validate::<T>()?;
+
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -2971,5 +3038,77 @@ mod tests {
             loaded.status_by_internal_id(ctx, 0).await.unwrap(),
             ElementStatus::Valid
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_vector_config() {
+        let params = BfTreeProviderParameters {
+            max_points: 100,
+            num_start_points: NonZeroUsize::new(1).unwrap(),
+            dim: 1536, // 1536 * 4 = 6144 bytes + 8-byte key = 6152 bytes needed
+            metric: Metric::L2,
+            max_degree: 8,
+            vector_provider_config: Config::default(), // cb_max_record_size = 1952
+            quant_vector_provider_config: Config::default(),
+            neighbor_list_provider_config: Config::default(),
+            graph_params: None,
+        };
+        let result = params.validate::<f32>();
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("vector_provider_config"),
+            "should name the failing config; got: {err}"
+        );
+        assert!(
+            err.contains("6152"),
+            "should state the required size; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_undersized_neighbor_config() {
+        // max_degree=500 → value = (500+1)*4 = 2004 bytes + 4-byte key = 2008 bytes
+        let mut neighbor_config = Config::default(); // cb_max_record_size = 1952
+                                                     // Vector config is fine (dim=4, so 4*4+8=24 bytes)
+        let mut vector_config = Config::default();
+        vector_config.cb_max_record_size(4096);
+        neighbor_config.cb_max_record_size(1952);
+
+        let params = BfTreeProviderParameters {
+            max_points: 100,
+            num_start_points: NonZeroUsize::new(1).unwrap(),
+            dim: 4,
+            metric: Metric::L2,
+            max_degree: 500,
+            vector_provider_config: vector_config,
+            quant_vector_provider_config: Config::default(),
+            neighbor_list_provider_config: neighbor_config,
+            graph_params: None,
+        };
+        let result = params.validate::<f32>();
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("neighbor_list_provider_config"),
+            "should name the failing config; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_config() {
+        let mut config = Config::default();
+        config.cb_max_record_size(8192);
+
+        let params = BfTreeProviderParameters {
+            max_points: 100,
+            num_start_points: NonZeroUsize::new(1).unwrap(),
+            dim: 128,
+            metric: Metric::L2,
+            max_degree: 64,
+            vector_provider_config: config.clone(),
+            quant_vector_provider_config: config.clone(),
+            neighbor_list_provider_config: config,
+            graph_params: None,
+        };
+        params.validate::<f32>().unwrap();
     }
 }
