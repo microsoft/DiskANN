@@ -3,8 +3,12 @@
  * Licensed under the MIT license.
  */
 
-mod backend;
+mod disk_index;
+mod exhaustive;
+mod filters;
+mod index;
 mod inputs;
+mod multi_vector;
 mod utils;
 
 #[global_allocator]
@@ -47,7 +51,11 @@ impl Cli {
 
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
-        backend::register_benchmarks(&mut registry)?;
+        exhaustive::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
+        filters::register_benchmarks(&mut registry)?;
+        multi_vector::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
