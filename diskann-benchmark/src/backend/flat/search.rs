@@ -198,15 +198,13 @@ where
 /// a full sequential scan over all vectors.
 struct FlatScanStrategy<T: VectorRepr> {
     metric: Metric,
-    num_vectors: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
 impl<T: VectorRepr> FlatScanStrategy<T> {
-    fn new(metric: Metric, num_vectors: usize) -> Self {
+    fn new(metric: Metric) -> Self {
         Self {
             metric,
-            num_vectors,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -215,7 +213,6 @@ impl<T: VectorRepr> FlatScanStrategy<T> {
 /// The visitor that iterates over all vectors in the provider.
 struct FlatVisitor<'a, T> {
     data: &'a Matrix<T>,
-    num_vectors: usize,
 }
 
 impl<T: VectorRepr> HasId for FlatVisitor<'_, T> {
@@ -236,8 +233,7 @@ impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for FlatVisitor<'_, T> 
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
-            for i in 0..self.num_vectors {
-                let vector = self.data.row(i);
+            for (i, vector) in self.data.row_iter().enumerate() {
                 let dist = computer.evaluate_similarity(vector);
                 f(i as u32, dist);
             }
@@ -265,7 +261,6 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for FlatScanStrategy<
     ) -> Result<Self::Visitor<'a>, Self::Error> {
         Ok(FlatVisitor {
             data: &provider.data,
-            num_vectors: self.num_vectors,
         })
     }
 
@@ -326,7 +321,7 @@ where
     where
         O: SearchOutputBuffer<u32> + Send,
     {
-        let strategy = FlatScanStrategy::<T>::new(self.metric, self.index.provider().data.nrows());
+        let strategy = FlatScanStrategy::<T>::new(self.metric);
         let context = DefaultContext;
         let query = self.queries.row(index);
 
