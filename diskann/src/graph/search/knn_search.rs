@@ -26,12 +26,8 @@ use crate::{
 /// Error type for [`Knn`] parameter validation.
 #[derive(Debug, Error)]
 pub enum KnnSearchError {
-    #[error("l_value ({l_value}) cannot be less than k_value ({k_value})")]
-    LLessThanK { l_value: usize, k_value: usize },
     #[error("beam width cannot be zero")]
     BeamWidthZero,
-    #[error("k_value cannot be zero")]
-    KZero,
     #[error("l_value cannot be zero")]
     LZero,
 }
@@ -60,7 +56,6 @@ impl From<KnnSearchError> for ANNError {
 ///
 /// # Parameters
 ///
-/// - `k_value`: Number of nearest neighbors to return
 /// - `l_value`: Search list size (larger values improve recall at cost of latency)
 /// - `beam_width`: Optional parallel exploration width
 ///
@@ -69,13 +64,11 @@ impl From<KnnSearchError> for ANNError {
 /// ```ignore
 /// use diskann::graph::{search::Knn, Search};
 ///
-/// let params = Knn::new(10, 100, None)?;
+/// let params = Knn::new(100, None)?;
 /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Knn {
-    /// Number of results to return (k in k-NN).
-    k_value: NonZeroUsize,
     /// Search list size - controls accuracy vs speed tradeoff.
     l_value: NonZeroUsize,
     /// Beam width for parallel graph exploration (defaults to 1).
@@ -89,21 +82,10 @@ impl Knn {
     ///
     /// # Errors
     ///
-    /// Returns an error if `k_value` is zero, `l_value` is zero,
-    /// `l_value < k_value`, or if `beam_width` is `Some(0)`.
-    pub fn new(
-        k_value: usize,
-        l_value: usize,
-        beam_width: Option<usize>,
-    ) -> Result<Self, KnnSearchError> {
-        let k_value = NonZeroUsize::new(k_value).ok_or(KnnSearchError::KZero)?;
+    /// Returns an error if `l_value` is zero,
+    /// or if `beam_width` is `Some(0)`.
+    pub fn new(l_value: usize, beam_width: Option<usize>) -> Result<Self, KnnSearchError> {
         let l_value = NonZeroUsize::new(l_value).ok_or(KnnSearchError::LZero)?;
-        if k_value > l_value {
-            return Err(KnnSearchError::LLessThanK {
-                l_value: l_value.get(),
-                k_value: k_value.get(),
-            });
-        }
 
         const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
         let beam_width = match beam_width {
@@ -112,21 +94,14 @@ impl Knn {
         };
 
         Ok(Self {
-            k_value,
             l_value,
             beam_width,
         })
     }
 
     /// Create parameters with default beam width.
-    pub fn new_default(k_value: usize, l_value: usize) -> Result<Self, KnnSearchError> {
-        Self::new(k_value, l_value, None)
-    }
-
-    /// Returns the number of results to return (k in k-NN).
-    #[inline]
-    pub fn k_value(&self) -> NonZeroUsize {
-        self.k_value
+    pub fn new_default(l_value: usize) -> Result<Self, KnnSearchError> {
+        Self::new(l_value, None)
     }
 
     /// Returns the search list size.
@@ -299,25 +274,15 @@ mod tests {
     #[test]
     fn test_knn_search_validation() {
         // Valid
-        assert!(Knn::new(10, 100, None).is_ok());
-        assert!(Knn::new(10, 100, Some(4)).is_ok());
-        assert!(Knn::new(10, 10, None).is_ok()); // k == l is valid
-
-        // Invalid: k = 0
-        assert!(matches!(Knn::new(0, 100, None), Err(KnnSearchError::KZero)));
+        assert!(Knn::new(100, None).is_ok());
+        assert!(Knn::new(100, Some(4)).is_ok());
 
         // Invalid: l = 0
-        assert!(matches!(Knn::new(10, 0, None), Err(KnnSearchError::LZero)));
-
-        // Invalid: l < k
-        assert!(matches!(
-            Knn::new(100, 10, None),
-            Err(KnnSearchError::LLessThanK { .. })
-        ));
+        assert!(matches!(Knn::new(0, None), Err(KnnSearchError::LZero)));
 
         // Invalid: zero beam_width
         assert!(matches!(
-            Knn::new(10, 100, Some(0)),
+            Knn::new(100, Some(0)),
             Err(KnnSearchError::BeamWidthZero)
         ));
     }
