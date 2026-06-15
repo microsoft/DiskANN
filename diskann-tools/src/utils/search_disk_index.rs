@@ -259,6 +259,7 @@ where
                     l,
                     Some(parameters.beam_width as usize),
                     Some(vector_filter_function),
+                    None,
                     parameters.is_flat_search,
                 );
 

@@ -6,6 +6,7 @@
 use diskann_benchmark_runner::Registry;
 
 mod build;
+pub(crate) mod post_processor;
 mod search;
 mod streaming;
 

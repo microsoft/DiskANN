@@ -91,7 +91,7 @@ mod imp {
         },
         inputs::{
             exhaustive,
-            graph_index::{SearchPhase, SphericalQuantBuild},
+            graph_index::{SearchPhase, SearchPhaseKind, SphericalQuantBuild},
         },
         utils::{
             self, datafiles,
@@ -366,11 +366,11 @@ mod imp {
         for search::plugins::Topk
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::Topk::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::Topk.as_str()
         }
 
         fn run(
@@ -409,11 +409,11 @@ mod imp {
         for search::plugins::Range
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::Range::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::Range.as_str()
         }
 
         fn run(
@@ -451,11 +451,11 @@ mod imp {
         for search::plugins::TopkBetaFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::TopkBetaFilter::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::TopkBetaFilter.as_str()
         }
 
         fn run(
@@ -505,11 +505,11 @@ mod imp {
         for search::plugins::TopkMultihopFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::TopkMultihopFilter::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            SearchPhaseKind::TopkMultihopFilter.as_str()
         }
 
         fn run(
@@ -555,11 +555,11 @@ mod imp {
         for search::plugins::TopkInlineFilter
     {
         fn is_match(&self, phase: &SearchPhase) -> bool {
-            Self::kind() == phase.kind()
+            search::plugins::TopkInlineFilter::is_match(phase)
         }
 
         fn kind(&self) -> &'static str {
-            Self::kind().as_str()
+            search::plugins::TopkInlineFilter::as_str()
         }
 
         fn run(

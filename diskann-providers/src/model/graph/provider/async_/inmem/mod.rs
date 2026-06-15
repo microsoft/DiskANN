@@ -19,10 +19,10 @@ pub use product::DefaultQuant;
 pub mod spherical;
 
 mod full_precision;
+pub(super) use full_precision::Rerank;
 pub use full_precision::{
-    CreateFullPrecision, FullAccessor, FullPrecisionProvider, FullPrecisionStore,
+    CreateFullPrecision, FullAccessor, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
 };
-pub(super) use full_precision::{GetFullPrecision, Rerank};
 
 #[cfg(test)]
 pub mod product;
