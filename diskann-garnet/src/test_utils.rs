@@ -39,12 +39,19 @@ impl Store {
         STORE.with(|s| s.get(&k).map(|v| v.to_owned()))
     }
 
-    pub fn delete(&self, context: u64, key: &[u8]) {
+    pub fn delete(&self, context: u64, key: &[u8]) -> bool {
         let context = context & TERM_BITMASK;
         let mut k = Vec::new();
         k.extend_from_slice(bytemuck::bytes_of(&context));
         k.extend_from_slice(key);
-        STORE.with(|s| s.remove(&k));
+        STORE.with(|s| {
+            if s.contains_key(&k) {
+                s.remove(&k);
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -97,8 +104,7 @@ unsafe extern "C" fn test_delete(ctx: u64, id_bytes: *const u8, id_len: usize) -
     let id = unsafe { slice::from_raw_parts(id_bytes, id_len) };
 
     let store = Store;
-    store.delete(ctx, id);
-    true
+    store.delete(ctx, id)
 }
 
 unsafe extern "C" fn test_rmw(
@@ -131,6 +137,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
+        VectorQuantType,
         garnet::{Context, Term},
         test_utils::Store,
     };
@@ -140,42 +147,42 @@ mod tests {
         let store = Store;
         store.clear();
         let callbacks = store.callbacks();
-        let ctx = Context(0);
+        let ctx = Context::new(0);
 
         // Reading a non-existant key should fail.
-        assert!(!callbacks.exists_iid(ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0));
 
         // Round tripping a write should work.
-        assert!(callbacks.write_iid(ctx, 0, b"test"));
+        assert!(callbacks.write_iid(&ctx, 0, b"test"));
         let mut val = vec![0u8; 4];
-        assert!(callbacks.read_single_iid(ctx, 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx, 0, &mut val));
         assert_eq!(val, b"test");
 
         // Overwriting a key should work.
-        assert!(callbacks.write_iid(ctx, 0, b"again"));
+        assert!(callbacks.write_iid(&ctx, 0, b"again"));
         let mut val = vec![0u8; 5];
-        assert!(callbacks.read_single_iid(ctx, 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx, 0, &mut val));
         assert_eq!(val, b"again");
 
         // Exists and delete should work.
-        assert!(callbacks.exists_iid(ctx, 0));
-        assert!(callbacks.delete_iid(ctx, 0));
-        assert!(!callbacks.exists_iid(ctx, 0));
+        assert!(callbacks.exists_iid(&ctx, 0));
+        assert!(callbacks.delete_iid(&ctx, 0));
+        assert!(!callbacks.exists_iid(&ctx, 0));
 
         // Different contexts should stay separate.
-        assert!(callbacks.write_iid(ctx.term(Term::Vector), 0, b"0000"));
-        assert!(callbacks.write_iid(ctx.term(Term::Neighbors), 0, b"nnnn"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Vector), 0, b"0000"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Neighbors), 0, b"nnnn"));
         let mut val = vec![0u8; 4];
-        assert!(callbacks.read_single_iid(ctx.term(Term::Vector), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
         assert_eq!(val, b"0000");
-        assert!(callbacks.read_single_iid(ctx.term(Term::Neighbors), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Neighbors), 0, &mut val));
         assert_eq!(val, b"nnnn");
 
         // Multi-read should work.
-        assert!(callbacks.write_iid(ctx.term(Term::Vector), 1, b"2222"));
+        assert!(callbacks.write_iid(&ctx.term(Term::Vector), 1, b"2222"));
         let ids = [4u32, 0, 4, 1, 4, 2];
         let mut results = HashMap::new();
-        callbacks.read_multi_lpiid(ctx.term(Term::Vector), &ids, |i, v| {
+        callbacks.read_multi_lpiid(&ctx.term(Term::Vector), &ids, |i, v| {
             results.insert(i, v.to_owned());
         });
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());
@@ -183,10 +190,10 @@ mod tests {
         assert_eq!(results.get(&2), None);
 
         // RMW should work.
-        assert!(callbacks.rmw_iid(ctx.term(Term::Vector), 0, 4, |data| {
+        assert!(callbacks.rmw_iid(&ctx.term(Term::Vector), 0, 4, |data| {
             data.copy_from_slice(b"0rmw");
         }));
-        assert!(callbacks.read_single_iid(ctx.term(Term::Vector), 0, &mut val));
+        assert!(callbacks.read_single_iid(&ctx.term(Term::Vector), 0, &mut val));
         assert_eq!(val, b"0rmw");
     }
 
@@ -198,12 +205,19 @@ mod tests {
         let store: Store = Store;
         store.clear();
         let callbacks = store.callbacks();
-        let ctx: Context = Context(0);
+        let ctx: Context = Context::new(0);
 
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<u8>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<u8>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            &ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());
@@ -215,7 +229,14 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<f32>::new(dim, Metric::L2, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<f32>::new(
+            dim,
+            VectorQuantType::NoQuant,
+            Metric::L2,
+            max_degree,
+            callbacks,
+            &ctx,
+        );
 
         // Provider should be created successfully
         assert!(provider.is_ok());

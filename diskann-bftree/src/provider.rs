@@ -20,31 +20,32 @@ use serde::{Deserialize, Serialize};
 use bf_tree::{BfTree, Config};
 use diskann::{
     default_post_processor,
-    error::{Infallible, RankedError},
+    error::{ErrorExt, Infallible, RankedError},
     graph::{
         glue::{
-            self, Batch, CopyIds, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy,
-            InsertStrategy, MultiInsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
+            self, Batch, CopyIds, DefaultPostProcessor, InplaceDeleteStrategy, InsertStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchStrategy,
         },
         strategy::{FullPrecision, Quantized},
-        workingset::{map, Map},
+        workingset::map,
         AdjacencyList, SearchOutputBuffer,
     },
     neighbor::Neighbor,
-    provider::{
-        Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
-        DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor, NeighborAccessorMut,
-        NoopGuard, SetElement,
-    },
+    provider::{DataProvider, DefaultContext, Delete, ElementStatus, HasId, NoopGuard, SetElement},
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
-use diskann_utils::{future::AsyncFriendly, views::MatrixView};
-use diskann_vector::{distance::Metric, DistanceFunction};
+use diskann_utils::{
+    future::{AsyncFriendly, SendFuture},
+    views::MatrixView,
+};
+use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 
 use super::{
-    neighbors::NeighborProvider, quant::QuantVectorProvider, vectors::VectorProvider, AccessError,
-    NoStore,
+    neighbors::{NeighborAccessor, NeighborProvider},
+    quant::QuantVectorProvider,
+    vectors::VectorProvider,
+    AccessError, NoStore,
 };
 use diskann_providers::model::graph::provider::async_::distances::UnwrapErr;
 use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, StorageWriteProvider};
@@ -215,13 +216,19 @@ pub struct BfTreeProviderParameters {
     // The maximum number of neighbors to store for each vector
     pub max_degree: u32,
 
-    // bf-tree config for vector provider
+    // bf-tree config for vector provider.
+    // bf-tree requires a minimum circular buffer size relative to leaf_page_size:
+    //   - Cache-only mode: cb_size_byte >= 4 * leaf_page_size
+    //   - Non cache-only mode: cb_size_byte >= 2 * leaf_page_size
+    // The default leaf_page_size is 4096 and default cb_size_byte is 32MB.
     pub vector_provider_config: Config,
 
-    // bf-tree config for quant vector provider
+    // bf-tree config for quant vector provider.
+    // Same minimum circular buffer constraint as above.
     pub quant_vector_provider_config: Config,
 
-    // bf-tree config for neighbor list provider
+    // bf-tree config for neighbor list provider.
+    // Same minimum circular buffer constraint as above.
     pub neighbor_list_provider_config: Config,
 
     // Optional graph configuration parameters for persistence
@@ -307,9 +314,10 @@ where
             // an uninitialized neighbor list in functions `consolidate_deletes` and
             // `consolidate_simple` and getting an error. This is a stop-gap solution
             // until BF-tree API is improved to handle `exists` queries.
+            let mut scratch = provider.neighbor_provider.scratch();
             for i in 0..params.max_points {
                 let vector_id = i as u32;
-                provider.neighbor_provider.set_neighbors(vector_id, &[])?;
+                scratch.write_neighbors(vector_id, &[])?;
             }
         }
         Ok(provider)
@@ -327,7 +335,7 @@ where
 
     /// Return a vector of starting points.
     pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
-        Ok(self.full_vectors.starting_points()?)
+        self.full_vectors.starting_points()
     }
 
     /// An iterator over all ids including start points (even if they are deleted).
@@ -385,17 +393,25 @@ where
     }
 }
 
+/// Hard-delete implementation for `BfTreeProvider`.
+///
+/// This provider performs **hard deletes**: vector data is immediately and irrecoverably erased
+/// from the underlying bf-tree storage when [`Delete::delete`] is called. This has an important
+/// consequence for inplace delete: the [`InplaceDeleteMethod::VisitedAndTopK`] strategy is
+/// **incompatible** with this provider because it requires reading the deleted vector's data
+/// (via [`InplaceDeleteStrategy::get_delete_element`]) *after* the delete has already been
+/// committed. Use [`InplaceDeleteMethod::OneHop`] or [`InplaceDeleteMethod::TwoHopAndOneHop`]
+/// instead, as these strategies only require neighbor topology (which remains accessible).
 impl<T, Q> Delete for BfTreeProvider<T, Q>
 where
     T: VectorRepr,
-    Q: AsyncFriendly + QuantDelete,
+    Q: AsyncFriendly,
 {
     fn release(
         &self,
         _context: &Self::Context,
         _id: Self::InternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        // no-op: hard delete removes the data
         std::future::ready(Ok(()))
     }
 
@@ -405,12 +421,7 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
-
-        if let Err(e) = self.neighbor_provider.set_neighbors(id, &[]) {
-            return std::future::ready(Err(e));
-        }
         self.full_vectors.delete_vector(id as usize);
-        self.quant_vectors.delete_vector(id as usize);
 
         std::future::ready(Ok(()))
     }
@@ -484,22 +495,6 @@ impl CreateQuantProvider for Poly<dyn Quantizer> {
     }
 }
 
-pub(crate) trait QuantDelete {
-    fn delete_vector(&self, id: usize);
-}
-
-impl QuantDelete for NoStore {
-    fn delete_vector(&self, _id: usize) {
-        //no-op
-    }
-}
-
-impl QuantDelete for QuantVectorProvider {
-    fn delete_vector(&self, id: usize) {
-        self.delete_vector(id);
-    }
-}
-
 impl<T, Q> BfTreeProvider<T, Q>
 where
     T: VectorRepr,
@@ -563,49 +558,6 @@ where
     Q: AsyncFriendly,
 {
     type Id = u32;
-}
-
-impl<'a, T, Q> DelegateNeighbor<'a> for BfTreeProvider<T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type Delegate = &'a NeighborProvider<u32>;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.neighbors()
-    }
-}
-
-impl NeighborAccessor for &NeighborProvider<u32> {
-    fn get_neighbors(
-        self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.get_neighbors(id, neighbors).map(|_| self))
-    }
-}
-
-impl NeighborAccessorMut for &NeighborProvider<u32> {
-    fn set_neighbors(
-        self,
-        vector_id: u32,
-        neighbors: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(self.set_neighbors(vector_id, neighbors).map(|_| self))
-    }
-
-    fn append_vector(
-        self,
-        vector_id: u32,
-        new_neighbor_ids: &[u32],
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
-        std::future::ready(
-            self.append_vector(vector_id, new_neighbor_ids)
-                .map(|_| self),
-        )
-    }
 }
 
 ////////////////
@@ -722,13 +674,13 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
-            // Set the quantized vector
             self.quant_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -753,11 +705,12 @@ where
             )));
         }
 
+        let mut scratch = self.neighbor_provider.scratch();
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
             // Initialize empty neighbor list
-            self.neighbor_provider.set_neighbors(id, &[])?;
+            scratch.write_neighbors(id, &[])?;
         }
 
         Ok(())
@@ -782,8 +735,33 @@ where
 {
     /// The host provider.
     provider: &'a BfTreeProvider<T, Q>,
+    /// The fused query-distance computer.
+    computer: T::QueryDistance,
     /// A buffer to store retrieved elements.
     element: Box<[T]>,
+}
+
+impl<'a, T, Q> FullAccessor<'a, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    pub(crate) fn new(provider: &'a BfTreeProvider<T, Q>, query: &[T]) -> Self {
+        Self {
+            provider,
+            computer: T::query_distance(query, provider.metric),
+            element: (0..provider.full_vectors.dim())
+                .map(|_| T::default())
+                .collect(),
+        }
+    }
+
+    fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        self.provider
+            .full_vectors
+            .get_vector_into(id.into_usize(), &mut self.element)
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+    }
 }
 
 impl<T, Q> HasId for FullAccessor<'_, T, Q>
@@ -794,7 +772,7 @@ where
     type Id = u32;
 }
 
-impl<T, Q> SearchExt for FullAccessor<'_, T, Q>
+impl<T, Q> glue::SearchAccessor for FullAccessor<'_, T, Q>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -802,144 +780,46 @@ where
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
     }
-}
 
-impl<'a, T, Q> FullAccessor<'a, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    pub(crate) fn new(provider: &'a BfTreeProvider<T, Q>) -> Self {
-        Self {
-            provider,
-            element: (0..provider.full_vectors.dim())
-                .map(|_| T::default())
-                .collect(),
-        }
-    }
-}
-
-impl<'a, T, Q> DelegateNeighbor<'a> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type Delegate = &'a NeighborProvider<u32>;
-
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T, Q> Accessor for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    /// This accessor returns a reference to a local copy of the vector.
-    type Element<'a>
-        = &'a [T]
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
-        Self: 'a;
-
-    /// The reference version of `Element` is the same as `Element`.
-    type ElementRef<'a> = &'a [T];
-
-    // Hard-deleted entries may be encountered via stale graph edges.
-    //
-    type GetError = AccessError;
-
-    /// Return the full-precision vector stored at index `i`.
-    ///
-    /// This function always completes synchronously
-    ///
-    #[inline(always)]
-    fn get_element(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        let v = self
-            .provider
-            .full_vectors
-            .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| &*self.element);
-
-        std::future::ready(v)
-    }
-
-    /// Perform a bulk operation, silently skipping entries that cannot be read
-    /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    fn on_elements_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(Self::ElementRef<'_>, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for i in itr {
-            match self
-                .provider
-                .full_vectors
-                .get_vector_into(i.into_usize(), &mut self.element)
-            {
-                Ok(()) => {
-                    f(&self.element, i);
-                }
-                Err(RankedError::Transient(_)) => {
-                    // Deleted or missing vector — expected during graph traversal, skip.
-                }
-                Err(e @ RankedError::Error(_)) => {
-                    return std::future::ready(Err(e));
+        for i in self.provider.starting_points()? {
+            f(
+                i,
+                self.get_distance(i)
+                    .escalate("starting point retrieval must succeed")?,
+            )
+        }
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut neighbors = AdjacencyList::new();
+        for n in ids {
+            self.provider.neighbors().get_neighbors(n, &mut neighbors)?;
+            for &id in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                if let Some(distance) = self
+                    .get_distance(id)
+                    .allow_transient("skipping deleted vectors")?
+                {
+                    on_neighbors(id, distance)
                 }
             }
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
-}
-
-impl<T, Q> BuildDistanceComputer for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type DistanceComputerError = Infallible;
-    type DistanceComputer = T::Distance;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(
-            self.provider.metric,
-            Some(self.provider.full_vectors.dim()),
-        ))
-    }
-}
-
-impl<T, Q> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
-    type QueryComputerError = Infallible;
-    type QueryComputer = T::QueryDistance;
-
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(from, self.provider.metric))
-    }
-}
-
-impl<T, Q> ExpandBeam<&[T]> for FullAccessor<'_, T, Q>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-{
 }
 
 ///////////////////
@@ -951,14 +831,42 @@ where
 /// This type implements the following traits:
 ///
 /// * [`Accessor`] for the `BfTreeProvider`.
-/// * [`BuildQueryComputer`].
 ///
 pub struct QuantAccessor<'a, T>
 where
     T: VectorRepr,
 {
     provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+    /// The fused query-distance computer.
+    computer: super::quant::QuantQueryComputer,
+    /// A buffer to store retrieved elements.
     element: Box<[u8]>,
+}
+
+impl<'a, T> QuantAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    pub(crate) fn new(
+        provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+        query: &[T],
+    ) -> ANNResult<Self> {
+        let computer = provider.quant_vectors.query_computer(query)?;
+        Ok(Self {
+            provider,
+            computer,
+            element: (0..provider.quant_vectors.quantizer.bytes())
+                .map(|_| u8::default())
+                .collect(),
+        })
+    }
+
+    fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
+        self.provider
+            .quant_vectors
+            .get_vector_into(id.into_usize(), &mut self.element)
+            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+    }
 }
 
 impl<T> HasId for QuantAccessor<'_, T>
@@ -968,145 +876,258 @@ where
     type Id = u32;
 }
 
-impl<T> SearchExt for QuantAccessor<'_, T>
+impl<T> glue::SearchAccessor for QuantAccessor<'_, T>
 where
     T: VectorRepr,
 {
     fn starting_points(&self) -> impl Future<Output = ANNResult<Vec<u32>>> {
         std::future::ready(self.provider.starting_points())
     }
-}
 
-impl<'a, T> QuantAccessor<'a, T>
-where
-    T: VectorRepr,
-{
-    pub(crate) fn new(provider: &'a BfTreeProvider<T, QuantVectorProvider>) -> Self {
-        Self {
-            provider,
-            element: (0..provider.quant_vectors.quantizer.bytes())
-                .map(|_| u8::default())
-                .collect(),
-        }
-    }
-}
-
-impl<'a, T> DelegateNeighbor<'a> for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    type Delegate = &'a NeighborProvider<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.provider.neighbors()
-    }
-}
-
-impl<T> Accessor for QuantAccessor<'_, T>
-where
-    T: VectorRepr,
-{
-    /// This accessor returns a reference to a local copy of the element.
-    type Element<'a>
-        = Opaque<'a>
+    async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
-        Self: 'a;
-
-    /// The reference version of `Element` is simply `Element`.
-    type ElementRef<'a> = Opaque<'a>;
-
-    // ANNError on access failures in bf-tree
-    //
-    type GetError = AccessError;
-
-    /// Return the quantized vector stored at index `i`.
-    ///
-    /// This function always completes synchronously.
-    ///
-    fn get_element(
-        &mut self,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send {
-        let v = self
-            .provider
-            .quant_vectors
-            .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| Opaque::new(&self.element));
-
-        std::future::ready(v)
-    }
-
-    /// Perform a bulk operation, silently skipping entries that cannot be read
-    /// (e.g., hard-deleted vectors whose graph edges have not yet been cleaned up).
-    ///
-    fn on_elements_unordered<Itr, F>(
-        &mut self,
-        itr: Itr,
-        mut f: F,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Self: Sync,
-        Itr: Iterator<Item = Self::Id> + Send,
-        F: Send + FnMut(Self::ElementRef<'_>, Self::Id),
+        F: FnMut(Self::Id, f32) + Send,
     {
-        for i in itr {
-            match self
-                .provider
-                .quant_vectors
-                .get_vector_into(i.into_usize(), &mut self.element)
-            {
-                Ok(()) => {
-                    f(Opaque::new(&self.element), i);
-                }
-                Err(RankedError::Transient(_)) => {
-                    // Deleted or missing vector — expected during graph traversal, skip.
-                }
-                Err(e @ RankedError::Error(_)) => {
-                    return std::future::ready(Err(e));
+        for i in self.provider.starting_points()? {
+            f(
+                i,
+                self.get_distance(i)
+                    .escalate("starting point retrieval must succeed")?,
+            )
+        }
+        Ok(())
+    }
+
+    async fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        mut pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send,
+    {
+        let mut neighbors = AdjacencyList::new();
+        for n in ids {
+            self.provider.neighbors().get_neighbors(n, &mut neighbors)?;
+            for &id in neighbors.iter().filter(|i| pred.eval_mut(i)) {
+                if let Some(distance) = self
+                    .get_distance(id)
+                    .allow_transient("skipping deleted vectors")?
+                {
+                    on_neighbors(id, distance)
                 }
             }
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
 
-impl<T> BuildQueryComputer<&[T]> for QuantAccessor<'_, T>
+///////////////////////
+// FullPruneAccessor //
+///////////////////////
+
+/// A [`glue::PruneAccessor`] for full-precision vectors in the `BfTreeProvider`.
+pub struct FullPruneAccessor<'a, T, Q>
 where
     T: VectorRepr,
+    Q: AsyncFriendly,
 {
-    type QueryComputerError = ANNError;
-    type QueryComputer = UnwrapErr<
-        spherical_iface::QueryComputer<GlobalAllocator>,
-        spherical_iface::QueryDistanceError,
-    >;
+    provider: &'a BfTreeProvider<T, Q>,
+    neighbors: NeighborAccessor<'a, u32>,
+    set: map::Map<u32, Box<[T]>, map::Ref<[T]>>,
+    distance: T::Distance,
+}
 
-    fn build_query_computer(
-        &self,
-        from: &[T],
-    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        self.provider
-            .quant_vectors
-            .query_computer(from)
-            .map(|qc| UnwrapErr::new(qc.into_inner()))
+impl<'a, T, Q> FullPruneAccessor<'a, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    fn new(
+        provider: &'a BfTreeProvider<T, Q>,
+        set: map::Map<u32, Box<[T]>, map::Ref<[T]>>,
+    ) -> Self {
+        Self {
+            provider,
+            neighbors: provider.neighbor_provider.scratch(),
+            set,
+            distance: T::distance(provider.metric, Some(provider.full_vectors.dim())),
+        }
     }
 }
 
-impl<T> ExpandBeam<&[T]> for QuantAccessor<'_, T> where T: VectorRepr {}
+impl<T, Q> HasId for FullPruneAccessor<'_, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type Id = u32;
+}
 
-impl<T> BuildDistanceComputer for QuantAccessor<'_, T>
+impl<'q, T, Q> glue::PruneAccessor for FullPruneAccessor<'q, T, Q>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+{
+    type ElementRef<'a> = &'a [T];
+
+    type View<'a>
+        = map::View<'a, u32, Box<[T]>, map::Ref<[T]>>
+    where
+        Self: 'a;
+
+    type Distance<'a>
+        = &'a T::Distance
+    where
+        Self: 'a;
+
+    type Neighbors<'a>
+        = diskann::provider::Neighbors<'a, NeighborAccessor<'q, u32>>
+    where
+        Self: 'a;
+
+    fn fill<Itr>(
+        &mut self,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        let mut buf: Option<Box<[T]>> = None;
+
+        let view = self.set.fill(itr, |i: u32| -> ANNResult<_> {
+            let mut b = match buf.take() {
+                Some(b) => b,
+                None => std::iter::repeat_n(T::default(), self.provider.dim()).collect(),
+            };
+
+            match self
+                .provider
+                .full_vectors
+                .get_vector_into(i.into_usize(), &mut b)
+                .allow_transient("transient errors allowed during fill")?
+            {
+                Some(()) => Ok(Some(b)),
+                None => {
+                    buf = Some(b);
+                    Ok(None)
+                }
+            }
+        });
+
+        let result = view.map(|v| (v, &self.distance));
+        std::future::ready(result)
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+        diskann::provider::Neighbors(&mut self.neighbors)
+    }
+}
+
+////////////////////////
+// QuantPruneAccessor //
+////////////////////////
+
+/// A [`glue::PruneAccessor`] for quantized vectors in the `BfTreeProvider`.
+pub struct QuantPruneAccessor<'a, T>
 where
     T: VectorRepr,
 {
-    type DistanceComputerError = ANNError;
-    type DistanceComputer =
-        UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
+    provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+    neighbors: NeighborAccessor<'a, u32>,
+    set: map::Map<u32, Owned>,
+    distance: UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>,
+}
 
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        self.provider
+impl<'a, T> QuantPruneAccessor<'a, T>
+where
+    T: VectorRepr,
+{
+    fn new(
+        provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+        capacity: usize,
+    ) -> ANNResult<Self> {
+        let distance = provider
             .quant_vectors
             .distance_computer()
-            .map(UnwrapErr::new)
+            .map(UnwrapErr::new)?;
+        let set = map::Builder::new(map::Capacity::Default).build(capacity);
+        Ok(Self {
+            provider,
+            neighbors: provider.neighbor_provider.scratch(),
+            set,
+            distance,
+        })
+    }
+}
+
+impl<T> HasId for QuantPruneAccessor<'_, T>
+where
+    T: VectorRepr,
+{
+    type Id = u32;
+}
+
+impl<'q, T> glue::PruneAccessor for QuantPruneAccessor<'q, T>
+where
+    T: VectorRepr,
+{
+    type ElementRef<'a> = Opaque<'a>;
+
+    type View<'a>
+        = map::View<'a, u32, Owned>
+    where
+        Self: 'a;
+
+    type Distance<'a>
+        = &'a UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>
+    where
+        Self: 'a;
+
+    type Neighbors<'a>
+        = diskann::provider::Neighbors<'a, NeighborAccessor<'q, u32>>
+    where
+        Self: 'a;
+
+    fn fill<Itr>(
+        &mut self,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+    {
+        let mut buf: Option<Box<[u8]>> = None;
+        let bytes = self.provider.quant_vectors.quantizer.bytes();
+
+        let view = self.set.fill(itr, |i: u32| -> ANNResult<_> {
+            let mut b = match buf.take() {
+                Some(b) => b,
+                None => std::iter::repeat_n(0, bytes).collect(),
+            };
+
+            match self
+                .provider
+                .quant_vectors
+                .get_vector_into(i.into_usize(), &mut b)
+                .allow_transient("transient errors allowed during fill")?
+            {
+                Some(()) => Ok(Some(Owned(b))),
+                None => {
+                    buf = Some(b);
+                    Ok(None)
+                }
+            }
+        });
+
+        let result = view.map(|v| (v, &self.distance));
+        std::future::ready(result)
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+        diskann::provider::Neighbors(&mut self.neighbors)
     }
 }
 
@@ -1117,18 +1138,12 @@ where
 /// [`workingset::View`] trait requires `get` to return something that implements
 /// `Reborrow<'short, Target = Opaque<'short>>`, so we need an owned type that bridges
 /// bf_tree's copy-out model with the working set's reborrow expectation.
-pub struct OwnedOpaque(Vec<u8>);
+pub struct Owned(Box<[u8]>);
 
-impl<'short> diskann_utils::Reborrow<'short> for OwnedOpaque {
+impl<'short> diskann_utils::Reborrow<'short> for Owned {
     type Target = Opaque<'short>;
     fn reborrow(&'short self) -> Self::Target {
         Opaque::new(&self.0)
-    }
-}
-
-impl<'a> From<Opaque<'a>> for OwnedOpaque {
-    fn from(value: Opaque<'a>) -> Self {
-        OwnedOpaque(value.to_vec())
     }
 }
 
@@ -1139,25 +1154,25 @@ impl<'a> From<Opaque<'a>> for OwnedOpaque {
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q> SearchStrategy<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> SearchStrategy<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q>;
+    type SearchAccessor = FullAccessor<'a, T, Q>;
     type SearchAccessorError = Infallible;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a BfTreeProvider<T, Q>,
         _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        Ok(FullAccessor::new(provider, query))
     }
 }
 
-impl<T, Q> DefaultPostProcessor<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> DefaultPostProcessor<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1171,25 +1186,21 @@ where
     T: VectorRepr,
     Q: AsyncFriendly,
 {
-    type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
-    type DistanceComputer<'a> = T::Distance;
-    type PruneAccessor<'a> = FullAccessor<'a, T, Q>;
+    type PruneAccessor<'a> = FullPruneAccessor<'a, T, Q>;
     type PruneAccessorError = diskann::error::Infallible;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a BfTreeProvider<T, Q>,
         _context: &'a DefaultContext,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        map::Builder::new(map::Capacity::Default).build(capacity)
+        let set = map::Builder::new(map::Capacity::Default).build(capacity);
+        Ok(FullPruneAccessor::new(provider, set))
     }
 }
 
-impl<T, Q> InsertStrategy<BfTreeProvider<T, Q>, &[T]> for FullPrecision
+impl<'a, T, Q> InsertStrategy<'a, BfTreeProvider<T, Q>, &'a [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1207,8 +1218,8 @@ where
     B: for<'a> Batch<Element<'a> = &'a [T]> + Debug,
 {
     type Seed = map::Builder<u32, map::Ref<[T]>>;
-    type WorkingSet = map::Map<u32, Box<[T]>, map::Ref<[T]>>;
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1229,10 +1240,27 @@ where
         let builder = map::Builder::new(map::Capacity::Default).with_overlay(overlay);
         std::future::ready(Ok(builder))
     }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a BfTreeProvider<T, Q>,
+        _context: &'a DefaultContext,
+        seed: &'a Self::Seed,
+        capacity: usize,
+    ) -> ANNResult<FullPruneAccessor<'a, T, Q>> {
+        let set = seed.clone().build(capacity);
+        Ok(FullPruneAccessor::new(provider, set))
+    }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using full-precision vectors.
 ///
+/// # Compatibility
+///
+/// This strategy is used with [`InplaceDeleteMethod::OneHop`] and
+/// [`InplaceDeleteMethod::TwoHopAndOneHop`]. It is **not compatible** with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] because `BfTreeProvider` performs hard deletes —
+/// the vector data is erased before `get_delete_element` is called, causing it to fail.
 impl<T, Q> InplaceDeleteStrategy<BfTreeProvider<T, Q>> for FullPrecision
 where
     T: VectorRepr,
@@ -1267,7 +1295,7 @@ where
         let elt = provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")?
+            .escalate("get_delete_element: failed to read vector for inplace delete")?
             .into();
         Ok(elt)
     }
@@ -1276,34 +1304,31 @@ where
 /// Perform a search entirely in the quantized space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T> SearchStrategy<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> SearchStrategy<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
-    type QueryComputer = UnwrapErr<
-        spherical_iface::QueryComputer<GlobalAllocator>,
-        spherical_iface::QueryDistanceError,
-    >;
-    type SearchAccessor<'a> = QuantAccessor<'a, T>;
+    type SearchAccessor = QuantAccessor<'a, T>;
     type SearchAccessorError = ANNError;
 
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a BfTreeProvider<T, QuantVectorProvider>,
         _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider))
+        query: &'a [T],
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        QuantAccessor::new(provider, query)
     }
 }
 
-impl<T> DefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> DefaultPostProcessor<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
-impl<T> InsertStrategy<BfTreeProvider<T, QuantVectorProvider>, &[T]> for Quantized
+impl<'a, T> InsertStrategy<'a, BfTreeProvider<T, QuantVectorProvider>, &'a [T]> for Quantized
 where
     T: VectorRepr,
 {
@@ -1317,15 +1342,11 @@ impl<T, B> MultiInsertStrategy<BfTreeProvider<T, QuantVectorProvider>, B> for Qu
 where
     T: VectorRepr,
     B: glue::Batch,
-    Self: for<'a> InsertStrategy<
-        BfTreeProvider<T, QuantVectorProvider>,
-        B::Element<'a>,
-        PruneStrategy = Self,
-    >,
+    B: for<'a> Batch<Element<'a> = &'a [T]> + Debug,
 {
-    type Seed = map::Builder<u32, map::Reborrowed<OwnedOpaque>>;
-    type WorkingSet = Map<u32, OwnedOpaque>;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1342,13 +1363,26 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        let builder = map::Builder::new(map::Capacity::Default);
-        std::future::ready(Ok(builder))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a BfTreeProvider<T, QuantVectorProvider>,
+        _context: &'a DefaultContext,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<QuantPruneAccessor<'a, T>> {
+        QuantPruneAccessor::new(provider, capacity)
     }
 }
 
-/// Inplace Delete
+/// Inplace delete strategy using quantized vectors.
 ///
+/// # Compatibility
+///
+/// Same constraint as [`FullPrecision`]'s impl: not compatible with
+/// [`InplaceDeleteMethod::VisitedAndTopK`] due to hard deletes.
 impl<T> InplaceDeleteStrategy<BfTreeProvider<T, QuantVectorProvider>> for Quantized
 where
     T: VectorRepr,
@@ -1382,7 +1416,7 @@ where
         provider
             .full_vectors
             .get_vector_sync(id.into_usize())
-            .escalate("delete target must exist")
+            .escalate("get_delete_element: failed to read vector for inplace delete")
             .map(Into::into)
     }
 }
@@ -1392,22 +1426,16 @@ impl<T> PruneStrategy<BfTreeProvider<T, QuantVectorProvider>> for Quantized
 where
     T: VectorRepr,
 {
-    type WorkingSet = Map<u32, OwnedOpaque>;
-    type DistanceComputer<'a> =
-        UnwrapErr<spherical_iface::DistanceComputer, spherical_iface::DistanceError>;
-    type PruneAccessor<'a> = QuantAccessor<'a, T>;
-    type PruneAccessorError = diskann::error::Infallible;
+    type PruneAccessor<'a> = QuantPruneAccessor<'a, T>;
+    type PruneAccessorError = ANNError;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a BfTreeProvider<T, QuantVectorProvider>,
         _context: &'a DefaultContext,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(QuantAccessor::new(provider))
-    }
-
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
-        map::Builder::new(map::Capacity::Default).build(capacity)
+        QuantPruneAccessor::new(provider, capacity)
     }
 }
 
@@ -1425,10 +1453,6 @@ where
         &self,
         accessor: &mut QuantAccessor<'a, T>,
         query: &[T],
-        _computer: &UnwrapErr<
-            spherical_iface::QueryComputer<GlobalAllocator>,
-            spherical_iface::QueryDistanceError,
-        >,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -1756,8 +1780,10 @@ where
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
             saved_params.is_memory,
         )?;
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
+            saved_params.max_degree,
+            adjacency_list_index,
+        )?;
 
         Ok(Self {
             quant_vectors: NoStore,
@@ -1902,8 +1928,10 @@ where
             BfTreePaths::neighbors_bftree(&saved_params.prefix),
             saved_params.is_memory,
         )?;
-        let neighbor_provider =
-            NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
+        let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(
+            saved_params.max_degree,
+            adjacency_list_index,
+        )?;
 
         let filename = BfTreePaths::quant_data_bin(&saved_params.prefix);
         let mut reader = storage.open_reader(&filename)?;
@@ -1999,7 +2027,7 @@ mod tests {
         for i in 0..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(Quantized, ctx, &i, point.as_slice())
+                .insert(&Quantized, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2091,7 +2119,7 @@ mod tests {
         for i in 0..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(Quantized, ctx, &i, point.as_slice())
+                .insert(&Quantized, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2169,7 +2197,7 @@ mod tests {
         for i in 0u32..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(FullPrecision, ctx, &i, point.as_slice())
+                .insert(&FullPrecision, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2204,7 +2232,7 @@ mod tests {
         for i in 0u32..15 {
             let point = vec![i as f32; 5];
             index
-                .insert(FullPrecision, ctx, &i, point.as_slice())
+                .insert(&FullPrecision, ctx, &i, point.as_slice())
                 .await
                 .unwrap();
         }
@@ -2369,7 +2397,7 @@ mod tests {
         )
         .unwrap();
 
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
 
         // Insert new vectors without neighbors and empty neighbor list is
         // expected for each newly inserted vector
@@ -2380,12 +2408,18 @@ mod tests {
 
             // First attempt should return empty
             let mut out = AdjacencyList::new();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
             assert!(out.is_empty());
 
             // After we set the empty neighbor list, our attempt should succeed
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2396,17 +2430,20 @@ mod tests {
         for i in 0..num_points {
             let mut out = AdjacencyList::new();
             let neighbors = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
 
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert_eq!(&*out, &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
-            neighbor_accessor.set_neighbors(i, &[]).await.unwrap();
-            neighbor_accessor.get_neighbors(i, &mut out).await.unwrap();
+            scratch.write_neighbors(i, &[]).unwrap();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut out)
+                .unwrap();
 
             assert!(out.is_empty());
         }
@@ -2416,9 +2453,9 @@ mod tests {
         let mut out = AdjacencyList::from_iter_untrusted([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]); // len = 10
 
         // Attempt to access non-existant vector's neighbor list should fail as NotFound
-        assert!(neighbor_accessor
+        assert!(provider
+            .neighbor_provider
             .get_neighbors(200, &mut out)
-            .await
             .is_err());
         assert!(out.is_empty());
     }
@@ -2490,15 +2527,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         assert_eq!(vector_config.get_leaf_page_size(), 8192);
@@ -2623,15 +2657,12 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         let storage = FileStorageProvider;
@@ -2748,15 +2779,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         // Delete a couple of vectors
@@ -2858,15 +2886,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let neighbor_accessor = &mut provider.neighbors();
+        let mut scratch = provider.neighbor_provider.scratch();
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
                 .collect();
-            neighbor_accessor
-                .set_neighbors(i, &neighbors)
-                .await
-                .unwrap();
+            scratch.write_neighbors(i, &neighbors).unwrap();
         }
 
         provider.delete(ctx, &2u32).await.unwrap();

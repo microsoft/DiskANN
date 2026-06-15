@@ -5,7 +5,7 @@
 
 //! Bf-Tree quant vector provider.
 
-use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
+use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_quantization::{
@@ -20,12 +20,6 @@ use super::ConfigError;
 use crate::TestCallCount;
 
 pub struct QuantQueryComputer(QueryComputer<GlobalAllocator>);
-
-impl QuantQueryComputer {
-    pub(crate) fn into_inner(self) -> QueryComputer<GlobalAllocator> {
-        self.0
-    }
-}
 
 impl PreprocessedDistanceFunction<&[u8], f32> for QuantQueryComputer {
     fn evaluate_similarity(&self, x: &[u8]) -> f32 {
@@ -123,7 +117,7 @@ impl QuantVectorProvider {
         }
 
         self.num_get_calls.increment();
-        match self.quant_vector_index.read(i.as_key(), buffer) {
+        match self.quant_vector_index.read(bytemuck::bytes_of(&i), buffer) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 if read_size as usize != expected {
                     return Err(AccessError::Error(ANNError::log_index_error(format!(
@@ -155,7 +149,7 @@ impl QuantVectorProvider {
         Ok(())
     }
 
-    /// Return the quant vector at index `i`.
+    /// Return the quant vector at index `i`
     #[cfg(test)]
     pub(crate) fn get_vector_sync(&self, i: usize) -> Result<Vec<u8>, AccessError> {
         let mut value = vec![0u8; self.quantizer.bytes()];
@@ -182,7 +176,7 @@ impl QuantVectorProvider {
         }
 
         // Serialize the key into a byte string, &[u8]
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
         let dim = self.quantizer.bytes();
         let quant_vector = &mut vec![0u8; dim];
@@ -213,16 +207,11 @@ impl QuantVectorProvider {
         }
 
         // Update pq vector with id = i to v
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
         self.quant_vector_index.insert(key, v);
 
         Ok(())
-    }
-
-    pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
-        self.quant_vector_index.delete(key);
     }
 }
 

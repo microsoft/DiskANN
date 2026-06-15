@@ -1,0 +1,24 @@
+{
+  "file": "diskann/src/graph/test/cases/inline.rs",
+  "test": "graph/test/cases/inline/inline_adaptive_l_logarithmic",
+  "payload": {
+    "comparisons": 57,
+    "grid_size": 100,
+    "hops": 57,
+    "k": 5,
+    "l": 5,
+    "matching_points": 2,
+    "query": [
+      50.0
+    ],
+    "result_count": 2,
+    "result_distances": [
+      49.0,
+      2025.0
+    ],
+    "result_ids": [
+      43,
+      95
+    ]
+  }
+}

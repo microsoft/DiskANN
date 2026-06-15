@@ -1,7 +1,6 @@
 {
   "search_directories": [
-    "../big-ann-benchmarks/data/MSTuringANNS",
-    "../big-ann-benchmarks/neurips23/runbooks"
+    "test_data/disk_index_search"
   ],
   "jobs": [
     {
@@ -9,18 +8,19 @@
       "content": {
         "build": {
           "data_type": "float32",
-          "data": "base1b.fbin.crop_nb_1000000",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
           "distance": "squared_l2",
-          "max_degree": 64,
-          "l_build": 128,
+          "max_degree": 32,
+          "l_build": 50,
           "alpha": 1.2,
           "backedge_ratio": 1.0,
-          "num_threads": 4
+          "num_threads": 4,
+          "start_point_strategy": "medoid"
         },
         "search_phase": {
             "search-type": "topk",
-            "queries": "query100K.fbin",
-            "groundtruth": "msturing-gt-1M",
+            "queries": "disk_index_sample_query_10pts.fbin",
+            "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
             "reps": 1,
             "num_threads": [
               2
@@ -29,22 +29,22 @@
               {
                 "search_n": 10,
                 "search_l": [
-                  32,
-                  200
+                  20,
+                  40
                 ],
                 "recall_k": 10
               }
             ]
         },
         "runbook_params": {
-            "runbook_path": "simple_runbook.yaml",
-            "dataset_name": "msturing-1M",
-            "gt_directory": "1000000/simple_runbook.yaml",
+            "runbook_path": "example_runbook.yaml",
+            "dataset_name": "sift-small-256",
+            "gt_directory": "example_runbook_gt",
             "ip_delete_method": {
               "method": "visited_and_top_k",
               "params": {
-                "k_value": 50,
-                "l_value": 128
+                "k_value": 20,
+                "l_value": 50
               }
             },
             "ip_delete_num_to_replace": 3,

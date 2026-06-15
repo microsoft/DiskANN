@@ -3,8 +3,13 @@
  * Licensed under the MIT license.
  */
 
-mod backend;
+mod disk_index;
+mod exhaustive;
+mod filters;
+mod index;
 mod inputs;
+mod ivf;
+mod multi_vector;
 mod utils;
 
 use diskann_benchmark_runner as runner;
@@ -44,7 +49,12 @@ impl Cli {
 
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
-        backend::register_benchmarks(&mut registry)?;
+        exhaustive::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
+        filters::register_benchmarks(&mut registry)?;
+        multi_vector::register_benchmarks(&mut registry)?;
+        ivf::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
@@ -254,12 +264,10 @@ mod tests {
         }
     }
 
-    // Graph Index Build Integration Test.
-    #[test]
-    fn graph_index_integration() {
+    fn run_integration_test(mut raw: serde_json::Value) {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index.json"));
+        // let mut raw = serde_json::from_str(json_string).unwrap();
         prefix_search_directories(&mut raw, &root_directory());
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -291,6 +299,50 @@ mod tests {
 
         let results: Vec<Value> = load_from_file(&output_path);
         assert_eq!(results.len(), num_jobs(&raw));
+    }
+
+    ////////////////////////////////
+    //      Graph Index Build     //
+    ////////////////////////////////
+    #[test]
+    fn graph_index_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
+    //      Dynamic Index     //
+    ////////////////////////////
+
+    #[test]
+    fn graph_index_dynamic_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-dynamic.json"));
+        run_integration_test(raw);
+    }
+
+    ////////////////////////////
+    //     BF-Tree Index      //
+    ////////////////////////////
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_spherical_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-spherical.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_stream_integration() {
+        let raw = value_from_file(&example_directory().join("graph-index-bftree-stream.json"));
+        run_integration_test(raw);
     }
 
     ////////////////////////////
@@ -362,7 +414,7 @@ mod tests {
     /////////////////////////
 
     #[test]
-    fn scalar_quantization_intergration() {
+    fn scalar_quantization_integration() {
         let input_paths = [example_directory().join("scalar.json")];
 
         for input_path in input_paths {
@@ -500,40 +552,8 @@ mod tests {
 
     #[test]
     fn label_index_integration() {
-        // First, parse and modify the input file to establish paths relative to the
-        // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("metadata-index.json"));
-        prefix_search_directories(&mut raw, &root_directory());
-
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("metadata-index.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let raw = value_from_file(&example_directory().join("metadata-index.json"));
+        run_integration_test(raw);
     }
 
     #[test]
@@ -557,38 +577,16 @@ mod tests {
     fn graph_index_filter_integration() {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
-        let mut raw = value_from_file(&example_directory().join("graph-index-filter.json"));
-        prefix_search_directories(&mut raw, &root_directory());
+        let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        run_integration_test(raw);
+    }
 
-        let tempdir = tempfile::tempdir().unwrap();
-
-        let input_path = tempdir.path().join("graph-index-filter.json");
-        save_to_file(&input_path, &raw);
-
-        let output_path = tempdir.path().join("output.json");
-        assert!(!output_path.exists());
-
-        // Run the example program.
-        let command = Commands::Run {
-            input_file: input_path.to_owned(),
-            output_file: output_path.to_owned(),
-            dry_run: false,
-            allow_debug: true,
-        };
-        let cli = Cli::from_commands(command, true);
-        let mut output = Memory::new();
-
-        cli.run(&mut output).unwrap();
-        println!(
-            "output = {}",
-            String::from_utf8(output.into_inner()).unwrap()
-        );
-
-        // Check that the results file is generated.
-        assert!(output_path.exists());
-
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+    #[test]
+    fn graph_index_inline_filter_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
+        run_integration_test(raw);
     }
 
     #[test]
