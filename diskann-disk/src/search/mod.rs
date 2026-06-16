@@ -5,6 +5,7 @@
 
 //! Model module containing data structures, providers, and traits for disk index operations
 
+pub mod plan;
 pub mod pq;
 pub mod provider;
 pub mod traits;

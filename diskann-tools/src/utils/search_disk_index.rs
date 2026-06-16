@@ -8,8 +8,12 @@ use std::{collections::HashSet, sync::atomic::AtomicBool, time::Instant};
 use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        plan::SearchPlan,
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -246,21 +250,27 @@ where
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,
             )| {
-                let vector_filter_function: Box<dyn Fn(&u32) -> bool + Send + Sync> =
-                    if parameters.vector_filters_file.is_none() {
-                        Box::new(|_: &u32| true)
-                    } else {
-                        Box::new(move |vector_id: &u32| vector_filter.contains(vector_id))
-                    };
+                // Construct the plan from the CLI-driven
+                // `(is_flat_search, has_filter)` pair. CLI doesn't expose
+                // AdaptiveL yet, so `InlineFilter` is unreachable here.
+                let has_filter = parameters.vector_filters_file.is_some();
+                let plan: SearchPlan<'_> = match (parameters.is_flat_search, has_filter) {
+                    (true, false) => SearchPlan::flat(),
+                    (true, true) => SearchPlan::flat_filtered(move |vid: &u32| {
+                        vector_filter.contains(vid)
+                    }),
+                    (false, false) => SearchPlan::graph(),
+                    (false, true) => SearchPlan::graph_filtered(move |vid: &u32| {
+                        vector_filter.contains(vid)
+                    }),
+                };
 
                 let result = searcher.search(
                     query,
                     parameters.recall_at,
                     l,
                     Some(parameters.beam_width as usize),
-                    Some(vector_filter_function),
-                    parameters.is_flat_search,
-                    None, // adaptive_l — disk-side AdaptiveL not yet exposed via CLI
+                    plan,
                 );
 
                 match result {

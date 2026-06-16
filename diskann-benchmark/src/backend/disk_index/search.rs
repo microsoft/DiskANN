@@ -13,8 +13,12 @@ use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
-    search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+    search::{
+        plan::SearchPlan,
+        provider::{
+            disk_provider::DiskIndexSearcher,
+            disk_vertex_provider_factory::DiskVertexProviderFactory,
+        },
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -264,11 +268,17 @@ where
         zipped.for_each_in_pool(
             pool.as_ref(),
             |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                let vector_filter = if search_params.vector_filters_file.is_none() {
-                    None
-                } else {
-                    Some(Box::new(move |vid: &u32| vf.contains(vid))
-                        as Box<dyn Fn(&u32) -> bool + Send + Sync>)
+                // Construct the plan from the JSON-driven
+                // `(is_flat_search, has_filter)` pair. JSON config doesn't
+                // expose AdaptiveL yet, so `InlineFilter` is unreachable here.
+                let has_filter = search_params.vector_filters_file.is_some();
+                let plan: SearchPlan<'_> = match (search_params.is_flat_search, has_filter) {
+                    (true, false) => SearchPlan::flat(),
+                    (true, true) => SearchPlan::flat_filtered(move |vid: &u32| vf.contains(vid)),
+                    (false, false) => SearchPlan::graph(),
+                    (false, true) => {
+                        SearchPlan::graph_filtered(move |vid: &u32| vf.contains(vid))
+                    }
                 };
 
                 match searcher.search(
@@ -276,9 +286,7 @@ where
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
-                    vector_filter,
-                    search_params.is_flat_search,
-                    None, // adaptive_l — disk-side AdaptiveL not yet exposed via JSON
+                    plan,
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;
