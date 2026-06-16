@@ -247,25 +247,93 @@ pub trait SearchAccessor: HasId + Send + Sync {
     }
 }
 
+/// Mark that an ID has been accepted for purposes of filtering.
+///
+/// See: [`Decision`], [`FilteredAccessor::expand_beam_accept_only`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Accept<T>(T);
+
+impl<T> Accept<T> {
+    /// Construct a new [`Accept`] around `id`.
+    pub fn new(id: T) -> Self {
+        Self(id)
+    }
+
+    /// Get a reference to the internal item.
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+
+    /// Get a mutable reference to the internal item.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    /// Consume `self`, returning the inner item.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+/// Mark that an ID has been rejected for purposes of filtering.
+///
+/// See: [`Decision`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Reject<T>(T);
+
+impl<T> Reject<T> {
+    /// Construct a new [`Reject`] around `id`.
+    pub fn new(id: T) -> Self {
+        Self(id)
+    }
+
+    /// Get a reference to the internal item.
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+
+    /// Get a mutable reference to the internal item.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    /// Consume `self`, returning the inner item.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 /// Filter decision for [`FilteredAccessor`].
 ///
 /// Both variants carry the item `T` since rejected items are useful for graph navigation.
 #[derive(Debug, Clone, Copy)]
 pub enum Decision<T> {
     /// The item satisfies the filter criteria.
-    Accept(T),
+    Accept(Accept<T>),
     /// The item does not satisfy the filter criteria.
-    Reject(T),
+    Reject(Reject<T>),
 }
 
 impl<T> Decision<T> {
+    /// Construct a new [`Decision`] in the [`Accept`] state.
+    pub fn accept(id: T) -> Self {
+        Self::Accept(Accept::new(id))
+    }
+
+    /// Construct a new [`Decision`] in the [`Reject`] state.
+    pub fn reject(id: T) -> Self {
+        Self::Reject(Reject::new(id))
+    }
+
     /// Consume `self`, returning the inner item regardless of acceptance.
     ///
     /// To view the inner item, use [`Self::as_ref`].
     /// ```rust
     /// use diskann::graph::glue::Decision;
     ///
-    /// let x = Decision::Accept(vec![0usize, 1, 2]);
+    /// let x = Decision::accept(vec![0usize, 1, 2]);
     ///
     /// let y: &[usize] = x.as_ref().into_inner();
     /// assert_eq!(y, &[0, 1, 2]);
@@ -275,8 +343,8 @@ impl<T> Decision<T> {
     /// ```
     pub fn into_inner(self) -> T {
         match self {
-            Self::Accept(i) => i,
-            Self::Reject(i) => i,
+            Self::Accept(i) => i.into_inner(),
+            Self::Reject(i) => i.into_inner(),
         }
     }
 
@@ -286,51 +354,50 @@ impl<T> Decision<T> {
         F: FnOnce(T) -> R,
     {
         match self {
-            Self::Accept(i) => Decision::Accept(f(i)),
-            Self::Reject(i) => Decision::Reject(f(i)),
+            Self::Accept(i) => Decision::accept(f(i.into_inner())),
+            Self::Reject(i) => Decision::reject(f(i.into_inner())),
         }
     }
 
     /// Borrow the inner item as a [`Decision`] of references.
     pub fn as_ref(&self) -> Decision<&T> {
         match self {
-            Self::Accept(i) => Decision::Accept(i),
-            Self::Reject(i) => Decision::Reject(i),
+            Self::Accept(i) => Decision::accept(i.get()),
+            Self::Reject(i) => Decision::reject(i.get()),
         }
     }
 
     /// Mutably borrow the inner item as a [`Decision`] of mutable references.
     pub fn as_mut(&mut self) -> Decision<&mut T> {
         match self {
-            Self::Accept(i) => Decision::Accept(i),
-            Self::Reject(i) => Decision::Reject(i),
+            Self::Accept(i) => Decision::accept(i.get_mut()),
+            Self::Reject(i) => Decision::reject(i.get_mut()),
         }
     }
 
+    /// Return `true` only if `self` is [`Decision::Accept`].
     #[must_use = "this function is side-effect free"]
     pub fn is_accept(&self) -> bool {
         matches!(self, Self::Accept(_))
     }
 
+    /// Return `true` only if `self` is [`Decision::Reject`].
     #[must_use = "this function is side-effect free"]
     pub fn is_reject(&self) -> bool {
         matches!(self, Self::Reject(_))
     }
 }
 
-/// Semantic hint for [`FilteredAccessor::expand_beam_filtered`].
-#[derive(Debug, Clone, Copy)]
-pub enum ExpansionKind {
-    /// All visited items should be yielded whether they are accepted or rejected.
-    ///
-    /// The caller intends to navigate through rejected nodes.
-    All,
+impl<T> From<Accept<T>> for Decision<T> {
+    fn from(accept: Accept<T>) -> Decision<T> {
+        Decision::Accept(accept)
+    }
+}
 
-    /// Only items that are [`Decision::Accept`] are expected.
-    ///
-    /// Implementations are free to skip any items that would have been marked
-    /// [`Decision::Reject`].
-    AcceptOnly,
+impl<T> From<Reject<T>> for Decision<T> {
+    fn from(reject: Reject<T>) -> Decision<T> {
+        Decision::Reject(reject)
+    }
 }
 
 /// The main extension point for filtered-graph search.
@@ -338,7 +405,8 @@ pub enum ExpansionKind {
 /// Filtered search is a best-first graph traversal with heuristics to direct the search
 /// depending on whether items are accepted or rejected.
 ///
-/// [`Self::expand_beam_filtered`] is the primary extension point.
+/// [`Self::expand_beam_filtered`] and [`Self::expand_beam_accept_only`] are the primary
+/// extension points.
 ///
 /// **Start Point Coherence**: The various methods regarding start points are expected to
 /// be coherent with one another. This means they agree on the number and IDs of the start
@@ -359,27 +427,16 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     where
         F: FnMut(Decision<Self::Id>, f32) + Send;
 
-    /// This function has similar semantics to [`SearchAccessor::expand_beam`] with the
-    /// following additions:
+    /// This function has similar semantics to [`SearchAccessor::expand_beam`] except that
+    /// the `on_neighbors` callback receives [`Decision`] rather than raw IDs. This is used
+    /// to indicate whether or not the associated item is accepted or rejected by the
+    /// filtered search.
     ///
-    /// 1. The `on_neighbors` callback receives [`Decision`] rather than raw IDs. This is
-    ///    used to indicate whether or not the associated item is accepted or rejected by
-    ///    the filtered search.
+    /// All traversed IDs should be passed to `pred`.
     ///
-    /// 2. An [`ExpansionKind`] enum which may be used to direct the implementation.
-    ///
-    ///    - [`ExpansionKind::All`]: All expanded items should be returned, whether they
-    ///      are accepted or rejected. The caller is doing an exploration that intends to
-    ///      navigate through rejected items.
-    ///
-    ///    - [`ExpansionKind::AcceptOnly`]: The provided `on_neighbors` callback will
-    ///      silently drop [`Decision::Reject`]. As such, implementations with cheap filter
-    ///      evaluation may check the filter decision first and skip rejected items entirely.
-    ///
-    /// See also: [`SearchAccessor::expand_beam`].
+    /// See also: [`SearchAccessor::expand_beam`], [`Self::expand_beam_accept_only`].
     fn expand_beam_filtered<Itr, P, F>(
         &mut self,
-        kind: ExpansionKind,
         ids: Itr,
         pred: P,
         on_neighbors: F,
@@ -388,6 +445,30 @@ pub trait FilteredAccessor: HasId + Send + Sync {
         Itr: Iterator<Item = Self::Id> + Send,
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Decision<Self::Id>, f32) + Send;
+
+    /// This function is nearly identical to [`Self::expand_beam_filtered`], but
+    /// implementors must ensure that only [`Accept`]ed IDs are passed to the callback.
+    ///
+    /// As a consequence, only [`Accept`]ed IDs may be passed to `pred.eval_mut`.
+    /// Constructing `Accept::new(raw_id)` and passing it to `pred.eval_mut` without
+    /// having first classified `raw_id` violates this contract.
+    ///
+    /// Because `pred.eval` is required to be side-effect-free (see [`Predicate`]),
+    /// implementors are free to call `pred.eval` on any ID — including those that have
+    /// not yet been classified — to cheaply pre-filter before paying the cost of
+    /// classification.
+    ///
+    /// See also: [`SearchAccessor::expand_beam`], [`Self::expand_beam_filtered`].
+    fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Accept<Self::Id>> + Send + Sync,
+        F: FnMut(Accept<Self::Id>, f32) + Send;
 
     //////////////////////
     // Provided methods //
@@ -460,6 +541,15 @@ where
     }
 }
 
+impl<T> Predicate<Accept<T>> for NotInMut<'_, T>
+where
+    T: Eq + std::hash::Hash,
+{
+    fn eval(&self, item: &Accept<T>) -> bool {
+        self.eval(item.get())
+    }
+}
+
 impl<T> PredicateMut<T> for NotInMut<'_, T>
 where
     T: Clone + Eq + std::hash::Hash,
@@ -469,8 +559,18 @@ where
     }
 }
 
+impl<T> PredicateMut<Accept<T>> for NotInMut<'_, T>
+where
+    T: Clone + Eq + std::hash::Hash,
+{
+    fn eval_mut(&mut self, item: &Accept<T>) -> bool {
+        self.eval_mut(item.get())
+    }
+}
+
 /// The interfaces `contains` and `insert` agree with each other.
 impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
+impl<T> HybridPredicate<Accept<T>> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
 
 /// A search strategy for query objects of type `T`.
 ///
@@ -997,29 +1097,29 @@ mod tests {
     #[test]
     fn decision() {
         // into_inner extracts regardless of variant
-        assert_eq!(Decision::Accept(7).into_inner(), 7);
-        assert_eq!(Decision::Reject(7).into_inner(), 7);
+        assert_eq!(Decision::accept(7).into_inner(), 7);
+        assert_eq!(Decision::reject(7).into_inner(), 7);
 
         // is_accept / is_reject
-        assert!(Decision::Accept(()).is_accept());
-        assert!(!Decision::Accept(()).is_reject());
-        assert!(Decision::Reject(()).is_reject());
-        assert!(!Decision::Reject(()).is_accept());
+        assert!(Decision::accept(()).is_accept());
+        assert!(!Decision::accept(()).is_reject());
+        assert!(Decision::reject(()).is_reject());
+        assert!(!Decision::reject(()).is_accept());
 
         // map preserves variant
-        let a = Decision::Accept(3).map(|x| x * 2);
+        let a = Decision::accept(3).map(|x| x * 2);
         assert!(a.is_accept());
         assert_eq!(a.into_inner(), 6);
-        let r = Decision::Reject(3).map(|x| x * 2);
+        let r = Decision::reject(3).map(|x| x * 2);
         assert!(r.is_reject());
         assert_eq!(r.into_inner(), 6);
 
         // as_ref borrows without consuming
-        let d = Decision::Accept(vec![1, 2, 3]);
+        let d = Decision::accept(vec![1, 2, 3]);
         assert_eq!(d.as_ref().into_inner(), &[1, 2, 3]);
 
         // as_mut allows in-place mutation
-        let mut d = Decision::Reject(10);
+        let mut d = Decision::reject(10);
         *d.as_mut().into_inner() = 20;
         assert_eq!(d.into_inner(), 20);
     }

@@ -33,7 +33,7 @@
 
 use crate::{
     ANNResult,
-    graph::glue::{self, Decision, ExpansionKind},
+    graph::glue::{self, Accept, Decision},
     neighbor::Neighbor,
     provider::{DataProvider, HasId},
     utils::VectorId,
@@ -59,9 +59,9 @@ where
     T: QueryLabelProvider<I> + ?Sized,
 {
     if provider.is_match(i) {
-        Decision::Accept(i)
+        Decision::accept(i)
     } else {
-        Decision::Reject(i)
+        Decision::reject(i)
     }
 }
 
@@ -180,7 +180,6 @@ where
 
     async fn expand_beam_filtered<Itr, P, F>(
         &mut self,
-        kind: ExpansionKind,
         ids: Itr,
         pred: P,
         mut on_neighbors: F,
@@ -190,22 +189,29 @@ where
         P: glue::HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(Decision<Self::Id>, f32) + Send,
     {
-        match kind {
-            ExpansionKind::All => {
-                self.inner
-                    .expand_beam(ids, pred, |id, distance| {
-                        on_neighbors(decide(self.labels, id), distance)
-                    })
-                    .await
-            }
-            ExpansionKind::AcceptOnly => {
-                self.inner
-                    .expand_beam(ids, Wrapper::new(pred, self.labels), |id, distance| {
-                        on_neighbors(Decision::Accept(id), distance)
-                    })
-                    .await
-            }
-        }
+        self.inner
+            .expand_beam(ids, pred, |id, distance| {
+                on_neighbors(decide(self.labels, id), distance)
+            })
+            .await
+    }
+
+    async fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        mut on_neighbors: F,
+    ) -> ANNResult<()>
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: glue::HybridPredicate<Accept<Self::Id>> + Send + Sync,
+        F: FnMut(Accept<Self::Id>, f32) + Send,
+    {
+        self.inner
+            .expand_beam(ids, Wrapper::new(pred, self.labels), |id, distance| {
+                on_neighbors(Accept::new(id), distance)
+            })
+            .await
     }
 
     fn terminate_early(&mut self) -> bool {
@@ -271,27 +277,31 @@ where
 
 impl<P, I> glue::Predicate<I> for Wrapper<'_, P, I>
 where
-    P: glue::Predicate<I>,
+    P: glue::Predicate<Accept<I>>,
     I: VectorId,
 {
     fn eval(&self, item: &I) -> bool {
-        self.labels.is_match(*item) && self.inner.eval(item)
+        // NOTE: Swapping the order here is legal as is passing `Accept` before evaluating
+        // `is_match`. This is because `self.inner.eval` does not modify state.
+        self.inner.eval(&Accept::new(*item)) && self.labels.is_match(*item)
     }
 }
 
 impl<P, I> glue::PredicateMut<I> for Wrapper<'_, P, I>
 where
-    P: glue::PredicateMut<I>,
+    P: glue::PredicateMut<Accept<I>>,
     I: VectorId,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        self.labels.is_match(*item) && self.inner.eval_mut(item)
+        // Oreder must be `label` -> `inner` because we have to know an ID is accepted before
+        // passing it to `eval_mut`.
+        self.labels.is_match(*item) && self.inner.eval_mut(&Accept::new(*item))
     }
 }
 
 impl<P, I> glue::HybridPredicate<I> for Wrapper<'_, P, I>
 where
-    P: glue::HybridPredicate<I>,
+    P: glue::HybridPredicate<Accept<I>>,
     I: VectorId,
 {
 }
@@ -302,10 +312,7 @@ mod tests {
 
     use super::*;
     use crate::graph::{
-        glue::{
-            ExpansionKind, FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut,
-            SearchStrategy,
-        },
+        glue::{FilteredAccessor as _, HybridPredicate, Predicate, PredicateMut, SearchStrategy},
         test::{provider as test_provider, synthetic::Grid},
     };
 
@@ -326,13 +333,26 @@ mod tests {
         }
     }
 
+    impl Predicate<Accept<u32>> for NotIn<'_> {
+        fn eval(&self, item: &Accept<u32>) -> bool {
+            self.eval(item.get())
+        }
+    }
+
     impl PredicateMut<u32> for NotIn<'_> {
         fn eval_mut(&mut self, item: &u32) -> bool {
             self.0.insert(*item)
         }
     }
 
+    impl PredicateMut<Accept<u32>> for NotIn<'_> {
+        fn eval_mut(&mut self, item: &Accept<u32>) -> bool {
+            self.eval_mut(item.get())
+        }
+    }
+
     impl HybridPredicate<u32> for NotIn<'_> {}
+    impl HybridPredicate<Accept<u32>> for NotIn<'_> {}
 
     #[tokio::test]
     async fn filtered_accessor_wrapping() {
@@ -365,14 +385,13 @@ mod tests {
         assert_eq!(start_results.len(), 1);
         assert!(start_results[0].0.is_reject());
 
-        // -- expand_beam_filtered with ExpansionKind::All --
+        // -- expand_beam_filtered
         let count_before = accessor.inner.get_vector_count();
         let mut visited = HashSet::new();
         let mut results_all: Vec<(Decision<u32>, f32)> = Vec::new();
 
         accessor
             .expand_beam_filtered(
-                ExpansionKind::All,
                 [0, 5, 10, 15].into_iter(),
                 NotIn(&mut visited),
                 |d, dist| results_all.push((d, dist)),
@@ -395,14 +414,13 @@ mod tests {
             }
         }
 
-        // -- expand_beam_filtered with ExpansionKind::AcceptOnly --
+        // -- expand_beam_accept_only
         let count_before = accessor.inner.get_vector_count();
         let mut visited2 = HashSet::new();
-        let mut results_accept: Vec<(Decision<u32>, f32)> = Vec::new();
+        let mut results_accept: Vec<(Accept<u32>, f32)> = Vec::new();
 
         accessor
-            .expand_beam_filtered(
-                ExpansionKind::AcceptOnly,
+            .expand_beam_accept_only(
                 [0, 5, 10, 15].into_iter(),
                 NotIn(&mut visited2),
                 |d, dist| results_accept.push((d, dist)),
@@ -411,11 +429,6 @@ mod tests {
             .unwrap();
 
         let get_vector_accept = accessor.inner.get_vector_count() - count_before;
-
-        // All yielded items must be Accept.
-        for (decision, _) in &results_accept {
-            assert!(decision.is_accept(), "AcceptOnly should only yield Accept");
-        }
 
         // Fewer distance computations than the All path — rejected items were skipped.
         assert!(

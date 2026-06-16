@@ -203,7 +203,7 @@ where
                 .insert(Neighbor::new(id.into_inner(), distance));
 
             if let glue::Decision::Accept(id) = id {
-                matched_results.push(Neighbor::new(id, distance));
+                matched_results.push(Neighbor::new(id.into_inner(), distance));
             }
         })
         .await?;
@@ -241,7 +241,6 @@ where
         // compute distances from query to one-hop neighbors, and mark them visited
         accessor
             .expand_beam_filtered(
-                glue::ExpansionKind::All,
                 scratch.beam_nodes.iter().copied(),
                 glue::NotInMut::new(&mut scratch.visited),
                 |id, distance| one_hop_neighbors.push((id, distance)),
@@ -252,7 +251,7 @@ where
         for (decision, distance) in one_hop_neighbors.iter().copied() {
             if let glue::Decision::Accept(id) = decision {
                 // matched nodes also go into matched_results for final output.
-                matched_results.push(Neighbor::new(id, distance));
+                matched_results.push(Neighbor::new(id.into_inner(), distance));
                 sample_matched += 1;
             }
 
