@@ -8,7 +8,7 @@
 //! Organized into two layers:
 //! - **Unit tests** call `multihop_search_internal` directly on small hand-constructed
 //!   graphs to test each decision path (Accept, Reject+two-hop, Terminate) in isolation.
-//! - **Integration tests** go through `index.search(MultihopSearch{...})` end-to-end
+//! - **Integration tests** go through `index.search(MultihopFilterSearch{...})` end-to-end
 //!   with baselines for regression protection.
 
 use std::sync::{Arc, Mutex};
@@ -20,7 +20,7 @@ use crate::{
         self, AdjacencyList, DiskANNIndex,
         index::{QueryLabelProvider, QueryVisitDecision},
         search::{
-            Knn, MultihopSearch,
+            Knn, MultihopFilterSearch,
             record::NoopSearchRecord,
             scratch::{PriorityQueueConfiguration, SearchScratch},
         },
@@ -56,7 +56,7 @@ impl QueryLabelProvider<u32> for AcceptAll {
 
 /// Accepts all IDs but only allows even IDs in results.
 #[derive(Debug)]
-struct EvenFilter;
+pub(super) struct EvenFilter;
 
 impl QueryLabelProvider<u32> for EvenFilter {
     fn is_match(&self, id: u32) -> bool {
@@ -115,7 +115,7 @@ impl QueryLabelProvider<u32> for TerminateOnTarget {
 
 /// Accepts all via `is_match`, but blocks one ID and adjusts another's distance.
 #[derive(Debug)]
-struct BlockAndAdjust {
+pub(super) struct BlockAndAdjust {
     blocked: u32,
     adjusted: u32,
     factor: f32,
@@ -123,11 +123,11 @@ struct BlockAndAdjust {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct BlockAndAdjustMetrics {
-    total_visits: usize,
-    rejected_count: usize,
-    adjusted_count: usize,
-    visited_ids: Vec<u32>,
+pub(super) struct BlockAndAdjustMetrics {
+    pub(super) total_visits: usize,
+    pub(super) rejected_count: usize,
+    pub(super) adjusted_count: usize,
+    pub(super) visited_ids: Vec<u32>,
 }
 
 verbose_eq!(BlockAndAdjustMetrics {
@@ -138,7 +138,7 @@ verbose_eq!(BlockAndAdjustMetrics {
 });
 
 impl BlockAndAdjust {
-    fn new(blocked: u32, adjusted: u32, factor: f32) -> Self {
+    pub(super) fn new(blocked: u32, adjusted: u32, factor: f32) -> Self {
         Self {
             blocked,
             adjusted,
@@ -147,7 +147,7 @@ impl BlockAndAdjust {
         }
     }
 
-    fn metrics(&self) -> BlockAndAdjustMetrics {
+    pub(super) fn metrics(&self) -> BlockAndAdjustMetrics {
         self.metrics.lock().unwrap().clone()
     }
 }
@@ -181,7 +181,7 @@ impl QueryLabelProvider<u32> for BlockAndAdjust {
 /// Build a 1D provider with the given points and adjacency lists.
 ///
 /// `start_pos` is the 1D position of the start node (id = `start_id`).
-fn build_1d_provider(
+pub(super) fn build_1d_provider(
     start_id: u32,
     start_pos: f32,
     start_neighbors: AdjacencyList<u32>,
@@ -217,7 +217,7 @@ fn run_internal(
 
         let mut scratch = SearchScratch::new(PriorityQueueConfiguration::Fixed(l), Some(l));
 
-        let stats = crate::graph::search::multihop_search::multihop_search_internal(
+        let stats = crate::graph::search::multihop_filter_search::multihop_search_internal(
             max_degree,
             &Knn::new_default(k, l).unwrap(),
             &mut accessor,
@@ -468,7 +468,7 @@ fn block_and_adjust_modifies_results() {
 
 /// Baseline struct for end-to-end multihop search results.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct MultihopBaseline {
+struct MultihopFilterBaseline {
     grid_size: usize,
     query: Vec<f32>,
     k: usize,
@@ -478,7 +478,7 @@ struct MultihopBaseline {
     hops: usize,
 }
 
-verbose_eq!(MultihopBaseline {
+verbose_eq!(MultihopFilterBaseline {
     grid_size,
     query,
     k,
@@ -489,7 +489,7 @@ verbose_eq!(MultihopBaseline {
 });
 
 /// Set up a 3D grid index using the test provider.
-fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
+pub(super) fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
     use crate::graph::test::synthetic::Grid;
 
     let grid = Grid::Three;
@@ -510,7 +510,7 @@ fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provider::Provide
 /// Two-hop reachability through non-matching nodes, end-to-end with baseline.
 ///
 /// Uses the same hand-constructed 1D graph as the unit test, but goes through
-/// `index.search(MultihopSearch{...})` to also exercise post-processing.
+/// `index.search(MultihopFilterSearch{...})` to also exercise post-processing.
 #[test]
 fn two_hop_reaches_through_non_matching() {
     let rt = current_thread_runtime();
@@ -557,7 +557,7 @@ fn two_hop_reaches_through_non_matching() {
     let l = 20;
 
     let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
+    let multihop = MultihopFilterSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -574,7 +574,7 @@ fn two_hop_reaches_through_non_matching() {
         .unwrap();
 
     let result_count = stats.result_count as usize;
-    let baseline = MultihopBaseline {
+    let baseline = MultihopFilterBaseline {
         grid_size: 0, // hand-constructed, not grid-based
         query: query.clone(),
         k,
@@ -626,7 +626,7 @@ fn even_filtering_grid() {
     let k = 20;
     let l = 40;
     let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
+    let multihop = MultihopFilterSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -643,7 +643,7 @@ fn even_filtering_grid() {
         .unwrap();
 
     let result_count = stats.result_count as usize;
-    let baseline = MultihopBaseline {
+    let baseline = MultihopFilterBaseline {
         grid_size,
         query: query.clone(),
         k,
@@ -692,7 +692,7 @@ fn callback_filtering_grid() {
     let k = 20;
     let l = 40;
     let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params, &filter);
+    let multihop = MultihopFilterSearch::new(search_params, &filter);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];

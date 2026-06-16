@@ -18,6 +18,22 @@
 //! Accessors are constructed via [`SearchStrategy::search_accessor`] and
 //! [`InsertStrategy::insert_search_accessor`] where they are provided with the query.
 //!
+//! # Build
+//!
+//! Index building consists of two main parts:
+//!
+//! 1. Adjacency list manipulation.
+//! 2. Neighbor pruning to compute new adjacency lists.
+//!
+//! Like search, there is a primary trait for extending this behavior: [`PruneAccessor`].
+//! Neighbor manipulation is done via [`PruneAccessor::neighbors`] whereas pruning is
+//! facilitated with [`PruneAccessor::fill`].
+//!
+//! A single [`PruneAccessor`] can be used for multiple rounds of pruning during a single
+//! insert or delete operation. As such, implementations may wish to cache a small number
+//! of vectors internally across calls to [`PruneAccessor::fill`] and are encouraged to use
+//! [`Map`](crate::graph::workingset::Map) for this cache.
+//!
 //! # Strategies
 //!
 //! Strategies provide the "glue" between [`DataProvider`]s and index operations like search,
@@ -68,18 +84,8 @@
 //!
 //!   This accessor is then used for search, followed by pruning.
 //!
-//! * [`PruneStrategy`]: The pruning strategy is largely straightforward, consisting of
-//!   an accessor and a random access [`DistanceFunction`] for performing distance
-//!   calculations on the retrieved elements.
-//!
-//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with
-//!   expensive vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
-//!
-//!   This is done by using a working set to store the elements retrieved by the
-//!   `PruneAccessor`. To give implementers the ability to perform a hybrid prune
-//!   (consisting of a mix of full-precision and quantized vectors), **without** the index
-//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to
-//!   delegate the responsibility of populating this cache to the [`DataProvider`].
+//! * [`PruneStrategy`]: The pruning strategy is simpler a deferred mechanism of constructing
+//!   a [`PruneAccessor`].
 //!
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
 //!   strategies. One difference for inplace-deletion is that we use an element accessed
@@ -91,7 +97,7 @@
 
 use std::{future::Future, sync::Arc};
 
-use diskann_utils::Reborrow;
+use diskann_utils::{Reborrow, future::SendFuture};
 use diskann_vector::DistanceFunction;
 use futures_util::FutureExt;
 
@@ -100,7 +106,7 @@ use crate::{
     error::StandardError,
     graph::{SearchOutputBuffer, workingset},
     neighbor::Neighbor,
-    provider::{AsNeighborMut, BuildDistanceComputer, DataProvider, HasElementRef, HasId},
+    provider::{self, DataProvider, HasId},
 };
 
 /// The main extension point for graph search.
@@ -565,6 +571,93 @@ where
     }
 }
 
+////////////
+// Insert //
+////////////
+
+/// The customization point for graph index construction.
+///
+/// Index construction consists of adjacency list manipulation and candidate pruning.
+/// Adjacency list manipulation is facilitated by [`neighbors`](Self::neighbors) and provides
+/// an opportunity for implementations to delegate to a common implementation if needed.
+/// If [`provider::NeighborAccessorMut`] is already implemented, then [`provider::Neighbors`]
+/// can be used to return `&mut Self`.
+///
+/// Pruning rounds happen using a sequence where [`fill`](Self::fill) is called on a
+/// collection of IDs to be pruned. Because a [`PruneAccessor`] may be used for multiple
+/// rounds of pruning, implementations can use [`Map`](crate::graph::workingset::Map) as
+/// a bounded cache of elements to avoid traffic to the backing provider.
+pub trait PruneAccessor: HasId + Send + Sync {
+    /// The type of the neighbor-accessor delegate.
+    type Neighbors<'a>: provider::NeighborAccessorMut<Id = Self::Id>
+    where
+        Self: 'a;
+
+    /// The element type yielded from [`Self::View`].
+    type ElementRef<'a>;
+
+    /// The type of the prune-local view over a collection of ids.
+    type View<'a>: for<'x> workingset::View<Self::Id, ElementRef<'x> = Self::ElementRef<'x>>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    /// The computer used to compute distances between elements.
+    type Distance<'a>: for<'x, 'y> DistanceFunction<Self::ElementRef<'x>, Self::ElementRef<'y>, f32>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    /// Return a delegate for performing graph manipulation.
+    ///
+    /// If `Self` implements [`NeighborAccessorMut`], then [`provider::Neighbors`] can be
+    /// used to wrap `&mut self`.
+    fn neighbors(&mut self) -> Self::Neighbors<'_>;
+
+    /// Make the data elements for items in `itr` available in the returned [`View`] and
+    /// provide a means of computing distance between elements in the view.
+    ///
+    /// The input `itr` is `Clone` and is expected that the implementation of `Clone` is cheap
+    /// and without interior mutability. This allows implementers to perform multiple passes
+    /// of `itr` if needed.
+    ///
+    /// ## Missing Entries
+    ///
+    /// While it's a good idea to ensure all items in `itr` are fetched, callers are
+    /// designed to tolerate a small number of missing entries without serious performance
+    /// degradation.
+    ///
+    /// If a ID really needs to be fetched for algorithmic purposes, it will be the first
+    /// item yielded from `itr`.
+    ///
+    /// ## Reuse
+    ///
+    /// This method may be called multiple times throughout the lifetime of `Self`, providing
+    /// an opportunity to cache previously returned results within `Self`.
+    ///
+    /// Trade offs include:
+    ///
+    /// * Without any reuse, more backend vector retrievals are made but the returned
+    ///   [`workingset::View`] is more up-to-date.
+    ///
+    /// * With reuse, the consumed memory increases but the total number of vector
+    ///   retrievals will be lower.
+    ///
+    /// Accessors are alive for a relatively small temporal window, so the risk of stale
+    /// entries in the cache causing incorrect graphs is minimal.
+    ///
+    /// See: [`Map`](crate::graph::workingset::Map) for a flexible data structure that
+    /// can be used to make an implementation.
+    fn fill<Itr>(
+        &mut self,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
+}
+
 /// A strategy for inserting elements from the data provider.
 ///
 /// This strategy is used during the greedy search portion of index construction.
@@ -606,83 +699,48 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
-    /// The [working set](crate::graph::workingset) used during pruning.
-    ///
-    /// For single insert this is typically an empty [`Map`](super::workingset::Map).
-    /// For multi-insert it may be pre-seeded with batch elements.
-    type WorkingSet: Send + Sync;
-
-    /// The distance computer used during pruning.
-    ///
-    /// We could grab this type from the `PruneAccessor` associated type, but it's
-    /// useful enough that we move it up here.
-    type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
-            <Self::PruneAccessor<'a> as HasElementRef>::ElementRef<'b>,
-            <Self::PruneAccessor<'c> as HasElementRef>::ElementRef<'d>,
-            f32,
-        > + Send
-        + Sync;
-
-    /// The concrete type of the accessor that is used to access `Self` during pruning.
-    ///
-    /// The accessor implements [`workingset::Fill`] for the strategy's
-    /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
-    /// cached for distance computations.
-    type PruneAccessor<'a>: HasId<Id = Provider::InternalId>
-        + HasElementRef
-        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
-        + AsNeighborMut
-        + workingset::Fill<Self::WorkingSet>
-        + Send
-        + Sync;
+    /// The concrete type of the [`PruneAccessor`] that is used during index construction.
+    type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
 
-    /// Create a fresh working set pre-sized for up to `capacity` elements.
-    ///
-    /// Argument `capacity` is an upper-bound: callers guarantee that no more than
-    /// `capacity` elements will be inserted into the working set during a single
-    /// [fill](workingset::Fill).
-    ///
-    /// Implementations may use this to pre-allocate or panic if exceeded.
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet;
-
-    /// Return the prune accessor.
+    /// Return the [`PruneAccessor`]. Argument `capacity` provides an upper bound on the
+    /// length of the iterator passed to [`PruneAccessor::fill`].
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
 }
 
 /// Strategy for bulk insertion via [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
 ///
-/// This trait delegates to its [`InsertStrategy`] for most selections during insert with
-/// one difference, the [working set](crate::graph::workingset) provided to the insertion
-/// [`PruneStrategy`] is seeded from [`Self::Seed`]. Seeding allows elements of the input
-/// batch `B` to be part of the working set throughout prune, saving on vector retrievals.
-pub trait MultiInsertStrategy<Provider, B>: Send + Sync
+/// Multi-insert bulk-inserts a batch of vectors and provides this batch to
+/// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
+/// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
+/// [`PruneAccessors`] needed during build.
+///
+/// This architecture allows implementations to use overlays like
+/// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can
+/// be routed locally rather than all the way back to the underlying provider.
+pub trait MultiInsertStrategy<Provider, B>: Send + Sync + 'static
 where
     Provider: DataProvider,
     B: Batch,
 {
-    /// The working set for the insertion [`PruneStrategy`].
-    type WorkingSet: Send + Sync + 'static;
-
-    /// The working set "seed", potentially containing `B` for faster access.
-    type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
+    /// The prune-accessor "seed", potentially containing `B` for faster access.
+    type Seed: Send + Sync + 'static;
 
     /// Any critical error that occurs during [`finish`](Self::finish).
     type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
+    /// The delegated [`PruneStrategy`] used for pruning.
+    type PruneStrategy: PruneStrategy<Provider>;
+
     /// The delegated [`InsertStrategy`] for most insertion related decisions.
-    type InsertStrategy: for<'a> InsertStrategy<
-            'a,
-            Provider,
-            B::Element<'a>,
-            PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
-        >;
+    type InsertStrategy: for<'a> InsertStrategy<'a, Provider, B::Element<'a>, PruneStrategy = Self::PruneStrategy>;
 
     /// Construct the associated [`InsertStrategy`].
     fn insert_strategy(&self) -> Self::InsertStrategy;
@@ -702,6 +760,18 @@ where
     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
         Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
+
+    /// Construct a [`PruneAccessor`] from a seed returned by [`Self::finish`].
+    ///
+    /// Argument `capacity` provides an upper bound on the iterator length for
+    /// [`PruneAccessor::fill`].
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        context: &'a Provider::Context,
+        seed: &'a Self::Seed,
+        capacity: usize,
+    ) -> ANNResult<<Self::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>>;
 }
 
 /// A batch of elements indexed positionally.

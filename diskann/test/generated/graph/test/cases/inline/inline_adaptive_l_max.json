@@ -1,0 +1,26 @@
+{
+  "file": "diskann/src/graph/test/cases/inline.rs",
+  "test": "graph/test/cases/inline/inline_adaptive_l_max",
+  "payload": {
+    "comparisons": 91,
+    "grid_size": 100,
+    "hops": 91,
+    "k": 3,
+    "l": 5,
+    "matching_points": 4,
+    "query": [
+      50.0
+    ],
+    "result_count": 3,
+    "result_distances": [
+      0.0,
+      400.0,
+      900.0
+    ],
+    "result_ids": [
+      50,
+      30,
+      20
+    ]
+  }
+}

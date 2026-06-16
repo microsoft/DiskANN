@@ -5,7 +5,7 @@
 
 //! Bf-Tree quant vector provider.
 
-use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
+use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use diskann::{error::IntoANNResult, utils::VectorRepr, ANNError, ANNResult};
 use diskann_quantization::{
@@ -117,7 +117,7 @@ impl QuantVectorProvider {
         }
 
         self.num_get_calls.increment();
-        match self.quant_vector_index.read(i.as_key(), buffer) {
+        match self.quant_vector_index.read(bytemuck::bytes_of(&i), buffer) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 if read_size as usize != expected {
                     return Err(AccessError::Error(ANNError::log_index_error(format!(
@@ -176,7 +176,7 @@ impl QuantVectorProvider {
         }
 
         // Serialize the key into a byte string, &[u8]
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
         let dim = self.quantizer.bytes();
         let quant_vector = &mut vec![0u8; dim];
@@ -207,7 +207,7 @@ impl QuantVectorProvider {
         }
 
         // Update pq vector with id = i to v
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
 
         self.quant_vector_index.insert(key, v);
 

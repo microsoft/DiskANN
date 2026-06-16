@@ -3,8 +3,12 @@
  * Licensed under the MIT license.
  */
 
-mod backend;
+mod disk_index;
+mod exhaustive;
+mod filters;
+mod index;
 mod inputs;
+mod multi_vector;
 mod utils;
 
 use diskann_benchmark_runner as runner;
@@ -44,7 +48,11 @@ impl Cli {
 
         // Collect benchmarks.
         let mut registry = runner::Registry::new();
-        backend::register_benchmarks(&mut registry)?;
+        exhaustive::register_benchmarks(&mut registry)?;
+        disk_index::register_benchmarks(&mut registry)?;
+        index::register_benchmarks(&mut registry)?;
+        filters::register_benchmarks(&mut registry)?;
+        multi_vector::register_benchmarks(&mut registry)?;
 
         self.app.run(&registry, output)
     }
@@ -568,6 +576,14 @@ mod tests {
         // First, parse and modify the input file to establish paths relative to the
         // directory building the dispatcher.
         let raw = value_from_file(&example_directory().join("graph-index-filter.json"));
+        run_integration_test(raw);
+    }
+
+    #[test]
+    fn graph_index_inline_filter_integration() {
+        // First, parse and modify the input file to establish paths relative to the
+        // directory building the dispatcher.
+        let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
         run_integration_test(raw);
     }
 

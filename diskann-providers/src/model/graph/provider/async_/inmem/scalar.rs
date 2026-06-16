@@ -17,7 +17,7 @@ use diskann::{
         },
         workingset,
     },
-    provider::{BuildDistanceComputer, DelegateNeighbor, ExecutionContext, HasElementRef, HasId},
+    provider::{ExecutionContext, HasId},
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_quantization::{
@@ -34,7 +34,7 @@ use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 use thiserror::Error;
 
-use super::{DefaultProvider, GetFullPrecision, PassThrough, Rerank};
+use super::{DefaultProvider, GetFullPrecision, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::provider::async_::{
@@ -367,15 +367,27 @@ where
 // PruneAccessor //
 ///////////////////
 
-#[derive(Clone, Copy)]
 pub struct PruneAccessor<'a, const NBITS: usize> {
     store: &'a SQStore<NBITS>,
-    neighbors: &'a SimpleNeighborProviderAsync<u32>,
+    neighbors: &'a SimpleNeighborProviderAsync,
+    distance: DistanceComputer,
 }
 
-impl<'a, const NBITS: usize> PruneAccessor<'a, NBITS> {
-    fn new(store: &'a SQStore<NBITS>, neighbors: &'a SimpleNeighborProviderAsync<u32>) -> Self {
-        Self { store, neighbors }
+impl<'a, const NBITS: usize> PruneAccessor<'a, NBITS>
+where
+    Unsigned: Representation<NBITS>,
+    DistanceComputer: for<'x, 'y> DistanceFunction<CVRef<'x, NBITS>, CVRef<'y, NBITS>, f32>,
+{
+    fn new(
+        store: &'a SQStore<NBITS>,
+        neighbors: &'a SimpleNeighborProviderAsync,
+    ) -> ANNResult<Self> {
+        let distance = store.distance_computer()?;
+        Ok(Self {
+            store,
+            neighbors,
+            distance,
+        })
     }
 }
 
@@ -383,60 +395,39 @@ impl<const NBITS: usize> HasId for PruneAccessor<'_, NBITS> {
     type Id = u32;
 }
 
-impl<const NBITS: usize> HasElementRef for PruneAccessor<'_, NBITS>
-where
-    Unsigned: Representation<NBITS>,
-{
-    type ElementRef<'a> = CVRef<'a, NBITS>;
-}
-
-impl<'a, const NBITS: usize> DelegateNeighbor<'a> for PruneAccessor<'_, NBITS> {
-    type Delegate = &'a SimpleNeighborProviderAsync<u32>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        self.neighbors
-    }
-}
-
-impl<const NBITS: usize> BuildDistanceComputer for PruneAccessor<'_, NBITS>
+impl<const NBITS: usize> glue::PruneAccessor for PruneAccessor<'_, NBITS>
 where
     Unsigned: Representation<NBITS>,
     DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
 {
-    type DistanceComputerError = ANNError;
-    type DistanceComputer = DistanceComputer;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(self.store.distance_computer()?)
-    }
-}
-
-impl<const NBITS: usize> workingset::Fill<PassThrough> for PruneAccessor<'_, NBITS>
-where
-    Unsigned: Representation<NBITS>,
-{
-    type Error = std::convert::Infallible;
+    type ElementRef<'a> = CVRef<'a, NBITS>;
     type View<'a>
-        = Self
+        = &'a Self
+    where
+        Self: 'a;
+    type Distance<'a>
+        = &'a DistanceComputer
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = &'a SimpleNeighborProviderAsync
     where
         Self: 'a;
 
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
+    async fn fill<Itr>(&mut self, _itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
     {
-        Ok(*self)
+        Ok((self, &self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+        self.neighbors
     }
 }
 
 // Pass-through view — reads scalar-quantized vectors directly from the provider.
-impl<const NBITS: usize> workingset::View<u32> for PruneAccessor<'_, NBITS>
+impl<const NBITS: usize> workingset::View<u32> for &PruneAccessor<'_, NBITS>
 where
     Unsigned: Representation<NBITS>,
 {
@@ -691,24 +682,16 @@ where
     Unsigned: Representation<NBITS>,
     DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
 {
-    type DistanceComputer<'a> = DistanceComputer;
     type PruneAccessor<'a> = PruneAccessor<'a, NBITS>;
-    type PruneAccessorError = diskann::error::Infallible;
-    type WorkingSet = PassThrough;
-
-    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
-        PassThrough
-    }
+    type PruneAccessorError = ANNError;
 
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
         _context: &'a Ctx,
+        _capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
-        Ok(PruneAccessor::new(
-            &provider.aux_vectors,
-            provider.neighbors(),
-        ))
+        PruneAccessor::new(&provider.aux_vectors, provider.neighbors())
     }
 }
 
@@ -739,7 +722,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     B: glue::Batch,
-    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, WorkingSet = PassThrough>
+    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>
         + for<'a> InsertStrategy<
             'a,
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
@@ -747,9 +730,9 @@ where
             PruneStrategy = Self,
         >,
 {
-    type WorkingSet = PassThrough;
-    type Seed = PassThrough;
+    type Seed = ();
     type FinishError = diskann::error::Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -766,7 +749,20 @@ where
     where
         Itr: ExactSizeIterator<Item = u32> + Send,
     {
-        std::future::ready(Ok(PassThrough))
+        std::future::ready(Ok(()))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+        context: &'a Ctx,
+        _seed: &'a (),
+        capacity: usize,
+    ) -> ANNResult<
+        <Self as PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>>::PruneAccessor<'a>,
+    > {
+        self.prune_accessor(provider, context, capacity)
+            .into_ann_result()
     }
 }
 
