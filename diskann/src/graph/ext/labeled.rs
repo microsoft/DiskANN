@@ -163,12 +163,6 @@ impl<'a, A> glue::FilteredAccessor for FilteredAccessor<'a, A>
 where
     A: glue::SearchAccessor,
 {
-    async fn starting_points(&self) -> ANNResult<Vec<Decision<Self::Id>>> {
-        let points = self.inner.starting_points().await?;
-        let annotated = points.into_iter().map(|i| decide(self.labels, i)).collect();
-        Ok(annotated)
-    }
-
     async fn start_point_distances<F>(&mut self, mut f: F) -> ANNResult<()>
     where
         F: FnMut(Decision<Self::Id>, f32) + Send,
@@ -371,10 +365,7 @@ mod tests {
         let mut accessor = FilteredAccessor::new(inner, &filter);
 
         // -- starting_points: u32::MAX is odd, should be Reject --
-        let starts = accessor.starting_points().await.unwrap();
-        assert_eq!(starts.len(), 1);
-        assert!(starts[0].is_reject());
-        assert_eq!(starts[0].into_inner(), u32::MAX);
+        assert_eq!(accessor.num_starting_points().await.unwrap(), 1);
 
         // -- start_point_distances: verify annotation and distance --
         let mut start_results = Vec::new();
@@ -447,17 +438,21 @@ mod tests {
         let filter = EvenFilter;
 
         let strategy = Filtered::new(test_provider::Strategy::new(), &filter);
-        let accessor = strategy
+        let mut accessor = strategy
             .search_accessor(&provider, &context, &[0.0, 0.0])
             .unwrap();
 
-        let starts = glue::FilteredAccessor::starting_points(&accessor)
-            .await
-            .unwrap();
+        let mut starts = Vec::new();
+        glue::FilteredAccessor::start_point_distances(&mut accessor, |decision, dist| {
+            starts.push((decision, dist));
+        })
+        .await
+        .unwrap();
+
         assert_eq!(starts.len(), 1);
         // u32::MAX is odd → Reject
-        assert!(starts[0].is_reject());
-        assert_eq!(starts[0].into_inner(), u32::MAX);
+        assert!(starts[0].0.is_reject());
+        assert_eq!(starts[0].0.into_inner(), u32::MAX);
     }
 
     #[test]

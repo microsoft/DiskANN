@@ -414,11 +414,6 @@ impl<T> From<Reject<T>> for Decision<T> {
 ///
 /// See also: [`SearchAccessor`].
 pub trait FilteredAccessor: HasId + Send + Sync {
-    /// Return the starting points for this search.
-    fn starting_points(
-        &self,
-    ) -> impl std::future::Future<Output = ANNResult<Vec<Decision<Self::Id>>>> + Send;
-
     /// Compute the distance to all start points, invoking `f` with all results.
     fn start_point_distances<F>(
         &mut self,
@@ -482,10 +477,7 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     }
 
     /// Return the number of starting points.
-    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
-        self.starting_points()
-            .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
-    }
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send;
 }
 
 /// A predicate evaluating `item`.
