@@ -343,6 +343,66 @@ mod tests {
         run_integration_test(raw);
     }
 
+    #[test]
+    #[cfg(feature = "bftree")]
+    fn graph_index_bftree_save_load_roundtrip() {
+        use diskann_bftree::{BfTreePaths, BfTreeProvider, NoStore};
+        use diskann_providers::storage::{FileStorageProvider, LoadWith};
+
+        let mut raw = value_from_file(&example_directory().join("graph-index-bftree.json"));
+        prefix_search_directories(&mut raw, &root_directory());
+
+        let tempdir = tempfile::tempdir().unwrap();
+
+        // Set save_path in the build config.
+        let save_prefix = tempdir.path().join("bftree_roundtrip");
+        let save_prefix_str = save_prefix.to_str().unwrap();
+        raw["jobs"][0]["content"]["build"]["save_path"] =
+            serde_json::Value::String(save_prefix_str.to_string());
+
+        let input_path = tempdir.path().join("input.json");
+        save_to_file(&input_path, &raw);
+
+        let output_path = tempdir.path().join("output.json");
+
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+        cli.run(&mut output).unwrap();
+
+        // Verify save artifacts exist.
+        let params_path = BfTreePaths::params_json(save_prefix_str);
+        assert!(
+            std::path::Path::new(&params_path).exists(),
+            "params file should exist at {params_path}"
+        );
+        assert!(
+            BfTreePaths::vectors_bftree(save_prefix_str).exists(),
+            "vectors bftree file should exist"
+        );
+        assert!(
+            BfTreePaths::neighbors_bftree(save_prefix_str).exists(),
+            "neighbors bftree file should exist"
+        );
+
+        // Load the index back and verify it has the expected number of points.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let loaded: BfTreeProvider<f32, NoStore> = rt
+            .block_on(<BfTreeProvider<f32, NoStore>>::load_with(
+                &FileStorageProvider,
+                &save_prefix_str.to_string(),
+            ))
+            .expect("should load saved index");
+
+        // The siftsmall dataset used in the test has 256 points.
+        assert_eq!(loaded.max_points(), 256);
+    }
+
     ////////////////////////////
     //  MinMax Quantization   //
     ////////////////////////////

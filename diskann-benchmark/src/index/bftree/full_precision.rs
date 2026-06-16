@@ -15,7 +15,10 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{BfTreeProvider, NoStore};
-use diskann_providers::model::graph::provider::async_::common::FullPrecision;
+use diskann_providers::{
+    model::graph::provider::async_::common::FullPrecision,
+    storage::{FileStorageProvider, SaveWith},
+};
 use diskann_utils::sampling::WithApproximateNorm;
 
 use crate::{
@@ -26,7 +29,7 @@ use crate::{
         search::plugins::{Plugin, Plugins},
     },
     inputs::{bftree::BfTreeFullPrecisionBuild, graph_index::SearchPhase},
-    utils::{self},
+    utils::{self, tokio},
 };
 
 type BfTreeFPProvider<T> = BfTreeProvider<T, NoStore>;
@@ -135,6 +138,15 @@ where
         )?;
 
         checkpoint.checkpoint(&build_stats)?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
 
         let search_results =
             self.plugins
