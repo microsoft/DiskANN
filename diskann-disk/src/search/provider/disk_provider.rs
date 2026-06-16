@@ -157,7 +157,7 @@ where
         let num_points = ctx.num_points;
 
         let index_path_prefix = ctx.quant_load_context.metadata.prefix();
-        let index_reader = DiskIndexReader::<<Data as GraphDataType>::VectorDataType>::new(
+        let index_reader = DiskIndexReader::new(
             get_pq_pivot_file(index_path_prefix),
             get_compressed_pq_file(index_path_prefix),
             provider,
@@ -178,7 +178,7 @@ where
     Data: GraphDataType<VectorIdType = u32>,
 {
     fn new(
-        disk_index_reader: &DiskIndexReader<Data::VectorDataType>,
+        disk_index_reader: &DiskIndexReader,
         graph_header: GraphHeader,
         metric: Metric,
         num_points: usize,
@@ -842,7 +842,7 @@ where
     pub fn new(
         num_threads: usize,
         search_io_limit: usize,
-        disk_index_reader: &DiskIndexReader<Data::VectorDataType>,
+        disk_index_reader: &DiskIndexReader,
         vertex_provider_factory: ProviderFactory,
         metric: Metric,
         runtime: Option<Runtime>,
@@ -1384,7 +1384,7 @@ mod disk_provider_tests {
             .build()
             .unwrap();
 
-        let disk_index_reader = DiskIndexReader::<Data::VectorDataType>::new(
+        let disk_index_reader = DiskIndexReader::new(
             params.pq_pivot_file_path.to_string(),
             params.pq_compressed_file_path.to_string(),
             storage_provider.as_ref(),

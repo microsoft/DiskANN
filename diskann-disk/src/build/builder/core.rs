@@ -1040,11 +1040,8 @@ pub(crate) mod disk_index_builder_tests {
         let pq_compressed_path = get_compressed_pq_file(&params.index_path_prefix);
         let index_file_path = get_disk_index_file(&params.index_path_prefix);
 
-        let index_reader = DiskIndexReader::<G::VectorDataType>::new(
-            pq_pivot_path,
-            pq_compressed_path,
-            storage_provider.as_ref(),
-        )?;
+        let index_reader =
+            DiskIndexReader::new(pq_pivot_path, pq_compressed_path, storage_provider.as_ref())?;
 
         let vertex_provider_factory = DiskVertexProviderFactory::new(
             VirtualAlignedReaderFactory::new(index_file_path, Arc::clone(storage_provider)),

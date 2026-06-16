@@ -133,7 +133,7 @@ where
         );
     }
 
-    let index_reader = DiskIndexReader::<<Data as GraphDataType>::VectorDataType>::new(
+    let index_reader = DiskIndexReader::new(
         get_pq_pivot_file(parameters.index_path_prefix),
         get_compressed_pq_file(parameters.index_path_prefix),
         storage_provider,
