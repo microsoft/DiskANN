@@ -18,9 +18,10 @@
 //! | :------------------------------------       | :----------------------------------------- |:--------- |
 //! | [`crate::provider::DataProvider`]           | [`crate::provider::DataProvider`]          | Yes       |
 //! | [`crate::graph::DiskANNIndex`]              | [`FlatIndex`]                              | No        |
-//! | [`crate::graph::glue::ExpandBeam`]          | [`DistancesUnordered`]                     | No        |
+//! | [`crate::graph::glue::SearchAccessor`]      | [`DistancesUnordered`]                     | No        |
 //! | [`crate::graph::glue::SearchStrategy`]      | [`SearchStrategy`]                         | No        |
 //! | [`crate::graph::Search`]                    | [`FlatIndex::knn_search`]                  | No        |
+//! | [`crate::graph::glue::SearchPostProcess`]   | [`crate::graph::glue::SearchPostProcess`]  | Yes       |
 //!
 pub mod index;
 pub mod strategy;

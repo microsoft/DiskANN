@@ -5,7 +5,7 @@
 
 //! Tests for inline filter search traversal behavior.
 //!
-//! These tests exercise end-to-end `index.search(InlineSearch { .. })` execution.
+//! These tests exercise end-to-end `index.search(InlineFilterSearch { .. })` execution.
 
 use diskann_vector::distance::Metric;
 use std::collections::HashSet;

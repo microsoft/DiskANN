@@ -820,9 +820,6 @@ impl From<AccessedInvalidId> for ANNError {
 
 /// A transient error from the test accessor — the ID exists but the retrieval
 /// temporarily failed. Must be acknowledged or escalated before being dropped.
-///
-/// Amognst other things, this is used to test the transient error handling of the blanket
-/// implementation of [`workingset::Fill`] for [`workingset::Map`].
 #[derive(Debug)]
 pub struct TransientAccessError {
     id: u32,
@@ -939,17 +936,16 @@ impl provider::HasId for NeighborAccessor<'_> {
 
 impl provider::NeighborAccessor for NeighborAccessor<'_> {
     async fn get_neighbors(
-        self,
+        &mut self,
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
-        self.provider.get_neighbors(id, neighbors)?;
-        Ok(self)
+    ) -> ANNResult<()> {
+        self.provider.get_neighbors(id, neighbors)
     }
 }
 
 impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
-    async fn set_neighbors(self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<Self> {
+    async fn set_neighbors(&mut self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<()> {
         if neighbors.len() > self.provider.max_degree() {
             return Err(message!(
                 "trying to assign neighbors with length {} when max degree is {}",
@@ -976,14 +972,14 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
                 if term.neighbors.len() != neighbors.len() {
                     Err(message!("duplicate neighbors detected"))
                 } else {
-                    Ok(self)
+                    Ok(())
                 }
             }
             None => Err(ANNError::opaque(AccessedInvalidId(id))),
         }
     }
 
-    async fn append_vector(self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<Self> {
+    async fn append_vector(&mut self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<()> {
         match self.provider.terms.get_mut(&id) {
             Some(mut term) => {
                 // Do not allow `append_vector` to exceed the max degree.
@@ -1003,7 +999,7 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
                 if added != neighbors.len() {
                     Err(message!("duplicate ids in append-vector"))
                 } else {
-                    Ok(self)
+                    Ok(())
                 }
             }
             None => Err(ANNError::opaque(AccessedInvalidId(id))),
@@ -1043,28 +1039,25 @@ pub struct PruneAccessor<'a> {
     provider: &'a Provider,
     get_vector: LocalCounter<'a>,
     transient_ids: Flaky<'a>,
+    distance: <f32 as VectorRepr>::Distance,
+    set: WorkingSet,
 }
 
+type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+type View<'a> = workingset::map::View<'a, u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+
 impl<'a> PruneAccessor<'a> {
-    fn new(provider: &'a Provider, transient_ids: Option<Cow<'a, HashSet<u32>>>) -> Self {
+    fn new(
+        provider: &'a Provider,
+        transient_ids: Option<Cow<'a, HashSet<u32>>>,
+        set: WorkingSet,
+    ) -> Self {
         Self {
             provider,
             get_vector: provider.get_vector.local(),
             transient_ids: Flaky::new(transient_ids),
-        }
-    }
-
-    fn get(&mut self, id: u32) -> Result<Box<[f32]>, AccessError> {
-        let f = |data: &[f32]| -> Result<Box<[f32]>, TransientAccessError> {
-            self.transient_ids.check(id)?;
-            self.get_vector.increment();
-            Ok(data.into())
-        };
-
-        match self.provider.get(id, f) {
-            Ok(Ok(buf)) => Ok(buf),
-            Ok(Err(transient)) => Err(AccessError::Transient(transient)),
-            Err(invalid) => Err(AccessError::InvalidId(invalid)),
+            distance: f32::distance(provider.distance_metric(), Some(provider.dim())),
+            set,
         }
     }
 }
@@ -1073,58 +1066,47 @@ impl provider::HasId for PruneAccessor<'_> {
     type Id = u32;
 }
 
-impl provider::HasElementRef for PruneAccessor<'_> {
+impl glue::PruneAccessor for PruneAccessor<'_> {
     type ElementRef<'a> = &'a [f32];
-}
-
-impl<'a> provider::DelegateNeighbor<'a> for PruneAccessor<'_> {
-    type Delegate = NeighborAccessor<'a>;
-    fn delegate_neighbor(&'a mut self) -> Self::Delegate {
-        NeighborAccessor::new(self.provider)
-    }
-}
-
-impl provider::BuildDistanceComputer for PruneAccessor<'_> {
-    type DistanceComputerError = Infallible;
-    type DistanceComputer = <f32 as VectorRepr>::Distance;
-
-    fn build_distance_computer(
-        &self,
-    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(f32::distance(
-            self.provider.distance_metric(),
-            Some(self.provider.dim()),
-        ))
-    }
-}
-
-//------//
-// glue //
-//------//
-
-type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-type View<'a> = workingset::map::View<'a, u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-
-impl workingset::Fill<WorkingSet> for PruneAccessor<'_> {
-    type Error = ANNError;
     type View<'a>
         = View<'a>
     where
-        Self: 'a,
-        WorkingSet: 'a;
+        Self: 'a;
+    type Distance<'a>
+        = <f32 as VectorRepr>::Distance
+    where
+        Self: 'a;
+    type Neighbors<'a>
+        = NeighborAccessor<'a>
+    where
+        Self: 'a;
 
-    async fn fill<'a, Itr>(
-        &'a mut self,
-        set: &'a mut WorkingSet,
-        itr: Itr,
-    ) -> Result<Self::View<'a>, Self::Error>
+    async fn fill<Itr>(&mut self, itr: Itr) -> ANNResult<(Self::View<'_>, Self::Distance<'_>)>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a,
     {
-        set.fill(itr, |i| {
-            self.get(i).allow_transient("transient failures allowed")
-        })
+        let view = self.set.fill(itr, |i| {
+            let f = |data: &[f32]| -> Result<Box<[f32]>, TransientAccessError> {
+                self.transient_ids.check(i)?;
+                self.get_vector.increment();
+                Ok(data.into())
+            };
+
+            match self.provider.get(i, f) {
+                Ok(Ok(buf)) => Ok(Some(buf)),
+                Ok(Err(transient)) => {
+                    transient.acknowledge("transient failures allowed");
+                    Ok(None)
+                }
+                Err(invalid) => Err(invalid),
+            }
+        })?;
+
+        Ok((view, self.distance))
+    }
+
+    fn neighbors(&mut self) -> Self::Neighbors<'_> {
+        NeighborAccessor::new(self.provider)
     }
 }
 
@@ -1338,29 +1320,26 @@ impl<'a> glue::DefaultPostProcessor<'a, Provider, &'a [f32]> for Strategy {
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
-    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-    type DistanceComputer<'a> = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = PruneAccessor<'a>;
     type PruneAccessorError = Infallible;
 
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+    fn prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+        capacity: usize,
+    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let cap = if self.working_set_reuse {
             workingset::map::Capacity::Default
         } else {
             workingset::map::Capacity::None
         };
 
-        workingset::map::Builder::new(cap).build(capacity)
-    }
+        let set = workingset::map::Builder::new(cap).build(capacity);
 
-    fn prune_accessor<'a>(
-        &'a self,
-        provider: &'a Provider,
-        _context: &'a Context,
-    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         match &self.transient_ids {
-            Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)))),
-            None => Ok(PruneAccessor::new(provider, None)),
+            Some(ids) => Ok(PruneAccessor::new(provider, Some(Cow::Borrowed(ids)), set)),
+            None => Ok(PruneAccessor::new(provider, None, set)),
         }
     }
 }
@@ -1383,9 +1362,9 @@ impl<'a> glue::InsertStrategy<'a, Provider, &'a [f32]> for Strategy {
 }
 
 impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
-    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type Seed = workingset::map::Builder<u32, workingset::map::Ref<[f32]>>;
     type FinishError = Infallible;
+    type PruneStrategy = Self;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1413,6 +1392,19 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
         std::future::ready(Ok(
             Builder::new(capacity).with_overlay(Overlay::from_batch(batch.clone(), ids))
         ))
+    }
+
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+        builder: &'a Self::Seed,
+        capacity: usize,
+    ) -> ANNResult<PruneAccessor<'a>> {
+        let set = builder.clone().build(capacity);
+        let transient_ids = self.transient_ids.as_deref().map(Cow::Borrowed);
+
+        Ok(PruneAccessor::new(provider, transient_ids, set))
     }
 }
 
@@ -1849,7 +1841,7 @@ mod tests {
         use provider::{DefaultAccessor, NeighborAccessor};
 
         let provider = create_test_provider();
-        let accessor = provider.default_accessor();
+        let mut accessor = provider.default_accessor();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();
@@ -1878,7 +1870,7 @@ mod tests {
         use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
-        let accessor = provider.default_accessor();
+        let mut accessor = provider.default_accessor();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();
@@ -1956,7 +1948,7 @@ mod tests {
         use provider::{DefaultAccessor, NeighborAccessor, NeighborAccessorMut};
 
         let provider = create_test_provider();
-        let accessor = provider.default_accessor();
+        let mut accessor = provider.default_accessor();
         let mut v = AdjacencyList::new();
 
         let rt = current_thread_runtime();

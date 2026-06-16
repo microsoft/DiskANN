@@ -17,7 +17,7 @@ use diskann::{
         search_output_buffer,
     },
     neighbor::Neighbor,
-    provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
+    provider::{DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement},
     utils::ONE,
 };
 use diskann_utils::Reborrow;
@@ -233,7 +233,7 @@ where
     ) -> ANNResult<bool>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -243,7 +243,7 @@ where
 
     pub fn drop_adj_list<NA>(&self, accessor: &mut NA, vector_id: DP::InternalId) -> ANNResult<()>
     where
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
@@ -258,7 +258,7 @@ where
     ) -> ANNResult<PartitionedNeighbors<DP::InternalId>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -296,7 +296,7 @@ where
     ) -> ANNResult<ConsolidateKind>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle.block_on(self.inner.drop_deleted_neighbors(
             context,
@@ -490,7 +490,7 @@ where
         accessor: &mut NA,
     ) -> ANNResult<usize>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.count_reachable_nodes(start_points, accessor))
@@ -499,7 +499,7 @@ where
     pub fn get_degree_stats<NA, Itr>(&self, accessor: &mut NA, itr: Itr) -> ANNResult<DegreeStats>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.get_degree_stats(accessor, itr))

@@ -7,29 +7,25 @@
 
 use std::marker::PhantomData;
 
-use crate::{AccessError, AsKey, VectorError, VectorUnavailable};
+use crate::{AccessError, VectorError, VectorUnavailable};
 use bf_tree::{BfTree, Config};
 use bytemuck::cast_slice;
-use diskann::{
-    error::RankedError,
-    utils::{ErrorToVectorId, TryIntoVectorId, VectorId, VectorRepr},
-    ANNError, ANNErrorKind, ANNResult,
-};
+use diskann::{error::RankedError, utils::VectorRepr, ANNError, ANNErrorKind, ANNResult};
 use thiserror::Error;
 
 use super::ConfigError;
 use crate::TestCallCount;
 
-pub struct VectorProvider<T: VectorRepr, I: VectorId = u32> {
+pub struct VectorProvider<T: VectorRepr> {
     dim: usize,
     pub max_vectors: usize,
     pub num_start_points: usize,
     vector_index: BfTree,
     pub(super) num_get_calls: TestCallCount,
-    _phantom: PhantomData<(T, I)>,
+    _phantom: PhantomData<T>,
 }
 
-impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
+impl<T: VectorRepr> VectorProvider<T> {
     /// Create a new instance based on bf-tree Config directly
     pub fn new_with_config(
         max_vectors: usize,
@@ -92,9 +88,13 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
     /// Return a vector of vector Ids of the starting points
     ///
     #[inline(always)]
-    pub fn starting_points(&self) -> Result<Vec<I>, ErrorToVectorId<usize, I>> {
+    pub fn starting_points(&self) -> ANNResult<Vec<u32>> {
         (self.max_vectors..self.total())
-            .map(|i| i.try_into_vector_id())
+            .map(|i| {
+                u32::try_from(i).map_err(|_| {
+                    ANNError::log_index_error(format_args!("start point id {i} exceeds u32::MAX"))
+                })
+            })
             .collect()
     }
 
@@ -128,7 +128,7 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         }
 
         // Serialize the key, vector_id, into a byte string, &[u8]
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
         let value = cast_slice::<T, u8>(v);
 
         self.vector_index.insert(key, value);
@@ -149,10 +149,10 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         }
 
         self.num_get_calls.increment();
-        match self
-            .vector_index
-            .read(i.as_key(), bytemuck::must_cast_slice_mut::<_, u8>(buffer))
-        {
+        match self.vector_index.read(
+            bytemuck::bytes_of(&i),
+            bytemuck::must_cast_slice_mut::<_, u8>(buffer),
+        ) {
             bf_tree::LeafReadResult::Found(read_size) => {
                 let vector_size = std::mem::size_of::<T>() * self.dim;
                 if read_size as usize != vector_size {
@@ -195,7 +195,7 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
     }
 
     pub(crate) fn delete_vector(&self, i: usize) {
-        let key = i.as_key();
+        let key = bytemuck::bytes_of(&i);
         self.vector_index.delete(key);
     }
 }
@@ -210,7 +210,6 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
 mod tests {
     use std::sync::Arc;
 
-    use diskann::utils::vecid_from_usize;
     use tokio::task::JoinSet;
 
     use super::*;
@@ -231,9 +230,7 @@ mod tests {
             let vector_provider_clone = Arc::clone(&vector_provider);
             set.spawn(async move {
                 // One tokio task per vector insertion
-                vector_provider_clone
-                    .set_vector_sync(vecid_from_usize(i).unwrap(), &vector)
-                    .unwrap()
+                vector_provider_clone.set_vector_sync(i, &vector).unwrap()
             });
         }
 
@@ -243,9 +240,7 @@ mod tests {
 
         for i in 0..num_points {
             // SAFETY: We're only accessing one at a time.
-            let vector = vector_provider
-                .get_vector_sync(vecid_from_usize(i).unwrap())
-                .unwrap();
+            let vector = vector_provider.get_vector_sync(i).unwrap();
             assert_eq!(&vector, &vec![(i as f32), (i + 1) as f32, (i + 2) as f32]);
         }
         if TestCallCount::enabled() {

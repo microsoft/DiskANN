@@ -8,7 +8,7 @@
 //! Organized into two layers:
 //! - **Unit tests** call `multihop_search_internal` directly on small hand-constructed
 //!   graphs to test each decision path (Accept, Reject+two-hop, Terminate) in isolation.
-//! - **Integration tests** go through `index.search(MultihopSearch{...})` end-to-end
+//! - **Integration tests** go through `index.search(MultihopFilterSearch{...})` end-to-end
 //!   with baselines for regression protection.
 
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use crate::{
     graph::{
         self, AdjacencyList, DiskANNIndex,
         ext::labeled,
-        search::{Knn, MultihopSearch},
+        search::{Knn, MultihopFilterSearch},
         search_output_buffer,
         test::provider as test_provider,
     },
@@ -119,7 +119,7 @@ fn run(
 ) -> (graph::index::SearchStats, Vec<Neighbor<u32>>) {
     let rt = current_thread_runtime();
     rt.block_on(async {
-        let multihop = MultihopSearch::new(Knn::new_default(k, l).unwrap());
+        let multihop = MultihopFilterSearch::new(Knn::new_default(k, l).unwrap());
         let mut neighbors = Vec::<Neighbor<u32>>::new();
 
         let stats = index
@@ -267,7 +267,7 @@ fn reject_all_yields_nothing() {
 
 /// Baseline struct for end-to-end multihop search results.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct MultihopBaseline {
+struct MultihopFilterBaseline {
     grid_size: usize,
     query: Vec<f32>,
     k: usize,
@@ -277,7 +277,7 @@ struct MultihopBaseline {
     hops: usize,
 }
 
-verbose_eq!(MultihopBaseline {
+verbose_eq!(MultihopFilterBaseline {
     grid_size,
     query,
     k,
@@ -309,7 +309,7 @@ pub(super) fn setup_grid_index(grid_size: usize) -> Arc<DiskANNIndex<test_provid
 /// Two-hop reachability through non-matching nodes, end-to-end with baseline.
 ///
 /// Uses the same hand-constructed 1D graph as the unit test, but goes through
-/// `index.search(MultihopSearch{...})` to also exercise post-processing.
+/// `index.search(MultihopFilterSearch{...})` to also exercise post-processing.
 #[test]
 fn two_hop_reaches_through_non_matching() {
     let rt = current_thread_runtime();
@@ -350,7 +350,7 @@ fn two_hop_reaches_through_non_matching() {
     let l = 20;
 
     let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params);
+    let multihop = MultihopFilterSearch::new(search_params);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -367,7 +367,7 @@ fn two_hop_reaches_through_non_matching() {
         .unwrap();
 
     let result_count = stats.result_count as usize;
-    let baseline = MultihopBaseline {
+    let baseline = MultihopFilterBaseline {
         grid_size: 0, // hand-constructed, not grid-based
         query: query.clone(),
         k,
@@ -419,7 +419,7 @@ fn even_filtering_grid() {
     let k = 20;
     let l = 40;
     let search_params = Knn::new_default(k, l).unwrap();
-    let multihop = MultihopSearch::new(search_params);
+    let multihop = MultihopFilterSearch::new(search_params);
 
     let mut ids = vec![0u32; k];
     let mut distances = vec![0.0f32; k];
@@ -436,7 +436,7 @@ fn even_filtering_grid() {
         .unwrap();
 
     let result_count = stats.result_count as usize;
-    let baseline = MultihopBaseline {
+    let baseline = MultihopFilterBaseline {
         grid_size,
         query: query.clone(),
         k,
