@@ -1091,6 +1091,7 @@ pub(crate) mod disk_index_builder_tests {
                 &mut associated_data,
                 &|_| true,
                 false,
+                None, // adaptive_l
             );
 
             diskann_providers::test_utils::assert_top_k_exactly_match(

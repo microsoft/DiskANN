@@ -278,6 +278,7 @@ where
                     Some(search_params.beam_width),
                     vector_filter,
                     search_params.is_flat_search,
+                    None, // adaptive_l — disk-side AdaptiveL not yet exposed via JSON
                 ) {
                     Ok(search_result) => {
                         *stats = search_result.stats.query_statistics;

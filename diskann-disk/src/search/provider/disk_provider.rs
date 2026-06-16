@@ -19,7 +19,8 @@ use diskann::{
     graph::{
         self,
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
-        search::Knn,
+        index::QueryLabelProvider,
+        search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
     neighbor::{Neighbor, NeighborPriorityQueue},
@@ -267,6 +268,26 @@ pub struct RerankAndFilter<'a> {
 impl<'a> RerankAndFilter<'a> {
     fn new(filter: &'a (dyn Fn(&u32) -> bool + Send + Sync)) -> Self {
         Self { filter }
+    }
+}
+
+/// Adapter exposing the existing disk-side `&dyn Fn(&u32) -> bool` predicate
+/// as a `QueryLabelProvider<u32>` for `InlineFilterSearch`. Lives entirely
+/// inside `filter_search` — public `search()` keeps its existing predicate
+/// type at the boundary.
+struct PredicateLabelProvider<'a> {
+    predicate: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+}
+
+impl std::fmt::Debug for PredicateLabelProvider<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PredicateLabelProvider").finish_non_exhaustive()
+    }
+}
+
+impl QueryLabelProvider<u32> for PredicateLabelProvider<'_> {
+    fn is_match(&self, vec_id: u32) -> bool {
+        (self.predicate)(&vec_id)
     }
 }
 
@@ -825,8 +846,49 @@ where
         })
     }
 
+    /// Run inline label-filtered graph search with optional adaptive-L sizing.
+    ///
+    /// Wraps `Knn` in an `InlineFilterSearch` that tracks matched candidates
+    /// during traversal. When `adaptive_l = Some(_)`, the beam (`l_search`)
+    /// is grown mid-query if the observed match specificity is low (see
+    /// `diskann::graph::search::AdaptiveL`).
+    ///
+    /// The disk-side `&dyn Fn(&u32) -> bool` predicate is adapted to the
+    /// `QueryLabelProvider<u32>` interface that `InlineFilterSearch` consumes
+    /// via a stack-allocated `PredicateLabelProvider` shim — no allocation,
+    /// no lifetime threading past this function body.
+    ///
+    /// Reuses the same `DiskAccessor` surface as the plain `Knn` graph path:
+    /// `start_point_distances` and `expand_beam`, both of which call
+    /// `pq_distances` internally.
+    async fn filter_search<OB>(
+        &self,
+        strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
+        query: &[Data::VectorDataType],
+        knn: Knn,
+        vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
+        adaptive_l: Option<AdaptiveL>,
+        output: &mut OB,
+    ) -> ANNResult<graph::index::SearchStats>
+    where
+        OB: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send,
+    {
+        let label_provider = PredicateLabelProvider {
+            predicate: vector_filter,
+        };
+        let search = InlineFilterSearch::new(knn, &label_provider, adaptive_l);
+        self.index
+            .search(search, strategy, &DefaultContext, query, output)
+            .await
+    }
+
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
+    ///
+    /// `adaptive_l = Some(_)` routes the graph path through inline
+    /// label-filtered search with adaptive-L sizing; `None` keeps the plain
+    /// `Knn` behavior. Ignored on the flat-scan path.
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
@@ -835,6 +897,7 @@ where
         beam_width: Option<usize>,
         vector_filter: Option<VectorFilter<Data>>,
         is_flat_search: bool,
+        adaptive_l: Option<AdaptiveL>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; return_list_size as usize];
@@ -853,6 +916,7 @@ where
             &mut associated_data,
             &vector_filter.unwrap_or(default_vector_filter::<Data>()),
             is_flat_search,
+            adaptive_l,
         )?;
 
         let mut search_result = SearchResult {
@@ -877,6 +941,10 @@ where
 
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
+    ///
+    /// `adaptive_l` routes the graph path through `filter_search`
+    /// (inline label-filtered search). `None` runs plain `Knn`. Has no
+    /// effect on the flat-scan path (`is_flat_search = true`).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
@@ -890,6 +958,7 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         vector_filter: &(dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
         is_flat_search: bool,
+        adaptive_l: Option<AdaptiveL>,
     ) -> ANNResult<SearchResultStats> {
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
@@ -907,6 +976,16 @@ where
                 query,
                 vector_filter,
                 l,
+                &mut result_output_buffer,
+            ))?
+        } else if adaptive_l.is_some() {
+            let knn_search = Knn::new(k, l, beam_width)?;
+            self.runtime.block_on(self.filter_search(
+                &strategy,
+                query,
+                knn_search,
+                vector_filter,
+                adaptive_l,
                 &mut result_output_buffer,
             ))?
         } else {
@@ -1311,6 +1390,7 @@ mod disk_provider_tests {
                     &mut associated_data,
                     &(|_| true),
                     false,
+                    None, // adaptive_l
                 );
 
                 // Calculate the range of the truth_result for this query
@@ -1357,7 +1437,7 @@ mod disk_provider_tests {
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, None, false)
+                    .search(query, params.k as u32, params.l as u32, beam_width, None, false, None)
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1469,6 +1549,7 @@ mod disk_provider_tests {
             &mut associated_data,
             &|_| true,
             false,
+            None, // adaptive_l
         );
 
         assert!(result.is_err());
@@ -1538,6 +1619,7 @@ mod disk_provider_tests {
             Some(4),
             None,
             false,
+            None, // adaptive_l
         );
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
@@ -1877,6 +1959,7 @@ mod disk_provider_tests {
             &mut associated_data,
             &vector_filter,
             is_flat_search,
+            None, // adaptive_l
         );
 
         assert!(result.is_ok(), "Expected search to succeed");
@@ -1898,6 +1981,7 @@ mod disk_provider_tests {
             None, // beam_width
             Some(Box::new(vector_filter)),
             is_flat_search,
+            None, // adaptive_l
         );
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
@@ -1923,6 +2007,120 @@ mod disk_provider_tests {
         assert!(
             check_distances(&actual_distances, &expected_distances),
             "Expected distances to match"
+        );
+    }
+
+    // ===========================================================================
+    // Inline filter + AdaptiveL behavioral tests
+    // ===========================================================================
+    //
+    // Two basic invariants from the design review:
+    //
+    // 1. `adaptive_l = Some(_)` with an always-true predicate visits every
+    //    candidate as a "match," computes specificity = 100%, never triggers
+    //    a resize, and produces the same top-k as plain `Knn`. This is the
+    //    "no-op equivalence" guard.
+    //
+    // 2. `adaptive_l = Some(_)` with a selective predicate must produce a
+    //    valid result set whose IDs all satisfy the predicate. Doesn't assert
+    //    recall@k (would need filter-selective ground truth) — just that the
+    //    inline path runs end-to-end and produces filter-conforming output.
+
+    #[test]
+    fn test_adaptive_l_with_no_filter_matches_plain_knn() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+
+        let plain = search_engine
+            .search(&query, 10, 10, None, None, false, None)
+            .expect("plain Knn must succeed");
+
+        let inline_no_filter = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None,
+                Some(Box::new(|_| true)),
+                false,
+                Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+            )
+            .expect("inline filter with accept-all predicate must succeed");
+
+        let plain_ids: Vec<u32> = plain.results.iter().map(|r| r.vertex_id).collect();
+        let inline_ids: Vec<u32> = inline_no_filter.results.iter().map(|r| r.vertex_id).collect();
+
+        assert_eq!(
+            plain.stats.result_count, inline_no_filter.stats.result_count,
+            "no-filter inline path must return same result count as plain Knn"
+        );
+        assert_eq!(
+            plain_ids, inline_ids,
+            "no-filter inline path must return the same top-k IDs as plain Knn"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_l_with_selective_predicate_returns_only_matches() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+        let search_engine = create_disk_index_searcher::<GraphDataF32VectorUnitData>(
+            CreateDiskIndexSearcherParams {
+                max_thread_num: 1,
+                pq_pivot_file_path: TEST_PQ_PIVOT_128DIM,
+                pq_compressed_file_path: TEST_PQ_COMPRESSED_128DIM,
+                index_path: TEST_INDEX_128DIM,
+                index_path_prefix: TEST_INDEX_PREFIX_128DIM,
+                ..Default::default()
+            },
+            &storage_provider,
+        );
+        let query = vec![0.1f32; 128];
+        // Predicate from `test_search_with_vector_filter::case_4` — three IDs
+        // known to be in the unfiltered top-10 for this query+fixture.
+        let predicate = |id: &u32| *id == 72 || *id == 87 || *id == 170;
+
+        let result = search_engine
+            .search(
+                &query,
+                10,
+                10,
+                None,
+                Some(Box::new(predicate)),
+                false,
+                Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
+            )
+            .expect("inline filter search with AdaptiveL must succeed");
+
+        // `result.results` is pre-allocated to `return_list_size`; only the
+        // first `result_count` entries are populated. The trailing entries
+        // are default zeros — not search output — so slice before asserting.
+        let count = result.stats.result_count as usize;
+        let ids: Vec<u32> = result
+            .results
+            .iter()
+            .take(count)
+            .map(|r| r.vertex_id)
+            .collect();
+        for id in &ids {
+            assert!(
+                predicate(id),
+                "AdaptiveL result must only contain predicate-matching IDs; got {id} in {ids:?}"
+            );
+        }
+        assert!(
+            !ids.is_empty(),
+            "AdaptiveL on a fixture with reachable matches must return at least one match"
         );
     }
 

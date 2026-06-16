@@ -260,6 +260,7 @@ where
                     Some(parameters.beam_width as usize),
                     Some(vector_filter_function),
                     parameters.is_flat_search,
+                    None, // adaptive_l — disk-side AdaptiveL not yet exposed via CLI
                 );
 
                 match result {
