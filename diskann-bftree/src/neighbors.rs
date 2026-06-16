@@ -6,7 +6,7 @@
 //! Bf-Tree neighbor list provider.
 
 use std::marker::PhantomData;
-use std::sync::RwLock;
+use std::sync::Arc;
 
 use bf_tree::{BfTree, Config};
 use bytemuck::{cast_slice, cast_slice_mut};
@@ -18,65 +18,15 @@ use diskann::{
 };
 
 use super::ConfigError;
+use crate::locks::StripedLocks;
 use crate::{bftree_insert, TestCallCount};
 
 pub struct NeighborProvider<I: VectorId + IntoUsize> {
     adjacency_list_index: BfTree,
     dim: usize, // Max number of neighbors in a neighbor list + 1 for the neighbor count
-    locks: StripedLocks,
     #[allow(dead_code)]
     pub(crate) num_get_calls: TestCallCount,
     _phantom: PhantomData<I>,
-}
-
-/// A fixed-size table of striped locks for per-vertex synchronization.
-///
-/// Vertex IDs are mapped to lock stripes via a multiply-shift hash. This provides
-/// constant memory overhead regardless of dataset size, at the cost of
-/// occasional false contention between vertices that map to the same stripe.
-///
-/// The default stripe count (16384) is chosen to keep false sharing negligible
-/// for typical workloads while using only ~128 KB of memory.
-struct StripedLocks {
-    stripes: Box<[RwLock<()>]>,
-}
-
-impl StripedLocks {
-    const DEFAULT_STRIPE_COUNT: usize = 16384;
-    // Fibonacci hashing constant for 64-bit: floor(2^64 / phi)
-    const HASH_MULTIPLIER: u64 = 0x9E3779B97F4A7C15;
-    // Shift to extract the top log2(16384) = 14 bits
-    const HASH_SHIFT: u32 = 64 - 14;
-
-    fn new() -> Self {
-        Self {
-            stripes: (0..Self::DEFAULT_STRIPE_COUNT)
-                .map(|_| RwLock::new(()))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        }
-    }
-
-    #[inline]
-    fn stripe_index(&self, id: usize) -> usize {
-        ((id as u64).wrapping_mul(Self::HASH_MULTIPLIER) >> Self::HASH_SHIFT) as usize
-    }
-
-    #[inline]
-    fn read(&self, id: usize) -> std::sync::RwLockReadGuard<'_, ()> {
-        let stripe = self.stripe_index(id);
-        self.stripes[stripe]
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    #[inline]
-    fn write(&self, id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
-        let stripe = self.stripe_index(id);
-        self.stripes[stripe]
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-    }
 }
 
 impl<I: VectorId + IntoUsize> HasId for NeighborProvider<I> {
@@ -101,7 +51,6 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         Ok(Self {
             adjacency_list_index,
             dim,
-            locks: StripedLocks::new(),
             num_get_calls: TestCallCount::default(),
             _phantom: PhantomData,
         })
@@ -134,8 +83,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
     /// Retrieve the neighbor list of a vector.
     ///
-    /// Acquires a read lock on the vertex to ensure consistency with concurrent
-    /// mutations (set/append).
+    /// Does not acquire any lock. Callers must ensure appropriate synchronization.
     pub fn get_neighbors(&self, vector_id: I, neighbors: &mut AdjacencyList<I>) -> ANNResult<()> {
         #[cfg(test)]
         self.num_get_calls.increment();
@@ -143,9 +91,6 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         // Clear the output before any early returns so callers always see
         // a deterministic empty state on error.
         neighbors.clear();
-
-        let idx = vector_id.into_usize();
-        let _guard = self.locks.read(idx);
 
         self.get_neighbors_unlocked(vector_id, neighbors)
     }
@@ -260,7 +205,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
 
     /// Insert a neighbor list of a vector in bf-tree as a (K, V) pair.
     ///
-    /// Acquires a write lock on the vertex to ensure exclusive access during mutation.
+    /// Does not acquire any lock. Callers must ensure appropriate synchronization.
     ///
     /// The list of neighbors and their length is written into the passed buffer
     /// `buf` before writing the leading `self.dim * std::mem::size_of::<I>()`
@@ -277,17 +222,13 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
             ));
         };
 
-        let idx = vector_id.into_usize();
-        let _guard = self.locks.write(idx);
-
         self.set_neighbors_internal(vector_id, neighbors, buf)
     }
 
     /// Append unique vectors into a neighbor list.
     ///
-    /// Acquires a write lock on the vertex for the entire read-modify-write cycle,
-    /// preventing lost updates when multiple threads append to the same vertex
-    /// concurrently.
+    /// Does not acquire any lock. Callers must ensure appropriate synchronization
+    /// for the entire read-modify-write cycle.
     ///
     /// The newly appended neighbor list will always be extended to 'dim'
     /// long to avoid frequent mem copy in bf-tree.
@@ -299,10 +240,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         new_neighbor_ids: &[I],
         buf: &mut [I],
     ) -> ANNResult<()> {
-        let idx = vector_id.into_usize();
-        let _guard = self.locks.write(idx);
-
-        // Retrieve existing neighborlist (no lock needed — we hold the write lock)
+        // Retrieve existing neighborlist
         let mut neighbor_list = AdjacencyList::with_capacity(self.dim);
         self.get_neighbors_unlocked(vector_id, &mut neighbor_list)?;
 
@@ -324,17 +262,15 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
     }
 
     pub fn delete_vector(&self, vector_id: I) -> ANNResult<()> {
-        let idx = vector_id.into_usize();
-        let _guard = self.locks.write(idx);
-
         let key = bytemuck::bytes_of(&vector_id);
         self.adjacency_list_index.delete(key);
         Ok(())
     }
 
-    pub(crate) fn scratch(&self) -> NeighborAccessor<'_, I> {
+    pub(crate) fn scratch<'a>(&'a self, locks: Arc<StripedLocks>) -> NeighborAccessor<'a, I> {
         NeighborAccessor {
             provider: self,
+            locks,
             buf: vec![I::zeroed(); self.dim],
         }
     }
@@ -345,6 +281,7 @@ where
     I: VectorId + IntoUsize,
 {
     provider: &'a NeighborProvider<I>,
+    locks: Arc<StripedLocks>,
     buf: Vec<I>,
 }
 
@@ -353,9 +290,11 @@ where
     I: VectorId + IntoUsize,
 {
     pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
+        let _guard = self.locks.write(id.into_usize());
         self.provider.set_neighbors(id, neighbors, &mut self.buf)
     }
     pub fn write_append(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
+        let _guard = self.locks.write(id.into_usize());
         self.provider.append_vector(id, neighbors, &mut self.buf)
     }
 }
@@ -376,6 +315,7 @@ where
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        let _guard = self.locks.read(id.into_usize());
         std::future::ready(self.provider.get_neighbors(id, neighbors))
     }
 }
@@ -389,6 +329,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        let _guard = self.locks.write(id.into_usize());
         std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
     }
     fn append_vector(
@@ -396,6 +337,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
+        let _guard = self.locks.write(id.into_usize());
         std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }
@@ -450,10 +392,11 @@ mod tests {
     /// Test corner cases of appending to neighbor list
     #[tokio::test]
     async fn test_neighbor_accessors() {
+        let locks = Arc::new(StripedLocks::new());
         let bf_tree_config = Config::default();
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
-        let mut scratch = neighbor_provider.scratch();
+        let mut scratch = neighbor_provider.scratch(locks.clone());
 
         // Set the neighbor list of a vector
         let adj_list = vec![1, 2, 3];
@@ -501,6 +444,7 @@ mod tests {
     /// by invoking the async accessors of the neighbor list provider
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
+        let locks = Arc::new(StripedLocks::new());
         let bf_tree_config = Config::default();
         let neighbor_provider =
             Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
@@ -509,8 +453,9 @@ mod tests {
         for i in 0..100 {
             let neighbor_list = vec![i as u32, (i + 1) as u32, (i + 2) as u32];
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
+            let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = neighbor_provider_clone.scratch();
+                let mut scratch = neighbor_provider_clone.scratch(locks.clone());
                 scratch.write_neighbors(i as u32, &neighbor_list).unwrap();
             });
         }
@@ -533,6 +478,7 @@ mod tests {
     /// Test that cpr_snapshot can be called without errors
     #[tokio::test]
     async fn test_snapshot() {
+        let locks = Arc::new(StripedLocks::new());
         // Use a temporary directory that gets cleaned up when dropped
         let temp_dir = tempfile::tempdir().unwrap();
         let snapshot_path = temp_dir.path().join("test_neighbor_snapshot.bftree");
@@ -544,7 +490,7 @@ mod tests {
 
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
-        let mut scratch = neighbor_provider.scratch();
+        let mut scratch = neighbor_provider.scratch(locks.clone());
 
         // Set some neighbor lists
         scratch.write_neighbors(1, &[2, 3, 4]).unwrap();
@@ -588,13 +534,14 @@ mod tests {
     /// Test new_from_bftree constructor
     #[tokio::test]
     async fn test_new_from_bftree() {
+        let locks = Arc::new(StripedLocks::new());
         let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree).unwrap();
 
         assert_eq!(neighbor_provider.max_degree(), 10);
 
         // Verify the provider is functional
-        let mut scratch = neighbor_provider.scratch();
+        let mut scratch = neighbor_provider.scratch(locks.clone());
         scratch.write_neighbors(1, &[2, 3]).unwrap();
         let mut result = AdjacencyList::with_capacity(11);
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
@@ -604,6 +551,7 @@ mod tests {
     /// Test other methods and edge cases of the vector provider and synchronization mechanism of Bf-Tree
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_neighbor_access() {
+        let locks = Arc::new(StripedLocks::new());
         let bf_tree_config = Config::default();
         let neighbor_provider =
             Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
@@ -611,8 +559,9 @@ mod tests {
         let mut set = JoinSet::new();
         for _ in 0..5 {
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
+            let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = neighbor_provider_clone.scratch();
+                let mut scratch = neighbor_provider_clone.scratch(locks.clone());
                 for i in 0..5 {
                     scratch.write_neighbors(i as u32, &[1, 2, 3, 4, 5]).unwrap();
                 }
@@ -640,13 +589,14 @@ mod tests {
     /// per-vertex write lock, every appended edge must be present in the final list.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_concurrent_append_no_lost_edges() {
+        let locks = Arc::new(StripedLocks::new());
         let max_degree = 120u32;
         let bf_tree_config = Config::default();
         let provider =
             Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0 with an empty neighbor list.
-        let mut scratch = provider.scratch();
+        let mut scratch = provider.scratch(locks.clone());
         scratch.write_neighbors(0, &[]).unwrap();
 
         let num_threads = 8;
@@ -656,8 +606,9 @@ mod tests {
         let mut set = JoinSet::new();
         for t in 0..num_threads {
             let provider_clone = Arc::clone(&provider);
+            let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch();
+                let mut scratch = provider_clone.scratch(locks.clone());
                 let base = t * edges_per_thread + 1;
                 for offset in 0..edges_per_thread {
                     let neighbor_id = base + offset;
@@ -704,6 +655,7 @@ mod tests {
     /// when independent vertices are mutated in parallel.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_concurrent_append_independent_vertices() {
+        let locks = Arc::new(StripedLocks::new());
         let max_degree = 64u32;
         let num_threads = 8u32;
         let vertices_per_thread = 50u32;
@@ -714,7 +666,7 @@ mod tests {
 
         // Initialize all vertices with empty neighbor lists.
         {
-            let mut scratch = provider.scratch();
+            let mut scratch = provider.scratch(locks.clone());
             for v in 0..num_vertices {
                 scratch.write_neighbors(v, &[]).unwrap();
             }
@@ -724,8 +676,9 @@ mod tests {
 
         for t in 0..num_threads {
             let provider_clone = Arc::clone(&provider);
+            let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch();
+                let mut scratch = provider_clone.scratch(locks.clone());
                 // Each thread owns a disjoint range of vertices
                 let base_vertex = t * vertices_per_thread;
                 for i in 0..vertices_per_thread {
@@ -762,13 +715,14 @@ mod tests {
     /// always in a consistent state (length matches actual content, no torn reads).
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_concurrent_read_write_consistency() {
+        let locks = Arc::new(StripedLocks::new());
         let max_degree = 120u32;
         let bf_tree_config = Config::default();
         let provider =
             Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0.
-        let mut scratch = provider.scratch();
+        let mut scratch = provider.scratch(locks.clone());
         scratch.write_neighbors(0, &[]).unwrap();
 
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -783,8 +737,9 @@ mod tests {
             let provider_clone = Arc::clone(&provider);
             let done_clone = Arc::clone(&done);
             let remaining_clone = Arc::clone(&writers_remaining);
+            let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch();
+                let mut scratch = provider_clone.scratch(locks.clone());
                 let base = t * edges_per_writer + 1;
                 for offset in 0..edges_per_writer {
                     scratch.write_append(0, &[base + offset]).unwrap();
