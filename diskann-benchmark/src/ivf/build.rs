@@ -35,10 +35,9 @@
 use std::{fmt, fs, io::Write, path::Path, time::Instant};
 
 use diskann_benchmark_runner::utils::MicroSeconds;
-use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool};
+use diskann_quantization::algorithms::kmeans::{lloyds::lloyds, plusplus::kmeans_plusplus_into};
 use diskann_utils::views::Matrix;
-use rand::prelude::*;
-use rayon::prelude::*;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -90,110 +89,6 @@ impl fmt::Display for IvfBuildStats {
     }
 }
 
-/// Run Lloyd's k-means to compute centroids.
-fn kmeans(
-    data: &Matrix<f32>,
-    k: usize,
-    max_iters: u32,
-    num_threads: usize,
-    metric: SimilarityMeasure,
-) -> Vec<f32> {
-    let n = data.nrows();
-    let d = data.ncols();
-    let dist_fn = super::distance_fn(metric);
-
-    // Initialize centroids with k-means++ seeding
-    let mut centroids = vec![0.0f32; k * d];
-    let mut rng = StdRng::seed_from_u64(42);
-
-    // Pick first centroid uniformly at random
-    let first = rng.random_range(0..n);
-    centroids[..d].copy_from_slice(data.row(first));
-
-    // Pick remaining centroids proportional to squared distance
-    let mut min_dists = vec![f32::MAX; n];
-    for c_idx in 1..k {
-        // Update min_dists with the last added centroid
-        let last_centroid = &centroids[(c_idx - 1) * d..c_idx * d];
-        for (md, i) in min_dists.iter_mut().zip(0..n) {
-            let dist = dist_fn(data.row(i), last_centroid);
-            if dist < *md {
-                *md = dist;
-            }
-        }
-
-        let total: f64 = min_dists.iter().map(|&x| x as f64).sum();
-        if total <= 0.0 {
-            // Degenerate case: just pick random
-            let idx = rng.random_range(0..n);
-            centroids[c_idx * d..(c_idx + 1) * d].copy_from_slice(data.row(idx));
-            continue;
-        }
-
-        let threshold = rng.random::<f64>() * total;
-        let mut cumulative = 0.0f64;
-        let mut chosen = n - 1;
-        for (i, &dist) in min_dists.iter().enumerate() {
-            cumulative += dist as f64;
-            if cumulative >= threshold {
-                chosen = i;
-                break;
-            }
-        }
-        centroids[c_idx * d..(c_idx + 1) * d].copy_from_slice(data.row(chosen));
-    }
-
-    // Build thread pool
-    let pool = create_thread_pool(num_threads).unwrap();
-
-    let mut assignments = vec![0u32; n];
-
-    for _iter in 0..max_iters {
-        // Assignment step: each point → nearest centroid
-        assignments
-            .par_iter_mut()
-            .enumerate()
-            .for_each_in_pool(pool.as_ref(), |(i, assign)| {
-                let point = data.row(i);
-                let mut best_dist = f32::MAX;
-                let mut best_c = 0u32;
-                for c in 0..k {
-                    let centroid = &centroids[c * d..(c + 1) * d];
-                    let dist = dist_fn(point, centroid);
-                    if dist < best_dist {
-                        best_dist = dist;
-                        best_c = c as u32;
-                    }
-                }
-                *assign = best_c;
-            });
-
-        // Update step: recompute centroids
-        let mut new_centroids = vec![0.0f64; k * d];
-        let mut counts = vec![0u64; k];
-
-        for (i, &c) in assignments.iter().enumerate() {
-            let c = c as usize;
-            counts[c] += 1;
-            let point = data.row(i);
-            for (j, &val) in point.iter().enumerate() {
-                new_centroids[c * d + j] += val as f64;
-            }
-        }
-
-        for c in 0..k {
-            if counts[c] > 0 {
-                let inv = 1.0 / counts[c] as f64;
-                for j in 0..d {
-                    centroids[c * d + j] = (new_centroids[c * d + j] * inv) as f32;
-                }
-            }
-        }
-    }
-
-    centroids
-}
-
 pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats> {
     let start = Instant::now();
 
@@ -205,32 +100,12 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
 
     anyhow::ensure!(nlist <= npoints, "nlist ({nlist}) > npoints ({npoints})");
 
-    // Run k-means
-    let centroids = kmeans(
-        &data,
-        nlist,
-        params.kmeans_iterations.get(),
-        params.num_threads.get(),
-        params.distance,
-    );
-
-    // Assign each vector to its nearest centroid
-    let dist_fn = super::distance_fn(params.distance);
-    let mut assignments = vec![0u32; npoints];
-    for (assign, i) in assignments.iter_mut().zip(0..npoints) {
-        let point = data.row(i);
-        let mut best_dist = f32::MAX;
-        let mut best_c = 0u32;
-        for c in 0..nlist {
-            let centroid = &centroids[c * ndims..(c + 1) * ndims];
-            let dist = dist_fn(point, centroid);
-            if dist < best_dist {
-                best_dist = dist;
-                best_c = c as u32;
-            }
-        }
-        *assign = best_c;
-    }
+    // Run k-means (always uses SquaredL2 for clustering, regardless of search metric)
+    let mut centroids = Matrix::new(0.0f32, nlist, ndims);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    kmeans_plusplus_into(centroids.as_mut_view(), data.as_view(), &mut rng)?;
+    let (assignments, _residual): (Vec<u32>, f32) =
+        lloyds(data.as_view(), centroids.as_mut_view(), params.kmeans_iterations.get() as usize);
 
     // Group vectors by cluster
     let mut clusters: Vec<Vec<u32>> = vec![Vec::new(); nlist];
@@ -253,7 +128,7 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
 
     // 2) Centroids file: nlist × ndims f32 values
     {
-        let bytes: &[u8] = bytemuck::cast_slice(&centroids);
+        let bytes: &[u8] = bytemuck::cast_slice(centroids.as_slice());
         let mut f = fs::File::create(save_dir.join("ivf_centroids.bin"))?;
         f.write_all(bytes)?;
     }

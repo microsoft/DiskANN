@@ -31,6 +31,20 @@ use crate::{
 
 use super::build::u32_to_metric;
 
+/// Returns a SIMD-accelerated distance function for the given metric.
+/// All returned functions follow the convention: lower = more similar.
+fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
+    use diskann_vector::distance;
+    use diskann_vector::PureDistanceFunction;
+
+    match metric {
+        SimilarityMeasure::SquaredL2 => |a, b| distance::SquaredL2::evaluate(a, b),
+        SimilarityMeasure::InnerProduct
+        | SimilarityMeasure::Cosine
+        | SimilarityMeasure::CosineNormalized => |a, b| distance::InnerProduct::evaluate(a, b),
+    }
+}
+
 struct IvfIndex {
     ndims: usize,
     nlist: usize,
@@ -162,7 +176,7 @@ fn search_one(
 ) -> (Vec<u32>, QueryStats, Vec<usize>) {
     let start = Instant::now();
     let ndims = index.ndims;
-    let dist_fn = super::distance_fn(index._metric);
+    let dist_fn = distance_fn(index._metric);
 
     // 1) Rank centroids (in RAM)
     let mut centroid_dists: Vec<(usize, f32)> = (0..index.nlist)
