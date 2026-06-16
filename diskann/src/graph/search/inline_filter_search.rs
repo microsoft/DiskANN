@@ -184,13 +184,6 @@ where
     let beam_width = search_params.beam_width().get();
     let l_search = search_params.l_value().get();
 
-    // // Helper to build the final stats from scratch state.
-    // let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {
-    //     cmps: scratch.cmps,
-    //     hops: scratch.hops,
-    //     range_search_second_round: false,
-    // };
-
     // Matched results tracked separately — scratch.best contains all nodes
     // for greedy navigation, matched_results contains only filter-matching nodes.
     let mut matched_results = Vec::new();
