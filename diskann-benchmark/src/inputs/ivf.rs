@@ -3,14 +3,14 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt, path::Path};
+use std::{fmt, num::{NonZeroU32, NonZeroUsize}, path::Path};
 
 use anyhow::Context;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    inputs::{as_input, Example},
+    inputs::{as_input, write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
 
@@ -48,9 +48,9 @@ pub(crate) struct IvfBuild {
     pub(crate) data_type: DataType,
     pub(crate) data: InputFile,
     pub(crate) distance: SimilarityMeasure,
-    pub(crate) nlist: u32,
-    pub(crate) num_threads: usize,
-    pub(crate) kmeans_iterations: u32,
+    pub(crate) nlist: NonZeroU32,
+    pub(crate) num_threads: NonZeroUsize,
+    pub(crate) kmeans_iterations: NonZeroU32,
     pub(crate) save_path: String,
 }
 
@@ -59,11 +59,11 @@ pub(crate) struct IvfBuild {
 pub(crate) struct IvfSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
-    pub(crate) num_threads: usize,
+    pub(crate) num_threads: NonZeroUsize,
     /// List of nprobe values to sweep. Each becomes a row in the output table, mapped to
     /// `search_l` in the result struct for comparability with DiskANN.
-    pub(crate) nprobe_list: Vec<u32>,
-    pub(crate) recall_at: u32,
+    pub(crate) nprobe_list: Vec<NonZeroU32>,
+    pub(crate) recall_at: NonZeroU32,
     pub(crate) distance: SimilarityMeasure,
 }
 
@@ -118,16 +118,6 @@ impl IvfBuild {
     pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.data.resolve(checker).context("invalid data file")?;
 
-        if self.nlist == 0 {
-            anyhow::bail!("nlist must be positive");
-        }
-        if self.num_threads == 0 {
-            anyhow::bail!("num_threads must be positive");
-        }
-        if self.kmeans_iterations == 0 {
-            anyhow::bail!("kmeans_iterations must be positive");
-        }
-
         // Relative save path with respect to output directory is not supported.
         if checker.output_directory().is_some() {
             anyhow::bail!("relative save_path with respect to output_directory is not supported");
@@ -165,15 +155,6 @@ impl IvfSearchPhase {
         if self.nprobe_list.is_empty() {
             anyhow::bail!("nprobe_list must have at least one value");
         }
-        if self.nprobe_list.contains(&0) {
-            anyhow::bail!("nprobe_list values must be positive");
-        }
-        if self.recall_at == 0 {
-            anyhow::bail!("recall_at must be positive");
-        }
-        if self.num_threads == 0 {
-            anyhow::bail!("num_threads must be positive");
-        }
         Ok(())
     }
 }
@@ -188,18 +169,23 @@ impl Example for IvfOperation {
             data_type: DataType::Float32,
             data: InputFile::new("path/to/data.fbin"),
             distance: SimilarityMeasure::SquaredL2,
-            nlist: 16,
-            num_threads: 1,
-            kmeans_iterations: 20,
+            nlist: NonZeroU32::new(16).unwrap(),
+            num_threads: NonZeroUsize::new(1).unwrap(),
+            kmeans_iterations: NonZeroU32::new(20).unwrap(),
             save_path: "sample_ivf_index".to_string(),
         };
 
         let search = IvfSearchPhase {
             queries: InputFile::new("path/to/queries.fbin"),
             groundtruth: InputFile::new("path/to/groundtruth.ibin"),
-            nprobe_list: vec![1, 4, 8, 16],
-            recall_at: 10,
-            num_threads: 1,
+            nprobe_list: vec![
+                NonZeroU32::new(1).unwrap(),
+                NonZeroU32::new(4).unwrap(),
+                NonZeroU32::new(8).unwrap(),
+                NonZeroU32::new(16).unwrap(),
+            ],
+            recall_at: NonZeroU32::new(10).unwrap(),
+            num_threads: NonZeroUsize::new(1).unwrap(),
             distance: SimilarityMeasure::SquaredL2,
         };
 
@@ -213,14 +199,6 @@ impl Example for IvfOperation {
 /////////////
 // Display //
 /////////////
-
-const PRINT_WIDTH: usize = 18;
-
-macro_rules! write_field {
-    ($f:ident, $field:tt, $($expr:tt)*) => {
-        writeln!($f,"{:>PRINT_WIDTH$}: {}", $field, $($expr)*)
-    }
-}
 
 impl fmt::Display for IvfSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

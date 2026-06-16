@@ -16,6 +16,7 @@ use std::{
     time::Instant,
 };
 
+use diskann::neighbor::{Neighbor, NeighborPriorityQueue};
 use diskann_benchmark_runner::utils::MicroSeconds;
 use diskann_providers::utils::{create_thread_pool, ParallelIteratorInPool};
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
@@ -29,10 +30,6 @@ use crate::{
 };
 
 use super::build::u32_to_metric;
-
-// ─────────────────────────────────────────
-// Lightweight handle — only centroids in RAM
-// ─────────────────────────────────────────
 
 struct IvfIndex {
     ndims: usize,
@@ -155,35 +152,6 @@ pub(super) struct IvfSearchResult {
     pub(super) list_reads: Vec<u32>,
 }
 
-/// Squared L2 distance (lower = more similar).
-fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let d = x - y;
-            d * d
-        })
-        .sum()
-}
-
-/// Negative inner product (lower = more similar, matching L2 sort order).
-fn neg_ip(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-}
-
-/// Returns the distance function for the given metric.
-/// All returned functions follow the convention: lower = more similar.
-fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
-    match metric {
-        SimilarityMeasure::SquaredL2 => sq_l2,
-        SimilarityMeasure::InnerProduct
-        | SimilarityMeasure::Cosine
-        | SimilarityMeasure::CosineNormalized => neg_ip,
-    }
-}
-
 /// Search a single query: rank centroids (RAM), then read `nprobe` cluster files from disk.
 /// Returns (result_ids, stats, probed_cluster_indices).
 fn search_one(
@@ -194,7 +162,7 @@ fn search_one(
 ) -> (Vec<u32>, QueryStats, Vec<usize>) {
     let start = Instant::now();
     let ndims = index.ndims;
-    let dist_fn = distance_fn(index._metric);
+    let dist_fn = super::distance_fn(index._metric);
 
     // 1) Rank centroids (in RAM)
     let mut centroid_dists: Vec<(usize, f32)> = (0..index.nlist)
@@ -208,7 +176,7 @@ fn search_one(
     let probe_count = nprobe.min(index.nlist);
 
     // 2) Read cluster files from disk and scan
-    let mut best: Vec<(f32, u32)> = Vec::with_capacity(k + 1);
+    let mut queue = NeighborPriorityQueue::new(k);
     let mut total_comparisons: u64 = 0;
     let mut io_count: u64 = 0;
     let mut io_time = std::time::Duration::ZERO;
@@ -230,22 +198,11 @@ fn search_one(
             let vec_slice = &vecs[vec_start..vec_start + ndims];
             let dist = dist_fn(query, vec_slice);
             total_comparisons += 1;
-
-            if best.len() < k {
-                best.push((dist, vid));
-                if best.len() == k {
-                    best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-                }
-            } else if dist < best[0].0 {
-                best[0] = (dist, vid);
-                best.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-            }
+            queue.insert(Neighbor::new(vid, dist));
         }
     }
 
-    // Sort results by distance ascending for recall computation
-    best.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    let result_ids: Vec<u32> = best.iter().map(|(_, id)| *id).collect();
+    let result_ids: Vec<u32> = queue.iter().take(k).map(|n| n.id).collect();
 
     let elapsed = start.elapsed();
     let cpu_time = elapsed.saturating_sub(io_time);
@@ -271,7 +228,7 @@ pub(super) fn search_ivf_index(
     // Load queries
     let queries: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&search_params.queries))?;
     let num_queries = queries.nrows();
-    let recall_at = search_params.recall_at as usize;
+    let recall_at = search_params.recall_at.get() as usize;
 
     // Load ground truth
     let gt = datafiles::load_groundtruth(
@@ -280,7 +237,7 @@ pub(super) fn search_ivf_index(
     )?;
 
     // Build thread pool
-    let pool = create_thread_pool(search_params.num_threads)?;
+    let pool = create_thread_pool(search_params.num_threads.get())?;
 
     let mut search_results_per_nprobe = Vec::with_capacity(search_params.nprobe_list.len());
 
@@ -292,7 +249,7 @@ pub(super) fn search_ivf_index(
             .into_par_iter()
             .map(|qi| {
                 let query = queries.row(qi);
-                search_one(&index, query, nprobe as usize, recall_at)
+                search_one(&index, query, nprobe.get() as usize, recall_at)
             })
             .collect_in_pool(pool.as_ref());
 
@@ -315,14 +272,15 @@ pub(super) fn search_ivf_index(
         }
 
         // Compute recall
+        let recall_at_u32 = search_params.recall_at.get();
         let recall = search_index_utils::calculate_recall(
             num_queries,
             gt.as_slice(),
             None,
             gt.ncols(),
             &result_ids,
-            search_params.recall_at,
-            KRecallAtN::new(search_params.recall_at, search_params.recall_at)?,
+            recall_at_u32,
+            KRecallAtN::new(recall_at_u32, recall_at_u32)?,
         )? as f32;
 
         // Compute statistics
@@ -351,7 +309,7 @@ pub(super) fn search_ivf_index(
         };
 
         search_results_per_nprobe.push(IvfSearchResult {
-            search_l: nprobe,
+            search_l: nprobe.get(),
             qps,
             mean_latency,
             p95_latency: MicroSeconds::new(p95 as u64),
@@ -366,8 +324,8 @@ pub(super) fn search_ivf_index(
     }
 
     Ok(IvfSearchStats {
-        num_threads: search_params.num_threads,
-        recall_at: search_params.recall_at,
+        num_threads: search_params.num_threads.get(),
+        recall_at: search_params.recall_at.get(),
         distance: search_params.distance,
         search_results_per_nprobe,
     })

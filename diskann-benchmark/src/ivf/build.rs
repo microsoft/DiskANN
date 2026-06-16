@@ -90,35 +90,6 @@ impl fmt::Display for IvfBuildStats {
     }
 }
 
-/// Squared L2 distance (lower = more similar).
-fn sq_l2(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| {
-            let d = x - y;
-            d * d
-        })
-        .sum()
-}
-
-/// Negative inner product (lower = more similar, matching L2 sort order).
-fn neg_ip(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-}
-
-/// Returns the distance function for the given metric.
-/// All returned functions follow the convention: lower = more similar.
-fn distance_fn(metric: SimilarityMeasure) -> fn(&[f32], &[f32]) -> f32 {
-    match metric {
-        SimilarityMeasure::SquaredL2 => sq_l2,
-        SimilarityMeasure::InnerProduct
-        | SimilarityMeasure::Cosine
-        | SimilarityMeasure::CosineNormalized => neg_ip,
-    }
-}
-
 /// Run Lloyd's k-means to compute centroids.
 fn kmeans(
     data: &Matrix<f32>,
@@ -129,7 +100,7 @@ fn kmeans(
 ) -> Vec<f32> {
     let n = data.nrows();
     let d = data.ncols();
-    let dist_fn = distance_fn(metric);
+    let dist_fn = super::distance_fn(metric);
 
     // Initialize centroids with k-means++ seeding
     let mut centroids = vec![0.0f32; k * d];
@@ -230,7 +201,7 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
     let data: Matrix<f32> = datafiles::load_dataset(datafiles::BinFile(&params.data))?;
     let npoints = data.nrows();
     let ndims = data.ncols();
-    let nlist = params.nlist as usize;
+    let nlist = params.nlist.get() as usize;
 
     anyhow::ensure!(nlist <= npoints, "nlist ({nlist}) > npoints ({npoints})");
 
@@ -238,13 +209,13 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
     let centroids = kmeans(
         &data,
         nlist,
-        params.kmeans_iterations,
-        params.num_threads,
+        params.kmeans_iterations.get(),
+        params.num_threads.get(),
         params.distance,
     );
 
     // Assign each vector to its nearest centroid
-    let dist_fn = distance_fn(params.distance);
+    let dist_fn = super::distance_fn(params.distance);
     let mut assignments = vec![0u32; npoints];
     for (assign, i) in assignments.iter_mut().zip(0..npoints) {
         let point = data.row(i);
@@ -275,7 +246,7 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
     {
         let mut f = fs::File::create(save_dir.join("ivf_meta.bin"))?;
         f.write_all(&(ndims as u32).to_le_bytes())?;
-        f.write_all(&params.nlist.to_le_bytes())?;
+        f.write_all(&params.nlist.get().to_le_bytes())?;
         f.write_all(&(npoints as u32).to_le_bytes())?;
         f.write_all(&metric_to_u32(params.distance).to_le_bytes())?;
     }
@@ -311,7 +282,7 @@ pub(super) fn build_ivf_index(params: &IvfBuild) -> anyhow::Result<IvfBuildStats
 
     Ok(IvfBuildStats {
         build_time,
-        nlist: params.nlist,
+        nlist: params.nlist.get(),
         npoints: npoints as u32,
         ndims: ndims as u32,
     })
