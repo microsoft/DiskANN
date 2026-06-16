@@ -1,10 +1,10 @@
 [package]
 name = "diskann-benchmark-core"
-version = { workspace = true }
-description = { workspace = true }
-authors = { workspace = true }
-documentation = { workspace = true }
-license = { workspace = true }
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
 edition = "2024"
 
 [dependencies]

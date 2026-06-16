@@ -237,6 +237,9 @@ impl<T: VectorRepr> GarnetProvider<T> {
         })
     }
 
+    /// Called during `VADD` to ensure a start point exists.
+    /// If there isn't a start point yet, the given point will be set as the start point; if there
+    /// is a start point already, we ensure the caches are populated.
     pub(crate) fn maybe_set_start_point(
         &self,
         context: &Context,
@@ -254,6 +257,21 @@ impl<T: VectorRepr> GarnetProvider<T> {
                 .read_single_iid(&context.term(Term::Neighbors), 0, &mut neighbors)
             {
                 return Err(GarnetError::Read.into());
+            }
+
+            if self.is_quantized()
+                && let Some(quantizer) = self.quantizer()
+            {
+                let mut qpoint = vec![0u8; quantizer.bytes()];
+                if !self
+                    .callbacks
+                    .read_single_iid(&context.term(Term::Quantized), 0, &mut qpoint)
+                {
+                    return Err(GarnetError::Read.into());
+                }
+
+                self.start_point_quant_cache
+                    .insert(0, Poly::from_iter(qpoint.iter().copied(), AlignToEight)?);
             }
 
             self.start_point_cache.insert(0, v);
@@ -957,6 +975,12 @@ impl<T: VectorRepr> SearchAccessor for DynamicAccessor<'_, T> {
     where
         F: FnMut(Self::Id, f32) + Send,
     {
+        // If there are no start points, just return without doing anything.
+        // Searches on an empty index just return no results.
+        if !self.provider.start_points_exist() {
+            return future::ready(Ok(()));
+        }
+
         let result = match self.start_point_distance() {
             Ok(dist) => {
                 f(Self::START_ID, dist);
