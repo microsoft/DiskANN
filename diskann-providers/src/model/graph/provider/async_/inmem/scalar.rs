@@ -705,13 +705,17 @@ impl<'a, const NBITS: usize, V, D, Ctx, T>
 where
     T: VectorRepr,
     V: AsyncFriendly,
-    D: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'x> PreprocessedDistanceFunction<CVRef<'x, NBITS>, f32>,
     DistanceComputer: for<'x, 'y> DistanceFunction<CVRef<'x, NBITS>, CVRef<'y, NBITS>, f32>,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, NBITS, V, D, Ctx>,
+        >,
 {
     type PruneStrategy = Self;
 
