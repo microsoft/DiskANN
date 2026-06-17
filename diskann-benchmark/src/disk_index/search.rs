@@ -3,12 +3,18 @@
  * Licensed under the MIT license.
  */
 
-use rayon::prelude::*;
-use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    collections::HashSet,
+    fmt,
+    num::NonZeroUsize,
+    sync::{atomic::AtomicBool, Arc},
+    time::Instant,
+};
 
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
+use diskann::utils::async_tools::PartitionIter;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
@@ -24,11 +30,8 @@ use diskann_disk::{
     utils::{instrumentation::PerfLogger, statistics, QueryStatistics},
 };
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{
-    storage::{
-        get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
-    },
-    utils::{create_thread_pool, ParallelIteratorInPool},
+use diskann_providers::storage::{
+    get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, FileStorageProvider,
 };
 use diskann_tools::utils::{search_index_utils, KRecallAtN};
 use diskann_utils::views::Matrix;
@@ -221,7 +224,7 @@ where
     let vertex_provider_factory =
         DiskVertexProviderFactory::from_disk_index_path(disk_index_path, caching_strategy)?;
 
-    let searcher = &DiskIndexSearcher::<AdHoc<T>, _>::new(
+    let searcher = Arc::new(DiskIndexSearcher::<AdHoc<T>, _>::new(
         search_params.num_threads,
         if let Some(lim) = search_params.search_io_limit {
             lim
@@ -231,12 +234,23 @@ where
         &index_reader,
         vertex_provider_factory,
         search_params.distance.into(),
-        None,
-    )?;
+    )?);
 
     logger.log_checkpoint("index_loaded");
 
-    let pool = create_thread_pool(search_params.num_threads)?;
+    // Shared, owned state for the spawned per-partition search tasks.
+    let queries = Arc::new(queries);
+    let vector_filters = Arc::new(vector_filters);
+    let search_mode_cfg = Arc::new(search_params.search_mode.clone());
+    let post_processor = Arc::new(search_params.post_processor.clone());
+    let has_filter = search_params.vector_filters_file.is_some();
+    let recall_at = search_params.recall_at;
+    let beam_width = search_params.beam_width;
+    let ntasks = search_params.num_threads.max(1);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ntasks)
+        .build()?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
 
@@ -257,61 +271,80 @@ where
             tracer.start(span_name)
         };
 
-        let zipped = queries
-            .par_row_iter()
-            .zip(vector_filters.par_iter())
-            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-            .zip(statistics_vec.par_iter_mut())
-            .zip(result_counts.par_iter_mut());
-
-        zipped.for_each_in_pool(
-            pool.as_ref(),
-            |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                // Construct the SearchMode from the JSON-driven
-                // `adaptive_l` is now encapsulated in `DiskSearchMode`, so the
-                // benchmark only supplies the per-query filter and post-processor.
-                let has_filter = search_params.vector_filters_file.is_some();
-                let mode: SearchMode<'_> = search_params.search_mode.search_mode(
-                    has_filter,
-                    vf,
-                    search_params.post_processor.as_ref(),
-                );
-
-                match searcher.search(
-                    q,
-                    search_params.recall_at,
-                    l,
-                    Some(search_params.beam_width),
-                    mode,
-                ) {
-                    Ok(search_result) => {
-                        *stats = search_result.stats.query_statistics;
-                        let base_count = (search_result.stats.result_count as usize)
-                            .min(search_params.recall_at as usize)
-                            .min(search_result.results.len());
-
-                        *rc = base_count as u32;
-                        id_chunk.fill(0);
-                        dist_chunk.fill(0.0);
-
-                        for (i, result_item) in
-                            search_result.results.iter().take(base_count).enumerate()
-                        {
-                            id_chunk[i] = result_item.vertex_id;
-                            dist_chunk[i] = result_item.distance;
-                        }
+        // Partition the queries into `ntasks` contiguous ranges and drive each
+        // range on its own spawned task, mirroring `diskann-benchmark-core`'s
+        // `search_inner`. The multi-threaded runtime executes the tasks in
+        // parallel across its worker threads.
+        let search_results = runtime.block_on(async {
+            let handles: Vec<_> = PartitionIter::new(
+                num_queries,
+                NonZeroUsize::new(ntasks).expect("ntasks is at least 1"),
+            )
+            .map(|range| {
+                let searcher = Arc::clone(&searcher);
+                let queries = Arc::clone(&queries);
+                let vector_filters = Arc::clone(&vector_filters);
+                let search_mode_cfg = Arc::clone(&search_mode_cfg);
+                let post_processor = Arc::clone(&post_processor);
+                tokio::spawn(async move {
+                    let mut out = Vec::with_capacity(range.len());
+                    for query_id in range {
+                        // `adaptive_l` is encapsulated in `DiskSearchMode`, so the
+                        // benchmark only supplies the per-query filter and
+                        // post-processor.
+                        let mode: SearchMode<'_> = search_mode_cfg.search_mode(
+                            has_filter,
+                            &vector_filters[query_id],
+                            (*post_processor).as_ref(),
+                        );
+                        let result = searcher
+                            .search(queries.row(query_id), recall_at, l, Some(beam_width), mode)
+                            .await;
+                        out.push((query_id, result));
                     }
-                    Err(e) => {
-                        eprintln!("Search failed for query: {:?}", e);
-                        *rc = 0;
-                        id_chunk.fill(0);
-                        dist_chunk.fill(0.0);
-                        has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
+                    out
+                })
+            })
+            .collect();
+
+            let mut results = Vec::with_capacity(num_queries);
+            for handle in handles {
+                results.extend(handle.await.expect("search task panicked"));
+            }
+            results
+        });
+
+        for (query_id, result) in search_results {
+            let base = query_id * search_params.recall_at as usize;
+            let id_chunk = &mut result_ids[base..base + search_params.recall_at as usize];
+            let dist_chunk = &mut result_dists[base..base + search_params.recall_at as usize];
+            match result {
+                Ok(search_result) => {
+                    statistics_vec[query_id] = search_result.stats.query_statistics;
+                    let base_count = (search_result.stats.result_count as usize)
+                        .min(search_params.recall_at as usize)
+                        .min(search_result.results.len());
+
+                    result_counts[query_id] = base_count as u32;
+                    id_chunk.fill(0);
+                    dist_chunk.fill(0.0);
+
+                    for (i, result_item) in
+                        search_result.results.iter().take(base_count).enumerate()
+                    {
+                        id_chunk[i] = result_item.vertex_id;
+                        dist_chunk[i] = result_item.distance;
                     }
                 }
-            },
-        );
+                Err(e) => {
+                    eprintln!("Search failed for query: {:?}", e);
+                    result_counts[query_id] = 0;
+                    id_chunk.fill(0);
+                    dist_chunk.fill(0.0);
+                    has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
         let total_time = start.elapsed();
 
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {

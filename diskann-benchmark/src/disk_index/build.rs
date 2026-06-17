@@ -129,7 +129,10 @@ where
     };
 
     let start = std::time::Instant::now();
-    disk_index.build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(params.num_threads.max(1))
+        .build()?;
+    runtime.block_on(disk_index.build())?;
     let total_time: MicroSeconds = start.elapsed().into();
 
     drop(span);

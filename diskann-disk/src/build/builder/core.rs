@@ -827,7 +827,10 @@ pub(crate) mod disk_index_builder_tests {
             }?;
 
             let timer = Instant::now();
-            disk_index.build()?;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .build()
+                .expect("failed to build tokio runtime");
+            runtime.block_on(disk_index.build())?;
             println!("Indexing time: {} seconds", timer.elapsed().as_secs_f64());
 
             Ok(())
@@ -1081,8 +1084,9 @@ pub(crate) mod disk_index_builder_tests {
             &index_reader,
             vertex_provider_factory,
             params.metric,
-            None,
         )?;
+
+        let runtime = tokio::runtime::Builder::new_current_thread().build()?;
 
         let data =
             read_bin::<G::VectorDataType>(&mut storage_provider.open_reader(&params.data_path)?)?;
@@ -1107,7 +1111,7 @@ pub(crate) mod disk_index_builder_tests {
             let mut distances = vec![0f32; top_k];
             let mut associated_data = vec![(); top_k];
 
-            _ = search_engine.search_internal(
+            _ = runtime.block_on(search_engine.search_internal(
                 query_data,
                 top_k,
                 search_l,
@@ -1117,7 +1121,7 @@ pub(crate) mod disk_index_builder_tests {
                 &mut distances,
                 &mut associated_data,
                 &crate::search::search_mode::SearchMode::graph(),
-            );
+            ));
 
             diskann_providers::test_utils::assert_top_k_exactly_match(
                 q, &gt, &indices, &distances, top_k,

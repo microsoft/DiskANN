@@ -9,7 +9,6 @@ pub mod core;
 pub mod quantizer;
 
 pub mod inmem_builder;
-pub mod tokio;
 
 #[cfg(test)]
 mod tests;

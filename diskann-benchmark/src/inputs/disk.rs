@@ -73,7 +73,7 @@ pub(crate) struct DiskIndexBuild {
 }
 
 #[cfg(feature = "disk-index")]
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct DiskSearchMode {
     pub(crate) is_flat_search: bool,
     #[serde(default)]
