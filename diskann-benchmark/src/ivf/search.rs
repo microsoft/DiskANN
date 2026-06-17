@@ -448,6 +448,7 @@ where
         let mut reranked = NeighborPriorityQueue::new(k);
         for (candidate, vec) in candidates.iter().zip(vecs.iter()) {
             let dist = dist_fn(query, vec);
+            total_comparisons += 1;
             reranked.insert(Neighbor::new(candidate.id, dist));
         }
 
