@@ -471,7 +471,7 @@ where
         gid: &Self::ExternalId,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         let id = *gid;
-        let _guard = self.locks.write(id as usize);
+        let _guard = self.locks.lock(id as usize);
         // Only delete vector data here. Neighbor adjacency cleanup (zeroing the
         // deleted vertex's edge list and patching neighbors-of-neighbors) is
         // handled by `DiskANNIndex::inplace_delete` → `drop_adj_list`.
@@ -639,7 +639,7 @@ where
         id: &u32,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
 
         // First, write to the authoritative full-precision store.
         if let Err(err) = self.full_vectors.set_vector_sync(id.into_usize(), element) {
@@ -675,7 +675,7 @@ where
         id: &u32,
         element: &[T],
     ) -> impl Future<Output = Result<Self::Guard, Self::SetError>> + Send {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
 
         if let Err(err) = self.full_vectors.set_vector_sync(id.into_usize(), element) {
             return std::future::ready(Err(err));

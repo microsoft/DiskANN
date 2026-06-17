@@ -290,11 +290,11 @@ where
     I: VectorId + IntoUsize,
 {
     pub fn write_neighbors(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
         self.provider.set_neighbors(id, neighbors, &mut self.buf)
     }
     pub fn write_append(&mut self, id: I, neighbors: &[I]) -> ANNResult<()> {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
         self.provider.append_vector(id, neighbors, &mut self.buf)
     }
 }
@@ -328,7 +328,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
         std::future::ready(self.provider.set_neighbors(id, neighbors, &mut self.buf))
     }
     fn append_vector(
@@ -336,7 +336,7 @@ where
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.write(id.into_usize());
+        let _guard = self.locks.lock(id.into_usize());
         std::future::ready(self.provider.append_vector(id, neighbors, &mut self.buf))
     }
 }

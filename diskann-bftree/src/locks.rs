@@ -5,7 +5,7 @@
 
 //! Striped lock table for per-vertex synchronization.
 
-use std::sync::RwLock;
+use std::sync::Mutex;
 
 /// A fixed-size table of striped locks for per-vertex synchronization.
 ///
@@ -17,7 +17,7 @@ use std::sync::RwLock;
 /// rounded to the next power of two, minimum 64). This keeps allocation lightweight
 /// in debug/test while still making false contention negligible for real workloads.
 pub(crate) struct StripedLocks {
-    stripes: Box<[RwLock<()>]>,
+    stripes: Box<[Mutex<()>]>,
     hash_shift: u32,
 }
 
@@ -34,7 +34,7 @@ impl StripedLocks {
 
         Self {
             stripes: (0..count)
-                .map(|_| RwLock::new(()))
+                .map(|_| Mutex::new(()))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             hash_shift,
@@ -47,10 +47,10 @@ impl StripedLocks {
     }
 
     #[inline]
-    pub(crate) fn write(&self, id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
+    pub(crate) fn lock(&self, id: usize) -> std::sync::MutexGuard<'_, ()> {
         let stripe = self.stripe_index(id);
         self.stripes[stripe]
-            .write()
+            .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
 }
