@@ -7,7 +7,7 @@ use bit_set::BitSet;
 use std::fmt::Debug;
 
 use diskann::{
-    graph::index::QueryLabelProvider,
+    graph::ext::labeled::QueryLabelProvider,
     utils::{IntoUsize, VectorId},
 };
 use diskann_benchmark_runner::files::InputFile;
