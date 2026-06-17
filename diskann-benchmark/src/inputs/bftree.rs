@@ -55,6 +55,10 @@ pub(crate) struct BfTreeStoreConfig {
     /// If true, only use the in-memory circular buffer (no disk pages).
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) cache_only: Option<bool>,
+
+    /// Whether to enable CPR snapshot support for this store.
+    #[serde(default, deserialize_with = "Deserialize::deserialize")]
+    pub(crate) use_snapshot: Option<bool>,
 }
 
 impl BfTreeStoreConfig {
@@ -104,6 +108,9 @@ impl BfTreeStoreConfig {
         if let Some(v) = self.cache_only {
             c.cache_only(v);
         }
+        if let Some(v) = self.use_snapshot {
+            c.use_snapshot(v);
+        }
         c
     }
 
@@ -142,6 +149,7 @@ impl Default for BfTreeStoreConfig {
             cb_copy_on_access_ratio: None,
             read_record_cache: None,
             cache_only: None,
+            use_snapshot: None,
         }
     }
 }
@@ -207,6 +215,10 @@ fn bftree_parameters_from(
             .into_config(),
         quant_vector_provider_config: quant_store_config.clone().unwrap_or_default().into_config(),
         graph_params: None,
+        use_snapshot: vector_store_config
+            .as_ref()
+            .and_then(|c| c.use_snapshot)
+            .unwrap_or(false),
     }
 }
 

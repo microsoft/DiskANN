@@ -445,15 +445,17 @@ mod tests {
         }
     }
 
-    /// Test that snapshot can be called without errors
+    /// Test that cpr_snapshot can be called without errors
     #[tokio::test]
     async fn test_snapshot() {
         // Use a temporary directory that gets cleaned up when dropped
         let temp_dir = tempfile::tempdir().unwrap();
         let snapshot_path = temp_dir.path().join("test_neighbor_snapshot.bftree");
+        let snapshot_output = temp_dir.path().join("test_neighbor_snapshot_out.bftree");
 
         let mut bf_tree_config = Config::new(&snapshot_path, 16384 * 16);
         bf_tree_config.storage_backend(bf_tree::StorageBackend::Std);
+        bf_tree_config.use_snapshot(true);
 
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
@@ -463,8 +465,10 @@ mod tests {
         scratch.write_neighbors(1, &[2, 3, 4]).unwrap();
         scratch.write_neighbors(2, &[1, 3, 5]).unwrap();
 
-        // Call snapshot - should not panic
-        neighbor_provider.adjacency_list_index.snapshot();
+        // Call cpr_snapshot - should not panic
+        neighbor_provider
+            .adjacency_list_index
+            .cpr_snapshot(&snapshot_output);
 
         // Verify data is still accessible after snapshot
         let mut result = AdjacencyList::with_capacity(10);
