@@ -78,7 +78,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// Checks to [`Tag::can_read`] can be made following [`Ordering::Acquire`] loads.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub struct Tag(u8);
+pub(crate) struct Tag(u8);
 
 impl Tag {
     //-------------//
@@ -86,10 +86,10 @@ impl Tag {
     //-------------//
 
     /// The slot is permanently readable and never mutated again. See [`Tag`].
-    pub const FROZEN: Self = Self::new(u8::MAX);
+    pub(crate) const FROZEN: Self = Self::new(u8::MAX);
 
     /// The slot has been published and is freely readable. See [`Tag`].
-    pub const PUBLISHED: Self = Self::new(u8::MAX - 1);
+    pub(crate) const PUBLISHED: Self = Self::new(u8::MAX - 1);
 
     //------------//
     // Low Values //
@@ -97,16 +97,18 @@ impl Tag {
 
     /// The slot holds no valid data and may be claimed via CAS to [`Tag::OWNED`].
     /// See [`Tag`].
-    pub const AVAILABLE: Self = Self::new(0);
+    pub(crate) const AVAILABLE: Self = Self::new(0);
 
     /// The slot is exclusively owned by a single thread that may write its data.
     /// See [`Tag`].
-    pub const OWNED: Self = Self::new(1);
+    pub(crate) const OWNED: Self = Self::new(1);
 
     /// The slot is in the process of being retired and is no longer readable to new
     /// readers. See [`Tag`].
-    pub const RETIRING: Self = Self::new(2);
+    pub(crate) const RETIRING: Self = Self::new(2);
 
+    /// NOTE: We rely on reserved values being contiguous so `is_reserved` can be
+    /// implemented relatively efficiently.
     const RESERVED: Self = Self::RETIRING;
 
     /// Return `true` if `self` is one of the protocol's reserved tag values.
@@ -164,11 +166,11 @@ impl std::fmt::Display for Tag {
 /// protocol described on [`Tag`].
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct AtomicTag(AtomicU8);
+pub(crate) struct AtomicTag(AtomicU8);
 
 impl AtomicTag {
     /// Construct a new [`AtomicTag`] initialized to `tag`.
-    pub const fn new(tag: Tag) -> Self {
+    pub(crate) const fn new(tag: Tag) -> Self {
         Self(AtomicU8::new(tag.value()))
     }
 
@@ -184,7 +186,7 @@ impl AtomicTag {
     ///   different sizes without synchronization.
     ///
     /// See: <https://doc.rust-lang.org/std/sync/atomic/index.html#memory-model-for-atomic-accesses>
-    pub unsafe fn from_ptr<'a>(ptr: *mut AtomicTag) -> &'a Self {
+    pub(crate) unsafe fn from_ptr<'a>(ptr: *mut AtomicTag) -> &'a Self {
         unsafe { &*ptr }
     }
 
@@ -194,7 +196,7 @@ impl AtomicTag {
     /// ensure `current` and `new` correspond to a legal transition.
     ///
     /// See: [`AtomicU8::compare_exchange`].
-    pub fn compare_exchange(
+    pub(crate) fn compare_exchange(
         &self,
         current: Tag,
         new: Tag,
@@ -210,14 +212,14 @@ impl AtomicTag {
     /// Perform an atomic load with the provided ordering.
     ///
     /// See: [`AtomicU8::load`].
-    pub fn load(&self, ordering: Ordering) -> Tag {
+    pub(crate) fn load(&self, ordering: Ordering) -> Tag {
         Tag::new(self.0.load(ordering))
     }
 
     /// Perform an atomic store with the provided ordering.
     ///
     /// See: [`AtomicU8::store`].
-    pub fn store(&self, val: Tag, ordering: Ordering) {
+    pub(crate) fn store(&self, val: Tag, ordering: Ordering) {
         self.0.store(val.value(), ordering)
     }
 }

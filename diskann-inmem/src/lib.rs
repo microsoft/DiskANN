@@ -3,11 +3,13 @@
  * Licensed under the MIT license.
  */
 
+#![deny(rustdoc::broken_intra_doc_links)]
+
 mod buffer;
 mod neighbors;
+mod sync;
 
 pub mod num;
-mod sync;
 
 pub mod ids;
 pub mod layers;

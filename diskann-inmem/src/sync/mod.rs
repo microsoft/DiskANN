@@ -10,7 +10,7 @@ pub(crate) mod freelist;
 pub(crate) use freelist::Freelist;
 
 mod tag;
-pub use tag::{AtomicTag, Tag};
+pub(crate) use tag::{AtomicTag, Tag};
 
 #[cfg(test)]
 mod test;

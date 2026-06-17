@@ -8,16 +8,16 @@
 //! When working with slots into an index, finding an available slot efficiently can be
 //! challenging. This module provides a [`Freelist`] to make this more efficient.
 //!
-//! IDs are retrieved in several orders of precedence:
+//! IDs are retrieved in the following order of precedence:
 //!
 //! ## Recycles
 //!
-//! Previously reclaimed slots can be recycled and is the preferred way of finding slots.
+//! Previously reclaimed slots can be recycled and are the preferred way of finding slots.
 //! Reclaimed slots IDs live inside an atomic queue and as such, the size of this queue is
 //! bounded to conserve memory.
 //!
 //! ## Minted
-//! If not slots live in the recycled queue, new slots can be "minted" up to the configured
+//! If no slots live in the recycled queue, new slots can be "minted" up to the configured
 //! maximum. This simply tracks the maximum slot ID that has been yielded so far and returns
 //! the next one.
 //!
@@ -33,10 +33,10 @@
 //!
 //! The [`Freelist`] assists with scans in several ways:
 //!
-//! 1. [`Freelist::scan`]: Receive a range of  managed ID ranges to scan. Multiple threads
+//! 1. [`Freelist::scan`]: Receive a range of managed IDs to scan. Multiple threads
 //!    can call this method to receive disjoint ranges to process.
 //!
-//! 2. [`Freelist::push`]/[`Freelist::append`]: Available slots can be placed into the
+//! 2. [`Freelist::push`]: Available slots can be placed into the
 //!    freelist for recycling.
 //!
 //! 3. [`Freelist::pop_recycled`]: Attempt to retrieve a slot ID directly from the recycled
@@ -52,7 +52,7 @@
 //! # Non-Authoritative
 //!
 //! Note that the [`Freelist`] does not attempt to be authoritative on the list of slots IDs
-//! that are used and unused. It's job is mainly to improve performance.
+//! that are used and unused. Its job is mainly to improve performance.
 //!
 //! An authoritative collection of [`AtomicTag`](super::AtomicTag)s must be used to correctly
 //! manage slots.
@@ -166,7 +166,7 @@ impl Freelist {
     ///
     /// If `false` is returned, it is likely because the internal recycle buffer is full.
     ///
-    /// IDs exceeding [`Self::max`] are discarded.
+    /// IDs at or above [`Self::max`] are discarded.
     pub(crate) fn push(&self, id: u32) -> bool {
         if id < self.max {
             self.recycled.push(id).is_ok()

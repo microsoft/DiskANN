@@ -94,7 +94,7 @@ pub(crate) struct Registry {
     retiring: [SegQueue<u32>; 3],
 }
 
-// Return the queue index for the `generation`.
+// Return the queue index for the `epoch`.
 fn queue(epoch: u64) -> usize {
     epoch.into_usize() % 3
 }
@@ -135,8 +135,8 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// Returns an error if the number of currently active guards exceeds [`Self::capacity`]
-    /// and thus a new guard cannot be made.
+    /// Returns an error if the number of currently active guards exceeds the number of
+    /// internal guard slots and thus a new guard cannot be made.
     pub(crate) fn guard(&self) -> Result<Guard<'_>, Unavailable> {
         self.guard_inner(NoDelay)
     }
@@ -345,11 +345,9 @@ pub(crate) struct Guard<'a> {
 impl Guard<'_> {
     /// Retire the id `i` at this guard's epoch.
     ///
-    /// `i` is a caller-defined id (typically an index into external storage).It will be
+    /// `i` is a caller-defined id (typically an index into external storage). It will be
     /// returned from a future [`Drain`] once the registry has advanced far enough that no
     /// reader could observe it.
-    ///
-    /// See also: [`Self::retire_all`].
     #[inline]
     pub(crate) fn retire(&self, i: u32) {
         self.retire.push(i)
@@ -656,7 +654,7 @@ mod tests {
                 let s0 = g0.slot_index;
                 let s1 = g1.slot_index;
 
-                // Due to how the hint works, the slotws could be acquired in either order.
+                // Due to how the hint works, the slots could be acquired in either order.
                 if s0 < s1 {
                     assert_eq!((s0, s1), (0, 1));
                 } else {
@@ -829,53 +827,4 @@ mod tests {
         with_pre_fence => pre_fence,
         with_post_fence => post_fence,
     }
-
-    // #[derive(Default)]
-    // struct TestGuardDelay<'a> {
-    //     post_guard_check: Option<&'a mut dyn FnMut()>,
-    //     pre_cas: Option<&'a mut dyn FnMut()>,
-    //     pre_fence: Option<&'a mut dyn FnMut()>,
-    //     post_fence: Option<&'a mut dyn FnMut()>,
-    // }
-
-    // macro_rules! builder {
-    //     ($f:ident, $field:ident) => {
-    //         fn $f(mut self, f: &'a mut dyn FnMut()) -> Self {
-    //             self.$field = Some(f);
-    //             self
-    //         }
-    //     }
-    // }
-
-    // macro_rules! forward {
-    //     ($f:ident) => {
-    //         fn $f(&mut self) {
-    //             if let Some(f) = self.$f.as_mut() {
-    //                 f()
-    //             }
-    //         }
-    //     }
-    // }
-
-    // impl<'a> TestGuardDelay<'a> {
-    //     builder!(post_guard_check, post_guard_check);
-    //     builder!(with_pre_cas, pre_cas);
-    //     builder!(with_pre_fence, pre_fence);
-    //     builder!(with_post_fence, post_fence);
-    // }
-
-    // impl GuardDelay for TestGuardDelay<'_> {
-    //     forward!(post_guard_check);
-    //     forward!(pre_cas);
-    //     forward!(pre_fence);
-    //     forward!(post_fence);
-    // }
-
-    // struct CanAdvanceDelay;
-
-    // impl CanAdvanceDelay for TestWaitingDelay {}
-
-    // struct TestTryAdvanceDelay;
-
-    // impl TryAdvanceDelay for TestTryAdvanceDelay {}
 }
