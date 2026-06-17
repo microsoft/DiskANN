@@ -24,6 +24,8 @@ use diskann_benchmark_runner::{
     utils::{datatype::AsDataType, percentiles, MicroSeconds},
     Benchmark, Checkpoint, Registry,
 };
+use diskann_providers::model::graph::provider::async_::FastMemoryVectorProviderAsync;
+use diskann_providers::storage::FileStorageProvider;
 use diskann_utils::{future::SendFuture, views::Matrix};
 use diskann_vector::{distance::Metric, PreprocessedDistanceFunction};
 use half::f16;
@@ -54,10 +56,10 @@ pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
 
 /// A minimal in-memory provider for flat search benchmarks.
 ///
-/// Wraps a loaded [`Matrix<T>`] and implements [`DataProvider`] with identity
-/// ID mapping.
-struct InMemProvider<T> {
-    data: Arc<Matrix<T>>,
+/// Wraps a [`FastMemoryVectorProviderAsync<T>`] and implements [`DataProvider`]
+/// with identity ID mapping.
+struct InMemProvider<T: VectorRepr> {
+    data: FastMemoryVectorProviderAsync<T>,
 }
 
 impl<T: VectorRepr> DataProvider for InMemProvider<T> {
@@ -128,14 +130,21 @@ where
 
         // Load dataset
         writeln!(output, "Loading dataset...")?;
-        let data: Matrix<T> = datafiles::load_dataset(datafiles::BinFile(&input.data))?;
-        let nrows = data.nrows();
-        let ncols = data.ncols();
+        let provider = {
+            let fmvp = FastMemoryVectorProviderAsync::<T>::load_from_bin(
+                &FileStorageProvider,
+                input.data.to_str().unwrap(),
+                metric,
+                None,
+                None,
+            )?;
+            InMemProvider { data: fmvp }
+        };
+        let nrows = provider.data.total();
+        let ncols = provider.data.dim();
         writeln!(output, "  Loaded {} vectors of dimension {}", nrows, ncols)?;
 
-        // Build the provider and wrap in FlatIndex
-        let data = Arc::new(data);
-        let provider = InMemProvider { data: data.clone() };
+        // Build the FlatIndex
         let index = FlatIndex::new(provider);
         let index = Arc::new(index);
 
@@ -211,8 +220,8 @@ impl<T: VectorRepr> FlatScanStrategy<T> {
 }
 
 /// The visitor that iterates over all vectors in the provider.
-struct FlatVisitor<'a, T> {
-    data: &'a Matrix<T>,
+struct FlatVisitor<'a, T: VectorRepr> {
+    data: &'a FastMemoryVectorProviderAsync<T>,
 }
 
 impl<T: VectorRepr> HasId for FlatVisitor<'_, T> {
@@ -232,7 +241,10 @@ impl<T: VectorRepr> DistancesUnordered<T::QueryDistance> for FlatVisitor<'_, T> 
         F: Send + FnMut(Self::Id, f32),
     {
         async move {
-            for (i, vector) in self.data.row_iter().enumerate() {
+            let total = self.data.total();
+            for i in 0..total {
+                // SAFETY: single-writer load completed before search; no concurrent mutation.
+                let vector = unsafe { self.data.get_vector_sync(i) };
                 let dist = computer.evaluate_similarity(vector);
                 f(i as u32, dist);
             }
