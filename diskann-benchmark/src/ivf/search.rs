@@ -443,7 +443,7 @@ where
         let io_start = Instant::now();
         let vecs = index.read_vectors_from_blob(&candidate_ids).unwrap();
         io_time += io_start.elapsed();
-        io_count += 1;
+        io_count += candidate_ids.len() as u64;
 
         let mut reranked = NeighborPriorityQueue::new(k);
         for (candidate, vec) in candidates.iter().zip(vecs.iter()) {
