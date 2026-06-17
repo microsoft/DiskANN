@@ -5,10 +5,9 @@
 
 //! Top-level disk search plan.
 //!
-//! Replaces the previous `(vector_filter, is_flat_search, adaptive_l)`
-//! parameter triple on `DiskIndexSearcher::search` with a sum type, making
-//! invalid combinations (flat scan with adaptive L, inline filter without a
-//! predicate) unrepresentable.
+//! Encodes the algorithm + filter combination for `DiskIndexSearcher::search`
+//! as a sum type so that invalid combinations (flat scan with adaptive L,
+//! inline filter without a predicate) are unrepresentable at the API boundary.
 
 use diskann::graph::search::AdaptiveL;
 
@@ -28,26 +27,12 @@ pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
 /// * `InlineFilter` — label-filtered graph search; the predicate is consulted
 ///   at visit time (not just during rerank). `adaptive_l = Some(_)` grows the
 ///   beam mid-search if the observed match specificity is low.
-///
-/// `AdaptiveL` is unreachable except via `InlineFilter` — flat scan doesn't
-/// benefit from beam widening, and plain graph search without inline tracking
-/// can't compute specificity. `InlineFilter` always carries a predicate; an
-/// inline filter with no filter degrades to plain Knn with extra bookkeeping
-/// (verified — same top-k, slower), so the variant requires one explicitly.
+
 pub enum SearchPlan<'a> {
-    /// Brute-force linear scan. `Some(p)` applies `p` inline; `None` scans
-    /// every vector (recall baseline).
     FlatScan { filter: Option<SearchPredicate<'a>> },
 
-    /// Plain greedy beam search. The optional post-filter is applied during
-    /// reranking via `RerankAndFilter`; traversal is identical to the
-    /// unfiltered case.
     Graph { filter: Option<SearchPredicate<'a>> },
 
-    /// Inline label-filtered graph search. The predicate is consulted at
-    /// visit time (`QueryLabelProvider::on_visit`) and again at rerank time.
-    /// `adaptive_l = Some(_)` enables mid-search beam widening based on
-    /// observed match specificity.
     InlineFilter {
         predicate: SearchPredicate<'a>,
         adaptive_l: Option<AdaptiveL>,
@@ -98,20 +83,6 @@ impl<'a> SearchPlan<'a> {
             adaptive_l,
         }
     }
-
-    /// Borrow the predicate carried by the plan, if any.
-    ///
-    /// `FlatScan { None }` and `Graph { None }` return `None` (accept-all,
-    /// consumers short-circuit). `FlatScan { Some(p) }`, `Graph { Some(p) }`,
-    /// and `InlineFilter { predicate: p, .. }` all return `Some(p)`.
-    pub fn predicate(&self) -> Option<&(dyn Fn(&u32) -> bool + Send + Sync)> {
-        match self {
-            SearchPlan::FlatScan { filter: None } | SearchPlan::Graph { filter: None } => None,
-            SearchPlan::FlatScan { filter: Some(p) }
-            | SearchPlan::Graph { filter: Some(p) }
-            | SearchPlan::InlineFilter { predicate: p, .. } => Some(p.as_ref()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -122,30 +93,36 @@ mod tests {
     fn flat_no_filter_constructor() {
         let plan = SearchPlan::flat();
         assert!(matches!(plan, SearchPlan::FlatScan { filter: None }));
-        assert!(plan.predicate().is_none());
     }
 
     #[test]
     fn flat_filtered_constructor() {
         let plan = SearchPlan::flat_filtered(|id| *id == 5);
-        let p = plan.predicate().expect("FlatScan { Some } exposes predicate");
-        assert!(p(&5));
-        assert!(!p(&4));
+        match &plan {
+            SearchPlan::FlatScan { filter: Some(p) } => {
+                assert!(p(&5));
+                assert!(!p(&4));
+            }
+            _ => panic!("expected FlatScan with filter"),
+        }
     }
 
     #[test]
     fn graph_no_filter_constructor() {
         let plan = SearchPlan::graph();
         assert!(matches!(plan, SearchPlan::Graph { filter: None }));
-        assert!(plan.predicate().is_none());
     }
 
     #[test]
     fn graph_filtered_constructor() {
         let plan = SearchPlan::graph_filtered(|id| *id == 7);
-        let p = plan.predicate().expect("Graph { Some } exposes predicate");
-        assert!(p(&7));
-        assert!(!p(&6));
+        match &plan {
+            SearchPlan::Graph { filter: Some(p) } => {
+                assert!(p(&7));
+                assert!(!p(&6));
+            }
+            _ => panic!("expected Graph with filter"),
+        }
     }
 
     #[test]
@@ -153,15 +130,14 @@ mod tests {
         let plan = SearchPlan::inline_filter(|id| *id == 3, None);
         match &plan {
             SearchPlan::InlineFilter {
-                adaptive_l: None, ..
-            } => {}
+                predicate,
+                adaptive_l: None,
+            } => {
+                assert!(predicate(&3));
+                assert!(!predicate(&2));
+            }
             _ => panic!("expected InlineFilter with adaptive_l = None"),
         }
-        let p = plan
-            .predicate()
-            .expect("InlineFilter always exposes a predicate");
-        assert!(p(&3));
-        assert!(!p(&2));
     }
 
     #[test]

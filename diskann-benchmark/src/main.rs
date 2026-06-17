@@ -578,6 +578,37 @@ mod tests {
         let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
         run_integration_test(raw);
     }
+    
+    /// Filtered disk search end-to-end: drives the disk-index backend through
+    /// `disk-index-filter.json`
+    #[test]
+    #[cfg(feature = "disk-index")]
+    fn disk_index_filter_integration() {
+        let mut raw = value_from_file(&example_directory().join("disk-index-filter.json"));
+        prefix_search_directories(&mut raw, &root_directory());
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let input_path = tempdir.path().join("disk-index-filter.json");
+        save_to_file(&input_path, &raw);
+        let output_path = tempdir.path().join("output.json");
+
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+            allow_debug: true,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+        let result = cli.run(&mut output);
+        let output_str = String::from_utf8(output.into_inner()).unwrap();
+        println!("output = {}", output_str);
+        result.expect("disk-index-filter run failed");
+
+        assert!(output_path.exists());
+        let results: Vec<Value> = load_from_file(&output_path);
+        assert_eq!(results.len(), num_jobs(&raw));
+    }
 
     #[test]
     fn graph_index_filter_integration_with_gt_compute() {

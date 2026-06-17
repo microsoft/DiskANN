@@ -214,11 +214,14 @@ where
 {
     // This needs to be Arc instead of Rc because DiskSearchStrategy has "Send" trait bound, though this is not expected to be shared across threads.
     io_tracker: IOTracker,
-    /// Borrowed predicate from `SearchPlan::predicate()`. `None` means
-    /// accept-all — downstream consumers short-circuit via `.map_or(true, ...)`
-    /// and skip the dyn-fn call entirely. Fn param is `u32` because
-    /// `VectorIdType = u32` is enforced by trait bounds throughout this provider.
-    vector_filter: Option<&'a (dyn Fn(&u32) -> bool + Send + Sync)>,
+    /// Borrowed predicate consumed *only* by `default_post_processor()` →
+    /// `RerankAndFilter`. Other variants (`FlatScan`, `InlineFilter`) filter
+    /// earlier in their pipelines and install `None` here to avoid a
+    /// redundant second application. `None` means accept-all — the post-
+    /// processor short-circuits via `.map_or(true, ...)` and skips the
+    /// dyn-fn call entirely. Fn param is `u32` because `VectorIdType = u32`
+    /// is enforced by trait bounds throughout this provider.
+    postprocess_filter: Option<&'a (dyn Fn(&u32) -> bool + Send + Sync)>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: &'a ProviderFactory,
@@ -277,10 +280,8 @@ impl<'a> RerankAndFilter<'a> {
     }
 }
 
-/// Adapter exposing the existing disk-side `&dyn Fn(&u32) -> bool` predicate
-/// as a `QueryLabelProvider<u32>` for `InlineFilterSearch`. Lives entirely
-/// inside `filter_search` — public `search()` keeps its existing predicate
-/// type at the boundary.
+/// Adapter exposing the disk-side `&dyn Fn(&u32) -> bool` predicate as a
+/// `QueryLabelProvider<u32>` for `InlineFilterSearch`.
 struct PredicateLabelProvider<'a> {
     predicate: &'a (dyn Fn(&u32) -> bool + Send + Sync),
 }
@@ -402,7 +403,7 @@ where
     type Processor = RerankAndFilter<'this>;
 
     fn default_post_processor(&'this self) -> Self::Processor {
-        RerankAndFilter::new(self.vector_filter)
+        RerankAndFilter::new(self.postprocess_filter)
     }
 }
 
@@ -776,16 +777,18 @@ where
 
     /// Helper method to create a DiskSearchStrategy with common parameters.
     ///
-    /// `vector_filter = None` means accept-all and propagates as `None`
-    /// through the strategy and downstream consumers, so the unfiltered hot
-    /// path pays no dyn-fn call per node.
+    /// `postprocess_filter = None` means accept-all at rerank time. Callers pass
+    /// `None` on paths that filter earlier in their pipeline (`FlatScan` at
+    /// scan time, `InlineFilter` at visit time) to avoid re-applying the
+    /// predicate redundantly; only the plain `Graph` path installs a
+    /// predicate here
     fn search_strategy<'a>(
         &'a self,
-        vector_filter: Option<&'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync)>,
+        postprocess_filter: Option<&'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync)>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
             io_tracker: IOTracker::default(),
-            vector_filter,
+            postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
         }
@@ -902,11 +905,7 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-    ///
-    /// The algorithm + filter combination is encoded by `plan` — see
-    /// [`SearchPlan`] for the available variants. The plan replaces the
-    /// previous `(vector_filter, is_flat_search, adaptive_l)` parameter
-    /// triple and makes invalid combinations unrepresentable.
+
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
@@ -955,11 +954,6 @@ where
 
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
-    ///
-    /// Dispatches on `plan` variants: `FlatScan` → linear scan; `Graph` →
-    /// plain `Knn` with the optional post-filter applied during rerank;
-    /// `InlineFilter` → `filter_search` (`InlineFilterSearch` with optional
-    /// `AdaptiveL`).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn search_internal(
         &self,
@@ -979,43 +973,55 @@ where
             &mut associated_data[..k_value],
         );
 
-        // `None` predicate propagates through strategy and downstream
-        // consumers — they short-circuit before the dyn-fn call, so the
-        // unfiltered hot path pays no per-node closure cost.
-        let predicate = plan.predicate();
-
-        let strategy = self.search_strategy(predicate);
         let timer = Instant::now();
         let k = k_value;
         let l = search_list_size as usize;
-        let stats = match plan {
-            SearchPlan::FlatScan { .. } => self.runtime.block_on(self.flat_search(
-                &strategy,
-                query,
-                predicate,
-                l,
-                &mut result_output_buffer,
-            ))?,
-            SearchPlan::Graph { .. } => {
+
+        // * `FlatScan`  — `flat_search` filters the scan iterator at
+        //   construction; non-matching IDs never enter `best`.
+        // * `Graph`     — plain greedy traversal doesn't consult any
+        //   predicate, if predicate presented `RerankAndFilter` will filter out non-matching nodes.
+        // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept`
+        //   nodes into `matched_results`, no filtering in post-processing.
+        let (strategy, stats) = match plan {
+            SearchPlan::FlatScan { filter } => {
+                let strategy = self.search_strategy(None);
+                let stats = self.runtime.block_on(self.flat_search(
+                    &strategy,
+                    query,
+                    filter.as_deref(),
+                    l,
+                    &mut result_output_buffer,
+                ))?;
+                (strategy, stats)
+            }
+            SearchPlan::Graph { filter } => {
+                let strategy = self.search_strategy(filter.as_deref());
                 let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.index.search(
+                let stats = self.runtime.block_on(self.index.search(
                     knn_search,
                     &strategy,
                     &DefaultContext,
                     query,
                     &mut result_output_buffer,
-                ))?
+                ))?;
+                (strategy, stats)
             }
-            SearchPlan::InlineFilter { predicate: p, adaptive_l } => {
+            SearchPlan::InlineFilter {
+                predicate,
+                adaptive_l,
+            } => {
+                let strategy = self.search_strategy(None);
                 let knn_search = Knn::new(k, l, beam_width)?;
-                self.runtime.block_on(self.filter_search(
+                let stats = self.runtime.block_on(self.filter_search(
                     &strategy,
                     query,
                     knn_search,
-                    p.as_ref(),
+                    predicate.as_ref(),
                     adaptive_l.clone(),
                     &mut result_output_buffer,
-                ))?
+                ))?;
+                (strategy, stats)
             }
         };
         query_stats.total_comparisons = stats.cmps;
