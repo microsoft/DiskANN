@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue, search::AdaptiveL},
+    graph::{self, ext::labeled, glue, search::AdaptiveL},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -32,7 +32,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     adaptive_l: Option<AdaptiveL>,
 }
 
@@ -63,7 +63,7 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
-        labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
         adaptive_l: Option<AdaptiveL>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
@@ -89,7 +89,14 @@ where
 impl<DP, T, S> Search for InlineFilterSearch<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<'a, DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [T],
+            DP::ExternalId,
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -114,16 +121,16 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let inline_search = graph::search::InlineFilterSearch::new(
-            *parameters,
-            &*self.labels[index],
-            self.adaptive_l.clone(),
-        );
+        let inline_search =
+            graph::search::InlineFilterSearch::new(*parameters, self.adaptive_l.clone());
+        let strategy =
+            labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
+
         let stats = self
             .index
             .search(
                 inline_search,
-                self.strategy.get(index)?,
+                &strategy,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -148,13 +155,13 @@ mod tests {
     use super::*;
 
     use crate::recall::GroundTruthMode;
-    use diskann::graph::{index::QueryLabelProvider, test::provider};
+    use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
     #[derive(Debug)]
     struct NoOdds;
 
-    impl graph::index::QueryLabelProvider<u32> for NoOdds {
+    impl labeled::QueryLabelProvider<u32> for NoOdds {
         fn is_match(&self, id: u32) -> bool {
             id.is_multiple_of(2)
         }

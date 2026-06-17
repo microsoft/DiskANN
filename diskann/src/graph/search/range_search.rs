@@ -160,7 +160,7 @@ impl Range {
 impl<'a, DP, S, T> Search<'a, DP, S, T> for Range
 where
     DP: DataProvider,
-    S: SearchStrategy<'a, DP, T>,
+    S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
     T: Copy + Send + Sync,
 {
     type Output = SearchStats;

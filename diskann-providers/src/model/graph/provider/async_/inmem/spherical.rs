@@ -635,7 +635,12 @@ where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
-    Quantized: SearchStrategy<'a, DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
+    Quantized: SearchStrategy<
+            'a,
+            DefaultProvider<V, SphericalStore, D, Ctx>,
+            &'a [T],
+            SearchAccessor = QuantAccessor<'a, V, D, Ctx>,
+        >,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
