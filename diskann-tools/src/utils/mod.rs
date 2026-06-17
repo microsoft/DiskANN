@@ -24,12 +24,6 @@ pub use ground_truth::*;
 // pub mod range_search_disk_index;
 // pub use range_search_disk_index::*;
 
-pub mod search_disk_index;
-pub use search_disk_index::*;
-
-pub mod build_disk_index;
-pub use build_disk_index::*;
-
 pub mod build_pq;
 pub use build_pq::*;
 
