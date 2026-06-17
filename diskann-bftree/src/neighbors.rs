@@ -315,7 +315,6 @@ where
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let _guard = self.locks.read(id.into_usize());
         std::future::ready(self.provider.get_neighbors(id, neighbors))
     }
 }

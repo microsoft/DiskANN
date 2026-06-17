@@ -47,14 +47,6 @@ impl StripedLocks {
     }
 
     #[inline]
-    pub(crate) fn read(&self, id: usize) -> std::sync::RwLockReadGuard<'_, ()> {
-        let stripe = self.stripe_index(id);
-        self.stripes[stripe]
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
-    #[inline]
     pub(crate) fn write(&self, id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
         let stripe = self.stripe_index(id);
         self.stripes[stripe]
