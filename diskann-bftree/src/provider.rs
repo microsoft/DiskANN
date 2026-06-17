@@ -262,11 +262,23 @@ where
     ///
     /// # Type Constraints
     /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
-    fn new_empty<TQ>(params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
+    fn new_empty<TQ>(mut params: BfTreeProviderParameters, quant_precursor: TQ) -> ANNResult<Self>
     where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
     {
+        // Force all configs to match the provider-level use_snapshot setting so the
+        // underlying bf-trees are always consistent with our snapshot guard.
+        params
+            .vector_provider_config
+            .use_snapshot(params.use_snapshot);
+        params
+            .neighbor_list_provider_config
+            .use_snapshot(params.use_snapshot);
+        params
+            .quant_vector_provider_config
+            .use_snapshot(params.use_snapshot);
+
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -1510,23 +1522,6 @@ pub struct BfTreeParams {
     pub bytes: usize,
     pub max_record_size: usize,
     pub leaf_page_size: usize,
-}
-
-impl BfTreeParams {
-    /// Build a BfTree Config from the saved parameters and a file path.
-    /// When `is_memory` is true, the config uses an in-memory storage backend,
-    /// ensuring the circular buffer is at least as large as the bf-tree default.
-    pub fn to_config(&self, path: &std::path::Path, is_memory: bool) -> Config {
-        let mut config = Config::new(path, self.bytes);
-        config.cb_max_record_size(self.max_record_size);
-        config.leaf_page_size(self.leaf_page_size);
-        if is_memory {
-            config.storage_backend(bf_tree::StorageBackend::Memory);
-        } else {
-            config.storage_backend(bf_tree::StorageBackend::Std);
-        }
-        config
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

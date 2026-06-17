@@ -13,7 +13,10 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
-use diskann_providers::model::graph::provider::async_::common::Quantized;
+use diskann_providers::{
+    model::graph::provider::async_::common::Quantized,
+    storage::{FileStorageProvider, SaveWith},
+};
 use diskann_quantization::{
     alloc::{AllocatorError, GlobalAllocator, Poly},
     spherical::{
@@ -32,7 +35,7 @@ use crate::{
         search::plugins::{Plugin, Plugins},
     },
     inputs::{bftree::BfTreeSphericalBuild, graph_index::SearchPhase},
-    utils::{self, datafiles},
+    utils::{self, datafiles, tokio},
 };
 
 type BfTreeSQProvider = BfTreeProvider<f32, QuantVectorProvider>;
@@ -189,6 +192,15 @@ impl Benchmark for BfTreeSpherical {
             single_or_multi_insert(index.clone(), Quantized, data.clone(), build, output)?;
 
         checkpoint.checkpoint(&build_stats)?;
+
+        // save the index if requested
+        if let Some(save_path) = build.save_path() {
+            tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
 
         // 5. Search using Quantized strategy.
         let search_results =

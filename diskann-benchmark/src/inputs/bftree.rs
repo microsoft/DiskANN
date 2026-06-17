@@ -57,7 +57,7 @@ pub(crate) struct BfTreeStoreConfig {
     pub(crate) cache_only: Option<bool>,
 
     /// Whether to enable CPR snapshot support for this store.
-    #[serde(default, deserialize_with = "Deserialize::deserialize")]
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) use_snapshot: Option<bool>,
 }
 
