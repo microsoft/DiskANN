@@ -14,7 +14,11 @@
                     "nlist": 316,
                     "num_threads": 8,
                     "kmeans_iterations": 20,
-                    "save_path": "target/tmp/openai_100k_ivf_index"
+                    "save_path": "target/tmp/openai_100k_ivf_index",
+                    "quantization": {
+                        "nbits": "4",
+                        "grid_scale": 0.9
+                    }
                 },
                 "search_phase": {
                     "queries": "OpenAIArXiv/openai_query.bin",
@@ -24,7 +28,10 @@
                     ],
                     "recall_at": 100,
                     "num_threads": 4,
-                    "distance": "squared_l2"
+                    "distance": "squared_l2",
+                    "rerank": {
+                        "search_l": 200
+                    }
                 }
             }
         }

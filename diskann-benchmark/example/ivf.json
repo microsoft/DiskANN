@@ -14,7 +14,11 @@
           "nlist": 16,
           "num_threads": 1,
           "kmeans_iterations": 20,
-          "save_path": "test_data/disk_index_search/ivf_siftsmall_index"
+          "save_path": "test_data/disk_index_search/ivf_siftsmall_index",
+          "quantization": {
+            "nbits": "4",
+            "grid_scale": 0.9
+          }
         },
         "search_phase": {
           "queries": "disk_index_sample_query_10pts.fbin",
@@ -22,7 +26,10 @@
           "nprobe_list": [1, 4, 8, 16],
           "recall_at": 10,
           "num_threads": 1,
-          "distance": "squared_l2"
+          "distance": "squared_l2",
+          "rerank": {
+            "search_l": 20
+          }
         }
       }
     },
@@ -40,9 +47,8 @@
           "nprobe_list": [1, 4, 8, 16],
           "recall_at": 10,
           "num_threads": 1,
-          "distance": "squared_l2"
+          "distance": "squared_l2",
+          "rerank": {
+            "search_l": 20
+          }
         }
-      }
-    }
-  ]
-}

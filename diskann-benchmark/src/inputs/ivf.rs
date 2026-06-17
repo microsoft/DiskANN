@@ -3,7 +3,11 @@
  * Licensed under the MIT license.
  */
 
-use std::{fmt, num::{NonZeroU32, NonZeroUsize}, path::Path};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+    path::Path,
+};
 
 use anyhow::Context;
 use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
@@ -23,6 +27,66 @@ as_input!(IvfOperation);
 ///////////
 // Input //
 ///////////
+
+/// Supported quantization bit widths for MinMax quantization.
+///
+/// MinMax quantization compresses each vector independently using per-vector min/max
+/// scaling, enabling streaming compression without training.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum QuantizationBits {
+    /// 1-bit quantization (highest compression, lowest fidelity).
+    #[serde(rename = "1")]
+    One,
+    /// 4-bit quantization (good balance of compression and fidelity).
+    #[serde(rename = "4")]
+    Four,
+    /// 8-bit quantization (lowest compression, highest fidelity).
+    #[serde(rename = "8")]
+    Eight,
+}
+
+impl QuantizationBits {
+    pub(crate) fn as_usize(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Four => 4,
+            Self::Eight => 8,
+        }
+    }
+
+    pub(crate) fn as_u8(self) -> u8 {
+        self.as_usize() as u8
+    }
+}
+
+impl fmt::Display for QuantizationBits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_usize())
+    }
+}
+
+/// MinMax quantization configuration for IVF cluster vectors.
+///
+/// When enabled, cluster vectors are stored as quantized codes instead of full-precision
+/// f32 values, reducing the on-disk size and I/O during search.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct QuantizationConfig {
+    /// Number of bits per dimension.
+    pub(crate) nbits: QuantizationBits,
+    /// Scaling parameter for the MinMax quantizer range. Values in `[0.8, 1.0]` work well.
+    /// Must be positive.
+    pub(crate) grid_scale: f32,
+}
+
+/// Reranking configuration for IVF search with quantized vectors.
+///
+/// When enabled, the search first collects `search_l` candidates using quantized distances,
+/// then reranks them using full-precision vectors loaded from `vectors.bin`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct RerankConfig {
+    /// Number of candidates to collect before reranking. Must be ≥ `recall_at`.
+    pub(crate) search_l: NonZeroU32,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IvfOperation {
@@ -52,6 +116,11 @@ pub(crate) struct IvfBuild {
     pub(crate) num_threads: NonZeroUsize,
     pub(crate) kmeans_iterations: NonZeroU32,
     pub(crate) save_path: String,
+    /// Optional MinMax quantization of cluster vectors.
+    /// When set, cluster files store quantized codes instead of f32 vectors,
+    /// and a `vectors.bin` blob is written for optional reranking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) quantization: Option<QuantizationConfig>,
 }
 
 /// Search phase configuration for IVF.
@@ -65,6 +134,10 @@ pub(crate) struct IvfSearchPhase {
     pub(crate) nprobe_list: Vec<NonZeroU32>,
     pub(crate) recall_at: NonZeroU32,
     pub(crate) distance: SimilarityMeasure,
+    /// Optional reranking with full-precision vectors.
+    /// Requires quantization to be enabled in the build phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rerank: Option<RerankConfig>,
 }
 
 /////////
@@ -110,6 +183,7 @@ impl IvfLoad {
             );
         }
 
+        // vectors.bin is optional — only present when index was built with quantization
         Ok(())
     }
 }
@@ -139,6 +213,14 @@ impl IvfBuild {
             }
         }
 
+        if let Some(ref qconfig) = self.quantization {
+            anyhow::ensure!(
+                qconfig.grid_scale > 0.0,
+                "quantization grid_scale must be positive, got {}",
+                qconfig.grid_scale
+            );
+        }
+
         Ok(())
     }
 }
@@ -155,6 +237,16 @@ impl IvfSearchPhase {
         if self.nprobe_list.is_empty() {
             anyhow::bail!("nprobe_list must have at least one value");
         }
+
+        if let Some(ref rerank) = self.rerank {
+            anyhow::ensure!(
+                rerank.search_l.get() >= self.recall_at.get(),
+                "rerank search_l ({}) must be >= recall_at ({})",
+                rerank.search_l.get(),
+                self.recall_at.get()
+            );
+        }
+
         Ok(())
     }
 }
@@ -173,6 +265,10 @@ impl Example for IvfOperation {
             num_threads: NonZeroUsize::new(1).unwrap(),
             kmeans_iterations: NonZeroU32::new(20).unwrap(),
             save_path: "sample_ivf_index".to_string(),
+            quantization: Some(QuantizationConfig {
+                nbits: QuantizationBits::Four,
+                grid_scale: 0.9,
+            }),
         };
 
         let search = IvfSearchPhase {
@@ -187,6 +283,9 @@ impl Example for IvfOperation {
             recall_at: NonZeroU32::new(10).unwrap(),
             num_threads: NonZeroUsize::new(1).unwrap(),
             distance: SimilarityMeasure::SquaredL2,
+            rerank: Some(RerankConfig {
+                search_l: NonZeroU32::new(100).unwrap(),
+            }),
         };
 
         Self {
@@ -228,6 +327,15 @@ impl fmt::Display for IvfBuild {
         write_field!(f, "K-Means Iters", self.kmeans_iterations)?;
         write_field!(f, "Build Threads", self.num_threads)?;
         write_field!(f, "Save Path", self.save_path)?;
+        match &self.quantization {
+            Some(q) => {
+                write_field!(f, "Quantization", format!("MinMax-{}", q.nbits))?;
+                write_field!(f, "Grid Scale", q.grid_scale)?;
+            }
+            None => {
+                write_field!(f, "Quantization", "None (full precision)")?;
+            }
+        }
         Ok(())
     }
 }
@@ -252,6 +360,14 @@ impl fmt::Display for IvfSearchPhase {
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
         write_field!(f, "Distance", self.distance)?;
+        match &self.rerank {
+            Some(r) => {
+                write_field!(f, "Rerank Search L", r.search_l)?;
+            }
+            None => {
+                write_field!(f, "Reranking", "disabled")?;
+            }
+        }
         Ok(())
     }
 }
