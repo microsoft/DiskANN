@@ -3,13 +3,14 @@
  * Licensed under the MIT license.
  */
 
-pub(crate) mod buffer;
-pub use buffer::{Buffer, RawSlice};
-
 pub mod epoch;
+pub use epoch::Registry;
 
 pub mod freelist;
 pub use freelist::Freelist;
 
-pub mod generation;
-pub use generation::Generation;
+mod tag;
+pub use tag::{AtomicTag, Tag};
+
+#[cfg(test)]
+mod test;

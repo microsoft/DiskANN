@@ -10,8 +10,9 @@ use diskann_utils::views::MatrixView;
 
 use crate::{
     Neighbors,
-    arbiter::{Buffer, Freelist, Generation, RawSlice, epoch, freelist, generation},
+    buffer::{Buffer, RawSlice},
     num::{Align, Bytes},
+    sync::{AtomicTag, Freelist, Tag, Registry, epoch, freelist},
 };
 
 #[derive(Debug)]
@@ -25,13 +26,13 @@ pub struct Primary {
 
     // The number of unfrozen points. This is guaranteed to be less than `buffer`.
     unfrozen: usize,
-    tags: Vec<generation::Tag>,
+    tags: Vec<AtomicTag>,
     freelist: Freelist,
-    registry: epoch::Registry,
+    registry: Registry,
     neighbors: Neighbors,
 }
 
-const SPLIT: Bytes = Bytes::size_of::<generation::Tag>();
+const SPLIT: Bytes = Bytes::size_of::<AtomicTag>();
 const RETRY_LIMIT: usize = 20;
 
 impl Primary {
@@ -53,15 +54,15 @@ impl Primary {
             buffer: Buffer::new(total, padded_bytes, Align::_128).unwrap(),
             unpadded,
             unfrozen: entries,
-            tags: repeat_n(Generation::AVAILABLE, total)
-                .map(|v| generation::Tag::new(v))
+            tags: repeat_n(Tag::AVAILABLE, total)
+                .map(|v| AtomicTag::new(v))
                 .collect(),
 
             // NOTE: The `Freelist` is initialized to `entries` and not `total` because
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
-            registry: epoch::Registry::new(),
-            neighbors: Neighbors::new(total, max_neighbors),
+            registry: Registry::new(),
+            neighbors: Neighbors::new(total, max_neighbors).unwrap(),
         };
 
         // Populate frozen points.
@@ -74,28 +75,33 @@ impl Primary {
         this
     }
 
+    /// Return the range of slots containing frozen items in `self`.
     pub fn frozen(&self) -> std::ops::Range<u32> {
         (self.unfrozen as u32)..(self.buffer.len() as u32)
     }
 
+    /// Return the number of unfrozen slots managed by `self`.
     pub fn capacity(&self) -> usize {
         self.buffer.len() - self.unfrozen
     }
 
+    /// Attempt to reclaim retired slots.
+    ///
+    /// If successful, returns the number of slots reclaimed.
     pub fn try_drain(&self) -> Option<usize> {
-        fn release(tag: generation::Mut<'_>, kind: &'static str) {
+        fn release(tag: &AtomicTag, kind: &'static str) {
             // Relaxed ordering is sufficient as all readers/writers are synchronized on
             // the central generation.
-            if let Err(got) = tag.try_set(
-                Generation::OWNED,
-                Generation::AVAILABLE,
+            if let Err(got) = tag.compare_exchange(
+                Tag::RETIRING,
+                Tag::AVAILABLE,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
                 panic!(
                     "CONCURRENCY VIOLATION: {} - expected {} - got {}",
                     kind,
-                    Generation::AVAILABLE,
+                    Tag::AVAILABLE,
                     got,
                 );
             }
@@ -108,18 +114,23 @@ impl Primary {
             // prematurely advertise availability.
             let (mirror, _) = unsafe { self.data_unchecked(i.into_usize()) };
             release(mirror, "mirror");
-            release(self.tags[i.into_usize()].as_mut(), "tag");
+            release(&self.tags[i.into_usize()], "tag");
             self.freelist.push(i);
         }
         Some(items)
     }
 
+    /// Return a [`Reader`] into the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`epoch::Unavailable`] if there are too many active readers.
     pub fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
         Ok(Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
             neighbors: &self.neighbors,
-            epoch: self.registry.register()?,
+            epoch: self.registry.guard()?,
         })
     }
 
@@ -155,12 +166,12 @@ impl Primary {
             remaining = remaining.saturating_sub(chunk.len());
 
             for slot in chunk {
-                let tag = self.tag_mut(slot.into_usize()).unwrap();
+                let tag = self.tags.get(slot.into_usize()).unwrap();
 
                 // If this slot is available and we haven't claimed a slot yet, try to
                 // claim it. Otherwise, continue with the scan to partially repopulate the
                 // freelist for other threads.
-                if tag.get(Ordering::Relaxed) == Generation::AVAILABLE {
+                if tag.load(Ordering::Relaxed) == Tag::AVAILABLE {
                     if acquired.is_none() {
                         acquired = unsafe { self.try_acquire(tag, slot) };
                     } else {
@@ -187,14 +198,14 @@ impl Primary {
     }
 
     fn slot(&self, i: u32) -> Option<Slot<'_>> {
-        let tag = self.tag_mut(i.into_usize()).unwrap();
+        let tag = &self.tags.get(i.into_usize()).unwrap();
         unsafe { self.try_acquire(tag, i) }
     }
 
-    unsafe fn try_acquire<'a>(&'a self, tag: generation::Mut<'a>, slot: u32) -> Option<Slot<'a>> {
-        match tag.try_set(
-            Generation::AVAILABLE,
-            Generation::OWNED,
+    unsafe fn try_acquire<'a>(&'a self, tag: &'a AtomicTag, slot: u32) -> Option<Slot<'a>> {
+        match tag.compare_exchange(
+            Tag::AVAILABLE,
+            Tag::OWNED,
             Ordering::Relaxed,
             Ordering::Relaxed,
         ) {
@@ -203,7 +214,6 @@ impl Primary {
                 Some(Slot {
                     tag,
                     mirror,
-                    generation: self.registry.generation(),
                     data,
                     slot,
                 })
@@ -213,24 +223,24 @@ impl Primary {
     }
 
     pub(crate) fn delete(&self, i: usize) -> bool {
-        let guard = self.registry.register().unwrap();
-        let tag = self.tag_mut(i).unwrap();
-        let current = tag.get(Ordering::Relaxed);
+        let guard = self.registry.guard().unwrap();
+        let tag = self.tags.get(i).unwrap();
+        let current = tag.load(Ordering::Relaxed);
 
         // We can only perform a deletion if the generation is not in a reserved state.
         if current.is_reserved() {
             return false;
         }
 
-        let owned = Generation::OWNED;
+        let retiring = Tag::RETIRING;
 
         // Even if we make this change, we can't access any data until we wait for the
         // epoch to be bumped. As such, relaxed semantics are fine.
-        match tag.try_set(current, owned, Ordering::Relaxed, Ordering::Relaxed) {
+        match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => {
                 // Set the metadata in the mirror as well.
                 let (mirror, _) = unsafe { self.data_unchecked(i) };
-                mirror.set(owned, Ordering::Relaxed);
+                mirror.store(retiring, Ordering::Relaxed);
                 guard.retire(i as u32);
                 true
             }
@@ -238,20 +248,14 @@ impl Primary {
         }
     }
 
-    unsafe fn data_unchecked(&self, i: usize) -> (generation::Mut<'_>, RawSlice<'_>) {
+    unsafe fn data_unchecked(&self, i: usize) -> (&AtomicTag, RawSlice<'_>) {
         let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }
             .truncate(self.unpadded)
             .split(SPLIT);
         (
-            unsafe { generation::Tag::from_ptr(mirror.as_mut_ptr().cast()) }.as_mut(),
+            unsafe { AtomicTag::from_ptr(mirror.as_mut_ptr().cast()) },
             data,
         )
-    }
-
-    /// Creating a `Mut` is impossible for user code. Exposing this functionality would
-    /// allow user code to break all safety invariantes this data structure relies on.
-    fn tag_mut(&self, i: usize) -> Option<generation::Mut<'_>> {
-        self.tags.get(i).map(|v| v.as_mut())
     }
 }
 
@@ -290,19 +294,19 @@ impl<'a> Reader<'a> {
             return None;
         }
 
-        let generation = unsafe { self.buffer.get_unchecked(i).truncate_unchecked(SPLIT) };
-        let generation = unsafe { generation::Tag::from_ptr(generation.as_mut_ptr().cast()) }
-            .as_ref()
-            .get(Ordering::Acquire);
+        let tag_ptr = unsafe { self.buffer.get_unchecked(i).truncate_unchecked(SPLIT) };
+        let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.as_mut_ptr().cast()) }
+            .load(Ordering::Acquire)
+            .can_read();
 
-        Some(generation >= self.epoch.generation())
+        Some(can_read)
     }
 
     #[inline]
     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
 
-        let (generation, rest) = unsafe {
+        let (tag_ptr, rest) = unsafe {
             self.buffer
                 .get_unchecked(i)
                 .truncate_unchecked(self.unpadded)
@@ -310,11 +314,11 @@ impl<'a> Reader<'a> {
         };
 
         // NOTE: Must be `Acquire` to correctly synchronize with writes.
-        let generation = unsafe { generation::Tag::from_ptr(generation.as_mut_ptr().cast()) }
-            .as_ref()
-            .get(Ordering::Acquire);
+        let can_read = unsafe { AtomicTag::from_ptr(tag_ptr.as_mut_ptr().cast()) }
+            .load(Ordering::Acquire)
+            .can_read();
 
-        if generation >= self.epoch.generation() {
+        if can_read {
             // SAFETY: tags and buffer always have the same length, and we
             // verified i < tags.len() above.
             Some(unsafe { rest.as_slice() })
@@ -347,9 +351,8 @@ impl<'a> Reader<'a> {
 
 #[derive(Debug)]
 pub struct Slot<'a> {
-    tag: generation::Mut<'a>,
-    mirror: generation::Mut<'a>,
-    generation: Generation,
+    tag: &'a AtomicTag,
+    mirror: &'a AtomicTag,
     data: RawSlice<'a>,
     slot: u32,
 }
@@ -366,14 +369,14 @@ impl<'a> Slot<'a> {
 
     fn freeze(self) {
         let me = std::mem::ManuallyDrop::new(self);
-        me.mirror.set(Generation::FROZEN, Ordering::Release);
-        me.tag.set(Generation::FROZEN, Ordering::Release);
+        me.mirror.store(Tag::FROZEN, Ordering::Release);
+        me.tag.store(Tag::FROZEN, Ordering::Release);
     }
 }
 
 impl Drop for Slot<'_> {
     fn drop(&mut self) {
-        self.mirror.set(self.generation, Ordering::Release);
-        self.tag.set(self.generation, Ordering::Release);
+        self.mirror.store(Tag::PUBLISHED, Ordering::Release);
+        self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }
 }

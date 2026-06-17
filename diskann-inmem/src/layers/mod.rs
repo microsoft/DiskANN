@@ -11,6 +11,33 @@ use crate::num::Bytes;
 pub(crate) mod full;
 pub use full::Full;
 
+pub trait AddLifetime: Send + Sync + 'static {
+    type Of<'a>: Send + Sync;
+}
+
+#[derive(Debug)]
+pub struct Slice<T>(std::marker::PhantomData<T>);
+
+impl<T> Slice<T> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> Clone for Slice<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Slice<T> {}
+
+impl<T> Default for Slice<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait Distance: Send + Sync + std::fmt::Debug {
     fn evaluate(&self, x: &[u8], y: &[u8]) -> ANNResult<f32>;
 }
@@ -38,12 +65,24 @@ pub trait Layer: Send + Sync + 'static {
 
 pub trait Set<T>: Layer {
     /// Write into the stored representation.
-    fn into_bytes<'a>(&self, element: T, bytes: &'a mut [u8]) -> ANNResult<()>;
+    fn into_bytes(&self, element: T, bytes: &mut [u8]) -> ANNResult<()>;
 }
 
 // Meta traits for `Search` and `Insert` compatibility.
-pub trait Search<'a, T>: Send + Sync + 'static {
-    fn query_distance(&'a self, query: T) -> ANNResult<Box<dyn QueryDistance + 'a>>;
+pub trait Search: Send + Sync + 'static {
+    type Query<'a>;
+
+    fn query_distance<'a>(
+        &'a self,
+        query: Self::Query<'a>,
+    ) -> ANNResult<Box<dyn QueryDistance + 'a>>;
 }
 
-pub trait Insert<'a, T>: Search<'a, T> + Set<T> + AsDistance {}
+pub trait Insert: Search + for<'a> Set<Self::Query<'a>> + AsDistance {
+    fn insert_distance<'a>(
+        &'a self,
+        query: Self::Query<'a>,
+    ) -> ANNResult<Box<dyn QueryDistance + 'a>> {
+        self.query_distance(query)
+    }
+}

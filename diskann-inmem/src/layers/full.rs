@@ -70,11 +70,13 @@ where
     }
 }
 
-impl<'a, T> layers::Search<'a, &'a [T]> for Full<T>
+impl<T> layers::Search for Full<T>
 where
     T: std::fmt::Debug + Send + Sync + 'static,
 {
-    fn query_distance(&'a self, query: &'a [T]) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
+    type Query<'a> = &'a [T];
+
+    fn query_distance<'a>(&'a self, query: &'a [T]) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
         Ok(Box::new(QueryDistance::new(self.distance, query)))
     }
 }
@@ -88,22 +90,10 @@ where
     }
 }
 
-impl<'a, T> layers::Insert<'a, &'a [T]> for Full<T> where
+impl<T> layers::Insert for Full<T> where
     T: bytemuck::Pod + std::fmt::Debug + Send + Sync
 {
 }
-
-// impl<'a, T> layers::Insert<'a, &'a [T]> for Full<T>
-// where
-//     T: bytemuck::Pod + std::fmt::Debug + Send + Sync,
-// {
-//     fn search_distance(
-//         &'a self,
-//         query: &'a [T],
-//     ) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
-//         Ok(Box::new(QueryDistance::new(self.distance, query)))
-//     }
-// }
 
 //////////////
 // Distance //

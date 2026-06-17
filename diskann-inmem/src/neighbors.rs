@@ -3,17 +3,28 @@
  * Licensed under the MIT license.
  */
 
+use std::ptr::NonNull;
+
 use diskann::{graph::AdjacencyList, utils::IntoUsize};
 use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 use crate::{
-    arbiter::Buffer,
+    buffer::{Buffer, BufferError},
     num::{Align, Bytes},
 };
 
 type Id = u32;
 
+/// Locks are shared among groups of adjacency lists.
+///
+/// Adjacency lists whose indices map to the same lock group (i.e. `i / LOCK_GRANULARITY`)
+/// share a single `RwLock`. This means that holding a [`Lock`] on slot `i` will also block
+/// operations on any slot `j` in the same group.
+///
+/// **Deadlock hazard**: attempting to acquire two [`Lock`]s simultaneously can deadlock if
+/// they fall in the same lock group — or even across groups, depending on acquisition order.
+/// Callers must not hold more than one [`Lock`] at a time.
 const LOCK_GRANULARITY: usize = 16;
 
 fn lock_index(i: usize) -> usize {
@@ -23,19 +34,41 @@ fn lock_index(i: usize) -> usize {
 #[derive(Debug)]
 pub struct Neighbors {
     neighbors: Buffer,
-    // One lock for each slot in `neighbors`.
     locks: Vec<RwLock<()>>,
 }
 
 impl Neighbors {
-    pub fn new(entries: usize, max_length: usize) -> Self {
-        let bytes = Bytes::new((max_length + 1) * std::mem::size_of::<Id>());
-        let neighbors = Buffer::new(entries, bytes, Align::_128).unwrap();
+    pub fn new(entries: usize, max_length: usize) -> Result<Self, NeighborsError> {
+        // This is exceedingly unlikely and
+        if max_length > (u32::MAX).into_usize() {
+            return Err(NeighborsError::AdjacencyListTooLong(max_length));
+        }
+
+        let bytes = max_length
+            .checked_add(1)
+            .and_then(|len| len.checked_mul(std::mem::size_of::<Id>()))
+            .map(Bytes::new)
+            .ok_or(NeighborsError::AdjacencyListTooLong(max_length))?;
+
+        // We materialize slices of `Id` into the raw byte buffers.
+        //
+        // To make this sound, the base allocation must be that of `Id` so the slice
+        // materialization is properly aligned.
+        const ALIGN: Align = Align::_128;
+        const {
+            assert!(
+                ALIGN.value() >= Align::of::<Id>().value(),
+                "buffer alignment must be at least that of the ID"
+            );
+        }
+
+        let neighbors = Buffer::new(entries, bytes, ALIGN)?;
+
         let locks = std::iter::repeat_with(|| RwLock::new(()))
             .take(entries.div_ceil(LOCK_GRANULARITY))
             .collect();
 
-        Self { neighbors, locks }
+        Ok(Self { neighbors, locks })
     }
 
     /// Return the maximum length for any adjacency list.
@@ -61,7 +94,7 @@ impl Neighbors {
             unsafe { self.neighbors.get_unchecked(i) }.split(Bytes::size_of::<Id>());
 
         debug_assert_eq!(prefix.len(), Bytes::size_of::<Id>());
-        debug_assert!(prefix.as_ptr().is_aligned());
+        debug_assert!(prefix.as_ptr().cast::<Id>().is_aligned());
 
         // SAFETY: We hold the read-lock, so reading is safe. From our bounds checks, we
         // know that this pointer is valid.
@@ -93,16 +126,13 @@ impl Neighbors {
         // `self.locks` and we have already checked that `i` is in-bounds there.
         let slice = unsafe { self.neighbors.get_unchecked(i) };
 
-        debug_assert!(slice.as_ptr().is_aligned());
+        debug_assert!(slice.as_ptr().cast::<Id>().is_aligned());
 
-        let raw = unsafe {
-            std::slice::from_raw_parts_mut(
-                slice.as_mut_ptr().cast::<Id>(),
-                slice.len().value() / std::mem::size_of::<Id>(),
-            )
-        };
-
-        Lock { raw, lock }
+        Lock {
+            ptr: slice.as_non_null().cast::<Id>(),
+            capacity: self.max_length(),
+            _lock: lock,
+        }
     }
 
     pub fn set(&self, i: usize, neighbors: &[u32]) -> Result<(), SetError> {
@@ -140,22 +170,19 @@ pub enum SetError {
 }
 
 /// A locked adjacency list to implement atomic read-modify-write operations.
+///
+/// Callers must not hold more than one `Lock` at a time. See [`LOCK_GRANULARITY`] for
+/// details on the deadlock hazard.
 pub struct Lock<'a> {
-    // The raw adjacency list with the actual length stored as the first element.
-    //
-    // This **must** have a length of at least one.
-    //
-    // Also, `raw.len()` must be less than `u32::MAX`.
-    raw: &'a mut [u32],
-    // VERY IMPORTANT: `lock` has to be **after** `raw` because `lock` is guarding `raw`
-    // and thus must be dropped **after** `raw`.
-    lock: RwLockWriteGuard<'a, ()>,
+    ptr: NonNull<u32>,
+    capacity: usize,
+    _lock: RwLockWriteGuard<'a, ()>,
 }
 
 impl Lock<'_> {
     /// Return the capacity of the neighbor buffer.
     pub fn capacity(&self) -> usize {
-        self.raw.len() - 1
+        self.capacity
     }
 
     /// Return the current length of the neighbor list.
@@ -165,15 +192,18 @@ impl Lock<'_> {
         // SAFETY: By construction, `self.raw` has a length of at least 1.
         //
         // The `min` operation is to be conservative.
-        unsafe { self.raw.get_unchecked(0) }
-            .into_usize()
-            .min(self.capacity())
+        unsafe { self.ptr.read() }.into_usize().min(self.capacity())
+    }
+
+    /// Return `true` only if `self.len() == 0`.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// View the current contents of the locked adjacency list as a slice.
     pub fn as_slice(&self) -> &[u32] {
         let len = self.len();
-        unsafe { self.raw.get_unchecked(1..len + 1) }
+        unsafe { std::slice::from_raw_parts(self.ptr.add(1).as_ptr().cast_const(), len) }
     }
 
     /// Consume the [`Lock`] - copying the contents of `neighbors`.
@@ -197,32 +227,353 @@ impl Lock<'_> {
             return Err(TooLong);
         }
 
-        unsafe { self.raw.get_unchecked_mut(len..newlen) }.copy_from_slice(neighbors);
-        *unsafe { self.raw.get_unchecked_mut(0) } = newlen as u32;
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                neighbors.as_ptr(),
+                self.ptr.add(len + 1).as_ptr(),
+                neighbors.len(),
+            )
+        }
+
+        unsafe { self.ptr.write(newlen as u32) };
         Ok(())
-        // `self.raw` is dropped first, then `self.lock` which was guarding it.
     }
 
     unsafe fn write_unchecked(self, neighbors: &[u32]) {
         let len = neighbors.len();
         debug_assert!(len <= self.capacity());
-        unsafe {
-            std::ptr::copy_nonoverlapping(neighbors.as_ptr(), self.raw.as_mut_ptr().add(1), len)
-        }
-        *unsafe { self.raw.get_unchecked_mut(0) } = len as u32;
-        // `self.raw` is dropped first, then `self.lock` which was guarding it.
+        unsafe { std::ptr::copy_nonoverlapping(neighbors.as_ptr(), self.ptr.as_ptr().add(1), len) }
+        unsafe { self.ptr.write(len as u32) };
     }
 }
 
 impl std::fmt::Debug for Lock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Lock")
-            .field("raw", &self.raw)
+            .field("ptr", &self.ptr)
+            .field("capacity", &self.capacity)
             .field("lock", &())
             .finish()
     }
 }
 
+#[derive(Debug, Error)]
+pub enum NeighborsError {
+    #[error("adjacency list length of {} is too long", 0)]
+    AdjacencyListTooLong(usize),
+    #[error("neighbor bufffer allocation failed")]
+    AllocationFailed(#[from] BufferError),
+}
+
 #[derive(Debug, Clone, Copy, Error)]
 #[error("too long")]
 pub struct TooLong;
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::test::Sequencer;
+
+    // Constructor errors
+
+    #[test]
+    fn new_rejects_max_length_exceeding_u32_max() {
+        let result = Neighbors::new(10, (u32::MAX as usize) + 1);
+        assert!(matches!(
+            result,
+            Err(NeighborsError::AdjacencyListTooLong(_))
+        ));
+    }
+
+    #[test]
+    fn new_rejects_allocation_overflow() {
+        // entries * (max_length + 1) * sizeof(Id) overflows.
+        let result = Neighbors::new(usize::MAX, 64);
+        assert!(matches!(result, Err(NeighborsError::AllocationFailed(_))));
+    }
+
+    // TooLong errors
+
+    #[test]
+    fn set_rejects_oversized_neighbors() {
+        let n = Neighbors::new(4, 3).unwrap();
+        let too_many = &[1, 2, 3, 4];
+        assert!(matches!(n.set(0, too_many), Err(SetError::TooLong(_))));
+    }
+
+    #[test]
+    fn lock_write_rejects_oversized_neighbors() {
+        let n = Neighbors::new(4, 3).unwrap();
+        let lock = n.lock(0).unwrap();
+        assert!(lock.write(&[1, 2, 3, 4]).is_err());
+    }
+
+    #[test]
+    fn lock_append_rejects_overflow() {
+        let n = Neighbors::new(4, 3).unwrap();
+        n.set(0, &[1, 2]).unwrap();
+        let lock = n.lock(0).unwrap();
+        assert!(lock.append(&[3, 4]).is_err());
+    }
+
+    #[test]
+    fn lock_implements_debug() {
+        let n = Neighbors::new(4, 3).unwrap();
+        let lock = n.lock(0).unwrap();
+        let _ = format!("{:?}", lock);
+    }
+
+    // -- Lock::append --
+
+    #[test]
+    fn append_preserves_existing_and_adds_new() {
+        let n = Neighbors::new(4, 6).unwrap();
+        n.set(0, &[10, 20]).unwrap();
+
+        let lock = n.lock(0).unwrap();
+        assert_eq!(lock.as_slice(), &[10, 20]);
+        lock.append(&[30, 40, 50]).unwrap();
+
+        let mut out = AdjacencyList::with_capacity(6);
+        n.get(0, &mut out).unwrap();
+        assert_eq!(&*out, &[10, 20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn append_to_empty() {
+        let n = Neighbors::new(4, 4).unwrap();
+
+        let lock = n.lock(0).unwrap();
+        assert_eq!(lock.as_slice(), &[]);
+        lock.append(&[1, 2, 3]).unwrap();
+
+        let mut out = AdjacencyList::with_capacity(4);
+        n.get(0, &mut out).unwrap();
+        assert_eq!(&*out, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn append_fills_to_capacity() {
+        let n = Neighbors::new(1, 3).unwrap();
+        n.set(0, &[1]).unwrap();
+
+        let lock = n.lock(0).unwrap();
+        lock.append(&[2, 3]).unwrap();
+
+        let mut out = AdjacencyList::with_capacity(3);
+        n.get(0, &mut out).unwrap();
+        assert_eq!(&*out, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn append_empty_slice_is_noop() {
+        let n = Neighbors::new(1, 4).unwrap();
+        n.set(0, &[10, 20]).unwrap();
+
+        let lock = n.lock(0).unwrap();
+        lock.append(&[]).unwrap();
+
+        let mut out = AdjacencyList::with_capacity(4);
+        n.get(0, &mut out).unwrap();
+        assert_eq!(&*out, &[10, 20]);
+    }
+
+    #[test]
+    fn write_overwrites_longer_list() {
+        let n = Neighbors::new(1, 5).unwrap();
+        n.set(0, &[1, 2, 3, 4, 5]).unwrap();
+
+        // Overwrite with a shorter list.
+        let lock = n.lock(0).unwrap();
+        assert_eq!(lock.len(), 5);
+        lock.write(&[99]).unwrap();
+
+        // The length must reflect the new shorter list, not the old one.
+        let mut out = AdjacencyList::with_capacity(5);
+        n.get(0, &mut out).unwrap();
+        assert_eq!(&*out, &[99]);
+    }
+
+    // Clear the adjacency list in `neighbors`.
+    //
+    // Receives by `&mut` to ensure exclusivity.
+    fn clear(neighbors: &mut Neighbors) {
+        for i in 0..neighbors.entries() {
+            neighbors.set(i, &[]).unwrap();
+        }
+
+        assert_is_cleared(neighbors);
+    }
+
+    fn assert_is_cleared(neighbors: &mut Neighbors) {
+        for i in 0..neighbors.entries() {
+            assert!(neighbors.lock(i).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn basic_test() {
+        let mut neighbors = Neighbors::new(10, 4).unwrap();
+        assert_eq!(neighbors.entries(), 10);
+        assert_eq!(neighbors.max_length(), 4);
+
+        let mut list = AdjacencyList::new();
+        for i in 0..neighbors.entries() {
+            list.clear();
+            list.extend_from_slice(&[1, 2, 3, 4]);
+            neighbors.get(i, &mut list).unwrap();
+            assert!(list.is_empty());
+
+            let lock = neighbors.lock(i).unwrap();
+            assert_eq!(lock.capacity(), neighbors.max_length());
+            assert_eq!(lock.len(), 0);
+            assert!(lock.is_empty());
+            assert_eq!(lock.as_slice(), &[]);
+        }
+
+        // Verify out-of-bounds accesses error.
+        let oob = neighbors.entries();
+        assert!(matches!(neighbors.get(oob, &mut list), Err(OutOfBounds(_))));
+        assert!(matches!(neighbors.lock(oob), Err(OutOfBounds(_))));
+        assert!(matches!(
+            neighbors.set(oob, &[1, 2, 3, 4, 5, 6]),
+            Err(SetError::OutOfBounds(_))
+        ));
+
+        let generate = |round: usize, entry: usize| -> Vec<u32> {
+            (0..(round + 1))
+                .map(|r| (entry + r).try_into().unwrap())
+                .collect()
+        };
+
+        // Test mutation via `Neighbors::set`.
+        for round in 0..neighbors.max_length() {
+            for i in 0..neighbors.entries() {
+                let v = generate(round, i);
+                neighbors.set(i, &v).unwrap();
+            }
+
+            for i in 0..neighbors.entries() {
+                let expected = generate(round, i);
+                neighbors.get(i, &mut list).unwrap();
+                assert_eq!(&*list, &*expected);
+
+                let lock = neighbors.lock(i).unwrap();
+                assert_eq!(lock.as_slice(), &*expected);
+            }
+        }
+
+        clear(&mut neighbors);
+
+        // Test mutation via `lock + write`.
+        for round in 0..neighbors.max_length() {
+            for i in 0..neighbors.entries() {
+                let v = generate(round, i);
+                neighbors.lock(i).unwrap().write(&v).unwrap();
+            }
+
+            for i in 0..neighbors.entries() {
+                let expected = generate(round, i);
+                neighbors.get(i, &mut list).unwrap();
+                assert_eq!(&*list, &*expected);
+
+                let lock = neighbors.lock(i).unwrap();
+                assert_eq!(lock.as_slice(), &*expected);
+            }
+        }
+
+        clear(&mut neighbors);
+
+        // Test mutation via `lock + append`.
+        for round in 0..neighbors.max_length() {
+            for i in 0..neighbors.entries() {
+                neighbors
+                    .lock(i)
+                    .unwrap()
+                    .append(&[(round + i).try_into().unwrap()])
+                    .unwrap();
+            }
+
+            for i in 0..neighbors.entries() {
+                let expected = generate(round, i);
+
+                neighbors.get(i, &mut list).unwrap();
+                assert_eq!(&*list, &*expected);
+
+                let lock = neighbors.lock(i).unwrap();
+                assert_eq!(lock.as_slice(), &*expected);
+            }
+        }
+
+        clear(&mut neighbors);
+    }
+
+    //-------------------//
+    // Concurrency Tests //
+    //-------------------//
+
+    // Verify that holding a `Lock` correctly blocks reads for the same adjacency list.
+    #[test]
+    fn lock_blocks_get() {
+        for i in 0..10 {
+            let neighbors = Neighbors::new(3, 4).unwrap();
+            let seq = Sequencer::new();
+
+            std::thread::scope(|s| {
+                let handle = s.spawn(|| {
+                    seq.wait_for(0);
+                    let mut list = AdjacencyList::new();
+                    neighbors.get(0, &mut list).unwrap();
+                    list
+                });
+
+                seq.until_waiting_for(0);
+                let lock = neighbors.lock(0).unwrap();
+                seq.advance_past(0);
+
+                lock.write(&[1, 2, 3, 4]).unwrap();
+                let list = handle.join().unwrap();
+                assert_eq!(&*list, &[1, 2, 3, 4]);
+            });
+        }
+    }
+
+    #[test]
+    fn many_appends() {
+        let max_length = if cfg!(miri) { 100 } else { 1000 };
+
+        let neighbors = Neighbors::new(1, max_length).unwrap();
+
+        let num_threads = 4;
+        let barrier = std::sync::Barrier::new(num_threads);
+
+        std::thread::scope(|s| {
+            let neighbors_ref = &neighbors;
+            let barrier_ref = &barrier;
+
+            for thread_id in 0..num_threads {
+                s.spawn(move || {
+                    barrier_ref.wait();
+                    let mut i = thread_id as u32;
+                    let upper = neighbors_ref.max_length() as u32;
+                    while i < upper {
+                        neighbors_ref.lock(0).unwrap().append(&[i]).unwrap();
+                        i += num_threads as u32;
+                    }
+                });
+            }
+        });
+
+        let mut list = AdjacencyList::new();
+        let expected: Vec<_> = (0..neighbors.max_length()).map(|i| i as u32).collect();
+        neighbors.get(0, &mut list).unwrap();
+        list.sort();
+
+        assert_eq!(&*list, &*expected);
+    }
+}

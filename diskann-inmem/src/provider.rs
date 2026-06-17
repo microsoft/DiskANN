@@ -19,34 +19,34 @@ use diskann::{
 use diskann_utils::views::Matrix;
 
 use crate::{
-    arbiter::epoch,
     ids,
     layers::{self, Distance, QueryDistance},
     num::Bytes,
     store::{self, Primary},
+    sync::epoch::Unavailable,
 };
 
 pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
 impl<T> Id for T where T: Send + Sync + Hash + Eq + Clone + 'static {}
 
 #[derive(Debug)]
-pub struct Provider<T, M = u32>
+pub struct Provider<L, M = u32>
 where
     M: Id,
 {
     primary: Primary,
-    layer: T,
+    layer: L,
     mapping: ids::Sharded<M>,
 }
 
-impl<T, M> Provider<T, M>
+impl<L, M> Provider<L, M>
 where
     M: Id,
 {
-    pub fn new<I, V>(layer: T, capacity: usize, start_points: I) -> Self
+    pub fn new<I, T>(layer: L, capacity: usize, start_points: I) -> Self
     where
-        I: IntoIterator<Item = V>,
-        T: layers::Set<V>,
+        I: IntoIterator<Item = T>,
+        L: layers::Set<T>,
     {
         let start_points: Vec<_> = start_points.into_iter().collect();
         let bytes = layers::Layer::bytes(&layer);
@@ -65,7 +65,7 @@ where
         }
     }
 
-    fn reader(&self) -> Result<store::Reader<'_>, epoch::Unavailable> {
+    fn reader(&self) -> Result<store::Reader<'_>, Unavailable> {
         self.primary.reader()
     }
 }
@@ -127,7 +127,7 @@ where
         Ok(())
     }
 
-    async fn release(&self, _context: &Context, id: Self::InternalId) -> ANNResult<()> {
+    async fn release(&self, _context: &Context, _id: Self::InternalId) -> ANNResult<()> {
         Ok(())
     }
 
@@ -164,7 +164,7 @@ where
 
     fn statuses_unordered<Itr, F>(
         &self,
-        context: &Self::Context,
+        _context: &Self::Context,
         itr: Itr,
         mut f: F,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send
@@ -197,7 +197,7 @@ where
 
 impl<T, L, M> diskann::provider::SetElement<T> for Provider<L, M>
 where
-    L: layers::Layer + layers::Set<T>,
+    L: layers::Set<T>,
     M: Id,
 {
     type SetError = ANNError;
@@ -535,9 +535,9 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct Strategy;
 
-impl<'a, T, L, M> glue::SearchStrategy<'a, Provider<L, M>, T> for Strategy
+impl<'a, L, M> glue::SearchStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
 where
-    L: layers::Search<'a, T>,
+    L: layers::Search,
     M: Id,
 {
     type SearchAccessor = SearchAccessor<'a>;
@@ -547,9 +547,9 @@ where
         &'a self,
         provider: &'a Provider<L, M>,
         _context: &'a Context,
-        query: T,
+        query: L::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let distance = <L as layers::Search<'a, T>>::query_distance(&provider.layer, query)?;
+        let distance = <L as layers::Search>::query_distance(&provider.layer, query)?;
         let reader = provider.primary.reader()?;
         let expand_beam = dispatch_expand_beam(reader.bytes());
         let accessor = SearchAccessor {
@@ -573,9 +573,9 @@ impl<L, M> Default for Translate<L, M> {
     }
 }
 
-impl<'a, T, L, M> glue::SearchPostProcess<SearchAccessor<'a>, T, M> for Translate<L, M>
+impl<'a, L, M> glue::SearchPostProcess<SearchAccessor<'a>, L::Query<'a>, M> for Translate<L, M>
 where
-    L: layers::Search<'a, T>,
+    L: layers::Search,
     M: Id,
 {
     type Error = ANNError;
@@ -583,7 +583,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut SearchAccessor<'_>,
-        query: T,
+        _query: L::Query<'a>,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -611,9 +611,9 @@ where
     }
 }
 
-impl<'a, T, L, M> glue::DefaultPostProcessor<'a, Provider<L, M>, T, M> for Strategy
+impl<'a, L, M> glue::DefaultPostProcessor<'a, Provider<L, M>, L::Query<'a>, M> for Strategy
 where
-    L: layers::Search<'a, T>,
+    L: layers::Search,
     M: Id,
 {
     diskann::default_post_processor!(Translate<L, M>);
@@ -631,7 +631,7 @@ where
         &self,
         provider: &'a Provider<L, M>,
         _context: &'a Context,
-        capacity: usize,
+        _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
         Ok(PruneAccessor {
             reader: provider.primary.reader()?,
@@ -640,9 +640,9 @@ where
     }
 }
 
-impl<'a, L, M, T> glue::InsertStrategy<'a, Provider<L, M>, T> for Strategy
+impl<'a, L, M> glue::InsertStrategy<'a, Provider<L, M>, L::Query<'a>> for Strategy
 where
-    L: layers::Insert<'a, T>,
+    L: layers::Insert,
     M: Id,
 {
     type PruneStrategy = Self;
@@ -655,7 +655,12 @@ where
 impl<M> glue::InplaceDeleteStrategy<Provider<layers::Full<f32>, M>> for Strategy
 where
     Self: glue::PruneStrategy<Provider<layers::Full<f32>, M>>,
-    Self: for<'a> glue::InsertStrategy<'a, Provider<layers::Full<f32>, M>, &'a [f32], SearchAccessor = SearchAccessor<'a>>,
+    Self: for<'a> glue::InsertStrategy<
+            'a,
+            Provider<layers::Full<f32>, M>,
+            &'a [f32],
+            SearchAccessor = SearchAccessor<'a>,
+        >,
     M: Id,
 {
     type DeleteElement<'a> = &'a [f32];
@@ -682,9 +687,10 @@ where
     fn get_delete_element<'a>(
         &'a self,
         provider: &'a Provider<layers::Full<f32>, M>,
-        context: &'a Context,
-        id: u32
-    ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send {
+        _context: &'a Context,
+        id: u32,
+    ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
+    {
         let work = move || {
             let reader = provider.primary.reader().unwrap();
             let mut buf: Box<[_]> = std::iter::repeat_n(0.0, provider.layer.dim()).collect();

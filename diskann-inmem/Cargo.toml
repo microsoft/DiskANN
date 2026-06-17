@@ -21,4 +21,5 @@ thiserror.workspace = true
 workspace = true
 
 [dev-dependencies]
+rand.workspace = true
 tokio = { workspace = true, features = ["macros"] }

@@ -3,8 +3,9 @@
  * Licensed under the MIT license.
  */
 
-mod arbiter;
+mod buffer;
 pub mod num;
+mod sync;
 
 pub mod ids;
 pub mod layers;
@@ -15,3 +16,6 @@ pub mod provider;
 
 pub use neighbors::Neighbors;
 pub use provider::{Context, Provider, Strategy};
+
+#[cfg(test)]
+mod test;

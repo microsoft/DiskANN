@@ -16,7 +16,7 @@ use crate::num::{Align, Bytes};
 ///
 /// Note that `Buffer` is unconditionally `Send` and `Sync`.
 #[derive(Debug)]
-pub struct Buffer {
+pub(crate) struct Buffer {
     ptr: NonNull<u8>,
     stride: Bytes,
     entries: usize,
@@ -32,7 +32,7 @@ impl Buffer {
     ///
     /// Returns an error if the number of bytes `bytes_per_entry * entries` rounded up to
     /// the next multiple of `align` exceeds `isize::MAX`.
-    pub fn new(entries: usize, bytes_per_entry: Bytes, align: Align) -> Result<Self, BufferError> {
+    pub(crate) fn new(entries: usize, bytes_per_entry: Bytes, align: Align) -> Result<Self, BufferError> {
         // If we overflow `usize::MAX`, we will definitely overflow `isize::MAX`.
         let bytes = bytes_per_entry.checked_mul(entries).ok_or(BufferError)?;
 
@@ -63,43 +63,14 @@ impl Buffer {
 
     /// Return the number of entries in this [`Buffer`].
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.entries
     }
 
     /// Return the number of bytes for each entry.
     #[inline]
-    pub fn stride(&self) -> Bytes {
+    pub(crate) fn stride(&self) -> Bytes {
         self.stride
-    }
-
-    /// Return the minimum alignment of the base pointer for the buffer.
-    #[inline]
-    pub fn align(&self) -> Align {
-        Align::from_layout(self.layout)
-    }
-
-    /// Return the result of `self.len() == 0`.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Return the `i`th entry if `i < self.len()`.
-    ///
-    /// The returned [`RawSlice`] is guaranteed to have a length of [`Self::stride`] and
-    /// begin at `self.as_ptr().add(self.stride().value() * i)`.
-    #[inline]
-    pub fn get(&self, i: usize) -> Option<RawSlice<'_>> {
-        if i >= self.entries {
-            None
-        } else {
-            // SAFETY: We have validated that `i < self.entries`. This does two things:
-            //
-            // 1. Ensure that the multiplication will not overflow.
-            // 2. Ensures that the computed offset is within the original allocation.
-            Some(unsafe { self.get_unchecked(i) })
-        }
     }
 
     /// Return the `i`th entry without bounds checking.
@@ -111,7 +82,7 @@ impl Buffer {
     ///
     /// `i` must be less than [`len`](Self::len).
     #[inline]
-    pub unsafe fn get_unchecked(&self, i: usize) -> RawSlice<'_> {
+    pub(crate) unsafe fn get_unchecked(&self, i: usize) -> RawSlice<'_> {
         debug_assert!(i < self.entries);
         let ptr = unsafe { self.ptr.add(self.stride().value() * i) };
         RawSlice {
@@ -121,12 +92,21 @@ impl Buffer {
         }
     }
 
-    /// Return the base pointer of the [`Buffer`].
-    ///
-    /// If the requested allocation was non-zero, this is guaranteed to be a multiple of the
-    /// requested alignment.
-    #[inline]
-    pub fn as_ptr(&self) -> *const u8 {
+    #[cfg(test)]
+    pub(crate) fn get(&self, i: usize) -> Option<RawSlice<'_>> {
+        if i >= self.entries {
+            None
+        } else {
+            // SAFETY: We have validated that `i < self.entries`. This does two things:
+            //
+            // 1. Ensure that the multiplication will not overflow.
+            // 2. Ensures that the computed offset is within the original allocation.
+            Some(unsafe { self.get_unchecked(i) })
+        }
+    }
+
+    #[cfg(test)]
+    fn as_ptr(&self) -> *const u8 {
         self.ptr.as_ptr().cast_const()
     }
 }
@@ -144,7 +124,7 @@ impl Drop for Buffer {
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct BufferError;
+pub(crate) struct BufferError;
 
 impl std::fmt::Display for BufferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -169,7 +149,7 @@ unsafe impl Sync for Buffer {}
 ///
 /// This has borrowing semantics of a raw pointer.
 #[derive(Debug)]
-pub struct RawSlice<'a> {
+pub(crate) struct RawSlice<'a> {
     ptr: NonNull<u8>,
     len: Bytes,
     _lifetime: PhantomData<&'a ()>,
@@ -195,7 +175,7 @@ impl<'a> RawSlice<'a> {
 
     /// Create a new slice to the first `n.min(self.len())` bytes of `self`.
     #[inline]
-    pub fn truncate(&self, n: Bytes) -> RawSlice<'a> {
+    pub(crate) fn truncate(&self, n: Bytes) -> RawSlice<'a> {
         // SAFETY: The `min` operation ensures we provide an argument <= `self.len()`.
         unsafe { self.truncate_unchecked(self.len.min(n)) }
     }
@@ -213,25 +193,10 @@ impl<'a> RawSlice<'a> {
         unsafe { Self::new(self.ptr, n) }
     }
 
-    /// Create a new slice skipping the first `n.min(self.len())` bytes of self.
-    #[inline]
-    pub fn skip(&self, n: Bytes) -> RawSlice<'a> {
-        let advance_by = self.len.min(n);
-
-        // SAFETY: `advance_by <= self.len()`, so the pointer offset is valid and the
-        // `unchecked_sub` cannot underflow.
-        unsafe {
-            Self::new(
-                self.ptr.add(advance_by.value()),
-                self.len.unchecked_sub(advance_by),
-            )
-        }
-    }
-
     /// Split `self` into two as `([ptr, ptr.add(m)), [ptr.add(m), ptr.add(self.len())))`
     /// where `m = n.min(self.len())`.
     #[inline]
-    pub fn split(&self, n: Bytes) -> (RawSlice<'a>, RawSlice<'a>) {
+    pub(crate) fn split(&self, n: Bytes) -> (RawSlice<'a>, RawSlice<'a>) {
         // SAFETY: The argument is <= `self.len()`.
         unsafe { self.split_unchecked(self.len.min(n)) }
     }
@@ -254,23 +219,17 @@ impl<'a> RawSlice<'a> {
 
     /// Return the length of the slice in bytes.
     #[inline]
-    pub fn len(&self) -> Bytes {
+    pub(crate) fn len(&self) -> Bytes {
         self.len
     }
 
-    /// Return the result of `self.len() == 0`.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == Bytes::new(0)
-    }
-
     /// Return the base [`NonNull`] pointer of the slice.
-    pub fn as_non_null(&self) -> NonNull<u8> {
+    pub(crate) fn as_non_null(&self) -> NonNull<u8> {
         self.ptr
     }
 
     /// Return the base pointer of the slice as `*const u8`.
-    pub fn as_ptr(&self) -> *const u8 {
+    pub(crate) fn as_ptr(&self) -> *const u8 {
         self.ptr.as_ptr().cast_const()
     }
 
@@ -278,7 +237,7 @@ impl<'a> RawSlice<'a> {
     ///
     /// This returns a mutable pointer regardless of the receiver's mutability, matching
     /// the raw-pointer semantics of [`RawSlice`].
-    pub fn as_mut_ptr(&self) -> *mut u8 {
+    pub(crate) fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 
@@ -292,7 +251,7 @@ impl<'a> RawSlice<'a> {
     /// However, it is the responsibility of the caller to ensure that materializing this
     /// slice does not violate Rust's borrowing rules.
     #[inline]
-    pub unsafe fn as_slice(&self) -> &'a [u8] {
+    pub(crate) unsafe fn as_slice(&self) -> &'a [u8] {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len.value()) }
     }
 
@@ -306,7 +265,7 @@ impl<'a> RawSlice<'a> {
     /// However, it is the responsibility of the caller to ensure that materializing this
     /// slice does not violate Rust's borrowing rules.
     #[inline]
-    pub unsafe fn as_mut_slice(&mut self) -> &'a mut [u8] {
+    pub(crate) unsafe fn as_mut_slice(&mut self) -> &'a mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len.value()) }
     }
 }
@@ -349,7 +308,6 @@ mod tests {
         // Initial Checks
         assert_eq!(buffer.len(), entries, "{}", ctx);
         assert_eq!(buffer.stride(), bytes_per_entry, "{}", ctx);
-        assert_eq!(buffer.align(), align, "{}", ctx);
 
         if entries != 0 && !bytes_per_entry.is_zero() {
             let addr = buffer.as_ptr() as usize;
@@ -359,12 +317,6 @@ mod tests {
                 addr,
                 ctx,
             );
-        }
-
-        if entries == 0 {
-            assert!(buffer.is_empty(), "{}", ctx);
-        } else {
-            assert!(!buffer.is_empty(), "{}", ctx);
         }
 
         // Verify zero initialization
@@ -415,12 +367,6 @@ mod tests {
                 ctx
             );
 
-            if raw_slice.len().is_zero() {
-                assert!(raw_slice.is_empty());
-            } else {
-                assert!(!raw_slice.is_empty());
-            }
-
             let slice = unsafe { raw_slice.as_slice() };
             assert_eq!(slice.len(), buffer.stride().value());
             assert!(slice.iter().all(|&i| i == 0), "{}", ctx);
@@ -452,19 +398,6 @@ mod tests {
             let truncated = raw.truncate(Bytes::new(i));
             assert_eq!(truncated.len().value(), expected, "{}", ctx);
             assert!(is_iota(unsafe { truncated.as_slice() }, base), "{}", ctx);
-        }
-
-        // skip //
-
-        for i in 0..raw.len().value() + base_usize {
-            let expected = raw.len().value() - i.min(raw.len().value());
-            let skipped = raw.skip(Bytes::new(i));
-            assert_eq!(skipped.len().value(), expected, "{}", ctx);
-            assert!(
-                is_iota(unsafe { skipped.as_slice() }, base.wrapping_add(i as u8)),
-                "{}",
-                ctx
-            );
         }
 
         // split //
