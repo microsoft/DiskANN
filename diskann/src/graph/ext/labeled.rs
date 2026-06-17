@@ -202,7 +202,7 @@ where
         F: FnMut(Accept<Self::Id>, f32) + Send,
     {
         self.inner
-            .expand_beam(ids, Wrapper::new(pred, self.labels), |id, distance| {
+            .expand_beam(ids, EvalFiltered::new(pred, self.labels), |id, distance| {
                 on_neighbors(Accept::new(id), distance)
             })
             .await
@@ -252,7 +252,7 @@ where
 /// A [`glue::HybridPredicate`] that uses an additional [`QueryLabelProvider`] to skip
 /// computing distances to items that do not satisfy the predicate.
 #[derive(Debug)]
-struct Wrapper<'a, P, I>
+struct EvalFiltered<'a, P, I>
 where
     I: VectorId,
 {
@@ -260,7 +260,7 @@ where
     labels: &'a dyn QueryLabelProvider<I>,
 }
 
-impl<'a, P, I> Wrapper<'a, P, I>
+impl<'a, P, I> EvalFiltered<'a, P, I>
 where
     I: VectorId,
 {
@@ -269,7 +269,7 @@ where
     }
 }
 
-impl<P, I> glue::Predicate<I> for Wrapper<'_, P, I>
+impl<P, I> glue::Predicate<I> for EvalFiltered<'_, P, I>
 where
     P: glue::Predicate<Accept<I>>,
     I: VectorId,
@@ -281,19 +281,19 @@ where
     }
 }
 
-impl<P, I> glue::PredicateMut<I> for Wrapper<'_, P, I>
+impl<P, I> glue::PredicateMut<I> for EvalFiltered<'_, P, I>
 where
     P: glue::PredicateMut<Accept<I>>,
     I: VectorId,
 {
     fn eval_mut(&mut self, item: &I) -> bool {
-        // Oreder must be `label` -> `inner` because we have to know an ID is accepted before
+        // Order must be `label` -> `inner` because we have to know an ID is accepted before
         // passing it to `eval_mut`.
         self.labels.is_match(*item) && self.inner.eval_mut(&Accept::new(*item))
     }
 }
 
-impl<P, I> glue::HybridPredicate<I> for Wrapper<'_, P, I>
+impl<P, I> glue::HybridPredicate<I> for EvalFiltered<'_, P, I>
 where
     P: glue::HybridPredicate<Accept<I>>,
     I: VectorId,
@@ -459,7 +459,7 @@ mod tests {
     fn wrapper_predicate() {
         let filter = EvenFilter;
         let mut visited = HashSet::new();
-        let mut wrapper = Wrapper::new(NotIn(&mut visited), &filter);
+        let mut wrapper = EvalFiltered::new(NotIn(&mut visited), &filter);
 
         // eval: both inner (not visited) and label (even) must pass.
         assert!(wrapper.eval(&2), "2 is even and not visited");
