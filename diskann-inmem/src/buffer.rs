@@ -9,12 +9,13 @@ use crate::num::{Align, Bytes};
 
 /// An unsynchronized row-store for raw data.
 ///
-/// The backing data is stored as a raw pointers and interacted with via [`RawSlice`], which
+/// The backing data is stored as raw pointers and interacted with via [`RawSlice`], which
 /// is also raw pointer based. Careful use of this struct enables safe use of
 /// [`RawSlice::as_slice`], [`RawSlice::as_mut_slice`], and other accesses from multiple
 /// threads without undefined behavior.
 ///
-/// Note that `Buffer` is unconditionally `Send` and `Sync`.
+/// `Buffer` is unconditionally `Send` and `Sync`: it holds only a pointer plus metadata,
+/// and the synchronization burden is shifted to users of [`RawSlice`].
 #[derive(Debug)]
 pub(crate) struct Buffer {
     ptr: NonNull<u8>,
@@ -163,8 +164,9 @@ impl<'a> RawSlice<'a> {
     /// The memory `[ptr, ptr.add(len.value()))` must be part of a single allocation for
     /// the duration of the lifetime `'a`.
     ///
-    /// However, this has the semantics of a pointer: multiple threads can hold a [`RawSlice`]
-    /// to the same piece of memory without undefined behavior.
+    /// The underlying allocation is safe to alias from multiple threads. [`RawSlice`]
+    /// itself is intentionally `!Send + !Sync`; each thread must derive its own from a
+    /// shared `&Buffer`.
     unsafe fn new(ptr: NonNull<u8>, len: Bytes) -> Self {
         Self {
             ptr,
@@ -180,7 +182,7 @@ impl<'a> RawSlice<'a> {
         unsafe { self.truncate_unchecked(self.len.min(n)) }
     }
 
-    /// Shorten the slice to the `n`.
+    /// Shorten the slice to `n` bytes.
     ///
     /// # Safety
     ///

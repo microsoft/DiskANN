@@ -56,7 +56,7 @@ const CAPACITY: usize = 256;
 
 /// A registry of epoch-based [`Guard`]s. See the [module-level docs](self).
 #[derive(Debug)]
-pub struct Registry {
+pub(crate) struct Registry {
     // A record of the active guards.
     //
     // * 0 = "available".
@@ -105,14 +105,14 @@ fn last_queue(epoch: u64) -> usize {
 
 impl Registry {
     /// Construct a new [`Registry`] with the default number of guard slots (256).
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_capacity(CAPACITY)
     }
 
     /// Construct a new [`Registry`] with `capacity` guard slots.
     ///
     /// This is the number of [`Guard`]s that can be registered concurrently.
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             guards: (0..capacity).map(|_| AtomicU64::new(0)).collect(),
             hint: AtomicUsize::new(0),
@@ -122,15 +122,10 @@ impl Registry {
         }
     }
 
-    /// Return the number of [`Guard`]s this [`Registry`] supports.
-    pub fn capacity(&self) -> usize {
-        self.guards.len()
-    }
-
     /// Return the current epoch.
     ///
     /// This has [`Ordering::Acquire`] semantics.
-    pub fn epoch(&self) -> u64 {
+    pub(crate) fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }
 
@@ -142,7 +137,7 @@ impl Registry {
     ///
     /// Returns an error if the number of currently active guards exceeds [`Self::capacity`]
     /// and thus a new guard cannot be made.
-    pub fn guard(&self) -> Result<Guard<'_>, Unavailable> {
+    pub(crate) fn guard(&self) -> Result<Guard<'_>, Unavailable> {
         self.guard_inner(NoDelay)
     }
 
@@ -189,6 +184,7 @@ impl Registry {
                 return Ok(Guard {
                     slot: m,
                     retire: &self.retiring[queue(epoch)],
+                    #[cfg(test)]
                     epoch,
                     #[cfg(test)]
                     slot_index: slot,
@@ -199,19 +195,7 @@ impl Registry {
         Err(Unavailable)
     }
 
-    /// Return `true` if the epoch can be advanced.
-    ///
-    /// This uses a fast method that may be conservative: it can return `false` even when a
-    /// subsequent call to [`Self::try_advance`] would succeed (for example, if a guard slot
-    /// is observed to hold an old epoch but the corresponding `Guard` is about to be
-    /// dropped).
-    ///
-    /// This is a synchronizing operation with [`Ordering::Acquire`] semantics.
-    pub fn can_advance(&self) -> bool {
-        self.can_advance_inner(&mut NoDelay).0
-    }
-
-    fn can_advance_inner<T>(&self, delay: &mut T) -> (bool, u64)
+    fn can_advance<T>(&self, delay: &mut T) -> (bool, u64)
     where
         T: CanAdvanceDelay,
     {
@@ -275,7 +259,7 @@ impl Registry {
     ///
     /// Panics if the epoch counter is about to overflow `u64::MAX`. In practice this is
     /// effectively unreachable.
-    pub fn try_advance(&self) -> Option<Drain<'_>> {
+    pub(crate) fn try_advance(&self) -> Option<Drain<'_>> {
         self.try_advance_inner(NoDelay)
     }
 
@@ -291,7 +275,7 @@ impl Registry {
         // This can help save an expensive slot scan.
         let drain = self.drain.try_lock()?;
 
-        let (can_advance, current) = self.can_advance_inner(&mut delay);
+        let (can_advance, current) = self.can_advance(&mut delay);
 
         // Don't wrap around!
         if current == u64::MAX {
@@ -312,7 +296,7 @@ impl Registry {
             debug_assert_eq!(_previous, current, "concurrency violation");
 
             let queue = &self.retiring[last_queue(current)];
-            Some(Drain { queue, drain })
+            Some(Drain { queue, _drain: drain })
         } else {
             // Previous generation has not completely retired.
             None
@@ -336,7 +320,7 @@ impl Registry {
 
     #[cfg(test)]
     fn waiting(&self) -> u64 {
-        self.can_advance_inner(&mut NoDelay).1
+        self.can_advance(&mut NoDelay).1
     }
 }
 
@@ -347,22 +331,18 @@ impl Registry {
 ///
 /// Obtained via [`Registry::guard`].
 #[derive(Debug)]
-pub struct Guard<'a> {
+pub(crate) struct Guard<'a> {
     slot: &'a AtomicU64,
     retire: &'a SegQueue<u32>,
-    epoch: u64,
+
+    #[cfg(test)]
+    pub(super) epoch: u64,
 
     #[cfg(test)]
     slot_index: usize,
 }
 
 impl Guard<'_> {
-    /// Return the epoch associated with this [`Guard`]'s creation.
-    #[inline]
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
     /// Retire the id `i` at this guard's epoch.
     ///
     /// `i` is a caller-defined id (typically an index into external storage).It will be
@@ -371,18 +351,8 @@ impl Guard<'_> {
     ///
     /// See also: [`Self::retire_all`].
     #[inline]
-    pub fn retire(&self, i: u32) {
+    pub(crate) fn retire(&self, i: u32) {
         self.retire.push(i)
-    }
-
-    /// Retire all ids in `itr`. See [`Self::retire`].
-    pub fn retire_all<I>(&self, itr: I)
-    where
-        I: IntoIterator<Item = u32>,
-    {
-        for i in itr {
-            self.retire(i)
-        }
     }
 }
 
@@ -397,26 +367,26 @@ impl Drop for Guard<'_> {
 /// While this drain is alive, no other thread can advance the [`Registry`]'s epoch. Drop
 /// it promptly after processing.
 #[derive(Debug)]
-pub struct Drain<'a> {
+pub(crate) struct Drain<'a> {
     queue: &'a SegQueue<u32>,
-    drain: MutexGuard<'a, ()>,
+    _drain: MutexGuard<'a, ()>,
 }
 
 impl Drain<'_> {
     /// Pop the next id ready for reclamation, or `None` if the drain is empty.
     #[must_use = "reclaimed ids must be reclaimed"]
-    pub fn pop(&self) -> Option<u32> {
+    pub(crate) fn pop(&self) -> Option<u32> {
         self.queue.pop()
     }
 
     /// Return the number of ids remaining in this drain.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.queue.len()
     }
 
-    /// Return `true` if there are no ids remaining in this drain.
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -439,7 +409,7 @@ impl ExactSizeIterator for Drain<'_> {}
 /// Returned by [`Registry::guard`] when all guard slots are occupied.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct Unavailable;
+pub(crate) struct Unavailable;
 
 impl std::fmt::Display for Unavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -511,8 +481,6 @@ mod tests {
             .with_post_fence(|| thread_a_loop_count += 1);
 
         let registry = Registry::with_capacity(2);
-        assert_eq!(registry.capacity(), 2);
-
         std::thread::scope(|s| {
             // Thread A
             s.spawn(|| {
@@ -565,7 +533,9 @@ mod tests {
                 // Since we hit the CAS loop - this serves as a sanity check that we have
                 // the correct drain buffer.
                 guard.retire(10);
-                guard.retire_all([1, 2, 3]);
+                guard.retire(1);
+                guard.retire(2);
+                guard.retire(3);
                 guard
             });
 
@@ -590,7 +560,7 @@ mod tests {
             // We pause it again because we want to verify that it registers an old generation.
             seq.advance_past(0);
             seq.until_waiting_for(1);
-            let (can_advance, waiter) = registry.can_advance_inner(&mut NoDelay);
+            let (can_advance, waiter) = registry.can_advance(&mut NoDelay);
             assert!(!can_advance);
             assert_eq!(
                 waiter, 1,
@@ -603,7 +573,7 @@ mod tests {
             // The generation should be the last set one - even though this thread was
             // parked during the transition.
             let r = handle.join().unwrap();
-            assert_eq!(r.epoch(), expected);
+            assert_eq!(r.epoch, expected);
             assert_eq!(registry.waiting(), expected);
         });
 
@@ -759,7 +729,7 @@ mod tests {
         // Helper: register, retire one item, drop. Returns the generation we retired at.
         let retire_at = |id: u32| {
             let g = registry.guard().unwrap();
-            let epoch = g.epoch();
+            let epoch = g.epoch;
             g.retire(id);
             epoch
         };

@@ -74,7 +74,7 @@ const SCAN_SIZE: u32 = 256;
 ///
 /// See [freelist](self) for details.
 #[derive(Debug)]
-pub struct Freelist {
+pub(crate) struct Freelist {
     // Bounded fast queue of retired slots.
     recycled: ArrayQueue<u32>,
 
@@ -95,7 +95,7 @@ impl Freelist {
     /// The internal fast recycled list will hold up to `recycled` items.
     ///
     /// The memory occupied by this struct is `O(recycled)`.
-    pub fn new(max: u32, recycled: NonZeroU32) -> Self {
+    pub(crate) fn new(max: u32, recycled: NonZeroU32) -> Self {
         Self {
             recycled: ArrayQueue::new(recycled.get().into_usize()),
             max,
@@ -104,15 +104,10 @@ impl Freelist {
         }
     }
 
-    /// Return the maximum number of slot IDs managed by `self`.
-    pub fn max(&self) -> u32 {
-        self.max
-    }
-
     /// Try to retrieve an id.
     ///
     /// If successful, return [`Id::Found`]. Otherwise, returns [`Id::Scan`].
-    pub fn pop(&self) -> Id {
+    pub(crate) fn pop(&self) -> Id {
         if let Some(id) = self.recycled.pop() {
             return Id::Found(id);
         }
@@ -138,7 +133,7 @@ impl Freelist {
     /// Attempt to retrieve an ID directly from the recycled list.
     ///
     /// This may be used during scans to retrieve IDs found by other threads.
-    pub fn pop_recycled(&self) -> Option<u32> {
+    pub(crate) fn pop_recycled(&self) -> Option<u32> {
         self.recycled.pop()
     }
 
@@ -146,7 +141,7 @@ impl Freelist {
     ///
     /// This is managed such that multiple threads calling this function will receive
     /// disjoint ranges to scan.
-    pub fn scan(&self) -> Scan {
+    pub(crate) fn scan(&self) -> Scan {
         if self.max == 0 {
             return Scan { start: 0, stop: 0 };
         }
@@ -172,43 +167,19 @@ impl Freelist {
     /// If `false` is returned, it is likely because the internal recycle buffer is full.
     ///
     /// IDs exceeding [`Self::max`] are discarded.
-    pub fn push(&self, id: u32) -> bool {
+    pub(crate) fn push(&self, id: u32) -> bool {
         if id < self.max {
             self.recycled.push(id).is_ok()
         } else {
             false
         }
     }
-
-    /// Append items from `itr` into the recycled buffer. Return the number of items
-    /// actually added.
-    ///
-    /// Callers may not assume that `itr` is fully consumed.
-    ///
-    /// IDs exceeding [`Self::max`] are discarded.
-    pub fn append<I>(&self, itr: I) -> usize
-    where
-        I: IntoIterator<Item = u32>,
-    {
-        let mut count = 0;
-        for id in itr {
-            if id < self.max {
-                if let Err(_) = self.recycled.push(id) {
-                    break;
-                } else {
-                    count += 1;
-                }
-            }
-        }
-
-        count
-    }
 }
 
 /// The result of [`Freelist::pop`].
 #[derive(Debug, Clone, Copy)]
 #[must_use]
-pub enum Id {
+pub(crate) enum Id {
     /// An ID was found directly in the [`Freelist`].
     Found(u32),
     /// No ID was found in the [`Freelist`] and an exhaustive scan is recommended.
@@ -231,13 +202,14 @@ impl Id {
 
 /// An [`ExactSizeIterator`] over IDs to scan. Returned by [`Freelist::scan`].
 #[derive(Debug)]
-pub struct Scan {
+pub(crate) struct Scan {
     start: u32,
     stop: u32,
 }
 
 impl Scan {
-    pub fn as_range(&self) -> std::ops::Range<u32> {
+    #[cfg(test)]
+    fn as_range(&self) -> std::ops::Range<u32> {
         self.start..self.stop
     }
 }
@@ -283,7 +255,6 @@ mod tests {
     #[test]
     fn pop_mints_sequentially_until_exhausted() {
         let fl = freelist(4, 8);
-        assert_eq!(fl.max(), 4);
 
         let mut got = Vec::new();
         for _ in 0..4 {
@@ -298,7 +269,6 @@ mod tests {
     fn pop_returns_scan_when_max_zero() {
         let fl = freelist(0, 1);
         assert!(fl.pop().is_scan());
-        assert_eq!(fl.max(), 0);
     }
 
     #[test]
@@ -351,31 +321,6 @@ mod tests {
         assert!(fl.pop_recycled().is_none());
         // The minting counter should be untouched.
         assert_eq!(fl.pop().unwrap(), 0);
-    }
-
-    //--------//
-    // Append //
-    //--------//
-
-    #[test]
-    fn append_counts_inserted_and_skips_out_of_range() {
-        let fl = freelist(4, 8);
-        let count = fl.append([0u32, 4, 1, 7, 2].iter().copied());
-        // 4 and 7 are >= max and skipped; 0, 1, 2 are inserted.
-        assert_eq!(count, 3);
-        let mut got = Vec::new();
-        while let Some(id) = fl.pop_recycled() {
-            got.push(id);
-        }
-        got.sort();
-        assert_eq!(got, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn append_stops_when_buffer_full() {
-        let fl = freelist(16, 2);
-        let count = fl.append(0u32..16);
-        assert_eq!(count, 2);
     }
 
     //------//

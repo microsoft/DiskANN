@@ -292,7 +292,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
             for i in ids {
                 self.reader
                     .neighbors()
-                    .get(i.into_usize(), &mut self.ids)
+                    .get(i, &mut self.ids)
                     .unwrap();
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
@@ -475,7 +475,7 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
             Ok(self
                 .reader
                 .neighbors()
-                .get(id.into_usize(), neighbors)
+                .get(id, neighbors)
                 .unwrap())
         };
         ready(work)
@@ -492,7 +492,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
             Ok(self
                 .reader
                 .neighbors()
-                .set(id.into_usize(), neighbors)
+                .set(id, neighbors)
                 .unwrap())
         };
         ready(work)
@@ -506,7 +506,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         let work = move || -> ANNResult<()> {
             self.reader
                 .neighbors()
-                .lock(id.into_usize())
+                .lock(id)
                 .unwrap()
                 .append(neighbors)
                 .unwrap();

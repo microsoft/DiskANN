@@ -3,6 +3,26 @@
  * Licensed under the MIT license.
  */
 
+//! A Concurrent Graph Structure
+//!
+//! The [`Neighbors`] data structure is a concurrent graph managed out of a single allocation.
+//! The use of a single allocation puts a hard upper-bound on the length each adjacency list,
+//! which is enforced by the types in this module.
+//!
+//! Concurrency is obtained using sharded read/write locks, with [`Neighbors::get`] and
+//! [`Neighbors::set`] acquiring read and write locks respectively.
+//!
+//! To implement atomic read-modify-write operations, [`Neighbors::lock`] can be used to
+//! obtain a [`Lock`]ed list.
+//!
+//! Due to lock sharding, attempting to acquire multiple [`Lock`]s to a single [`Neighbors`]
+//! simultaneously can lead to dead-lock.
+//!
+//! ## Performance Considerations
+//!
+//! Adjacency lists written through the APIs exposed in this module are not validated for
+//! uniqueness nor for being in-bounds. These are the caller's responsibility.
+
 use std::ptr::NonNull;
 
 use diskann::{graph::AdjacencyList, utils::IntoUsize};
@@ -27,28 +47,37 @@ type Id = u32;
 /// Callers must not hold more than one [`Lock`] at a time.
 const LOCK_GRANULARITY: usize = 16;
 
-fn lock_index(i: usize) -> usize {
-    i / LOCK_GRANULARITY
+fn lock_index(i: u32) -> usize {
+    i.into_usize() / LOCK_GRANULARITY
 }
 
+/// A concurrent graph data structure with a fixed number of adjacency lists and a fixed
+/// upper-bound for each adjacency list's length. See the [module level docs](self) for
+/// more detail.
+///
+/// Adjacency lists are indexed by `[0, Neighbors::entries)`.
 #[derive(Debug)]
-pub struct Neighbors {
+pub(crate) struct Neighbors {
     neighbors: Buffer,
     locks: Vec<RwLock<()>>,
 }
 
 impl Neighbors {
-    pub fn new(entries: usize, max_length: usize) -> Result<Self, NeighborsError> {
-        // This is exceedingly unlikely and
-        if max_length > (u32::MAX).into_usize() {
-            return Err(NeighborsError::AdjacencyListTooLong(max_length));
-        }
-
+    /// Construct a new [`Neighbors`] capable of holding `entries` adjacency lists with a
+    /// maximum length of `max_length`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `(max_length + 1) * size_of::<u32>()` overflows `usize`
+    /// (unreachable on 64-bit targets) or the resulting allocation would exceed
+    /// `isize::MAX` bytes.
+    pub(crate) fn new(entries: u32, max_length: u32) -> Result<Self, NeighborsError> {
         let bytes = max_length
+            .into_usize()
             .checked_add(1)
             .and_then(|len| len.checked_mul(std::mem::size_of::<Id>()))
             .map(Bytes::new)
-            .ok_or(NeighborsError::AdjacencyListTooLong(max_length))?;
+            .ok_or(NeighborsError::Overflow(max_length))?;
 
         // We materialize slices of `Id` into the raw byte buffers.
         //
@@ -62,36 +91,47 @@ impl Neighbors {
             );
         }
 
-        let neighbors = Buffer::new(entries, bytes, ALIGN)?;
+        let neighbors = Buffer::new(entries.into_usize(), bytes, ALIGN)?;
 
         let locks = std::iter::repeat_with(|| RwLock::new(()))
-            .take(entries.div_ceil(LOCK_GRANULARITY))
+            .take(entries.into_usize().div_ceil(LOCK_GRANULARITY))
             .collect();
 
         Ok(Self { neighbors, locks })
     }
 
     /// Return the maximum length for any adjacency list.
-    pub fn max_length(&self) -> usize {
+    pub(crate) fn max_length(&self) -> usize {
         // We reserve 4 bytes at the beginning for the length of the adjacency list.
         (self.neighbors.stride().value() - std::mem::size_of::<Id>()) / std::mem::size_of::<Id>()
     }
 
-    pub fn entries(&self) -> usize {
-        self.neighbors.len()
+    /// Return the maximum length for any adjacency list as a 32-bit integer.
+    pub(crate) fn max_length_u32(&self) -> u32 {
+        // Lossless by the invariants on `Self::new`.
+        self.max_length() as u32
     }
 
-    pub fn get(&self, i: usize, neighbors: &mut AdjacencyList<u32>) -> Result<(), OutOfBounds> {
+    /// Return the number of adjacency lists contained by this graph.
+    pub(crate) fn entries(&self) -> u32 {
+        // Cast is lossless by construction.
+        self.neighbors.len() as u32
+    }
+
+    /// Copy the contents of adjacency list `i` into `neighbors`.
+    ///
+    /// Returns an error if `i` exceeds [`Self::entries`].
+    pub(crate) fn get(&self, i: u32, neighbors: &mut AdjacencyList<u32>) -> Result<(), OutOfBounds> {
         self.check(i)?;
 
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) };
 
         let _guard = lock.read();
 
-        // SAFETY: By consruction `self.buffer` has the same number of entries as
+        // SAFETY: By construction `self.buffer` has the same number of entries as
         // `self.locks` and we have already checked that `i` is in-bounds there.
         let (prefix, rest) =
-            unsafe { self.neighbors.get_unchecked(i) }.split(Bytes::size_of::<Id>());
+            unsafe { self.neighbors.get_unchecked(i.into_usize()) }.split(Bytes::size_of::<Id>());
 
         debug_assert_eq!(prefix.len(), Bytes::size_of::<Id>());
         debug_assert!(prefix.as_ptr().cast::<Id>().is_aligned());
@@ -99,8 +139,7 @@ impl Neighbors {
         // SAFETY: We hold the read-lock, so reading is safe. From our bounds checks, we
         // know that this pointer is valid.
         let len: usize = unsafe { prefix.as_ptr().cast::<Id>().read() }
-            .into_usize()
-            .min(self.max_length());
+            .min(self.max_length_u32()).into_usize();
 
         let mut resizer = neighbors.resize(len);
         unsafe {
@@ -114,33 +153,49 @@ impl Neighbors {
         Ok(())
     }
 
-    pub fn lock(&self, i: usize) -> Result<Lock<'_>, OutOfBounds> {
+    /// Lock adjacency list `i` for read-modify-write operations.
+    ///
+    /// Returns an error if `i` exceeds [`Self::entries`].
+    pub(crate) fn lock(&self, i: u32) -> Result<Lock<'_>, OutOfBounds> {
         self.check(i)?;
         Ok(unsafe { self.lock_unchecked(i) })
     }
 
-    unsafe fn lock_unchecked(&self, i: usize) -> Lock<'_> {
+    unsafe fn lock_unchecked(&self, i: u32) -> Lock<'_> {
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) }.write();
 
-        // SAFETY: By consruction `self.buffer` has the same number of entries as
+        // SAFETY: By construction `self.buffer` has the same number of entries as
         // `self.locks` and we have already checked that `i` is in-bounds there.
-        let slice = unsafe { self.neighbors.get_unchecked(i) };
+        let slice = unsafe { self.neighbors.get_unchecked(i.into_usize()) };
 
         debug_assert!(slice.as_ptr().cast::<Id>().is_aligned());
 
         Lock {
             ptr: slice.as_non_null().cast::<Id>(),
-            capacity: self.max_length(),
+            capacity: self.max_length().into_usize(),
             _lock: lock,
         }
     }
 
-    pub fn set(&self, i: usize, neighbors: &[u32]) -> Result<(), SetError> {
+    /// Overwrite the contents of adjacency list `i` with `neighbors`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// * `i` exceeds [`Self::entries`].
+    /// * `neighbors.len()` exceeds [`Self::max_length_u32`].
+    ///
+    /// If an error is returned, the graph is left unmodified.
+    pub(crate) fn set(&self, i: u32, neighbors: &[u32]) -> Result<(), SetError> {
         self.check(i).map_err(SetError::OutOfBounds)?;
 
         // We can check the length of `neighbors` before acquiring any locks as an early exit.
-        if neighbors.len() > self.max_length() {
-            return Err(SetError::TooLong(TooLong));
+        if neighbors.len() > self.max_length().into_usize() {
+            return Err(SetError::TooLong(TooLong {
+                got: neighbors.len(),
+                max: self.max_length_u32(),
+            }));
         }
 
         let lock = unsafe { self.lock_unchecked(i) };
@@ -148,7 +203,7 @@ impl Neighbors {
         Ok(())
     }
 
-    fn check(&self, i: usize) -> Result<(), OutOfBounds> {
+    fn check(&self, i: u32) -> Result<(), OutOfBounds> {
         if i >= self.entries() {
             Err(OutOfBounds(i))
         } else {
@@ -157,14 +212,49 @@ impl Neighbors {
     }
 }
 
+/// Errors returned by [`Neighbors::new`].
+#[derive(Debug, Error)]
+pub(crate) enum NeighborsError {
+    /// Computing the per-list byte size `(max_length + 1) * size_of::<u32>()` overflowed
+    /// `usize`.
+    ///
+    /// Unreachable on 64-bit targets.
+    #[error("adjacency list length of {0} is too long")]
+    Overflow(u32),
+
+    /// Allocation of the underlying buffer failed.
+    ///
+    /// This can occur if the total allocation size (`entries * per-list bytes`)
+    /// would exceed `isize::MAX`, or if the underlying allocator returns an error.
+    #[error("neighbor buffer allocation failed")]
+    AllocationFailed(#[from] BufferError),
+}
+
+
+/// Attempted to access a [`Neighbors`] at an out-of-bounds index.
 #[derive(Debug, Clone, Copy, Error)]
 #[error("index {} is out-of-bounds", self.0)]
-pub struct OutOfBounds(usize);
+pub(crate) struct OutOfBounds(u32);
 
+/// A neighbor list was longer than the configured per-list capacity.
+///
+/// `got` is the caller-supplied length (any `usize`); `max` is the per-list capacity,
+/// which is bounded by `u32` per [`Neighbors::new`].
 #[derive(Debug, Clone, Copy, Error)]
-pub enum SetError {
+#[error("length {} exceeds the max length {}", self.got, self.max)]
+pub(crate) struct TooLong {
+    got: usize,
+    max: u32,
+}
+
+/// Errors during [`Neighbors::set`].
+#[derive(Debug, Clone, Copy, Error)]
+pub(crate) enum SetError {
+    /// Attempted to access an out-of-bounds index.
     #[error(transparent)]
     OutOfBounds(OutOfBounds),
+
+    /// The new adjacency list was too long.
     #[error(transparent)]
     TooLong(TooLong),
 }
@@ -173,7 +263,7 @@ pub enum SetError {
 ///
 /// Callers must not hold more than one `Lock` at a time. See [`LOCK_GRANULARITY`] for
 /// details on the deadlock hazard.
-pub struct Lock<'a> {
+pub(crate) struct Lock<'a> {
     ptr: NonNull<u32>,
     capacity: usize,
     _lock: RwLockWriteGuard<'a, ()>,
@@ -181,50 +271,36 @@ pub struct Lock<'a> {
 
 impl Lock<'_> {
     /// Return the capacity of the neighbor buffer.
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Return the current length of the neighbor list.
     ///
-    /// This is guaranteed to be less than [`capacity`](Self::capacity).
-    pub fn len(&self) -> usize {
+    /// This is guaranteed to be less than or equal to [`capacity`](Self::capacity).
+    pub(crate) fn len(&self) -> usize {
         // SAFETY: By construction, `self.raw` has a length of at least 1.
         //
-        // The `min` operation is to be conservative.
+        // The `min` operation defensively clamps in case the stored length has been
+        // corrupted; under normal operation it should already be `<= capacity`.
         unsafe { self.ptr.read() }.into_usize().min(self.capacity())
     }
 
-    /// Return `true` only if `self.len() == 0`.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// View the current contents of the locked adjacency list as a slice.
-    pub fn as_slice(&self) -> &[u32] {
-        let len = self.len();
-        unsafe { std::slice::from_raw_parts(self.ptr.add(1).as_ptr().cast_const(), len) }
-    }
-
-    /// Consume the [`Lock`] - copying the contents of `neighbors`.
+    /// Consume `self`, appending `neighbors` to the list.
     ///
-    /// Returns an error if `neighbors.len() > self.capacity()` without copying any of the
-    /// contents of `neighbors`.
-    pub fn write(self, neighbors: &[u32]) -> Result<(), TooLong> {
-        if neighbors.len() > self.capacity() {
-            return Err(TooLong);
-        }
-
-        unsafe { self.write_unchecked(neighbors) };
-        Ok(())
-    }
-
-    pub fn append(self, neighbors: &[u32]) -> Result<(), TooLong> {
+    /// Returns an error if the concatenated list would exceed [`Self::capacity`] without
+    /// modify the adjacency list.
+    ///
+    /// This method does not attempt to deduplicate `neighbors`.
+    pub(crate) fn append(self, neighbors: &[u32]) -> Result<(), TooLong> {
         let len = self.len();
         let newlen = len.saturating_add(neighbors.len());
 
         if newlen > self.capacity() {
-            return Err(TooLong);
+            return Err(TooLong {
+                got: newlen,
+                max: self.capacity as u32,
+            });
         }
 
         unsafe {
@@ -245,6 +321,31 @@ impl Lock<'_> {
         unsafe { std::ptr::copy_nonoverlapping(neighbors.as_ptr(), self.ptr.as_ptr().add(1), len) }
         unsafe { self.ptr.write(len as u32) };
     }
+
+    #[cfg(test)]
+    fn as_slice(&self) -> &[u32] {
+        let len = self.len();
+        unsafe { std::slice::from_raw_parts(self.ptr.add(1).as_ptr().cast_const(), len) }
+    }
+
+    #[cfg(test)]
+    fn write(self, neighbors: &[u32]) -> Result<(), TooLong> {
+        if neighbors.len() > self.capacity() {
+            return Err(TooLong {
+                got: neighbors.len(),
+                max: self.capacity as u32,
+            });
+        }
+
+        unsafe { self.write_unchecked(neighbors) };
+        Ok(())
+    }
+
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl std::fmt::Debug for Lock<'_> {
@@ -257,17 +358,6 @@ impl std::fmt::Debug for Lock<'_> {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum NeighborsError {
-    #[error("adjacency list length of {} is too long", 0)]
-    AdjacencyListTooLong(usize),
-    #[error("neighbor bufffer allocation failed")]
-    AllocationFailed(#[from] BufferError),
-}
-
-#[derive(Debug, Clone, Copy, Error)]
-#[error("too long")]
-pub struct TooLong;
 
 ///////////
 // Tests //
@@ -279,22 +369,31 @@ mod tests {
 
     use crate::test::Sequencer;
 
-    // Constructor errors
+    // -- OutOfBounds checks --
 
     #[test]
-    fn new_rejects_max_length_exceeding_u32_max() {
-        let result = Neighbors::new(10, (u32::MAX as usize) + 1);
-        assert!(matches!(
-            result,
-            Err(NeighborsError::AdjacencyListTooLong(_))
-        ));
+    fn out_of_bounds_rejects_indices_beyond_entries() {
+        let n = Neighbors::new(4, 4).unwrap();
+        // entries == 4, so valid indices are 0..=3.
+        // Regression test: a buggy `check` using `i == entries()` would let
+        // `entries+1`, `entries+2`, ... slip through to UB.
+        let mut out = AdjacencyList::with_capacity(4);
+        for bad in [4u32, 5, 100, u32::MAX] {
+            assert!(matches!(n.get(bad, &mut out), Err(OutOfBounds(_))));
+            assert!(matches!(n.set(bad, &[]), Err(SetError::OutOfBounds(_))));
+            assert!(matches!(n.lock(bad), Err(OutOfBounds(_))));
+        }
     }
 
     #[test]
-    fn new_rejects_allocation_overflow() {
-        // entries * (max_length + 1) * sizeof(Id) overflows.
-        let result = Neighbors::new(usize::MAX, 64);
-        assert!(matches!(result, Err(NeighborsError::AllocationFailed(_))));
+    fn empty_neighbors_rejects_all_access() {
+        let n = Neighbors::new(0, 4).unwrap();
+        let mut out = AdjacencyList::with_capacity(4);
+        for i in [0u32, 1, u32::MAX] {
+            assert!(matches!(n.get(i, &mut out), Err(OutOfBounds(_))));
+            assert!(matches!(n.set(i, &[]), Err(SetError::OutOfBounds(_))));
+            assert!(matches!(n.lock(i), Err(OutOfBounds(_))));
+        }
     }
 
     // TooLong errors
@@ -445,14 +544,14 @@ mod tests {
             Err(SetError::OutOfBounds(_))
         ));
 
-        let generate = |round: usize, entry: usize| -> Vec<u32> {
+        let generate = |round: u32, entry: u32| -> Vec<u32> {
             (0..(round + 1))
-                .map(|r| (entry + r).try_into().unwrap())
+                .map(|r| entry + r)
                 .collect()
         };
 
         // Test mutation via `Neighbors::set`.
-        for round in 0..neighbors.max_length() {
+        for round in 0..neighbors.max_length_u32() {
             for i in 0..neighbors.entries() {
                 let v = generate(round, i);
                 neighbors.set(i, &v).unwrap();
@@ -471,7 +570,7 @@ mod tests {
         clear(&mut neighbors);
 
         // Test mutation via `lock + write`.
-        for round in 0..neighbors.max_length() {
+        for round in 0..neighbors.max_length_u32() {
             for i in 0..neighbors.entries() {
                 let v = generate(round, i);
                 neighbors.lock(i).unwrap().write(&v).unwrap();
@@ -490,12 +589,12 @@ mod tests {
         clear(&mut neighbors);
 
         // Test mutation via `lock + append`.
-        for round in 0..neighbors.max_length() {
+        for round in 0..neighbors.max_length_u32() {
             for i in 0..neighbors.entries() {
                 neighbors
                     .lock(i)
                     .unwrap()
-                    .append(&[(round + i).try_into().unwrap()])
+                    .append(&[round + i])
                     .unwrap();
             }
 
@@ -520,7 +619,7 @@ mod tests {
     // Verify that holding a `Lock` correctly blocks reads for the same adjacency list.
     #[test]
     fn lock_blocks_get() {
-        for i in 0..10 {
+        for _ in 0..10 {
             let neighbors = Neighbors::new(3, 4).unwrap();
             let seq = Sequencer::new();
 

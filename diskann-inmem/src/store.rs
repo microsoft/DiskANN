@@ -9,7 +9,7 @@ use diskann::utils::IntoUsize;
 use diskann_utils::views::MatrixView;
 
 use crate::{
-    Neighbors,
+    neighbors::Neighbors,
     buffer::{Buffer, RawSlice},
     num::{Align, Bytes},
     sync::{AtomicTag, Freelist, Tag, Registry, epoch, freelist},
@@ -48,7 +48,7 @@ impl Primary {
         let unpadded = bytes.checked_add(SPLIT).unwrap();
         let padded_bytes = unpadded.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
 
-        let total = entries.checked_add(init.nrows()).unwrap();
+        let total: usize = entries.checked_add(init.nrows()).unwrap();
 
         let this = Self {
             buffer: Buffer::new(total, padded_bytes, Align::_128).unwrap(),
@@ -62,7 +62,7 @@ impl Primary {
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
             registry: Registry::new(),
-            neighbors: Neighbors::new(total, max_neighbors).unwrap(),
+            neighbors: Neighbors::new(total.try_into().unwrap(), max_neighbors.try_into().unwrap()).unwrap(),
         };
 
         // Populate frozen points.
@@ -130,7 +130,7 @@ impl Primary {
             buffer: &self.buffer,
             unpadded: self.unpadded,
             neighbors: &self.neighbors,
-            epoch: self.registry.guard()?,
+            _epoch: self.registry.guard()?,
         })
     }
 
@@ -264,7 +264,8 @@ pub struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
     neighbors: &'a Neighbors,
-    epoch: epoch::Guard<'a>,
+    // It's important that we hold onto this, even if we don't use it.
+    _epoch: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
