@@ -18,7 +18,7 @@ use crate::{
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
+    neighbor::{DiverseId, DiverseNeighborQueue, NeighborQueue},
     provider::DataProvider,
 };
 
@@ -26,22 +26,16 @@ use crate::{
 ///
 /// Returns results that are diverse across a specified attribute.
 #[derive(Debug)]
-pub struct Diverse<P>
-where
-    P: AttributeValueProvider,
-{
+pub struct Diverse {
     /// Base k-NN search parameters.
     inner: Knn,
     /// Diversity-specific parameters.
-    diverse_params: DiverseSearchParams<P>,
+    diverse_params: DiverseSearchParams,
 }
 
-impl<P> Diverse<P>
-where
-    P: AttributeValueProvider,
-{
+impl Diverse {
     /// Create new diverse search parameters.
-    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Self {
+    pub fn new(inner: Knn, diverse_params: DiverseSearchParams) -> Self {
         Self {
             inner,
             diverse_params,
@@ -56,7 +50,7 @@ where
 
     /// Returns a reference to the diversity-specific parameters.
     #[inline]
-    pub fn diverse_params(&self) -> &DiverseSearchParams<P> {
+    pub fn diverse_params(&self) -> &DiverseSearchParams {
         &self.diverse_params
     }
 
@@ -64,17 +58,15 @@ where
     fn create_scratch<DP>(
         &self,
         index: &DiskANNIndex<DP>,
-    ) -> SearchScratch<DP::InternalId, DiverseNeighborQueue<P>>
+    ) -> SearchScratch<DP::InternalId, DiverseNeighborQueue<DP::InternalId>>
     where
         DP: DataProvider,
-        P: AttributeValueProvider<Id = DP::InternalId>,
+        DP::InternalId: DiverseId,
     {
-        let attribute_provider = self.diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
             self.inner.l_value().get(),
             self.inner.k_value(),
             self.diverse_params.diverse_results_k,
-            attribute_provider,
         );
 
         SearchScratch {
@@ -92,12 +84,12 @@ where
     }
 }
 
-impl<'a, DP, S, T, P> Search<'a, DP, S, T> for Diverse<P>
+impl<'a, DP, S, T> Search<'a, DP, S, T> for Diverse
 where
     DP: DataProvider,
+    DP::InternalId: DiverseId,
     T: Copy + Send + Sync,
     S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
-    P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;
 
