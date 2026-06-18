@@ -21,7 +21,7 @@
 //! # Side-Car Artifacts
 //!
 //! Binary blobs (e.g. vector buffers) are written to side-car files via
-//! [`Context::write`], which returns a [`Writer`](Context). The handle returned by
+//! [`Context::write`], which returns a [`Writer`]. The handle returned by
 //! [`Writer::finish`](context::Writer::finish) can be embedded into the record as a
 //! [`Handle`]; it serializes as a `$handle` reference and is rehydrated on the load side.
 mod value;

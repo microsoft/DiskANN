@@ -51,6 +51,19 @@ impl ContextInner {
     }
 
     pub(super) fn write(&self, key: &str) -> Result<Writer<'_>> {
+        // Reject absolute paths, parent traversal, and multi-component paths. Handles must be
+        // simple file names relative to the manifest directory.
+        let mut components = std::path::Path::new(key).components();
+        match components.next() {
+            Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
+            _ => {
+                return Err(Error::message(format!(
+                    "artifact file name {:?} must be a relative file name with no path separators",
+                    key,
+                )));
+            }
+        }
+
         // TODO: Proper disambiguation - making UUIDs etc.
         let mut files = self
             .files
@@ -63,6 +76,12 @@ impl ContextInner {
             )));
         }
         let full = self.dir.join(key);
+        if full.exists() {
+            return Err(Error::message(format!(
+                "file {} already exists",
+                full.display()
+            )));
+        }
         let file = std::fs::File::create_new(&full).map_err(|err| {
             Error::new(err).context(format!("while creating new file {}", full.display()))
         })?;
@@ -79,30 +98,33 @@ impl ContextInner {
     /// then renames it into place. Fails if the temp file already exists (an in-flight
     /// save is in progress, or a previous run aborted between rename steps).
     pub fn finish(self, value: Value<'_>) -> Result<()> {
-        let mut temp = self.metadata.clone().into_os_string();
-        temp.push(".temp");
-        let temp = PathBuf::from(temp);
-        if temp.exists() {
-            return Err(Error::message(format!(
-                "Temporary file {} already exists. Aborting!",
-                temp.display()
-            )));
-        }
         let files = self
-            .files
-            .into_inner()
-            .unwrap_or_else(|poison| poison.into_inner());
+        .files
+        .into_inner()
+        .unwrap_or_else(|poison| poison.into_inner());
         let f = Final {
             files: files.iter().map(|k| &**k).collect(),
             value: &value,
         };
-
-        let buffer = std::fs::File::create(&temp).map_err(|err| {
-            Error::new(err).context(format!(
-                "while creating temp manifest file {}",
-                temp.display()
-            ))
+        
+        // Fail if the temp file already exists
+        let mut temp = self.metadata.clone().into_os_string();
+        temp.push(".temp");
+        let temp = PathBuf::from(temp);
+        let buffer = std::fs::File::create_new(&temp).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::message(format!(
+                    "Temporary file {} already exists. Aborting!",
+                    temp.display()
+                ))
+            } else {
+                Error::new(err).context(format!(
+                    "while creating temp manifest file {}",
+                    temp.display()
+                ))
+            }
         })?;
+        
         serde_json::to_writer_pretty(buffer, &f)
             .map_err(|err| Error::new(err).context("while serializing manifest to JSON"))?;
         std::fs::rename(&temp, &self.metadata).map_err(|err| {
