@@ -634,13 +634,6 @@ where
 // TODO: This is such a hack.
 impl<M> glue::InplaceDeleteStrategy<Provider<layers::Full<f32>, M>> for Strategy
 where
-    Self: glue::PruneStrategy<Provider<layers::Full<f32>, M>>,
-    Self: for<'a> glue::InsertStrategy<
-            'a,
-            Provider<layers::Full<f32>, M>,
-            &'a [f32],
-            SearchAccessor = SearchAccessor<'a>,
-        >,
     M: Id,
 {
     type DeleteElement<'a> = &'a [f32];
