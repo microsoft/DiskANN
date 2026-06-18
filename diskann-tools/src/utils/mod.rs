@@ -33,9 +33,6 @@ pub use generate_synthetic_labels_utils::*;
 pub mod gen_associated_data_from_range;
 pub use gen_associated_data_from_range::*;
 
-pub mod test_utils;
-pub use test_utils::*;
-
 pub type CMDResult<T> = Result<T, CMDToolError>;
 
 pub mod parameter_helper;
