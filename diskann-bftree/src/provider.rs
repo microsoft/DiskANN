@@ -9,7 +9,6 @@ use std::{
     io::{Read, Write},
     num::NonZeroUsize,
     str::FromStr,
-    sync::Arc,
 };
 
 use diskann_quantization::{
@@ -206,7 +205,7 @@ where
     pub(crate) use_snapshot: bool,
     // Striped locks for per-vertex synchronization across all stores.
     //
-    pub(crate) locks: Arc<StripedLocks>,
+    pub(crate) locks: StripedLocks,
 }
 
 #[derive(Debug, Clone)]
@@ -299,7 +298,7 @@ where
             metric: params.metric,
             graph_params: params.graph_params,
             use_snapshot: params.use_snapshot,
-            locks: Arc::new(StripedLocks::new()),
+            locks: StripedLocks::new(),
         })
     }
 
@@ -343,7 +342,7 @@ where
             // an uninitialized neighbor list in functions `consolidate_deletes` and
             // `consolidate_simple` and getting an error. This is a stop-gap solution
             // until BF-tree API is improved to handle `exists` queries.
-            let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+            let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
             for i in 0..params.max_points {
                 let vector_id = i as u32;
                 scratch.write_neighbors(vector_id, &[])?;
@@ -731,7 +730,7 @@ where
             )));
         }
 
-        let mut scratch = self.neighbor_provider.scratch(self.locks.clone());
+        let mut scratch = self.neighbor_provider.scratch(&self.locks);
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
@@ -762,7 +761,7 @@ where
             )));
         }
 
-        let mut scratch = self.neighbor_provider.scratch(self.locks.clone());
+        let mut scratch = self.neighbor_provider.scratch(&self.locks);
         for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
             // Set the full-precision vector
             self.full_vectors.set_vector_sync(id.into_usize(), v)?;
@@ -1016,7 +1015,7 @@ where
     ) -> Self {
         Self {
             provider,
-            neighbors: provider.neighbor_provider.scratch(provider.locks.clone()),
+            neighbors: provider.neighbor_provider.scratch(&provider.locks),
             set,
             distance: T::distance(provider.metric, Some(provider.full_vectors.dim())),
         }
@@ -1121,7 +1120,7 @@ where
         let set = map::Builder::new(map::Capacity::Default).build(capacity);
         Ok(Self {
             provider,
-            neighbors: provider.neighbor_provider.scratch(provider.locks.clone()),
+            neighbors: provider.neighbor_provider.scratch(&provider.locks),
             set,
             distance,
         })
@@ -1819,7 +1818,7 @@ where
             metric,
             graph_params: saved_params.graph_params,
             use_snapshot: saved_params.use_snapshot,
-            locks: Arc::new(StripedLocks::new()),
+            locks: StripedLocks::new(),
         })
     }
 }
@@ -1981,7 +1980,7 @@ where
             metric,
             graph_params: saved_params.graph_params,
             use_snapshot: saved_params.use_snapshot,
-            locks: Arc::new(StripedLocks::new()),
+            locks: StripedLocks::new(),
         })
     }
 }
@@ -2434,7 +2433,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
 
         // Insert new vectors without neighbors and empty neighbor list is
         // expected for each newly inserted vector
@@ -2567,7 +2566,7 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
@@ -2701,7 +2700,7 @@ mod tests {
         }
 
         // Populate provider with neighbor lists
-        let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
@@ -2829,7 +2828,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)
@@ -2943,7 +2942,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let mut scratch = provider.neighbor_provider.scratch(provider.locks.clone());
+        let mut scratch = provider.neighbor_provider.scratch(&provider.locks);
         for i in 0..num_points as u32 {
             let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
                 .map(|j| (i + j) % num_points as u32)

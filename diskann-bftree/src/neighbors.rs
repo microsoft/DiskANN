@@ -6,7 +6,6 @@
 //! Bf-Tree neighbor list provider.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use bf_tree::{BfTree, Config};
 use bytemuck::{cast_slice, cast_slice_mut};
@@ -267,7 +266,7 @@ impl<I: VectorId + IntoUsize> NeighborProvider<I> {
         Ok(())
     }
 
-    pub(crate) fn scratch<'a>(&'a self, locks: Arc<StripedLocks>) -> NeighborAccessor<'a, I> {
+    pub(crate) fn scratch<'a>(&'a self, locks: &'a StripedLocks) -> NeighborAccessor<'a, I> {
         NeighborAccessor {
             provider: self,
             locks,
@@ -281,7 +280,7 @@ where
     I: VectorId + IntoUsize,
 {
     provider: &'a NeighborProvider<I>,
-    locks: Arc<StripedLocks>,
+    locks: &'a StripedLocks,
     buf: Vec<I>,
 }
 
@@ -395,7 +394,7 @@ mod tests {
         let bf_tree_config = Config::default();
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
-        let mut scratch = neighbor_provider.scratch(locks.clone());
+        let mut scratch = neighbor_provider.scratch(&locks);
 
         // Set the neighbor list of a vector
         let adj_list = vec![1, 2, 3];
@@ -454,7 +453,7 @@ mod tests {
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
             let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = neighbor_provider_clone.scratch(locks.clone());
+                let mut scratch = neighbor_provider_clone.scratch(&locks);
                 scratch.write_neighbors(i as u32, &neighbor_list).unwrap();
             });
         }
@@ -489,7 +488,7 @@ mod tests {
 
         let neighbor_provider =
             NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
-        let mut scratch = neighbor_provider.scratch(locks.clone());
+        let mut scratch = neighbor_provider.scratch(&locks);
 
         // Set some neighbor lists
         scratch.write_neighbors(1, &[2, 3, 4]).unwrap();
@@ -540,7 +539,7 @@ mod tests {
         assert_eq!(neighbor_provider.max_degree(), 10);
 
         // Verify the provider is functional
-        let mut scratch = neighbor_provider.scratch(locks.clone());
+        let mut scratch = neighbor_provider.scratch(&locks);
         scratch.write_neighbors(1, &[2, 3]).unwrap();
         let mut result = AdjacencyList::with_capacity(11);
         neighbor_provider.get_neighbors(1, &mut result).unwrap();
@@ -560,7 +559,7 @@ mod tests {
             let neighbor_provider_clone = Arc::clone(&neighbor_provider);
             let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = neighbor_provider_clone.scratch(locks.clone());
+                let mut scratch = neighbor_provider_clone.scratch(&locks);
                 for i in 0..5 {
                     scratch.write_neighbors(i as u32, &[1, 2, 3, 4, 5]).unwrap();
                 }
@@ -595,7 +594,7 @@ mod tests {
             Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0 with an empty neighbor list.
-        let mut scratch = provider.scratch(locks.clone());
+        let mut scratch = provider.scratch(&locks);
         scratch.write_neighbors(0, &[]).unwrap();
 
         let num_threads = 8;
@@ -607,7 +606,7 @@ mod tests {
             let provider_clone = Arc::clone(&provider);
             let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch(locks.clone());
+                let mut scratch = provider_clone.scratch(&locks);
                 let base = t * edges_per_thread + 1;
                 for offset in 0..edges_per_thread {
                     let neighbor_id = base + offset;
@@ -665,7 +664,7 @@ mod tests {
 
         // Initialize all vertices with empty neighbor lists.
         {
-            let mut scratch = provider.scratch(locks.clone());
+            let mut scratch = provider.scratch(&locks);
             for v in 0..num_vertices {
                 scratch.write_neighbors(v, &[]).unwrap();
             }
@@ -677,7 +676,7 @@ mod tests {
             let provider_clone = Arc::clone(&provider);
             let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch(locks.clone());
+                let mut scratch = provider_clone.scratch(&locks);
                 // Each thread owns a disjoint range of vertices
                 let base_vertex = t * vertices_per_thread;
                 for i in 0..vertices_per_thread {
@@ -721,7 +720,7 @@ mod tests {
             Arc::new(NeighborProvider::<u32>::new_with_config(max_degree, bf_tree_config).unwrap());
 
         // Initialize vertex 0.
-        let mut scratch = provider.scratch(locks.clone());
+        let mut scratch = provider.scratch(&locks);
         scratch.write_neighbors(0, &[]).unwrap();
 
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -738,7 +737,7 @@ mod tests {
             let remaining_clone = Arc::clone(&writers_remaining);
             let locks = locks.clone();
             set.spawn(async move {
-                let mut scratch = provider_clone.scratch(locks.clone());
+                let mut scratch = provider_clone.scratch(&locks);
                 let base = t * edges_per_writer + 1;
                 for offset in 0..edges_per_writer {
                     scratch.write_append(0, &[base + offset]).unwrap();
