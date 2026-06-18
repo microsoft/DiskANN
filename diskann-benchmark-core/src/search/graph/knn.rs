@@ -189,6 +189,8 @@ where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: for<'a> glue::SearchStrategy<'a, DP, &'a [T]> + Clone + AsyncFriendly,
     PP: for<'a> AsPostProcessor<'a, S, DP, &'a [T]> + AsyncFriendly,
+    graph::search::Knn:
+        for<'a> graph::Search<'a, DP, S, &'a [T], Output = graph::index::SearchStats>,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
