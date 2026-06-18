@@ -1,0 +1,82 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+//! Semver-style version stamps embedded in every saved object.
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+/// A semver-style schema version attached to every saved record.
+///
+/// Each [`crate::save::Save`] / [`crate::load::Load`] impl declares its
+/// `const VERSION: Version`. On load, the version recorded in the manifest is compared
+/// against the declared version to dispatch between
+/// [`Load::load`](crate::load::Load::load) and
+/// [`Load::load_legacy`](crate::load::Load::load_legacy).
+///
+/// The framework treats versions as opaque triples and only checks them for equality;
+/// ordering / semver semantics are entirely up to the implementing type.
+///
+/// On the wire, a `Version` is encoded as a single string of the form
+/// `"major.minor.patch"` (e.g. `"0.0.0"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl Version {
+    /// Construct a [`Version`] from its three components.
+    pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+
+impl Serialize for Version {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.collect_str(&format_args!(
+            "{}.{}.{}",
+            self.major, self.minor, self.patch
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct VersionVisitor;
+
+        impl de::Visitor<'_> for VersionVisitor {
+            type Value = Version;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a version string of the form \"major.minor.patch\"")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Version, E> {
+                let mut parts = v.split('.');
+                let major = parts.next().and_then(|s| s.parse::<u32>().ok());
+                let minor = parts.next().and_then(|s| s.parse::<u32>().ok());
+                let patch = parts.next().and_then(|s| s.parse::<u32>().ok());
+                match (major, minor, patch, parts.next()) {
+                    (Some(major), Some(minor), Some(patch), None) => Ok(Version {
+                        major,
+                        minor,
+                        patch,
+                    }),
+                    _ => Err(E::custom(format!(
+                        "unknown version {:?}: expected three `.`-separated u32 components",
+                        v,
+                    ))),
+                }
+            }
+        }
+
+        de.deserialize_str(VersionVisitor)
+    }
+}

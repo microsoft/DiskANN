@@ -913,6 +913,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-record"
+version = "0.54.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "diskann-tools"
 version = "0.54.0"
 dependencies = [
