@@ -3,20 +3,22 @@
  * Licensed under the MIT license.
  */
 
-use std::{iter::repeat_n, num::NonZeroU32, sync::atomic::Ordering};
+use std::{iter::repeat_n, num::{NonZeroU32, NonZeroUsize}, sync::atomic::Ordering};
 
 use diskann::utils::IntoUsize;
 use diskann_utils::views::MatrixView;
 
 use crate::{
-    neighbors::Neighbors,
     buffer::{Buffer, RawSlice},
+    epoch::{self, Registry},
+    freelist::{self, Freelist},
+    neighbors::Neighbors,
     num::{Align, Bytes},
-    sync::{AtomicTag, Freelist, Tag, Registry, epoch, freelist},
+    tag::{AtomicTag, Tag},
 };
 
 #[derive(Debug)]
-pub struct Primary {
+pub(crate) struct Store {
     // The invasive store where concurrency tags are stored inline with the data.
     //
     // These tags are mirrored from `tags` - with the latter being used for secondary scans
@@ -34,9 +36,10 @@ pub struct Primary {
 
 const SPLIT: Bytes = Bytes::size_of::<AtomicTag>();
 const RETRY_LIMIT: usize = 20;
+const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
-impl Primary {
-    pub fn new(
+impl Store {
+    pub(crate) fn new(
         entries: usize,
         bytes: Bytes,
         max_neighbors: usize,
@@ -46,7 +49,13 @@ impl Primary {
         assert_ne!(init.nrows(), 0);
 
         let unpadded = bytes.checked_add(SPLIT).unwrap();
-        let padded_bytes = unpadded.checked_next_multiple_of(Bytes::CACHELINE).unwrap();
+
+        // Pad to half a cache line. When data occupies just part of a cache line, this
+        // results in the same total number of cache lines being fetched while potentially
+        // enabling more compact memory.
+        let padded_bytes = unpadded
+            .checked_next_multiple_of(Bytes::CACHELINE.div(TWO))
+            .unwrap();
 
         let total: usize = entries.checked_add(init.nrows()).unwrap();
 
@@ -62,7 +71,8 @@ impl Primary {
             // we do not want it to release frozen IDs.
             freelist: Freelist::new(entries.try_into().unwrap(), NonZeroU32::new(1024).unwrap()),
             registry: Registry::new(),
-            neighbors: Neighbors::new(total.try_into().unwrap(), max_neighbors.try_into().unwrap()).unwrap(),
+            neighbors: Neighbors::new(total.try_into().unwrap(), max_neighbors.try_into().unwrap())
+                .unwrap(),
         };
 
         // Populate frozen points.
@@ -76,19 +86,19 @@ impl Primary {
     }
 
     /// Return the range of slots containing frozen items in `self`.
-    pub fn frozen(&self) -> std::ops::Range<u32> {
+    pub(crate) fn frozen(&self) -> std::ops::Range<u32> {
         (self.unfrozen as u32)..(self.buffer.len() as u32)
     }
 
     /// Return the number of unfrozen slots managed by `self`.
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.buffer.len() - self.unfrozen
     }
 
     /// Attempt to reclaim retired slots.
     ///
     /// If successful, returns the number of slots reclaimed.
-    pub fn try_drain(&self) -> Option<usize> {
+    pub(crate) fn try_drain(&self) -> Option<usize> {
         fn release(tag: &AtomicTag, kind: &'static str) {
             // Relaxed ordering is sufficient as all readers/writers are synchronized on
             // the central generation.
@@ -125,17 +135,20 @@ impl Primary {
     /// # Errors
     ///
     /// Returns [`epoch::Unavailable`] if there are too many active readers.
-    pub fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
+    pub(crate) fn reader(&self) -> Result<Reader<'_>, epoch::Unavailable> {
         Ok(Reader {
             buffer: &self.buffer,
             unpadded: self.unpadded,
             neighbors: &self.neighbors,
-            _epoch: self.registry.guard()?,
+            _guard: self.registry.guard()?,
         })
     }
 
-    /// Attempt to acquire new slot for writing.
-    pub fn acquire(&self) -> Option<Slot<'_>> {
+    /// Attempt to acquire a new [`Slot`] for writing.
+    ///
+    /// This method first consults the freelist and falls back to scanning the tags list
+    /// if no ID is available from the fast path.
+    pub(crate) fn acquire(&self) -> Option<Slot<'_>> {
         for _ in 0..RETRY_LIMIT {
             match self.freelist.pop() {
                 freelist::Id::Found(id) => {
@@ -152,6 +165,32 @@ impl Primary {
             }
         }
         None
+    }
+
+    pub(crate) fn delete(&self, i: usize) -> bool {
+        let guard = self.registry.guard().unwrap();
+        let tag = self.tags.get(i).unwrap();
+        let current = tag.load(Ordering::Relaxed);
+
+        // We can only perform a deletion if the generation is not in a reserved state.
+        if current.is_reserved() {
+            return false;
+        }
+
+        let retiring = Tag::RETIRING;
+
+        // Even if we make this change, we can't access any data until we wait for the
+        // epoch to be bumped. As such, relaxed semantics are fine.
+        match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => {
+                // Set the metadata in the mirror as well.
+                let (mirror, _) = unsafe { self.data_unchecked(i) };
+                mirror.store(retiring, Ordering::Relaxed);
+                guard.retire(i as u32);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     fn scan_acquire(&self) -> Option<Slot<'_>> {
@@ -202,6 +241,12 @@ impl Primary {
         unsafe { self.try_acquire(tag, i) }
     }
 
+    /// Try to acquire `slot` with the associated `tag`.
+    ///
+    /// # Safety
+    ///
+    /// Caller asserts that `tag` was obtained from `self.tags[slot]`. This is meant as
+    /// a perfomance optimization where `tag` is first queried for potential availability.
     unsafe fn try_acquire<'a>(&'a self, tag: &'a AtomicTag, slot: u32) -> Option<Slot<'a>> {
         match tag.compare_exchange(
             Tag::AVAILABLE,
@@ -222,32 +267,11 @@ impl Primary {
         }
     }
 
-    pub(crate) fn delete(&self, i: usize) -> bool {
-        let guard = self.registry.guard().unwrap();
-        let tag = self.tags.get(i).unwrap();
-        let current = tag.load(Ordering::Relaxed);
-
-        // We can only perform a deletion if the generation is not in a reserved state.
-        if current.is_reserved() {
-            return false;
-        }
-
-        let retiring = Tag::RETIRING;
-
-        // Even if we make this change, we can't access any data until we wait for the
-        // epoch to be bumped. As such, relaxed semantics are fine.
-        match tag.compare_exchange(current, retiring, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => {
-                // Set the metadata in the mirror as well.
-                let (mirror, _) = unsafe { self.data_unchecked(i) };
-                mirror.store(retiring, Ordering::Relaxed);
-                guard.retire(i as u32);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
+    /// Return the data at position `i` without bound-checking.
+    ///
+    /// # Safety
+    ///
+    /// The index `i` must be less then `self.buffer.len()`.
     unsafe fn data_unchecked(&self, i: usize) -> (&AtomicTag, RawSlice<'_>) {
         let (mirror, data) = unsafe { self.buffer.get_unchecked(i) }
             .truncate(self.unpadded)
@@ -259,13 +283,16 @@ impl Primary {
     }
 }
 
+/// An epoch protect reader into [`Store`].
+///
+/// Created via [`Store::reader`].
 #[derive(Debug)]
-pub struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     buffer: &'a Buffer,
     unpadded: Bytes,
     neighbors: &'a Neighbors,
     // It's important that we hold onto this, even if we don't use it.
-    _epoch: epoch::Guard<'a>,
+    _guard: epoch::Guard<'a>,
 }
 
 impl<'a> Reader<'a> {
@@ -275,7 +302,7 @@ impl<'a> Reader<'a> {
     /// 1. Index `i` is out-of-bounds.
     /// 2. The read cannot be guaranteed to be race-free.
     #[inline]
-    pub fn read(&self, i: usize) -> Option<&[u8]> {
+    pub(crate) fn read(&self, i: usize) -> Option<&[u8]> {
         if self.is_in_bounds(i) {
             unsafe { self.read_in_bounds(i) }
         } else {
@@ -286,10 +313,14 @@ impl<'a> Reader<'a> {
     /// Return `true` if the index `i` is in-bounds.
     #[inline]
     #[must_use = "this function has no side-effects"]
-    pub fn is_in_bounds(&self, i: usize) -> bool {
+    pub(crate) fn is_in_bounds(&self, i: usize) -> bool {
         i < self.buffer.len()
     }
 
+    /// Return `true` if it is safe to read the data at position `i`.
+    ///
+    /// This guarantee only holds while `self` is alive. Construction of a new [`Reader`]
+    /// requires a separate check.
     pub(crate) fn can_read(&self, i: usize) -> Option<bool> {
         if !self.is_in_bounds(i) {
             return None;
@@ -303,6 +334,12 @@ impl<'a> Reader<'a> {
         Some(can_read)
     }
 
+    /// Read the data as position `i` if it is guaranteed to be race-free without bounds
+    /// checking.
+    ///
+    /// # Safety
+    ///
+    /// The index `i` must satisfy [`Self::is_in_bounds`].
     #[inline]
     pub(crate) unsafe fn read_in_bounds(&self, i: usize) -> Option<&[u8]> {
         debug_assert!(self.is_in_bounds(i));
@@ -320,8 +357,8 @@ impl<'a> Reader<'a> {
             .can_read();
 
         if can_read {
-            // SAFETY: tags and buffer always have the same length, and we
-            // verified i < tags.len() above.
+            // SAFETY: We've passed the `can_read` check - `_guard` will ensure the read
+            // slice is valid and race-free.
             Some(unsafe { rest.as_slice() })
         } else {
             None
@@ -332,7 +369,7 @@ impl<'a> Reader<'a> {
     ///
     /// # Safety
     ///
-    /// The index `i` must be in-bounds.
+    /// The index `i` must be satisfy [`Self::is_in_bounds`].
     #[inline]
     pub(crate) unsafe fn read_raw_unchecked(&self, i: usize) -> RawSlice<'_> {
         unsafe { self.buffer.get_unchecked(i) }.truncate(self.unpadded)
@@ -343,15 +380,15 @@ impl<'a> Reader<'a> {
         self.unpadded
     }
 
-    // TODO: We may want to lock `Neighbors` in some way to enable exclusive access during
-    // operations like snapshots.
+    /// Return [`Neighbors`].
     pub(crate) fn neighbors(&self) -> &Neighbors {
         &self.neighbors
     }
 }
 
+/// A writable buffer into the data managed by a [`Store`], obtained from [`Store::Acquire`].
 #[derive(Debug)]
-pub struct Slot<'a> {
+pub(crate) struct Slot<'a> {
     tag: &'a AtomicTag,
     mirror: &'a AtomicTag,
     data: RawSlice<'a>,
@@ -359,12 +396,13 @@ pub struct Slot<'a> {
 }
 
 impl<'a> Slot<'a> {
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+    /// View the managed data as a mutable slice.
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.data.as_mut_slice() }
     }
 
     /// Return the slot associated with this write.
-    pub fn slot(&self) -> u32 {
+    pub(crate) fn slot(&self) -> u32 {
         self.slot
     }
 

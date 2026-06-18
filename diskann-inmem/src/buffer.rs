@@ -33,7 +33,11 @@ impl Buffer {
     ///
     /// Returns an error if the number of bytes `bytes_per_entry * entries` rounded up to
     /// the next multiple of `align` exceeds `isize::MAX`.
-    pub(crate) fn new(entries: usize, bytes_per_entry: Bytes, align: Align) -> Result<Self, BufferError> {
+    pub(crate) fn new(
+        entries: usize,
+        bytes_per_entry: Bytes,
+        align: Align,
+    ) -> Result<Self, BufferError> {
         // If we overflow `usize::MAX`, we will definitely overflow `isize::MAX`.
         let bytes = bytes_per_entry.checked_mul(entries).ok_or(BufferError)?;
 

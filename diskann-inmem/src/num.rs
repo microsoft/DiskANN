@@ -39,6 +39,11 @@ impl Bytes {
     }
 
     #[inline]
+    pub const fn div(self, other: NonZeroUsize) -> Bytes {
+        Bytes::new(self.value() / other.get())
+    }
+
+    #[inline]
     pub(crate) const fn unchecked_mul(self, other: usize) -> Bytes {
         Bytes::new(self.value() * other)
     }

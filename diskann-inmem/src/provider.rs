@@ -19,11 +19,10 @@ use diskann::{
 use diskann_utils::views::Matrix;
 
 use crate::{
-    ids,
     layers::{self, Distance, QueryDistance},
     num::Bytes,
-    store::{self, Primary},
-    sync::epoch::Unavailable,
+    sharded::Sharded,
+    store::{self, Store},
 };
 
 pub trait Id: Send + Sync + Hash + Eq + Clone + 'static {}
@@ -34,9 +33,9 @@ pub struct Provider<L, M = u32>
 where
     M: Id,
 {
-    primary: Primary,
+    store: Store,
     layer: L,
-    mapping: ids::Sharded<M>,
+    mapping: Sharded<M>,
 }
 
 impl<L, M> Provider<L, M>
@@ -56,17 +55,13 @@ where
             layers::Set::into_bytes(&layer, point, row).unwrap();
         }
 
-        let primary = Primary::new(capacity, bytes, 32, data.as_view());
-        let mapping = ids::Sharded::new(capacity);
+        let store = Store::new(capacity, bytes, 32, data.as_view());
+        let mapping = Sharded::new(capacity);
         Self {
-            primary,
+            store,
             layer,
             mapping,
         }
-    }
-
-    fn reader(&self) -> Result<store::Reader<'_>, Unavailable> {
-        self.primary.reader()
     }
 }
 
@@ -123,7 +118,7 @@ where
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
         // TODO: These need to actually happen in lock-step.
         let internal = self.mapping.remove(gid).unwrap();
-        assert!(self.primary.delete(internal.into_usize()));
+        assert!(self.store.delete(internal.into_usize()));
         Ok(())
     }
 
@@ -137,7 +132,7 @@ where
         id: u32,
     ) -> ANNResult<diskann::provider::ElementStatus> {
         if self
-            .primary
+            .store
             .reader()
             .unwrap()
             .can_read(id.into_usize())
@@ -173,7 +168,7 @@ where
         F: FnMut(ANNResult<diskann::provider::ElementStatus>, Self::InternalId) + Send,
     {
         let work = move || {
-            let reader = self.primary.reader().unwrap();
+            let reader = self.store.reader().unwrap();
             for i in itr {
                 if reader.can_read(i.into_usize()).unwrap() {
                     f(Ok(diskann::provider::ElementStatus::Valid), i)
@@ -209,7 +204,7 @@ where
         element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send {
         let work = move || {
-            let mut slot = self.primary.acquire().unwrap();
+            let mut slot = self.store.acquire().unwrap();
 
             // TODO: Proper cleanup via `Guard` or some other mechanism on the event of
             // insert failure.
@@ -290,10 +285,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     {
         let work = move || -> ANNResult<()> {
             for i in ids {
-                self.reader
-                    .neighbors()
-                    .get(i, &mut self.ids)
-                    .unwrap();
+                self.reader.neighbors().get(i, &mut self.ids).unwrap();
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
                 self.ids
@@ -349,15 +341,15 @@ fn dispatch_expand_beam(bytes: Bytes) -> FExpandBeam {
 
 const CACHE_LINE_SIZE: usize = 64;
 
-pub unsafe fn test_function(
-    list: &[u32],
-    lookahead: usize,
-    reader: &store::Reader<'_>,
-    distance: &dyn layers::QueryDistance,
-    f: &mut dyn FnMut(u32, f32),
-) -> ANNResult<()> {
-    unsafe { expand_beam_inner::<4>(list, lookahead, reader, distance, f) }
-}
+// pub unsafe fn test_function(
+//     list: &[u32],
+//     lookahead: usize,
+//     reader: &store::Reader<'_>,
+//     distance: &dyn layers::QueryDistance,
+//     f: &mut dyn FnMut(u32, f32),
+// ) -> ANNResult<()> {
+//     unsafe { expand_beam_inner::<4>(list, lookahead, reader, distance, f) }
+// }
 
 /// Safety (no # yet because we need to revisit this - clippy will lint)
 ///
@@ -471,13 +463,7 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let work = move || {
-            Ok(self
-                .reader
-                .neighbors()
-                .get(id, neighbors)
-                .unwrap())
-        };
+        let work = move || Ok(self.reader.neighbors().get(id, neighbors).unwrap());
         ready(work)
     }
 }
@@ -488,13 +474,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let work = move || {
-            Ok(self
-                .reader
-                .neighbors()
-                .set(id, neighbors)
-                .unwrap())
-        };
+        let work = move || Ok(self.reader.neighbors().set(id, neighbors).unwrap());
         ready(work)
     }
 
@@ -550,7 +530,7 @@ where
         query: L::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
         let distance = <L as layers::Search>::query_distance(&provider.layer, query)?;
-        let reader = provider.primary.reader()?;
+        let reader = provider.store.reader()?;
         let expand_beam = dispatch_expand_beam(reader.bytes());
         let accessor = SearchAccessor {
             reader,
@@ -558,7 +538,7 @@ where
             ids: AdjacencyList::new(),
             expand_beam,
             provider,
-            start_points: provider.primary.frozen(),
+            start_points: provider.store.frozen(),
         };
         Ok(accessor)
     }
@@ -634,7 +614,7 @@ where
         _capacity: usize,
     ) -> ANNResult<PruneAccessor<'a>> {
         Ok(PruneAccessor {
-            reader: provider.primary.reader()?,
+            reader: provider.store.reader()?,
             distance: <L as layers::AsDistance>::as_distance(&provider.layer),
         })
     }
@@ -692,7 +672,7 @@ where
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send
     {
         let work = move || {
-            let reader = provider.primary.reader().unwrap();
+            let reader = provider.store.reader().unwrap();
             let mut buf: Box<[_]> = std::iter::repeat_n(0.0, provider.layer.dim()).collect();
             let data = reader.read(id.into_usize()).unwrap();
             bytemuck::must_cast_slice_mut::<f32, u8>(&mut buf).copy_from_slice(data);

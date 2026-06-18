@@ -121,7 +121,11 @@ impl Neighbors {
     /// Copy the contents of adjacency list `i` into `neighbors`.
     ///
     /// Returns an error if `i` exceeds [`Self::entries`].
-    pub(crate) fn get(&self, i: u32, neighbors: &mut AdjacencyList<u32>) -> Result<(), OutOfBounds> {
+    pub(crate) fn get(
+        &self,
+        i: u32,
+        neighbors: &mut AdjacencyList<u32>,
+    ) -> Result<(), OutOfBounds> {
         self.check(i)?;
 
         let lock = unsafe { self.locks.get_unchecked(lock_index(i)) };
@@ -139,7 +143,8 @@ impl Neighbors {
         // SAFETY: We hold the read-lock, so reading is safe. From our bounds checks, we
         // know that this pointer is valid.
         let len: usize = unsafe { prefix.as_ptr().cast::<Id>().read() }
-            .min(self.max_length_u32()).into_usize();
+            .min(self.max_length_u32())
+            .into_usize();
 
         let mut resizer = neighbors.resize(len);
         unsafe {
@@ -229,7 +234,6 @@ pub(crate) enum NeighborsError {
     #[error("neighbor buffer allocation failed")]
     AllocationFailed(#[from] BufferError),
 }
-
 
 /// Attempted to access a [`Neighbors`] at an out-of-bounds index.
 #[derive(Debug, Clone, Copy, Error)]
@@ -341,7 +345,6 @@ impl Lock<'_> {
         Ok(())
     }
 
-
     #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -357,7 +360,6 @@ impl std::fmt::Debug for Lock<'_> {
             .finish()
     }
 }
-
 
 ///////////
 // Tests //
@@ -544,11 +546,8 @@ mod tests {
             Err(SetError::OutOfBounds(_))
         ));
 
-        let generate = |round: u32, entry: u32| -> Vec<u32> {
-            (0..(round + 1))
-                .map(|r| entry + r)
-                .collect()
-        };
+        let generate =
+            |round: u32, entry: u32| -> Vec<u32> { (0..(round + 1)).map(|r| entry + r).collect() };
 
         // Test mutation via `Neighbors::set`.
         for round in 0..neighbors.max_length_u32() {
@@ -591,11 +590,7 @@ mod tests {
         // Test mutation via `lock + append`.
         for round in 0..neighbors.max_length_u32() {
             for i in 0..neighbors.entries() {
-                neighbors
-                    .lock(i)
-                    .unwrap()
-                    .append(&[round + i])
-                    .unwrap();
+                neighbors.lock(i).unwrap().append(&[round + i]).unwrap();
             }
 
             for i in 0..neighbors.entries() {

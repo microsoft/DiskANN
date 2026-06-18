@@ -296,7 +296,10 @@ impl Registry {
             debug_assert_eq!(_previous, current, "concurrency violation");
 
             let queue = &self.retiring[last_queue(current)];
-            Some(Drain { queue, _drain: drain })
+            Some(Drain {
+                queue,
+                _drain: drain,
+            })
         } else {
             // Previous generation has not completely retired.
             None

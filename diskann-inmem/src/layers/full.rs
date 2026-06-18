@@ -76,7 +76,10 @@ where
 {
     type Query<'a> = &'a [T];
 
-    fn query_distance<'a>(&'a self, query: &'a [T]) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
+    fn query_distance<'a>(
+        &'a self,
+        query: &'a [T],
+    ) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
         Ok(Box::new(QueryDistance::new(self.distance, query)))
     }
 }
@@ -90,10 +93,7 @@ where
     }
 }
 
-impl<T> layers::Insert for Full<T> where
-    T: bytemuck::Pod + std::fmt::Debug + Send + Sync
-{
-}
+impl<T> layers::Insert for Full<T> where T: bytemuck::Pod + std::fmt::Debug + Send + Sync {}
 
 //////////////
 // Distance //

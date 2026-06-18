@@ -13,7 +13,10 @@ use std::{
 
 use rand::{Rng, distr::StandardUniform};
 
-use super::{AtomicTag, Registry, Tag};
+use crate::{
+    epoch::Registry,
+    tag::{AtomicTag, Tag},
+};
 
 type Data = [u32; 4];
 

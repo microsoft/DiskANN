@@ -5,16 +5,18 @@
 
 #![deny(rustdoc::broken_intra_doc_links)]
 
-mod buffer;
-mod neighbors;
-mod sync;
-
 pub mod num;
 
-pub mod ids;
-pub mod layers;
+mod buffer;
+mod epoch;
+mod freelist;
+mod neighbors;
+mod sharded;
+mod tag;
+
 mod store;
 
+pub mod layers;
 pub mod provider;
 
 pub use provider::{Context, Provider, Strategy};
