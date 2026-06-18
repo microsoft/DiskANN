@@ -18,8 +18,8 @@ use diskann::{
     error::IntoANNResult,
     graph::{
         self,
+        ext::labeled::{self, QueryLabelProvider},
         glue::{self, DefaultPostProcessor, SearchPostProcess, SearchStrategy},
-        index::QueryLabelProvider,
         search::{AdaptiveL, InlineFilterSearch, Knn},
         search_output_buffer, DiskANNIndex,
     },
@@ -212,8 +212,8 @@ where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    // This needs to be Arc instead of Rc because DiskSearchStrategy has "Send" trait bound, though this is not expected to be shared across threads.
-    io_tracker: IOTracker,
+    // Borrowed from `search_internal` so the strategy can be passed by value
+    io_tracker: &'a IOTracker,
     /// Borrowed predicate consumed *only* by `default_post_processor()` →
     /// `RerankAndFilter`. Other variants (`FlatScan`, `InlineFilter`) filter
     /// earlier in their pipelines and install `None` here to avoid a
@@ -784,10 +784,11 @@ where
     /// predicate here
     fn search_strategy<'a>(
         &'a self,
+        io_tracker: &'a IOTracker,
         postprocess_filter: Option<&'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync)>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
-            io_tracker: IOTracker::default(),
+            io_tracker,
             postprocess_filter,
             vertex_provider_factory: &self.vertex_provider_factory,
             scratch_pool: &self.scratch_pool,
@@ -882,9 +883,9 @@ where
     /// Reuses the same `DiskAccessor` surface as the plain `Knn` graph path:
     /// `start_point_distances` and `expand_beam`, both of which call
     /// `pq_distances` internally.
-    async fn filter_search<OB>(
+    async fn filter_search<'a, OB>(
         &self,
-        strategy: &DiskSearchStrategy<'_, Data, ProviderFactory>,
+        strategy: DiskSearchStrategy<'a, Data, ProviderFactory>,
         query: &[Data::VectorDataType],
         knn: Knn,
         vector_filter: &(dyn Fn(&u32) -> bool + Send + Sync),
@@ -897,9 +898,11 @@ where
         let label_provider = PredicateLabelProvider {
             predicate: vector_filter,
         };
-        let search = InlineFilterSearch::new(knn, &label_provider, adaptive_l);
+        
+        let filtered_strategy = labeled::Filtered::new(strategy, &label_provider);
+        let search = InlineFilterSearch::new(knn, adaptive_l);
         self.index
-            .search(search, strategy, &DefaultContext, query, output)
+            .search(search, &filtered_strategy, &DefaultContext, query, output)
             .await
     }
 
@@ -977,62 +980,64 @@ where
         let k = k_value;
         let l = search_list_size as usize;
 
+        let io_tracker = IOTracker::default();
+
         // * `FlatScan`  — `flat_search` filters the scan iterator at
         //   construction; non-matching IDs never enter `best`.
         // * `Graph`     — plain greedy traversal doesn't consult any
         //   predicate, if predicate presented `RerankAndFilter` will filter out non-matching nodes.
         // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept`
         //   nodes into `matched_results`, no filtering in post-processing.
-        let (strategy, stats) = match plan {
+        let stats = match plan {
             SearchPlan::FlatScan { filter } => {
-                let strategy = self.search_strategy(None);
-                let stats = self.runtime.block_on(self.flat_search(
+                let strategy = self.search_strategy(&io_tracker, None);
+                self.runtime.block_on(self.flat_search(
                     &strategy,
                     query,
                     filter.as_deref(),
                     l,
                     &mut result_output_buffer,
-                ))?;
-                (strategy, stats)
+                ))?
             }
             SearchPlan::Graph { filter } => {
-                let strategy = self.search_strategy(filter.as_deref());
+                let strategy = self.search_strategy(&io_tracker, filter.as_deref());
                 let knn_search = Knn::new(k, l, beam_width)?;
-                let stats = self.runtime.block_on(self.index.search(
+                self.runtime.block_on(self.index.search(
                     knn_search,
                     &strategy,
                     &DefaultContext,
                     query,
                     &mut result_output_buffer,
-                ))?;
-                (strategy, stats)
+                ))?
             }
             SearchPlan::InlineFilter {
                 predicate,
                 adaptive_l,
             } => {
-                let strategy = self.search_strategy(None);
+                // Strategy is moved by value into `filter_search` so that the
+                // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
+                // its counters reachable from this scope.
+                let strategy = self.search_strategy(&io_tracker, None);
                 let knn_search = Knn::new(k, l, beam_width)?;
-                let stats = self.runtime.block_on(self.filter_search(
-                    &strategy,
+                self.runtime.block_on(self.filter_search(
+                    strategy,
                     query,
                     knn_search,
                     predicate.as_ref(),
                     adaptive_l.clone(),
                     &mut result_output_buffer,
-                ))?;
-                (strategy, stats)
+                ))?
             }
         };
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;
 
         query_stats.total_execution_time_us = timer.elapsed().as_micros();
-        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
-        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
-        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.io_time_us = IOTracker::time(&io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = io_tracker.io_count() as u32;
         query_stats.query_pq_preprocess_time_us =
-            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+            IOTracker::time(&io_tracker.preprocess_time_us) as u128;
         query_stats.cpu_time_us = query_stats.total_execution_time_us
             - query_stats.io_time_us
             - query_stats.query_pq_preprocess_time_us;
@@ -1604,7 +1609,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(None);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, None);
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let recorded_search =
@@ -1725,7 +1731,8 @@ mod disk_provider_tests {
             &mut distances,
             &mut associated_data,
         );
-        let strategy = search_engine.search_strategy(None);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, None);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -1772,7 +1779,10 @@ mod disk_provider_tests {
             &mut distances2,
             &mut associated_data2,
         );
-        let strategy2 = search_engine.search_strategy(&|_| true);
+        let io_tracker2 = IOTracker::default();
+        // Old API passed `&|_| true` (accept-all); after the Option refactor
+        // that's structurally equivalent to `None`.
+        let strategy2 = search_engine.search_strategy(&io_tracker2, None);
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
@@ -2180,7 +2190,8 @@ mod disk_provider_tests {
             &mut associated_data,
         );
 
-        let strategy = search_engine.search_strategy(None);
+        let io_tracker = IOTracker::default();
+        let strategy = search_engine.search_strategy(&io_tracker, None);
 
         let mut search_record = VisitedSearchRecord::new(0);
         let search_params = Knn::new(10, 10, Some(4)).unwrap();
