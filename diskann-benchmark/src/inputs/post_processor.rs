@@ -6,7 +6,7 @@
 use std::fmt;
 
 use diskann_benchmark_runner::Checker;
-use diskann_providers::post_processor::DeterminantDiversityParams;
+use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

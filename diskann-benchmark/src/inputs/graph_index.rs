@@ -15,9 +15,8 @@ use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Chec
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
+        graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
     },
-    post_processor::DeterminantDiversityParams,
     utils::load_metadata_from_file,
 };
 use serde::{Deserialize, Serialize};

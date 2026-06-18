@@ -27,10 +27,12 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
     ANNError, ANNResult,
 };
-use diskann_providers::post_processor::DeterminantDiversityParams;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
-    model::{compute_pq_distance, graph::provider::determinant_diversity},
+    model::{
+        compute_pq_distance,
+        graph::provider::{determinant_diversity, DeterminantDiversityParams},
+    },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
 use diskann_utils::{
