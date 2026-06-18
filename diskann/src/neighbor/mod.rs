@@ -16,7 +16,7 @@ pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueu
 mod diverse_priority_queue;
 #[cfg(feature = "experimental_diversity_search")]
 pub use diverse_priority_queue::{
-    Attribute, DiverseId, DiverseNeighborQueue, VectorIdWithAttribute,
+    Attribute, DiverseAttributeQueue, DiverseId, DiverseNeighborQueue, VectorIdWithAttribute,
 };
 
 //////////////

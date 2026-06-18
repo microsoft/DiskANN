@@ -18,27 +18,35 @@ use crate::{
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
-    neighbor::{DiverseId, DiverseNeighborQueue, NeighborQueue},
+    neighbor::{Attribute, DiverseAttributeQueue, NeighborQueue},
     provider::DataProvider,
 };
 
 /// Parameters for diversity-aware search.
 ///
-/// Returns results that are diverse across a specified attribute.
-#[derive(Debug)]
-pub struct Diverse {
+/// Returns results that are diverse across a specified attribute. The attribute
+/// for each candidate id is obtained via the `attribute_of` lookup supplied at
+/// construction; ids without an attribute are excluded from the diverse results.
+pub struct Diverse<F> {
     /// Base k-NN search parameters.
     inner: Knn,
     /// Diversity-specific parameters.
     diverse_params: DiverseSearchParams,
+    /// Maps a raw internal id to its diversity attribute (or `None`).
+    attribute_of: F,
 }
 
-impl Diverse {
+impl<F> Diverse<F> {
     /// Create new diverse search parameters.
-    pub fn new(inner: Knn, diverse_params: DiverseSearchParams) -> Self {
+    ///
+    /// `attribute_of` maps an internal vector id to its diversity attribute, or
+    /// `None` if the id has no attribute (in which case it is excluded from the
+    /// diverse results).
+    pub fn new(inner: Knn, diverse_params: DiverseSearchParams, attribute_of: F) -> Self {
         Self {
             inner,
             diverse_params,
+            attribute_of,
         }
     }
 
@@ -54,19 +62,21 @@ impl Diverse {
         &self.diverse_params
     }
 
-    /// Create search scratch with DiverseNeighborQueue for this search.
-    fn create_scratch<DP>(
+    /// Create search scratch with a [`DiverseAttributeQueue`] for this search.
+    fn create_scratch<DP, A>(
         &self,
         index: &DiskANNIndex<DP>,
-    ) -> SearchScratch<DP::InternalId, DiverseNeighborQueue<DP::InternalId>>
+    ) -> SearchScratch<DP::InternalId, DiverseAttributeQueue<DP::InternalId, A, F>>
     where
         DP: DataProvider,
-        DP::InternalId: DiverseId,
+        A: Attribute,
+        F: Fn(DP::InternalId) -> Option<A> + Clone + Send + Sync,
     {
-        let diverse_queue = DiverseNeighborQueue::new(
+        let diverse_queue = DiverseAttributeQueue::new(
             self.inner.l_value().get(),
             self.inner.k_value(),
             self.diverse_params.diverse_results_k,
+            self.attribute_of.clone(),
         );
 
         SearchScratch {
@@ -84,10 +94,11 @@ impl Diverse {
     }
 }
 
-impl<'a, DP, S, T> Search<'a, DP, S, T> for Diverse
+impl<'a, DP, S, T, A, F> Search<'a, DP, S, T> for Diverse<F>
 where
     DP: DataProvider,
-    DP::InternalId: DiverseId,
+    A: Attribute,
+    F: Fn(DP::InternalId) -> Option<A> + Clone + Send + Sync,
     T: Copy + Send + Sync,
     S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor>,
 {
@@ -112,7 +123,7 @@ where
                 .search_accessor(&index.data_provider, context, query)
                 .into_ann_result()?;
 
-            let mut diverse_scratch = self.create_scratch(index);
+            let mut diverse_scratch = self.create_scratch::<DP, A>(index);
 
             let stats = index
                 .search_internal(

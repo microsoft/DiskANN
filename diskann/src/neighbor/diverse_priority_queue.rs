@@ -262,6 +262,144 @@ where
     }
 }
 
+/// Unwrap a [`VectorIdWithAttribute`]-keyed neighbor back to its raw id.
+fn unwrap_attribute<I, A>(nbr: Neighbor<VectorIdWithAttribute<I, A>>) -> Neighbor<I>
+where
+    I: NeighborPriorityQueueIdType + Hash,
+    A: Attribute,
+{
+    Neighbor::new(nbr.id.id, nbr.distance)
+}
+
+/// A [`NeighborQueue`] adapter that attaches diversity attributes to raw ids at
+/// the search pipeline boundary.
+///
+/// The graph search pipeline produces bare ids (`I`) that do not carry an
+/// attribute. This adapter applies a lookup function to each id, wraps it in a
+/// [`VectorIdWithAttribute`] so the attribute travels with the id, and delegates
+/// the diversity bookkeeping to an inner [`DiverseNeighborQueue`]. Results are
+/// unwrapped back to the original id type `I`, so the rest of the pipeline is
+/// unaffected.
+///
+/// Ids for which the lookup returns `None` have no attribute and are skipped,
+/// matching the behavior of [`DiverseNeighborQueue`].
+pub struct DiverseAttributeQueue<I, A, F>
+where
+    I: NeighborPriorityQueueIdType + Hash,
+    A: Attribute,
+    F: Fn(I) -> Option<A> + Send + Sync,
+{
+    inner: DiverseNeighborQueue<VectorIdWithAttribute<I, A>>,
+    attribute_of: F,
+}
+
+impl<I, A, F> DiverseAttributeQueue<I, A, F>
+where
+    I: NeighborPriorityQueueIdType + Hash,
+    A: Attribute,
+    F: Fn(I) -> Option<A> + Send + Sync,
+{
+    /// Create a new adapter wrapping a [`DiverseNeighborQueue`].
+    ///
+    /// `attribute_of` maps a raw id to its attribute, or `None` if it has none.
+    pub fn new(
+        l_value: usize,
+        k_value: NonZeroUsize,
+        diverse_results_k: usize,
+        attribute_of: F,
+    ) -> Self {
+        Self {
+            inner: DiverseNeighborQueue::new(l_value, k_value, diverse_results_k),
+            attribute_of,
+        }
+    }
+
+    /// Trim each attribute's results down to `diverse_results_k`.
+    ///
+    /// See [`DiverseNeighborQueue::post_process`].
+    pub fn post_process(&mut self) {
+        self.inner.post_process();
+    }
+}
+
+impl<I, A, F> Debug for DiverseAttributeQueue<I, A, F>
+where
+    I: NeighborPriorityQueueIdType + Hash,
+    A: Attribute,
+    F: Fn(I) -> Option<A> + Send + Sync,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiverseAttributeQueue")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<I, A, F> NeighborQueue<I> for DiverseAttributeQueue<I, A, F>
+where
+    I: NeighborPriorityQueueIdType + Hash,
+    A: Attribute,
+    F: Fn(I) -> Option<A> + Send + Sync,
+{
+    type Iter<'a>
+        = std::iter::Map<
+        BestCandidatesIterator<
+            'a,
+            VectorIdWithAttribute<I, A>,
+            DiverseNeighborQueue<VectorIdWithAttribute<I, A>>,
+        >,
+        fn(Neighbor<VectorIdWithAttribute<I, A>>) -> Neighbor<I>,
+    >
+    where
+        Self: 'a,
+        I: 'a;
+
+    fn insert(&mut self, nbr: Neighbor<I>) {
+        // Look up the attribute for this id. Ids without an attribute are skipped.
+        let Some(attribute) = (self.attribute_of)(nbr.id) else {
+            return;
+        };
+        self.inner.insert(Neighbor::new(
+            VectorIdWithAttribute::new(nbr.id, attribute),
+            nbr.distance,
+        ));
+    }
+
+    fn get(&self, index: usize) -> Neighbor<I> {
+        unwrap_attribute(self.inner.get(index))
+    }
+
+    fn closest_notvisited(&mut self) -> Option<Neighbor<I>> {
+        self.inner.closest_notvisited().map(unwrap_attribute)
+    }
+
+    fn has_notvisited_node(&self) -> bool {
+        self.inner.has_notvisited_node()
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    fn search_l(&self) -> usize {
+        self.inner.search_l()
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.inner
+            .iter()
+            .map(unwrap_attribute as fn(Neighbor<VectorIdWithAttribute<I, A>>) -> Neighbor<I>)
+    }
+}
+
 #[cfg(test)]
 mod diverse_priority_queue_test {
     use super::*;

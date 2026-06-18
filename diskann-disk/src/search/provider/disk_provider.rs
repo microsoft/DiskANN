@@ -1868,35 +1868,7 @@ mod disk_provider_tests {
     #[test]
     fn test_disk_search_diversity_search() {
         use diskann::graph::DiverseSearchParams;
-        use diskann::neighbor::AttributeValueProvider;
         use std::collections::HashMap;
-
-        // Simple test attribute provider
-        #[derive(Debug, Clone)]
-        struct TestAttributeProvider {
-            attributes: HashMap<u32, u32>,
-        }
-        impl TestAttributeProvider {
-            fn new() -> Self {
-                Self {
-                    attributes: HashMap::new(),
-                }
-            }
-            fn insert(&mut self, id: u32, attribute: u32) {
-                self.attributes.insert(id, attribute);
-            }
-        }
-        impl diskann::provider::HasId for TestAttributeProvider {
-            type Id = u32;
-        }
-
-        impl AttributeValueProvider for TestAttributeProvider {
-            type Value = u32;
-
-            fn get(&self, id: Self::Id) -> Option<Self::Value> {
-                self.attributes.get(&id).copied()
-            }
-        }
 
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
@@ -1914,16 +1886,16 @@ mod disk_provider_tests {
 
         let query_vector: [f32; 128] = [1f32; 128];
 
-        // Create attribute provider with random labels (1 to 3) for all vectors
-        let mut attribute_provider = TestAttributeProvider::new();
+        // Map each vector id to a label (1 to 15) derived from the id.
+        let mut attributes: HashMap<u32, u32> = HashMap::new();
         let num_vectors = 256; // Number of vectors in the test dataset
         for i in 0..num_vectors {
-            // Assign labels 1-3 based on modulo to ensure distribution
+            // Assign labels 1-15 based on modulo to ensure distribution
             let label = (i % 15) + 1;
-            attribute_provider.insert(i, label);
+            attributes.insert(i, label);
         }
-        // Wrap in Arc once to avoid cloning the HashMap later
-        let attribute_provider = std::sync::Arc::new(attribute_provider);
+        // Wrap in Arc so multiple lookup closures and verification can share the map.
+        let attributes = std::sync::Arc::new(attributes);
 
         let mut indices = vec![0u32; 10];
         let mut distances = vec![0f32; 10];
@@ -1936,16 +1908,20 @@ mod disk_provider_tests {
         );
         let strategy = search_engine.search_strategy(&|_| true);
 
-        // Create diverse search parameters with attribute provider
+        // Create diverse search parameters; the attribute is derived from the id.
         let diverse_params = DiverseSearchParams::new(
             0, // diverse_attribute_id
             3, // diverse_results_k
-            attribute_provider.clone(),
         );
+        let attribute_of = {
+            let attributes = attributes.clone();
+            move |id: u32| attributes.get(&id).copied()
+        };
 
         let search_params = Knn::new(10, 20, None).unwrap();
 
-        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let diverse_search =
+            diskann::graph::search::Diverse::new(search_params, diverse_params, attribute_of);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -1969,8 +1945,11 @@ mod disk_provider_tests {
         let diverse_params = DiverseSearchParams::new(
             0, // diverse_attribute_id
             diverse_results_k,
-            attribute_provider.clone(),
         );
+        let attribute_of = {
+            let attributes = attributes.clone();
+            move |id: u32| attributes.get(&id).copied()
+        };
 
         // Test diverse search using the search API
         let mut indices2 = vec![0u32; return_list_size as usize];
@@ -1985,7 +1964,8 @@ mod disk_provider_tests {
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
-        let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
+        let diverse_search2 =
+            diskann::graph::search::Diverse::new(search_params2, diverse_params, attribute_of);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -2022,7 +2002,7 @@ mod disk_provider_tests {
         println!("{:<10} {:<15} {:<10}", "Vertex ID", "Distance", "Label");
         println!("{}", "-".repeat(35));
         for i in 0..stats.result_count as usize {
-            let attribute_value = attribute_provider.get(indices2[i]).unwrap_or(0);
+            let attribute_value = attributes.get(&indices2[i]).copied().unwrap_or(0);
             println!(
                 "{:<10} {:<15.2} {:<10}",
                 indices2[i], distances2[i], attribute_value
@@ -2041,7 +2021,7 @@ mod disk_provider_tests {
         // Verify diversity: Check that we have diverse attribute values in the results
         let mut attribute_counts = HashMap::new();
         for item in indices2.iter().take(stats.result_count as usize) {
-            if let Some(attribute_value) = attribute_provider.get(*item) {
+            if let Some(attribute_value) = attributes.get(item).copied() {
                 *attribute_counts.entry(attribute_value).or_insert(0) += 1;
             }
         }
@@ -2059,7 +2039,7 @@ mod disk_provider_tests {
         println!("Total unique labels: {}", attribute_counts.len());
         println!("================================\n");
 
-        // With diverse_results_k = 5, we expect at most 5 results per attribute value
+        // With diverse_results_k results, we expect at most that many per attribute value
         for (attribute_value, count) in &attribute_counts {
             println!(
                 "Assert: Label {} has {} occurrences (max: {})",
@@ -2075,7 +2055,6 @@ mod disk_provider_tests {
         }
 
         // Verify that we have multiple different attribute values (diversity)
-        // With 3 possible labels and diverse_results_k=5, we should see at least 2 different labels
         println!(
             "Assert: Found {} unique labels (expected at least 2)",
             attribute_counts.len()
