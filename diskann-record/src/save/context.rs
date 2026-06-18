@@ -99,14 +99,14 @@ impl ContextInner {
     /// save is in progress, or a previous run aborted between rename steps).
     pub fn finish(self, value: Value<'_>) -> Result<()> {
         let files = self
-        .files
-        .into_inner()
-        .unwrap_or_else(|poison| poison.into_inner());
+            .files
+            .into_inner()
+            .unwrap_or_else(|poison| poison.into_inner());
         let f = Final {
             files: files.iter().map(|k| &**k).collect(),
             value: &value,
         };
-        
+
         // Fail if the temp file already exists
         let mut temp = self.metadata.clone().into_os_string();
         temp.push(".temp");
@@ -124,7 +124,7 @@ impl ContextInner {
                 ))
             }
         })?;
-        
+
         serde_json::to_writer_pretty(buffer, &f)
             .map_err(|err| Error::new(err).context("while serializing manifest to JSON"))?;
         std::fs::rename(&temp, &self.metadata).map_err(|err| {

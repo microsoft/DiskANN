@@ -63,11 +63,15 @@ impl ContextInner {
 
     pub(super) fn read(&self, key: &str) -> Result<Reader<'_>> {
         let key_as_path: &Path = key.as_ref();
-        if key.contains("..") || key_as_path.is_absolute() {
-            return Err(Error::from(error::Kind::MissingFile).context(format!(
-                "handle references file {:?} which escapes the manifest directory",
-                key,
-            )));
+        let mut components = key_as_path.components();
+        match components.next() {
+            Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
+            _ => {
+                return Err(Error::from(error::Kind::MissingFile).context(format!(
+                    "handle references file {:?} which escapes the manifest directory",
+                    key,
+                )));
+            }
         }
         if !self.files.contains(key_as_path) {
             return Err(Error::from(error::Kind::MissingFile).context(format!(
