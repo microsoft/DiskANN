@@ -14,11 +14,11 @@ use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::{AdHoc, CachingStrategy},
     search::{
-        search_mode::SearchMode,
         provider::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
@@ -276,9 +276,7 @@ where
                     (true, false) => SearchMode::flat(),
                     (true, true) => SearchMode::flat_filtered(move |vid: &u32| vf.contains(vid)),
                     (false, false) => SearchMode::graph(),
-                    (false, true) => {
-                        SearchMode::graph_filtered(move |vid: &u32| vf.contains(vid))
-                    }
+                    (false, true) => SearchMode::graph_filtered(move |vid: &u32| vf.contains(vid)),
                 };
 
                 match searcher.search(

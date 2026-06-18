@@ -27,11 +27,14 @@ pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
 /// * `InlineFilter` — label-filtered graph search; the predicate is consulted
 ///   at visit time (not just during rerank). `adaptive_l = Some(_)` grows the
 ///   beam mid-search if the observed match specificity is low.
-
 pub enum SearchMode<'a> {
-    FlatScan { filter: Option<SearchPredicate<'a>> },
+    FlatScan {
+        filter: Option<SearchPredicate<'a>>,
+    },
 
-    Graph { filter: Option<SearchPredicate<'a>> },
+    Graph {
+        filter: Option<SearchPredicate<'a>>,
+    },
 
     InlineFilter {
         predicate: SearchPredicate<'a>,

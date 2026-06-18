@@ -586,7 +586,7 @@ mod tests {
         let raw = value_from_file(&example_directory().join("graph-index-inline-filter.json"));
         run_integration_test(raw);
     }
-    
+
     /// Filtered disk search end-to-end: drives the disk-index backend through
     /// `disk-index-filter.json`
     #[test]

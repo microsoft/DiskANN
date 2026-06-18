@@ -9,11 +9,11 @@ use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
     search::{
-        search_mode::SearchMode,
         provider::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
         },
+        search_mode::SearchMode,
     },
     storage::disk_index_reader::DiskIndexReader,
     utils::{
@@ -256,13 +256,13 @@ where
                 let has_filter = parameters.vector_filters_file.is_some();
                 let mode: SearchMode<'_> = match (parameters.is_flat_search, has_filter) {
                     (true, false) => SearchMode::flat(),
-                    (true, true) => SearchMode::flat_filtered(move |vid: &u32| {
-                        vector_filter.contains(vid)
-                    }),
+                    (true, true) => {
+                        SearchMode::flat_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
                     (false, false) => SearchMode::graph(),
-                    (false, true) => SearchMode::graph_filtered(move |vid: &u32| {
-                        vector_filter.contains(vid)
-                    }),
+                    (false, true) => {
+                        SearchMode::graph_filtered(move |vid: &u32| vector_filter.contains(vid))
+                    }
                 };
 
                 let result = searcher.search(

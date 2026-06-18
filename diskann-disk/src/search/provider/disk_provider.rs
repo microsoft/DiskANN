@@ -43,8 +43,8 @@ use tracing::debug;
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
     search::{
-        search_mode::SearchMode,
         provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
+        search_mode::SearchMode,
         traits::{VertexProvider, VertexProviderFactory},
     },
     storage::{api::AsyncDiskLoadContext, disk_index_reader::DiskIndexReader},
@@ -207,6 +207,11 @@ where
 /// from local data structures). Moving these components to the search strategy allows
 /// DiskProvider to satisfy 'static constraints while enabling flexible per-search
 /// resource management.
+/// Borrowed predicate used internally by the disk search pipeline.
+/// Spelled out here to keep the field/parameter signatures under
+/// `clippy::type_complexity`'s default threshold.
+type PostprocessFilter<'a> = &'a (dyn Fn(&u32) -> bool + Send + Sync);
+
 pub struct DiskSearchStrategy<'a, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
@@ -221,7 +226,7 @@ where
     /// processor short-circuits via `.map_or(true, ...)` and skips the
     /// dyn-fn call entirely. Fn param is `u32` because `VectorIdType = u32`
     /// is enforced by trait bounds throughout this provider.
-    postprocess_filter: Option<&'a (dyn Fn(&u32) -> bool + Send + Sync)>,
+    postprocess_filter: Option<PostprocessFilter<'a>>,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: &'a ProviderFactory,
@@ -271,11 +276,11 @@ impl IOTracker {
 pub struct RerankAndFilter<'a> {
     /// `None` means accept-all; `post_process` short-circuits before invoking
     /// the closure, so the unfiltered hot path pays no dyn-fn cost per node.
-    filter: Option<&'a (dyn Fn(&u32) -> bool + Send + Sync)>,
+    filter: Option<PostprocessFilter<'a>>,
 }
 
 impl<'a> RerankAndFilter<'a> {
-    fn new(filter: Option<&'a (dyn Fn(&u32) -> bool + Send + Sync)>) -> Self {
+    fn new(filter: Option<PostprocessFilter<'a>>) -> Self {
         Self { filter }
     }
 }
@@ -288,7 +293,8 @@ struct PredicateLabelProvider<'a> {
 
 impl std::fmt::Debug for PredicateLabelProvider<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PredicateLabelProvider").finish_non_exhaustive()
+        f.debug_struct("PredicateLabelProvider")
+            .finish_non_exhaustive()
     }
 }
 
@@ -332,7 +338,7 @@ where
             .map(|n| n.id)
             // `None` short-circuits to `true` — no dyn-fn call when there's
             // no predicate set, which is the common unfiltered hot path.
-            .filter(|id| self.filter.map_or(true, |f| f(id)))
+            .filter(|id| self.filter.is_none_or(|f| f(id)))
             .filter_map(|n| {
                 if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
                     Some(Ok::<((u32, _), f32), ANNError>(((n, entry.1), entry.0)))
@@ -378,7 +384,7 @@ where
     ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
         DiskAccessor::new(
             provider,
-            &self.io_tracker,
+            self.io_tracker,
             query,
             self.vertex_provider_factory,
             self.scratch_pool,
@@ -785,7 +791,7 @@ where
     fn search_strategy<'a>(
         &'a self,
         io_tracker: &'a IOTracker,
-        postprocess_filter: Option<&'a (dyn Fn(&Data::VectorIdType) -> bool + Send + Sync)>,
+        postprocess_filter: Option<PostprocessFilter<'a>>,
     ) -> DiskSearchStrategy<'a, Data, ProviderFactory> {
         DiskSearchStrategy {
             io_tracker,
@@ -840,8 +846,8 @@ where
 
         // `None` short-circuits to `true` — no dyn-fn call per node on the
         // unfiltered (recall-baseline) path.
-        let mut iter = (0..provider.num_points as u32)
-            .filter(|id| vector_filter.map_or(true, |f| f(id)));
+        let mut iter =
+            (0..provider.num_points as u32).filter(|id| vector_filter.is_none_or(|f| f(id)));
         loop {
             id_buffer.clear();
             id_buffer.extend(iter.by_ref().take(batch_size));
@@ -898,7 +904,7 @@ where
         let label_provider = PredicateLabelProvider {
             predicate: vector_filter,
         };
-        
+
         let filtered_strategy = labeled::Filtered::new(strategy, &label_provider);
         let search = InlineFilterSearch::new(knn, adaptive_l);
         self.index
@@ -908,7 +914,6 @@ where
 
     /// Perform a search on the disk index.
     /// return the list of nearest neighbors and associated data.
-
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
@@ -2096,7 +2101,11 @@ mod disk_provider_tests {
             .expect("inline filter with accept-all predicate must succeed");
 
         let plain_ids: Vec<u32> = plain.results.iter().map(|r| r.vertex_id).collect();
-        let inline_ids: Vec<u32> = inline_no_filter.results.iter().map(|r| r.vertex_id).collect();
+        let inline_ids: Vec<u32> = inline_no_filter
+            .results
+            .iter()
+            .map(|r| r.vertex_id)
+            .collect();
 
         assert_eq!(
             plain.stats.result_count, inline_no_filter.stats.result_count,
