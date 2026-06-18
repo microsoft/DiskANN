@@ -9,7 +9,7 @@ use diskann::utils::IntoUsize;
 use diskann_disk::{
     data_model::{CachingStrategy, GraphDataType},
     search::{
-        plan::SearchPlan,
+        search_mode::SearchMode,
         provider::{
             disk_provider::DiskIndexSearcher,
             disk_vertex_provider_factory::DiskVertexProviderFactory,
@@ -250,17 +250,17 @@ where
                 (((((_cmp, query), vector_filter), query_result_id), query_result_dist), stats),
                 result_count,
             )| {
-                // Construct the plan from the CLI-driven
+                // Construct the mode from the CLI-driven
                 // `(is_flat_search, has_filter)` pair. CLI doesn't expose
                 // AdaptiveL yet, so `InlineFilter` is unreachable here.
                 let has_filter = parameters.vector_filters_file.is_some();
-                let plan: SearchPlan<'_> = match (parameters.is_flat_search, has_filter) {
-                    (true, false) => SearchPlan::flat(),
-                    (true, true) => SearchPlan::flat_filtered(move |vid: &u32| {
+                let mode: SearchMode<'_> = match (parameters.is_flat_search, has_filter) {
+                    (true, false) => SearchMode::flat(),
+                    (true, true) => SearchMode::flat_filtered(move |vid: &u32| {
                         vector_filter.contains(vid)
                     }),
-                    (false, false) => SearchPlan::graph(),
-                    (false, true) => SearchPlan::graph_filtered(move |vid: &u32| {
+                    (false, false) => SearchMode::graph(),
+                    (false, true) => SearchMode::graph_filtered(move |vid: &u32| {
                         vector_filter.contains(vid)
                     }),
                 };
@@ -270,7 +270,7 @@ where
                     parameters.recall_at,
                     l,
                     Some(parameters.beam_width as usize),
-                    plan,
+                    mode,
                 );
 
                 match result {

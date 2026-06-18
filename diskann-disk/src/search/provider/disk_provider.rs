@@ -43,7 +43,7 @@ use tracing::debug;
 use crate::{
     data_model::{CachingStrategy, GraphHeader},
     search::{
-        plan::SearchPlan,
+        search_mode::SearchMode,
         provider::disk_vertex_provider_factory::DiskVertexProviderFactory,
         traits::{VertexProvider, VertexProviderFactory},
     },
@@ -915,7 +915,7 @@ where
         return_list_size: u32,
         search_list_size: u32,
         beam_width: Option<usize>,
-        plan: SearchPlan<'_>,
+        mode: SearchMode<'_>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; return_list_size as usize];
@@ -932,7 +932,7 @@ where
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &plan,
+            &mode,
         )?;
 
         let mut search_result = SearchResult {
@@ -968,7 +968,7 @@ where
         indices: &mut [u32],
         distances: &mut [f32],
         associated_data: &mut [Data::AssociatedDataType],
-        plan: &SearchPlan<'_>,
+        mode: &SearchMode<'_>,
     ) -> ANNResult<SearchResultStats> {
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
@@ -988,8 +988,8 @@ where
         //   predicate, if predicate presented `RerankAndFilter` will filter out non-matching nodes.
         // * `InlineFilter` — `InlineFilterSearch` only forwards `Accept`
         //   nodes into `matched_results`, no filtering in post-processing.
-        let stats = match plan {
-            SearchPlan::FlatScan { filter } => {
+        let stats = match mode {
+            SearchMode::FlatScan { filter } => {
                 let strategy = self.search_strategy(&io_tracker, None);
                 self.runtime.block_on(self.flat_search(
                     &strategy,
@@ -999,7 +999,7 @@ where
                     &mut result_output_buffer,
                 ))?
             }
-            SearchPlan::Graph { filter } => {
+            SearchMode::Graph { filter } => {
                 let strategy = self.search_strategy(&io_tracker, filter.as_deref());
                 let knn_search = Knn::new(k, l, beam_width)?;
                 self.runtime.block_on(self.index.search(
@@ -1010,11 +1010,11 @@ where
                     &mut result_output_buffer,
                 ))?
             }
-            SearchPlan::InlineFilter {
+            SearchMode::InlineFilter {
                 predicate,
                 adaptive_l,
             } => {
-                // Strategy is moved by value into `filter_search` so that the
+                // Strategy is passed by value into `filter_search` so that the
                 // `labeled::Filtered` wrapper can own it; `io_tracker` keeps
                 // its counters reachable from this scope.
                 let strategy = self.search_strategy(&io_tracker, None);
@@ -1419,7 +1419,7 @@ mod disk_provider_tests {
                     &mut indices,
                     &mut distances,
                     &mut associated_data,
-                    &SearchPlan::graph(),
+                    &SearchMode::graph(),
                 );
 
                 // Calculate the range of the truth_result for this query
@@ -1466,7 +1466,7 @@ mod disk_provider_tests {
             .for_each_in_pool(pool.as_ref(), |(i, query)| {
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, SearchPlan::graph())
+                    .search(query, params.k as u32, params.l as u32, beam_width, SearchMode::graph())
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1576,7 +1576,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &SearchPlan::graph(),
+            &SearchMode::graph(),
         );
 
         assert!(result.is_err());
@@ -1645,7 +1645,7 @@ mod disk_provider_tests {
             return_list_size,
             search_list_size,
             Some(4),
-            SearchPlan::graph(),
+            SearchMode::graph(),
         );
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
@@ -1978,13 +1978,13 @@ mod disk_provider_tests {
         let mut distances = vec![0f32; 10];
         let mut associated_data = vec![(); 10];
 
-        // Build the same `SearchPlan` twice. `vector_filter` is a `fn` pointer
-        // (Copy), so each call reconstructs a fresh plan with the same filter.
-        let make_plan = || -> SearchPlan<'static> {
+        // Build the same `SearchMode` twice. `vector_filter` is a `fn` pointer
+        // (Copy), so each call reconstructs a fresh mode with the same filter.
+        let make_mode = || -> SearchMode<'static> {
             if is_flat_search {
-                SearchPlan::flat_filtered(vector_filter)
+                SearchMode::flat_filtered(vector_filter)
             } else {
-                SearchPlan::graph_filtered(vector_filter)
+                SearchMode::graph_filtered(vector_filter)
             }
         };
 
@@ -1997,7 +1997,7 @@ mod disk_provider_tests {
             &mut indices,
             &mut distances,
             &mut associated_data,
-            &make_plan(),
+            &make_mode(),
         );
 
         assert!(result.is_ok(), "Expected search to succeed");
@@ -2017,7 +2017,7 @@ mod disk_provider_tests {
             10,
             10,
             None, // beam_width
-            make_plan(),
+            make_mode(),
         );
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");
@@ -2079,7 +2079,7 @@ mod disk_provider_tests {
         let query = vec![0.1f32; 128];
 
         let plain = search_engine
-            .search(&query, 10, 10, None, SearchPlan::graph())
+            .search(&query, 10, 10, None, SearchMode::graph())
             .expect("plain Knn must succeed");
 
         let inline_no_filter = search_engine
@@ -2088,7 +2088,7 @@ mod disk_provider_tests {
                 10,
                 10,
                 None,
-                SearchPlan::inline_filter(
+                SearchMode::inline_filter(
                     |_| true,
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),
@@ -2133,7 +2133,7 @@ mod disk_provider_tests {
                 10,
                 10,
                 None,
-                SearchPlan::inline_filter(
+                SearchMode::inline_filter(
                     predicate,
                     Some(AdaptiveL::new(5, 16.0).expect("valid AdaptiveL")),
                 ),

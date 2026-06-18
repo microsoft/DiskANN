@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Top-level disk search plan.
+//! Top-level disk search mode.
 //!
 //! Encodes the algorithm + filter combination for `DiskIndexSearcher::search`
 //! as a sum type so that invalid combinations (flat scan with adaptive L,
@@ -17,7 +17,7 @@ use diskann::graph::search::AdaptiveL;
 /// on the disk path by construction).
 pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
 
-/// Top-level disk search plan.
+/// Top-level disk search mode.
 ///
 /// Three variants encode the algorithm + filter combination:
 ///
@@ -28,7 +28,7 @@ pub type SearchPredicate<'a> = Box<dyn Fn(&u32) -> bool + Send + Sync + 'a>;
 ///   at visit time (not just during rerank). `adaptive_l = Some(_)` grows the
 ///   beam mid-search if the observed match specificity is low.
 
-pub enum SearchPlan<'a> {
+pub enum SearchMode<'a> {
     FlatScan { filter: Option<SearchPredicate<'a>> },
 
     Graph { filter: Option<SearchPredicate<'a>> },
@@ -39,7 +39,7 @@ pub enum SearchPlan<'a> {
     },
 }
 
-impl<'a> SearchPlan<'a> {
+impl<'a> SearchMode<'a> {
     /// Flat scan over all vectors. Recall baseline.
     pub fn flat() -> Self {
         Self::FlatScan { filter: None }
@@ -91,15 +91,15 @@ mod tests {
 
     #[test]
     fn flat_no_filter_constructor() {
-        let plan = SearchPlan::flat();
-        assert!(matches!(plan, SearchPlan::FlatScan { filter: None }));
+        let mode = SearchMode::flat();
+        assert!(matches!(mode, SearchMode::FlatScan { filter: None }));
     }
 
     #[test]
     fn flat_filtered_constructor() {
-        let plan = SearchPlan::flat_filtered(|id| *id == 5);
-        match &plan {
-            SearchPlan::FlatScan { filter: Some(p) } => {
+        let mode = SearchMode::flat_filtered(|id| *id == 5);
+        match &mode {
+            SearchMode::FlatScan { filter: Some(p) } => {
                 assert!(p(&5));
                 assert!(!p(&4));
             }
@@ -109,15 +109,15 @@ mod tests {
 
     #[test]
     fn graph_no_filter_constructor() {
-        let plan = SearchPlan::graph();
-        assert!(matches!(plan, SearchPlan::Graph { filter: None }));
+        let mode = SearchMode::graph();
+        assert!(matches!(mode, SearchMode::Graph { filter: None }));
     }
 
     #[test]
     fn graph_filtered_constructor() {
-        let plan = SearchPlan::graph_filtered(|id| *id == 7);
-        match &plan {
-            SearchPlan::Graph { filter: Some(p) } => {
+        let mode = SearchMode::graph_filtered(|id| *id == 7);
+        match &mode {
+            SearchMode::Graph { filter: Some(p) } => {
                 assert!(p(&7));
                 assert!(!p(&6));
             }
@@ -127,9 +127,9 @@ mod tests {
 
     #[test]
     fn inline_filter_constructor_without_adaptive_l() {
-        let plan = SearchPlan::inline_filter(|id| *id == 3, None);
-        match &plan {
-            SearchPlan::InlineFilter {
+        let mode = SearchMode::inline_filter(|id| *id == 3, None);
+        match &mode {
+            SearchMode::InlineFilter {
                 predicate,
                 adaptive_l: None,
             } => {
@@ -143,9 +143,9 @@ mod tests {
     #[test]
     fn inline_filter_constructor_with_adaptive_l() {
         let adaptive = AdaptiveL::new(5, 16.0).expect("valid AdaptiveL");
-        let plan = SearchPlan::inline_filter(|id| *id == 11, Some(adaptive));
-        match &plan {
-            SearchPlan::InlineFilter {
+        let mode = SearchMode::inline_filter(|id| *id == 11, Some(adaptive));
+        match &mode {
+            SearchMode::InlineFilter {
                 adaptive_l: Some(_),
                 ..
             } => {}
