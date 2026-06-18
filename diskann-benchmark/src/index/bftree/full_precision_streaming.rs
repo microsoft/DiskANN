@@ -225,7 +225,7 @@ where
     ))?);
 
     let config = input.try_as_config()?.build()?;
-    let params = input.bftree_parameters(max_points, data.ncols());
+    let params = input.bftree_parameters(max_points, data.ncols())?;
     let start_points = input
         .build()
         .start_point_strategy()

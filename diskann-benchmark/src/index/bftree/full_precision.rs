@@ -129,7 +129,7 @@ where
             output,
             |data| {
                 let config = input.try_as_config()?.build()?;
-                let params = input.bftree_parameters(data.nrows(), data.ncols());
+                let params = input.bftree_parameters(data.nrows(), data.ncols())?;
                 let start_points = input.build().start_point_strategy().compute(data)?;
                 let provider = BfTreeProvider::new(params, start_points.as_view(), NoStore)?;
                 Ok(Arc::new(DiskANNIndex::new(config, provider, None)))

@@ -400,7 +400,7 @@ mod tests {
         raw["jobs"][0]["content"]["build"]["save_path"] =
             serde_json::Value::String(save_prefix_str.to_string());
 
-        // Enable snapshots on store configs so save_with can snapshot the trees.
+        // Enable snapshots on each store config so save_with can snapshot the trees.
         let content = &mut raw["jobs"][0]["content"];
         for key in ["vector_store_config", "neighbor_store_config"] {
             if let Some(cfg) = content[key].as_object_mut() {

@@ -179,7 +179,7 @@ impl Benchmark for BfTreeSpherical {
 
         // 3. Build the bf_tree provider with quantization.
         let config = input.try_as_config()?.build()?;
-        let params = input.bftree_parameters(data.nrows(), data.ncols());
+        let params = input.bftree_parameters(data.nrows(), data.ncols())?;
         let start_points = input
             .build()
             .start_point_strategy()
