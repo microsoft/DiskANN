@@ -133,7 +133,7 @@ where
         let provider = {
             let fmvp = FastMemoryVectorProviderAsync::<T>::load_from_bin(
                 &FileStorageProvider,
-                input.data.to_str().unwrap(),
+                &input.data.to_string_lossy(),
                 metric,
                 None,
                 None,
@@ -146,13 +146,19 @@ where
 
         // Build the FlatIndex
         let index = FlatIndex::new(provider);
-        let index = Arc::new(index);
 
         // Load queries and groundtruth
         let queries: Matrix<T> =
             datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?;
         let groundtruth: Matrix<u32> =
             datafiles::load_dataset(datafiles::BinFile(&input.search.groundtruth))?;
+
+        anyhow::ensure!(
+            ncols == queries.ncols(),
+            "dataset dimension ({}) does not match query dimension ({})",
+            ncols,
+            queries.ncols(),
+        );
 
         writeln!(
             output,
@@ -168,13 +174,13 @@ where
 
         let mut results = Vec::new();
 
-        for &threads in &input.search.num_threads {
-            let searcher = Arc::new(FlatSearcher {
-                index: index.clone(),
-                queries: Arc::new(queries.clone()),
-                metric,
-            });
+        let searcher = Arc::new(FlatSearcher {
+            index,
+            queries,
+            strategy: FlatScanStrategy::new(metric),
+        });
 
+        for &threads in &input.search.num_threads {
             let setup = search::Setup {
                 threads,
                 tasks: threads,
@@ -183,7 +189,7 @@ where
 
             let run = search::Run::new(FlatSearchParameters { k }, setup);
             let aggregated = search::search_all(
-                searcher,
+                searcher.clone(),
                 std::iter::once(run),
                 FlatAggregator::new(&groundtruth, k.get()),
             )?;
@@ -288,9 +294,9 @@ impl<T: VectorRepr> SearchStrategy<InMemProvider<T>, &[T]> for FlatScanStrategy<
 
 /// Wraps a [`FlatIndex`] and queries to implement the [`Search`] trait from benchmark_core.
 struct FlatSearcher<T: VectorRepr> {
-    index: Arc<FlatIndex<InMemProvider<T>>>,
-    queries: Arc<Matrix<T>>,
-    metric: Metric,
+    index: FlatIndex<InMemProvider<T>>,
+    queries: Matrix<T>,
+    strategy: FlatScanStrategy<T>,
 }
 
 /// Search parameters for flat-index benchmarks.
@@ -331,13 +337,19 @@ where
     where
         O: SearchOutputBuffer<u32> + Send,
     {
-        let strategy = FlatScanStrategy::<T>::new(self.metric);
         let context = DefaultContext;
         let query = self.queries.row(index);
 
         let stats = self
             .index
-            .knn_search(parameters.k, &strategy, CopyIds, &context, query, buffer)
+            .knn_search(
+                parameters.k,
+                &self.strategy,
+                CopyIds,
+                &context,
+                query,
+                buffer,
+            )
             .await?;
 
         Ok(FlatMetrics {
