@@ -129,13 +129,10 @@ impl fmt::Display for DeterminantDiversityParams {
 /// [`determinant_diversity`].
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum DeterminantDiversityError {
-    /// Power parameter <= 0.0
     #[error("determinant-diversity power must be > 0.0, got: {0}")]
     InvalidPower(f32),
-    /// Eta parameter < 0.0
     #[error("determinant-diversity eta must be >= 0.0, got: {0}")]
     InvalidEta(f32),
-    /// The candidate matrix column count does not match the query dimension.
     #[error(
         "determinant-diversity candidate matrix has {candidate} columns but query dimension is {query}"
     )]
@@ -145,7 +142,6 @@ pub enum DeterminantDiversityError {
         /// Number of columns in the candidate matrix.
         candidate: usize,
     },
-    /// The number of distances does not match the number of candidate rows.
     #[error("determinant-diversity received {distances} distances for {candidates} candidate rows")]
     DistanceCountMismatch {
         /// Number of supplied distances.
