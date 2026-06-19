@@ -8,6 +8,7 @@ use std::{fmt::Debug, future::Future};
 use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
+    error::ANNErrorKind,
     error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
@@ -23,6 +24,7 @@ use diskann::{
 };
 
 use diskann_utils::future::AsyncFriendly;
+use diskann_utils::views::Matrix;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
 
 use crate::model::graph::provider::async_::{
@@ -34,6 +36,7 @@ use crate::model::graph::provider::async_::{
     inmem::DefaultProvider,
     postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
 };
+use crate::model::graph::provider::{DeterminantDiversityParams, determinant_diversity};
 
 /// A type alias for the DefaultProvider with full-precision as the primary vector store.
 pub type FullPrecisionProvider<T, Q = NoStore, D = NoDeletes, Ctx = DefaultContext> =
@@ -397,6 +400,76 @@ where
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Store the reranked results.
+        std::future::ready(Ok(output.extend(reranked)))
+    }
+}
+
+/// A [`SearchPostProcess`]or that reranks a full-precision candidate stream using the
+/// Determinant-Diversity algorithm, reordering results to promote geometric diversity
+/// while preserving relevance to the query.
+#[derive(Debug, Clone, Copy)]
+pub struct DeterminantDiversity {
+    params: DeterminantDiversityParams,
+}
+
+impl DeterminantDiversity {
+    /// Construct a new [`DeterminantDiversity`] post-processor with the given parameters.
+    pub const fn new(params: DeterminantDiversityParams) -> Self {
+        Self { params }
+    }
+}
+
+impl<'a, A> glue::SearchPostProcess<A, &'a [f32], A::Id> for DeterminantDiversity
+where
+    A: HasId<Id = u32> + GetFullPrecision<Repr = f32> + Send + Sync,
+{
+    type Error = ANNError;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut A,
+        query: &'a [f32],
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<A::Id>> + Send,
+        B: SearchOutputBuffer<A::Id> + Send + ?Sized,
+    {
+        let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
+        let candidate_count = candidates.len();
+        let store: &FullPrecisionStore<f32> = accessor.as_full_precision();
+        let mut vectors = Matrix::new(0.0f32, candidate_count, query.len());
+        let mut ids = Vec::with_capacity(candidate_count);
+        let mut distances = Vec::with_capacity(candidate_count);
+
+        for (i, candidate) in candidates.into_iter().enumerate() {
+            // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
+            // pattern used by `Rerank` above.
+            let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
+            ids.push(candidate.id);
+            distances.push(candidate.distance);
+            vectors.row_mut(i).copy_from_slice(vector);
+        }
+
+        let indices = match determinant_diversity(
+            vectors.as_mut_view(),
+            &distances,
+            query,
+            candidate_count,
+            &self.params,
+        ) {
+            Ok(indices) => indices,
+            Err(error) => {
+                return std::future::ready(Err(ANNError::new(
+                    ANNErrorKind::DimensionMismatchError,
+                    error,
+                )));
+            }
+        };
+
+        let reranked = indices.into_iter().map(|idx| (ids[idx], distances[idx]));
+
         std::future::ready(Ok(output.extend(reranked)))
     }
 }

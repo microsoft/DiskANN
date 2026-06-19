@@ -42,7 +42,6 @@ use super::{
 };
 use crate::{
     index::{
-        post_processor,
         result::{AggregatedSearchResults, BuildResult},
         search::plugins,
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
@@ -475,7 +474,7 @@ impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::Fu
             index,
             queries,
             benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
-            post_processor::DeterminantDiversity::new(params),
+            inmem::DeterminantDiversity::new(params),
         )?;
 
         let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
