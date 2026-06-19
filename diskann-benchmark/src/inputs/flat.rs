@@ -136,3 +136,25 @@ impl Example for SearchPhase {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inputs::Example;
+
+    #[test]
+    fn example_flat_search_round_trips() {
+        let example = FlatSearch::example();
+        let json = serde_json::to_value(&example).unwrap();
+        let _: FlatSearch = serde_json::from_value(json).unwrap();
+    }
+
+    #[test]
+    fn display_flat_search() {
+        let example = FlatSearch::example();
+        let text = format!("{}", example);
+        assert!(text.contains("Data"));
+        assert!(text.contains("Threads"));
+        assert!(text.contains("Reps"));
+    }
+}
