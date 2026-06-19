@@ -431,8 +431,7 @@ where
             &query_f32,
             usize::MAX,
             &self.params,
-        )
-        .map_err(|e| ANNError::new(diskann::ANNErrorKind::DimensionMismatchError, e))?;
+        )?;
 
         Ok(output.extend(reranked.into_iter().map(|idx| {
             let id = candidate_ids[idx];

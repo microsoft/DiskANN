@@ -155,6 +155,22 @@ pub enum DeterminantDiversityError {
     },
 }
 
+impl From<DeterminantDiversityError> for diskann::ANNError {
+    #[track_caller]
+    fn from(err: DeterminantDiversityError) -> Self {
+        use diskann::ANNErrorKind;
+        let kind = match err {
+            DeterminantDiversityError::InvalidPower(_)
+            | DeterminantDiversityError::InvalidEta(_) => ANNErrorKind::IndexConfigError,
+            DeterminantDiversityError::QueryDimensionMismatch { .. }
+            | DeterminantDiversityError::DistanceCountMismatch { .. } => {
+                ANNErrorKind::DimensionMismatchError
+            }
+        };
+        diskann::ANNError::new(kind, err)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct DistanceRange {
     min: f32,

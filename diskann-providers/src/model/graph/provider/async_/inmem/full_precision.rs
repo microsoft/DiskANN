@@ -8,7 +8,6 @@ use std::{fmt::Debug, future::Future};
 use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
-    error::ANNErrorKind,
     error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
@@ -460,12 +459,7 @@ where
             &self.params,
         ) {
             Ok(indices) => indices,
-            Err(error) => {
-                return std::future::ready(Err(ANNError::new(
-                    ANNErrorKind::DimensionMismatchError,
-                    error,
-                )));
-            }
+            Err(error) => return std::future::ready(Err(error.into())),
         };
 
         let reranked = indices.into_iter().map(|idx| (ids[idx], distances[idx]));
