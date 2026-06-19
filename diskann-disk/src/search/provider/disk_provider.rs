@@ -278,6 +278,8 @@ pub struct DeterminantDiversityAndFilter<'a> {
 
 #[derive(Clone, Copy)]
 pub enum SearchPostProcessorKind {
+    /// No post-processing; search results are returned as-is.
+    None,
     RerankAndFilter,
     DeterminantDiversity(DeterminantDiversityParams),
 }
@@ -983,7 +985,7 @@ where
         search_list_size: u32,
         beam_width: Option<usize>,
         vector_filter: Option<VectorFilter<Data>>,
-        post_processor: Option<SearchPostProcessorKind>,
+        post_processor: SearchPostProcessorKind,
         is_flat_search: bool,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
@@ -993,17 +995,19 @@ where
             vec![Data::AssociatedDataType::default(); return_list_size as usize];
 
         let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
-        let post_processor = post_processor.map(|processor| match processor {
-            SearchPostProcessorKind::RerankAndFilter => DiskSearchPostProcessor::RerankAndFilter(
-                RerankAndFilter::new(vector_filter.as_ref()),
+        let post_processor = match post_processor {
+            SearchPostProcessorKind::None => None,
+            SearchPostProcessorKind::RerankAndFilter => Some(
+                DiskSearchPostProcessor::RerankAndFilter(RerankAndFilter::new(
+                    vector_filter.as_ref(),
+                )),
             ),
             SearchPostProcessorKind::DeterminantDiversity(params) => {
-                DiskSearchPostProcessor::DeterminantDiversity(DeterminantDiversityAndFilter::new(
-                    vector_filter.as_ref(),
-                    params,
+                Some(DiskSearchPostProcessor::DeterminantDiversity(
+                    DeterminantDiversityAndFilter::new(vector_filter.as_ref(), params),
                 ))
             }
-        });
+        };
 
         let stats = self.search_internal(
             query,
@@ -1537,7 +1541,7 @@ mod disk_provider_tests {
                         params.l as u32,
                         beam_width,
                         None,
-                        None,
+                        SearchPostProcessorKind::None,
                         false,
                     )
                     .unwrap();
@@ -1720,7 +1724,7 @@ mod disk_provider_tests {
             search_list_size,
             Some(4),
             None,
-            None,
+            SearchPostProcessorKind::None,
             false,
         );
         assert!(result.is_ok(), "Expected search to succeed");
@@ -1765,7 +1769,7 @@ mod disk_provider_tests {
                 search_list_size,
                 Some(4),
                 None,
-                None,
+                SearchPostProcessorKind::None,
                 false,
             )
             .unwrap();
@@ -1785,7 +1789,7 @@ mod disk_provider_tests {
                 search_list_size,
                 Some(4),
                 None,
-                Some(SearchPostProcessorKind::DeterminantDiversity(params)),
+                SearchPostProcessorKind::DeterminantDiversity(params),
                 false,
             )
             .unwrap();
@@ -1825,7 +1829,7 @@ mod disk_provider_tests {
                 search_list_size,
                 Some(4),
                 None,
-                Some(SearchPostProcessorKind::DeterminantDiversity(pure_params)),
+                SearchPostProcessorKind::DeterminantDiversity(pure_params),
                 false,
             )
             .unwrap();
@@ -1849,7 +1853,7 @@ mod disk_provider_tests {
                 search_list_size,
                 Some(4),
                 Some(filter),
-                Some(SearchPostProcessorKind::DeterminantDiversity(params)),
+                SearchPostProcessorKind::DeterminantDiversity(params),
                 false,
             )
             .unwrap();
@@ -2205,7 +2209,7 @@ mod disk_provider_tests {
             10,
             None, // beam_width
             Some(Box::new(vector_filter)),
-            None,
+            SearchPostProcessorKind::None,
             is_flat_search,
         );
 
