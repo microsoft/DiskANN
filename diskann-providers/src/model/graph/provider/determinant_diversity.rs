@@ -127,13 +127,18 @@ impl fmt::Display for DeterminantDiversityParams {
 
 /// Error produced when constructing [`DeterminantDiversityParams`] or running
 /// [`determinant_diversity`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum DeterminantDiversityError {
     /// Power parameter <= 0.0
+    #[error("determinant-diversity power must be > 0.0, got: {0}")]
     InvalidPower(f32),
     /// Eta parameter < 0.0
+    #[error("determinant-diversity eta must be >= 0.0, got: {0}")]
     InvalidEta(f32),
     /// The candidate matrix column count does not match the query dimension.
+    #[error(
+        "determinant-diversity candidate matrix has {candidate} columns but query dimension is {query}"
+    )]
     QueryDimensionMismatch {
         /// Number of dimensions in the query.
         query: usize,
@@ -141,6 +146,7 @@ pub enum DeterminantDiversityError {
         candidate: usize,
     },
     /// The number of distances does not match the number of candidate rows.
+    #[error("determinant-diversity received {distances} distances for {candidates} candidate rows")]
     DistanceCountMismatch {
         /// Number of supplied distances.
         distances: usize,
@@ -148,35 +154,6 @@ pub enum DeterminantDiversityError {
         candidates: usize,
     },
 }
-
-impl fmt::Display for DeterminantDiversityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPower(p) => {
-                write!(f, "determinant-diversity power must be > 0.0, got: {}", p)
-            }
-            Self::InvalidEta(e) => {
-                write!(f, "determinant-diversity eta must be >= 0.0, got: {}", e)
-            }
-            Self::QueryDimensionMismatch { query, candidate } => write!(
-                f,
-                "determinant-diversity candidate matrix has {} columns but query \
-                 dimension is {}",
-                candidate, query
-            ),
-            Self::DistanceCountMismatch {
-                distances,
-                candidates,
-            } => write!(
-                f,
-                "determinant-diversity received {} distances for {} candidate rows",
-                distances, candidates
-            ),
-        }
-    }
-}
-
-impl std::error::Error for DeterminantDiversityError {}
 
 #[derive(Clone, Copy)]
 struct DistanceRange {
