@@ -997,11 +997,11 @@ where
         let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
         let post_processor = match post_processor {
             SearchPostProcessorKind::None => None,
-            SearchPostProcessorKind::RerankAndFilter => Some(
-                DiskSearchPostProcessor::RerankAndFilter(RerankAndFilter::new(
-                    vector_filter.as_ref(),
-                )),
-            ),
+            SearchPostProcessorKind::RerankAndFilter => {
+                Some(DiskSearchPostProcessor::RerankAndFilter(
+                    RerankAndFilter::new(vector_filter.as_ref()),
+                ))
+            }
             SearchPostProcessorKind::DeterminantDiversity(params) => {
                 Some(DiskSearchPostProcessor::DeterminantDiversity(
                     DeterminantDiversityAndFilter::new(vector_filter.as_ref(), params),
