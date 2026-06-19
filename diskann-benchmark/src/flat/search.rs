@@ -142,6 +142,12 @@ where
         };
         let nrows = provider.data.total();
         let ncols = provider.data.dim();
+        anyhow::ensure!(
+            nrows <= u32::MAX as usize,
+            "flat-index benchmark requires <= {} vectors (got {}) to fit in u32 ids",
+            u32::MAX,
+            nrows,
+        );
         writeln!(output, "  Loaded {} vectors of dimension {}", nrows, ncols)?;
 
         // Build the FlatIndex
@@ -150,9 +156,10 @@ where
         // Load queries and groundtruth
         let queries: Matrix<T> =
             datafiles::load_dataset(datafiles::BinFile(&input.search.queries))?;
-        let groundtruth: Matrix<u32> =
-            datafiles::load_dataset(datafiles::BinFile(&input.search.groundtruth))?;
-
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&input.search.groundtruth),
+            Some(input.search.k.get()),
+        )?;
         anyhow::ensure!(
             ncols == queries.ncols(),
             "dataset dimension ({}) does not match query dimension ({})",
@@ -171,6 +178,12 @@ where
         // Run searches for each thread count
         let k = input.search.k;
         let reps = input.search.reps;
+        anyhow::ensure!(
+            k.get() <= nrows,
+            "k ({}) must be <= number of dataset vectors ({})",
+            k,
+            nrows,
+        );
 
         let mut results = Vec::new();
 
@@ -416,21 +429,13 @@ impl search::Aggregate<FlatSearchParameters, u32, FlatMetrics> for FlatAggregato
         let mut p90_latencies = Vec::with_capacity(results.len());
         let mut p99_latencies = Vec::with_capacity(results.len());
 
-        results.iter_mut().for_each(|r| {
-            match percentiles::compute_percentiles(r.latencies_mut()) {
-                Ok(values) => {
-                    let percentiles::Percentiles { mean, p90, p99, .. } = values;
-                    mean_latencies.push(mean);
-                    p90_latencies.push(p90);
-                    p99_latencies.push(p99);
-                }
-                Err(_) => {
-                    mean_latencies.push(0.0);
-                    p90_latencies.push(MicroSeconds::new(0));
-                    p99_latencies.push(MicroSeconds::new(0));
-                }
-            }
-        });
+        for r in results.iter_mut() {
+            let percentiles::Percentiles { mean, p90, p99, .. } =
+                percentiles::compute_percentiles(r.latencies_mut())?;
+            mean_latencies.push(mean);
+            p90_latencies.push(p90);
+            p99_latencies.push(p99);
+        }
 
         let qps: Vec<f64> = results
             .iter()
