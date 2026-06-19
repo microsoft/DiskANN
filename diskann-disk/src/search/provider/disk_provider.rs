@@ -406,23 +406,21 @@ where
 
         let mut candidate_vectors = Matrix::new(0.0f32, candidate_ids.len(), query_f32.len());
         let mut candidate_distances = Vec::with_capacity(candidate_ids.len());
-        let mut ordered_ids = Vec::with_capacity(candidate_ids.len());
-        let mut associated_data = HashMap::with_capacity(candidate_ids.len());
+        let mut associated_data = Vec::with_capacity(candidate_ids.len());
 
-        for (row_idx, id) in candidate_ids.into_iter().enumerate() {
-            let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
+        for (row_idx, id) in candidate_ids.iter().enumerate() {
+            let vector = accessor.scratch.vertex_provider.get_vector(id)?;
             let distance = provider
                 .distance_comparer
                 .evaluate_similarity(query, vector);
             let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
-            let data = accessor.scratch.vertex_provider.get_associated_data(&id)?;
+            let data = accessor.scratch.vertex_provider.get_associated_data(id)?;
 
             candidate_vectors
                 .row_mut(row_idx)
                 .copy_from_slice(&vector_f32);
             candidate_distances.push(distance);
-            ordered_ids.push(id);
-            associated_data.insert(id, *data);
+            associated_data.push(*data);
         }
 
         let reranked = determinant_diversity(
@@ -431,15 +429,13 @@ where
             &query_f32,
             usize::MAX,
             &self.params,
-        );
+        )
+        .map_err(|e| ANNError::new(diskann::ANNErrorKind::DimensionMismatchError, e))?;
 
-        Ok(output.extend(reranked.into_iter().filter_map(|idx| {
-            let id = ordered_ids[idx];
+        Ok(output.extend(reranked.into_iter().map(|idx| {
+            let id = candidate_ids[idx];
             let distance = candidate_distances[idx];
-            associated_data
-                .get(&id)
-                .copied()
-                .map(|data| ((id, data), distance))
+            ((id, associated_data[idx]), distance)
         })))
     }
 }

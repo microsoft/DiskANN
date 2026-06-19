@@ -125,13 +125,28 @@ impl fmt::Display for DeterminantDiversityParams {
     }
 }
 
-/// Validation error for Determinant-Diversity parameters.
+/// Error produced when constructing [`DeterminantDiversityParams`] or running
+/// [`determinant_diversity`].
 #[derive(Debug, Clone)]
 pub enum DeterminantDiversityError {
     /// Power parameter <= 0.0
     InvalidPower(f32),
     /// Eta parameter < 0.0
     InvalidEta(f32),
+    /// The candidate matrix column count does not match the query dimension.
+    QueryDimensionMismatch {
+        /// Number of dimensions in the query.
+        query: usize,
+        /// Number of columns in the candidate matrix.
+        candidate: usize,
+    },
+    /// The number of distances does not match the number of candidate rows.
+    DistanceCountMismatch {
+        /// Number of supplied distances.
+        distances: usize,
+        /// Number of candidate rows.
+        candidates: usize,
+    },
 }
 
 impl fmt::Display for DeterminantDiversityError {
@@ -143,6 +158,20 @@ impl fmt::Display for DeterminantDiversityError {
             Self::InvalidEta(e) => {
                 write!(f, "determinant-diversity eta must be >= 0.0, got: {}", e)
             }
+            Self::QueryDimensionMismatch { query, candidate } => write!(
+                f,
+                "determinant-diversity candidate matrix has {} columns but query \
+                 dimension is {}",
+                candidate, query
+            ),
+            Self::DistanceCountMismatch {
+                distances,
+                candidates,
+            } => write!(
+                f,
+                "determinant-diversity received {} distances for {} candidate rows",
+                distances, candidates
+            ),
         }
     }
 }
@@ -155,34 +184,57 @@ struct DistanceRange {
     max: f32,
 }
 
+/// Rerank `candidates` to promote geometric diversity while preserving relevance.
+///
+/// Returns the indices (into the rows of `candidates`) of the selected vectors,
+/// in selection order, with at most `k` entries.
+///
+/// # Arguments
+///
+/// - `candidates`: row-major matrix whose `i`-th row is the full-precision vector
+///   of the `i`-th candidate. Its column count must equal `query.len()`.
+/// - `distances`: candidate-to-query distances, parallel to the rows of
+///   `candidates`. Its length must equal `candidates.nrows()`.
+/// - `query`: the query vector.
+/// - `k`: maximum number of results to return; clamped to `candidates.nrows()`.
+/// - `params`: relevance/regularization parameters.
+///
+/// # Errors
+///
+/// Returns [`DeterminantDiversityError::QueryDimensionMismatch`] if the candidate
+/// matrix column count does not equal `query.len()`, or
+/// [`DeterminantDiversityError::DistanceCountMismatch`] if `distances.len()` does
+/// not equal `candidates.nrows()`. These structural invariants are validated up
+/// front so they are enforced consistently even when an input is empty.
+///
+/// An empty candidate set, a `k` of zero, or zero-dimensional vectors yield an
+/// empty result.
 pub fn determinant_diversity(
     candidates: MutMatrixView<'_, f32>,
     distances: &[f32],
     query: &[f32],
     k: usize,
     params: &DeterminantDiversityParams,
-) -> Vec<usize> {
-    if candidates.nrows() == 0 || query.is_empty() {
-        return Vec::new();
+) -> Result<Vec<usize>, DeterminantDiversityError> {
+    // Validate structural invariants first so they are enforced consistently,
+    // regardless of whether any individual input happens to be empty.
+    if candidates.ncols() != query.len() {
+        return Err(DeterminantDiversityError::QueryDimensionMismatch {
+            query: query.len(),
+            candidate: candidates.ncols(),
+        });
     }
 
-    assert!(
-        candidates.ncols() == query.len(),
-        "candidate matrix columns must equal query dimension"
-    );
-
-    assert!(
-        distances.len() == candidates.nrows(),
-        "distances length must equal candidate rows"
-    );
+    if distances.len() != candidates.nrows() {
+        return Err(DeterminantDiversityError::DistanceCountMismatch {
+            distances: distances.len(),
+            candidates: candidates.nrows(),
+        });
+    }
 
     let k = k.min(candidates.nrows());
-    if k == 0 {
-        return Vec::new();
-    }
-
-    if candidates.ncols() == 0 {
-        return Vec::new();
+    if k == 0 || candidates.ncols() == 0 {
+        return Ok(Vec::new());
     }
 
     let distance_range = {
@@ -208,14 +260,14 @@ pub fn determinant_diversity(
         1.0
     };
 
-    greedy_orthogonal_select(
+    Ok(greedy_orthogonal_select(
         candidates,
         distances,
         k,
         params.power(),
         inv_sqrt_eta,
         distance_range,
-    )
+    ))
 }
 
 /// Core greedy selection algorithm for Determinant-Diversity.
@@ -422,6 +474,7 @@ fn greedy_orthogonal_select(
 /// - The trailing `+ EPSILON` ensures the result is strictly positive, so
 ///   that `similarity(d).powf(power)` never produces a hard zero scale (which
 ///   would erase a candidate from the QR pivoting and bias selection).
+#[inline(always)]
 fn distance_to_similarity(distance: f32, distance_range: DistanceRange) -> f32 {
     let span = (distance_range.max - distance_range.min).max(f32::EPSILON);
 
@@ -500,6 +553,7 @@ mod tests {
 
         let params = DeterminantDiversityParams::new(power.into_inner(), eta).unwrap();
         determinant_diversity(matrix.as_mut_view(), &distances, query, k, &params)
+            .expect("valid determinant-diversity inputs")
             .into_iter()
             .map(|idx| (ids[idx], distances[idx]))
             .collect()
@@ -517,21 +571,59 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_query() {
-        let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
-        let result = run_with_ids(candidates, &[], 5, 0.5, p(1.0));
-        assert_eq!(result.len(), 0);
+    fn test_empty_query_is_dimension_mismatch() {
+        // A zero-length query against non-empty candidates is a structural
+        // mismatch (candidate columns != query dimension), not a valid request
+        // that trivially returns nothing.
+        let mut matrix = Matrix::new(0.0f32, 1, 2);
+        matrix.row_mut(0).copy_from_slice(&[1.0, 2.0]);
+        let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();
+
+        let result = determinant_diversity(matrix.as_mut_view(), &[0.5], &[], 5, &params);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::QueryDimensionMismatch {
+                query: 0,
+                candidate: 2,
+            })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "candidate matrix columns must equal query dimension")]
-    fn test_mismatched_dimensions_panics() {
-        // Candidate vectors are 2-D, but the query is 3-D. The helper builds a
-        // matrix with `ncols == 2`, so `determinant_diversity` should hit its
-        // `candidates.ncols() == query.len()` assertion.
-        let candidates = vec![(0u32, 0.5, vec![1.0, 2.0])];
-        let query = &[1.0, 2.0, 3.0];
-        let _ = run_with_ids(candidates, query, 5, 0.5, p(1.0));
+    fn test_mismatched_dimensions_errors() {
+        // Candidate vectors are 2-D, but the query is 3-D, so
+        // `determinant_diversity` should report a dimension mismatch.
+        let mut matrix = Matrix::new(0.0f32, 1, 2);
+        matrix.row_mut(0).copy_from_slice(&[1.0, 2.0]);
+        let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();
+
+        let result =
+            determinant_diversity(matrix.as_mut_view(), &[0.5], &[1.0, 2.0, 3.0], 5, &params);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::QueryDimensionMismatch {
+                query: 3,
+                candidate: 2,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_mismatched_distances_errors() {
+        // Two candidate rows but only one distance is a structural mismatch.
+        let mut matrix = Matrix::new(0.0f32, 2, 2);
+        matrix.row_mut(0).copy_from_slice(&[1.0, 0.0]);
+        matrix.row_mut(1).copy_from_slice(&[0.0, 1.0]);
+        let params = DeterminantDiversityParams::new(1.0, 0.5).unwrap();
+
+        let result = determinant_diversity(matrix.as_mut_view(), &[0.5], &[1.0, 1.0], 2, &params);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::DistanceCountMismatch {
+                distances: 1,
+                candidates: 2,
+            })
+        ));
     }
 
     #[test]

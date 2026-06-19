@@ -7,7 +7,7 @@ use std::future::Future;
 
 use diskann::graph::search_output_buffer::SearchOutputBuffer;
 use diskann::utils::IntoUsize;
-use diskann::{error::ANNError, graph::glue, neighbor::Neighbor, provider::HasId};
+use diskann::{error::ANNError, error::ANNErrorKind, graph::glue, neighbor::Neighbor, provider::HasId};
 use diskann_providers::model::graph::provider::{
     async_::inmem::{self, GetFullPrecision},
     determinant_diversity, DeterminantDiversityParams,
@@ -43,12 +43,13 @@ where
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
         let candidates: Vec<Neighbor<A::Id>> = candidates.collect();
+        let candidate_count = candidates.len();
         let store: &inmem::FullPrecisionStore<f32> = accessor.as_full_precision();
-        let mut vectors = Matrix::new(0.0f32, candidates.len(), query.len());
-        let mut ids = Vec::with_capacity(candidates.len());
-        let mut distances = Vec::with_capacity(candidates.len());
+        let mut vectors = Matrix::new(0.0f32, candidate_count, query.len());
+        let mut ids = Vec::with_capacity(candidate_count);
+        let mut distances = Vec::with_capacity(candidate_count);
 
-        for (i, candidate) in candidates.iter().enumerate() {
+        for (i, candidate) in candidates.into_iter().enumerate() {
             // SAFETY: We accept potential unsynchronized concurrent mutation, matching the
             // pattern used by `Rerank` in `inmem::full_precision`.
             let vector = unsafe { store.get_vector_sync(candidate.id.into_usize()) };
@@ -57,15 +58,23 @@ where
             vectors.row_mut(i).copy_from_slice(vector);
         }
 
-        let reranked = determinant_diversity(
+        let indices = match determinant_diversity(
             vectors.as_mut_view(),
             &distances,
             query,
-            candidates.len(),
+            candidate_count,
             &self.params,
-        )
-        .into_iter()
-        .map(|idx| (ids[idx], distances[idx]));
+        ) {
+            Ok(indices) => indices,
+            Err(error) => {
+                return std::future::ready(Err(ANNError::new(
+                    ANNErrorKind::DimensionMismatchError,
+                    error,
+                )));
+            }
+        };
+
+        let reranked = indices.into_iter().map(|idx| (ids[idx], distances[idx]));
 
         std::future::ready(Ok(output.extend(reranked)))
     }
