@@ -72,17 +72,31 @@ pub trait Set<T>: Layer {
 pub trait Search: Send + Sync + 'static {
     type Query<'a>;
 
-    fn query_distance<'a>(
-        &'a self,
-        query: Self::Query<'a>,
-    ) -> ANNResult<Box<dyn QueryDistance + 'a>>;
+    fn query_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
+    where
+        V: QueryVisitor<'a>;
+}
+
+pub trait QueryVisitor<'a>: Sized {
+    type Output;
+
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: QueryDistance + 'a;
+
+    unsafe fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+    where
+        T: QueryDistance + 'a,
+    {
+        self.visit(distance)
+    }
 }
 
 pub trait Insert: Search + for<'a> Set<Self::Query<'a>> + AsDistance {
-    fn insert_distance<'a>(
-        &'a self,
-        query: Self::Query<'a>,
-    ) -> ANNResult<Box<dyn QueryDistance + 'a>> {
-        self.query_distance(query)
+    fn insert_distance<'a, V>(&'a self, query: Self::Query<'a>, visitor: V) -> ANNResult<V::Output>
+    where
+        V: QueryVisitor<'a>,
+    {
+        self.query_distance(query, visitor)
     }
 }

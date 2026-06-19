@@ -3,10 +3,16 @@
  * Licensed under the MIT license.
  */
 
+use std::{fmt::Debug, marker::PhantomData};
+
 use diskann::{ANNError, ANNResult};
 use diskann_vector::{
     UnalignedSlice,
     distance::{self, DistanceProvider, Metric},
+};
+use diskann_wide::{
+    ARCH,
+    arch::{Current, FTarget2},
 };
 use thiserror::Error;
 
@@ -19,6 +25,7 @@ where
     T: 'static,
 {
     distance: Distance<T>,
+    metric: Metric,
     _type: std::marker::PhantomData<T>,
 }
 
@@ -37,6 +44,7 @@ where
 
         Self {
             distance,
+            metric,
             _type: std::marker::PhantomData,
         }
     }
@@ -70,30 +78,21 @@ where
     }
 }
 
-impl<T> layers::Search for Full<T>
-where
-    T: std::fmt::Debug + Send + Sync + 'static,
-{
-    type Query<'a> = &'a [T];
-
-    fn query_distance<'a>(
-        &'a self,
-        query: &'a [T],
-    ) -> ANNResult<Box<dyn layers::QueryDistance + 'a>> {
-        Ok(Box::new(QueryDistance::new(self.distance, query)))
-    }
-}
-
 impl<T> layers::AsDistance for Full<T>
 where
-    T: std::fmt::Debug + Send + Sync + 'static,
+    T: Debug + Send + Sync + 'static,
 {
     fn as_distance(&self) -> &dyn layers::Distance {
         &self.distance
     }
 }
 
-impl<T> layers::Insert for Full<T> where T: bytemuck::Pod + std::fmt::Debug + Send + Sync {}
+impl<T> layers::Insert for Full<T>
+where
+    T: bytemuck::Pod + Debug + Send + Sync + 'static,
+    Self: for<'a> layers::Search<Query<'a> = &'a [T]>,
+{
+}
 
 //////////////
 // Distance //
@@ -143,7 +142,7 @@ where
 
 impl<T> layers::Distance for Distance<T>
 where
-    T: std::fmt::Debug + 'static,
+    T: Debug + 'static,
 {
     fn evaluate(&self, x: &[u8], y: &[u8]) -> ANNResult<f32> {
         let bytes = self.bytes();
@@ -210,7 +209,7 @@ where
 
 impl<T> layers::QueryDistance for QueryDistance<'_, T>
 where
-    T: std::fmt::Debug + Sync + 'static,
+    T: Debug + Sync + 'static,
 {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
         if x.len() != self.distance.bytes() {
@@ -233,4 +232,85 @@ where
 struct QueryDistanceError {
     expected: usize,
     xlen: usize,
+}
+
+//-----------//
+// Version 2 //
+//-----------//
+
+macro_rules! specialize {
+    ($me:ident, $query:ident, $visitor:ident, $T:ty, $(($var:ident, $N:literal, $f:ty)),* $(,)?) => {
+        match ($me.metric, $me.dim()) {
+            $(
+                (Metric::$var, $N) => {
+                    let wrapped = Wrap::<Specialize<$N, $f>, _>::new($query);
+                    return Ok(unsafe {
+                        $visitor.visit_sized::<{ $N * std::mem::size_of::<$T>() }, _>(wrapped)
+                    })
+                },
+            )*
+            _ => {},
+        }
+    }
+}
+
+impl layers::Search for Full<f32> {
+    type Query<'a> = &'a [f32];
+
+    fn query_distance<'a, V>(&'a self, query: &'a [f32], visitor: V) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>,
+    {
+        use diskann_vector::distance::{Specialize, SquaredL2};
+
+        specialize!(self, query, visitor, f32, (L2, 100, SquaredL2));
+
+        Ok(visitor.visit(QueryDistance::new(self.distance, query)))
+    }
+}
+
+impl layers::Search for Full<u8> {
+    type Query<'a> = &'a [u8];
+
+    fn query_distance<'a, V>(&'a self, query: &'a [u8], visitor: V) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>,
+    {
+        use diskann_vector::distance::{Specialize, SquaredL2};
+
+        specialize!(self, query, visitor, u8, (L2, 128, SquaredL2));
+
+        Ok(visitor.visit(QueryDistance::new(self.distance, query)))
+    }
+}
+
+#[derive(Debug)]
+struct Wrap<'a, I, T> {
+    query: &'a [T],
+    inner: PhantomData<I>,
+}
+
+impl<'a, I, T> Wrap<'a, I, T> {
+    fn new(query: &'a [T]) -> Self {
+        Self {
+            query,
+            inner: PhantomData,
+        }
+    }
+}
+
+impl<I, T> layers::QueryDistance for Wrap<'_, I, T>
+where
+    I: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, T>>
+        + Send
+        + Sync
+        + Debug,
+    T: Send + Sync + 'static + Debug,
+{
+    #[inline(always)]
+    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+        // TODO: This is not fully valid - we need to check.
+        let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.query.len()) };
+        Ok(I::run(ARCH, self.query.into(), x))
+    }
 }

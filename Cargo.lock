@@ -817,6 +817,7 @@ dependencies = [
  "diskann",
  "diskann-utils",
  "diskann-vector",
+ "diskann-wide",
  "parking_lot",
  "rand 0.9.4",
  "thiserror 2.0.17",

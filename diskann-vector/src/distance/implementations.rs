@@ -49,7 +49,13 @@ macro_rules! architecture_hook {
 
 /// A utility for specializing distance computations for fixed-length slices.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
+pub struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
+
+impl<const N: usize, F> Specialize<N, F> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
 
 impl<A, T, L, R, const N: usize, F>
     diskann_wide::arch::FTarget2<A, T, UnalignedSlice<'_, L>, UnalignedSlice<'_, R>>

@@ -33,8 +33,7 @@ use diskann_vector::distance::Metric;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    backend::index::build::ProgressMeter, inputs::graph_index::DynamicRunbookParams,
-    utils::datafiles,
+    index::build::ProgressMeter, inputs::graph_index::DynamicRunbookParams, utils::datafiles,
 };
 
 pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {

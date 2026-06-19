@@ -11,8 +11,8 @@ mod streaming;
 
 mod benchmarks;
 mod inmem;
-mod result;
 mod inmem2;
+mod result;
 
 #[cfg(feature = "bftree")]
 mod bftree;

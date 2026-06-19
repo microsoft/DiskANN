@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::hash::Hash;
+use std::{hash::Hash, marker::PhantomData};
 
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
@@ -55,7 +55,7 @@ where
             layers::Set::into_bytes(&layer, point, row).unwrap();
         }
 
-        let store = Store::new(capacity, bytes, 32, data.as_view());
+        let store = Store::new(capacity, bytes, 32, data.as_view()).unwrap();
         let mapping = Sharded::new(capacity);
         Self {
             store,
@@ -131,13 +131,9 @@ where
         _context: &Context,
         id: u32,
     ) -> ANNResult<diskann::provider::ElementStatus> {
-        if self
-            .store
-            .reader()
-            .unwrap()
-            .can_read(id.into_usize())
-            .unwrap()
-        {
+        // Not that this check is approximate. A full check requires materialization of
+        // a `reader`.
+        if self.store.can_read_approximate(id.into_usize()).unwrap() {
             Ok(diskann::provider::ElementStatus::Valid)
         } else {
             Ok(diskann::provider::ElementStatus::Deleted)
@@ -155,31 +151,6 @@ where
         } else {
             Ok(diskann::provider::ElementStatus::Deleted)
         }
-    }
-
-    fn statuses_unordered<Itr, F>(
-        &self,
-        _context: &Self::Context,
-        itr: Itr,
-        mut f: F,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send
-    where
-        Itr: Iterator<Item = Self::InternalId> + Send,
-        F: FnMut(ANNResult<diskann::provider::ElementStatus>, Self::InternalId) + Send,
-    {
-        let work = move || {
-            let reader = self.store.reader().unwrap();
-            for i in itr {
-                if reader.can_read(i.into_usize()).unwrap() {
-                    f(Ok(diskann::provider::ElementStatus::Valid), i)
-                } else {
-                    f(Ok(diskann::provider::ElementStatus::Deleted), i)
-                }
-            }
-            Ok(())
-        };
-
-        ready(work)
     }
 }
 
@@ -225,9 +196,8 @@ where
 #[derive(Debug)]
 pub struct SearchAccessor<'a> {
     reader: store::Reader<'a>,
-    distance: Box<dyn QueryDistance + 'a>,
     ids: AdjacencyList<u32>,
-    expand_beam: FExpandBeam,
+    expand_beam: ExpandBeam<'a>,
 
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
@@ -256,7 +226,7 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
             for p in self.start_points.clone() {
                 match self.reader.read(p.into_usize()) {
                     Some(point) => {
-                        f(p, self.distance.evaluate(point)?);
+                        f(p, self.expand_beam.evaluate(point)?);
                     }
                     None => {
                         return Err(ANNError::message(
@@ -292,13 +262,8 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
                     .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
 
                 unsafe {
-                    (self.expand_beam)(
-                        &self.ids,
-                        8,
-                        &self.reader,
-                        &*self.distance,
-                        &mut on_neighbors,
-                    )
+                    self.expand_beam
+                        .run(&self.ids, 8, &self.reader, &mut on_neighbors)
                 }?;
             }
 
@@ -310,32 +275,128 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
 }
 
 type FExpandBeam = unsafe fn(
+    *const (),
     &[u32],
     usize,
     &store::Reader<'_>,
-    &dyn layers::QueryDistance,
     &mut dyn FnMut(u32, f32),
 ) -> ANNResult<()>;
 
-fn dispatch_expand_beam(bytes: Bytes) -> FExpandBeam {
-    if bytes <= Bytes::CACHELINE {
-        expand_beam_inner::<1>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(2) {
-        expand_beam_inner::<2>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(3) {
-        expand_beam_inner::<3>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(4) {
-        expand_beam_inner::<4>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(5) {
-        expand_beam_inner::<5>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(6) {
-        expand_beam_inner::<6>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(7) {
-        expand_beam_inner::<7>
-    } else if bytes <= Bytes::CACHELINE.unchecked_mul(16) {
-        expand_beam_inner::<8>
-    } else {
-        expand_beam_inner::<16>
+#[derive(Debug)]
+struct ExpandBeamVisitor {
+    bytes: Bytes,
+}
+
+impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
+    type Output = ExpandBeam<'a>;
+
+    unsafe fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+    where
+        T: QueryDistance + 'a,
+    {
+        // Make sure there's no lying.
+        assert_eq!(Bytes::new(BYTES + 1), self.bytes);
+
+        unsafe { ExpandBeam::new(distance, expand_beam_inner::<T, BYTES>) }
+    }
+
+    fn visit<T>(self, distance: T) -> Self::Output
+    where
+        T: QueryDistance + 'a,
+    {
+        unsafe { ExpandBeam::new(distance, expand_beam_inner::<T, 0>) }
+    }
+}
+
+#[derive(Debug)]
+struct ExpandBeam<'a> {
+    ptr: *const (),
+    expand_beam: FExpandBeam,
+    vtable: &'static VTable,
+    lifetime: PhantomData<&'a ()>,
+}
+
+#[derive(Debug)]
+struct VTable {
+    evaluate: unsafe fn(*const (), &[u8]) -> ANNResult<f32>,
+    drop: unsafe fn(*mut ()),
+}
+
+// SAFETY: We constrain `ptr` to be `Send`.
+unsafe impl Send for ExpandBeam<'_> {}
+
+// SAFETY: We constrain `ptr` to be `Send`.
+unsafe impl Sync for ExpandBeam<'_> {}
+
+impl<'a> ExpandBeam<'a> {
+    unsafe fn new<T>(x: T, expand_beam: FExpandBeam) -> Self
+    where
+        T: layers::QueryDistance + Send + Sync + 'a,
+    {
+        let vtable = &VTable {
+            evaluate: evaluate::<T>,
+            drop: drop::<T>,
+        };
+
+        let ptr: *const T = Box::leak(Box::new(x));
+        Self {
+            ptr: ptr.cast(),
+            expand_beam,
+            vtable: &vtable,
+            lifetime: PhantomData,
+        }
+    }
+
+    unsafe fn run(
+        &self,
+        list: &[u32],
+        lookahead: usize,
+        reader: &store::Reader<'_>,
+        f: &mut dyn FnMut(u32, f32),
+    ) -> ANNResult<()> {
+        unsafe { (self.expand_beam)(self.ptr, list, lookahead, reader, f) }
+    }
+
+    fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
+        unsafe { (self.vtable.evaluate)(self.ptr, x) }
+    }
+}
+
+impl Drop for ExpandBeam<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.vtable.drop)(self.ptr.cast_mut()) }
+    }
+}
+
+unsafe fn drop<T>(ptr: *mut ()) {
+    let _ = unsafe { Box::from_raw(ptr.cast::<T>()) };
+}
+
+unsafe fn evaluate<T>(ptr: *const (), x: &[u8]) -> ANNResult<f32>
+where
+    T: layers::QueryDistance,
+{
+    let f = unsafe { &*ptr.cast::<T>() };
+    <T as layers::QueryDistance>::evaluate(f, x)
+}
+
+#[inline(always)]
+unsafe fn prefetch(ptr: *const u8, len: usize) {
+    use std::arch::x86_64::*;
+
+    // Fetch the last cache line (the one with the tag) first.
+    let stride = Bytes::CACHELINE.value();
+    let ptr = ptr.cast::<i8>();
+    let lines = len.div_ceil(stride);
+    if lines == 0 {
+        return;
+    }
+
+    unsafe { _mm_prefetch(ptr.add(stride * (lines - 1)), _MM_HINT_T0) };
+    for i in 0..(lines - 1) {
+        unsafe {
+            _mm_prefetch(ptr.add(stride * i), _MM_HINT_T0);
+        }
     }
 }
 
@@ -353,37 +414,45 @@ const CACHE_LINE_SIZE: usize = 64;
 
 /// Safety (no # yet because we need to revisit this - clippy will lint)
 ///
+/// * The concrete type of `distance` must be `T`.
 /// * All items in `list` must in-bounds with respect to `reader`.
 /// * The number of bytes associated with `N` cache lines must "make sense".
-unsafe fn expand_beam_inner<const N: usize>(
+unsafe fn expand_beam_inner<T, const BYTES: usize>(
+    distance: *const (),
     list: &[u32],
     lookahead: usize,
     reader: &store::Reader<'_>,
-    distance: &dyn layers::QueryDistance,
     f: &mut dyn FnMut(u32, f32),
-) -> ANNResult<()> {
+) -> ANNResult<()>
+where
+    T: layers::QueryDistance,
+{
+    let distance = unsafe { &*distance.cast::<T>() };
+
     debug_assert!(
-        N * CACHE_LINE_SIZE
-            <= reader
-                .bytes()
-                .checked_next_multiple_of(Bytes::CACHELINE)
-                .unwrap()
-                .value(),
+        BYTES + 1 <= reader.bytes().value(),
         "we really rely on this: {}, bytes = {}",
-        N,
+        BYTES + 1,
         reader.bytes()
     );
+
+    let bytes = if BYTES == 0 {
+        reader.bytes().value()
+    } else {
+        BYTES + 1
+    };
 
     let len = list.len();
     let lookahead = lookahead.min(len);
 
     for j in 0..lookahead {
         unsafe {
-            diskann_vector::prefetch_exactly::<N>(
+            prefetch(
                 reader
                     .read_raw_unchecked(list.get_unchecked(j).into_usize())
                     .as_ptr()
                     .cast(),
+                bytes,
             )
         }
     }
@@ -392,11 +461,12 @@ unsafe fn expand_beam_inner<const N: usize>(
     for &i in list.iter() {
         if j != len {
             unsafe {
-                diskann_vector::prefetch_exactly::<N>(
+                prefetch(
                     reader
                         .read_raw_unchecked(list.get_unchecked(j).into_usize())
                         .as_ptr()
                         .cast(),
+                    bytes,
                 )
             }
             j += 1;
@@ -529,12 +599,17 @@ where
         _context: &'a Context,
         query: L::Query<'a>,
     ) -> ANNResult<SearchAccessor<'a>> {
-        let distance = <L as layers::Search>::query_distance(&provider.layer, query)?;
         let reader = provider.store.reader()?;
-        let expand_beam = dispatch_expand_beam(reader.bytes());
+        let expand_beam = <L as layers::Search>::query_distance(
+            &provider.layer,
+            query,
+            ExpandBeamVisitor {
+                bytes: provider.store.bytes(),
+            },
+        )?;
+
         let accessor = SearchAccessor {
             reader,
-            distance,
             ids: AdjacencyList::new(),
             expand_beam,
             provider,
@@ -542,6 +617,15 @@ where
         };
         Ok(accessor)
     }
+}
+
+pub fn test_function<'a>(
+    x: &'a Provider<layers::Full<u8>>,
+    strategy: &'a Strategy,
+    context: &'a Context,
+    query: &'a [u8],
+) -> SearchAccessor<'a> {
+    glue::SearchStrategy::search_accessor(strategy, x, context, query).unwrap()
 }
 
 #[derive(Debug, Clone, Copy)]
