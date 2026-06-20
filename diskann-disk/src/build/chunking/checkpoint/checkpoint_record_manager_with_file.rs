@@ -105,6 +105,77 @@ mod tests {
     }
 
     #[test]
+    fn test_new_checkpoint_creates_fresh_record() -> ANNResult<()> {
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("fresh_index")
+            .to_str()
+            .unwrap()
+            .to_string();
+        // Two managers with the same prefix+identifier should see the same checkpoint state
+        let manager_a = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 42);
+        let manager_b = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 42);
+        assert_eq!(
+            manager_a.get_resumption_point(WorkStage::Start)?,
+            manager_b.get_resumption_point(WorkStage::Start)?
+        );
+        // A different identifier should be independent
+        let manager_c = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 99);
+        assert!(!manager_c.has_completed()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_completed_false_when_no_file() -> ANNResult<()> {
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("nonexistent_index")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, 999);
+        assert!(!manager.has_completed()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mark_as_invalid() -> ANNResult<()> {
+        let temp_dir = tempdir()?;
+        let index_prefix = temp_dir
+            .path()
+            .join("test_invalid")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let identifier = 77;
+
+        let mut manager = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        // Advance to a later stage with some progress
+        manager.update(Progress::Completed, WorkStage::QuantizeFPV)?;
+        manager.update(Progress::Processed(42), WorkStage::InMemIndexBuild)?;
+
+        // Verify we can resume from progress=42
+        let manager2 = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        assert_eq!(
+            manager2.get_resumption_point(WorkStage::QuantizeFPV)?,
+            Some(42)
+        );
+
+        // Mark as invalid - progress resets to 0 (is_valid=false => progress read as 0)
+        let mut manager3 = CheckpointRecordManagerWithFileStorage::new(&index_prefix, identifier);
+        manager3.mark_as_invalid()?;
+        assert_eq!(
+            manager3.get_resumption_point(WorkStage::QuantizeFPV)?,
+            Some(0)
+        );
+
+        clean_checkpoint_file(&index_prefix, identifier);
+        Ok(())
+    }
+
+    #[test]
     fn test_checkpoint_manager_interruption_and_resumption() -> ANNResult<()> {
         let temp_dir = tempdir()?;
         let index_prefix = temp_dir

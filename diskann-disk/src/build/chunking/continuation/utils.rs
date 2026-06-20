@@ -150,6 +150,150 @@ mod tests {
         }
     }
 
+    /// A tracker that returns Stop after `stop_after` Continue grants.
+    #[derive(Clone)]
+    struct StopAfterTracker {
+        count: std::sync::Arc<std::sync::Mutex<usize>>,
+        stop_after: usize,
+    }
+
+    impl ContinuationTrackerTrait for StopAfterTracker {
+        fn get_continuation_grant(&self) -> ContinuationGrant {
+            let mut count = self.count.lock().unwrap();
+            if *count >= self.stop_after {
+                ContinuationGrant::Stop
+            } else {
+                *count += 1;
+                ContinuationGrant::Continue
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_while_resource_is_available_stops_early() {
+        let tracker = StopAfterTracker {
+            count: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            stop_after: 3,
+        };
+        let items = vec![10, 20, 30, 40, 50];
+        let mut processed = Vec::new();
+
+        let result = process_while_resource_is_available(
+            |item| {
+                processed.push(item);
+                Ok::<(), TestError>(())
+            },
+            items.into_iter(),
+            Box::new(tracker),
+        );
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Progress::Processed(idx) => {
+                assert_eq!(idx, 3); // stopped before processing item at index 3
+                assert_eq!(processed, vec![10, 20, 30]);
+            }
+            _ => panic!("Expected Processed"),
+        }
+    }
+
+    /// A tracker that yields once (with a tiny duration), then continues.
+    #[derive(Clone)]
+    struct YieldOnceThenContinueTracker {
+        yielded: std::sync::Arc<std::sync::Mutex<bool>>,
+    }
+
+    impl ContinuationTrackerTrait for YieldOnceThenContinueTracker {
+        fn get_continuation_grant(&self) -> ContinuationGrant {
+            let mut yielded = self.yielded.lock().unwrap();
+            if !*yielded {
+                *yielded = true;
+                ContinuationGrant::Yield(std::time::Duration::from_millis(1))
+            } else {
+                // After yielding once, always continue
+                ContinuationGrant::Continue
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_while_resource_is_available_yield_then_continue() {
+        let tracker = YieldOnceThenContinueTracker {
+            yielded: std::sync::Arc::new(std::sync::Mutex::new(false)),
+        };
+        let items = vec![1, 2];
+        let mut processed = Vec::new();
+
+        let result = process_while_resource_is_available(
+            |item| {
+                processed.push(item);
+                Ok::<(), TestError>(())
+            },
+            items.into_iter(),
+            Box::new(tracker),
+        );
+
+        assert!(result.is_ok());
+        // After yielding, it should have continued and processed all items
+        match result.unwrap() {
+            Progress::Completed => assert_eq!(processed, vec![1, 2]),
+            _ => panic!("Expected Completed"),
+        }
+    }
+
+    #[test]
+    fn test_process_while_resource_is_available_action_error() {
+        let checker = Box::new(NaiveContinuationTracker::default());
+        let items = vec![1, 2, 3];
+
+        let result = process_while_resource_is_available(
+            |item| {
+                if item == 2 {
+                    Err(TestError)
+                } else {
+                    Ok(())
+                }
+            },
+            items.into_iter(),
+            checker,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_process_while_resource_is_available_async_stops_early() {
+        let tracker = StopAfterTracker {
+            count: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            stop_after: 2,
+        };
+        let items = vec![1, 2, 3, 4, 5];
+        let processed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let result = process_while_resource_is_available_async(
+            |item| {
+                let processed = processed.clone();
+                async move {
+                    processed.lock().await.push(item);
+                    Ok::<(), TestError>(())
+                }
+            },
+            items.into_iter(),
+            Box::new(tracker),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Progress::Processed(idx) => {
+                assert_eq!(idx, 2);
+                let processed = processed.lock().await;
+                assert_eq!(*processed, vec![1, 2]);
+            }
+            _ => panic!("Expected Processed"),
+        }
+    }
+
     #[tokio::test]
     async fn test_process_while_resource_is_available_async_completes() {
         let checker = Box::new(NaiveContinuationTracker::default());

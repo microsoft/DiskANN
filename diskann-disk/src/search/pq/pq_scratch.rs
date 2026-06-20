@@ -128,4 +128,29 @@ mod tests {
             assert_eq!(pq_scratch.query_scratch[i], query[i]);
         });
     }
+
+    #[test]
+    fn test_pq_scratch_set_rejects_short_query() {
+        let dim = 16;
+        let mut pq_scratch = PQScratch::new(64, dim, 4, 256).unwrap();
+
+        // Query shorter than dim should fail
+        let short_query: Vec<f32> = (1..dim).map(|i| i as f32).collect(); // dim-1 elements
+        let err = pq_scratch.set(&short_query).unwrap_err();
+        assert!(err.to_string().contains("expected query of length"));
+    }
+
+    #[test]
+    fn test_pq_scratch_set_accepts_oversized_query() {
+        let dim = 8;
+        let mut pq_scratch = PQScratch::new(64, dim, 4, 256).unwrap();
+
+        // Query longer than dim should succeed (only first `dim` elements used)
+        let long_query: Vec<f32> = (1..=dim + 10).map(|i| i as f32).collect();
+        pq_scratch.set(&long_query).unwrap();
+
+        for (i, &val) in long_query.iter().enumerate().take(dim) {
+            assert_eq!(pq_scratch.query_scratch[i], val);
+        }
+    }
 }
