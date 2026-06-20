@@ -78,7 +78,8 @@ pub(crate) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()>
             .search(plugins::Range)
             .search(plugins::TopkBetaFilter)
             .search(plugins::TopkMultihopFilter)
-            .search(plugins::TopkInlineFilter),
+            .search(plugins::TopkInlineFilter)
+            .search(plugins::DeterminantDiversity),
     )?;
 
     registry.register(
@@ -442,6 +443,47 @@ impl<S> Strategy<S> {
 // Topk //
 //------//
 
+impl search::Plugin<FullPrecisionProvider<f32>, SearchPhase, Strategy<common::FullPrecision>>
+    for plugins::DeterminantDiversity
+{
+    fn is_match(&self, phase: &SearchPhase) -> bool {
+        plugins::DeterminantDiversity::is_match(phase)
+    }
+
+    fn kind(&self) -> &'static str {
+        plugins::DeterminantDiversity::as_str()
+    }
+
+    fn run(
+        &self,
+        index: Arc<DiskANNIndex<FullPrecisionProvider<f32>>>,
+        phase: &SearchPhase,
+        _strategy: &Strategy<common::FullPrecision>,
+    ) -> anyhow::Result<AggregatedSearchResults> {
+        let (phase, params) = plugins::DeterminantDiversity::get(phase)?;
+
+        let queries = Arc::new(datafiles::load_dataset::<f32>(datafiles::BinFile(
+            &phase.queries,
+        ))?);
+        let groundtruth = datafiles::load_groundtruth(
+            datafiles::BinFile(&phase.groundtruth),
+            Some(phase.max_k()),
+        )?;
+
+        let knn = benchmark_core::search::graph::KNN::with_postprocessor(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
+            inmem::DeterminantDiversity::new(params),
+        )?;
+
+        let steps = search::knn::SearchSteps::new(phase.reps, &phase.num_threads, &phase.runs);
+        let results = search::knn::run(&knn, &groundtruth, steps)?;
+
+        Ok(AggregatedSearchResults::Topk(results))
+    }
+}
+
 impl<DP, S> search::Plugin<DP, SearchPhase, Strategy<S>> for plugins::Topk
 where
     DP: DataProvider<Context: Default, InternalId = u32, ExternalId = u32> + QueryType,
@@ -454,11 +496,11 @@ where
         + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::Topk::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        plugins::Topk::as_str()
     }
 
     fn run(
@@ -507,11 +549,11 @@ where
         + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::Range::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        plugins::Range::as_str()
     }
 
     fn run(
@@ -557,11 +599,11 @@ where
         + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::TopkBetaFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        plugins::TopkBetaFilter::as_str()
     }
 
     fn run(
@@ -622,11 +664,11 @@ where
         + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::TopkMultihopFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        plugins::TopkMultihopFilter::as_str()
     }
 
     fn run(
@@ -680,11 +722,11 @@ where
         + AsyncFriendly,
 {
     fn is_match(&self, phase: &SearchPhase) -> bool {
-        Self::kind() == phase.kind()
+        plugins::TopkInlineFilter::is_match(phase)
     }
 
     fn kind(&self) -> &'static str {
-        Self::kind().as_str()
+        plugins::TopkInlineFilter::as_str()
     }
 
     fn run(
