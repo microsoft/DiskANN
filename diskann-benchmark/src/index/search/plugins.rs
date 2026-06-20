@@ -36,8 +36,12 @@ use std::sync::Arc;
 
 use diskann::{graph::DiskANNIndex, provider::DataProvider};
 use diskann_benchmark_runner::utils::fmt::{Delimit, Quote};
+use diskann_providers::model::graph::provider::DeterminantDiversityParams;
 
-use crate::{index::result::AggregatedSearchResults, inputs::graph_index::SearchPhaseKind};
+use crate::{
+    index::result::AggregatedSearchResults,
+    inputs::graph_index::{SearchPhase, TopkDeterminantDiversityPhase},
+};
 
 /// A dyn-compatible search plugin for `DP`.
 ///
@@ -143,9 +147,34 @@ where
 pub(crate) struct Topk;
 
 impl Topk {
-    /// Returns [`SearchPhaseKind::Topk`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::Topk
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk"
+    }
+}
+
+/// A search plugin for determinant-diversity top-k post-processing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeterminantDiversity;
+
+impl DeterminantDiversity {
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_determinant_diversity().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk-determinant-diversity"
+    }
+
+    pub(crate) fn get(
+        phase: &SearchPhase,
+    ) -> anyhow::Result<(&TopkDeterminantDiversityPhase, DeterminantDiversityParams)> {
+        let phase = phase.as_topk_determinant_diversity()?;
+        let params = DeterminantDiversityParams::new(phase.power, phase.eta)?;
+        Ok((phase, params))
     }
 }
 
@@ -154,9 +183,12 @@ impl Topk {
 pub(crate) struct Range;
 
 impl Range {
-    /// Returns [`SearchPhaseKind::Range`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::Range
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_range().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "range"
     }
 }
 
@@ -165,9 +197,12 @@ impl Range {
 pub(crate) struct TopkBetaFilter;
 
 impl TopkBetaFilter {
-    /// Returns [`SearchPhaseKind::TopkBetaFilter`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkBetaFilter
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_beta_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + beta filter"
     }
 }
 
@@ -176,9 +211,12 @@ impl TopkBetaFilter {
 pub(crate) struct TopkMultihopFilter;
 
 impl TopkMultihopFilter {
-    /// Returns [`SearchPhaseKind::TopkMultihopFilter`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkMultihopFilter
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_multihop_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + multihop filter"
     }
 }
 
@@ -187,8 +225,11 @@ impl TopkMultihopFilter {
 pub(crate) struct TopkInlineFilter;
 
 impl TopkInlineFilter {
-    /// Returns [`SearchPhaseKind::TopkInlineFilter`].
-    pub(crate) fn kind() -> SearchPhaseKind {
-        SearchPhaseKind::TopkInlineFilter
+    pub(crate) fn is_match(phase: &SearchPhase) -> bool {
+        phase.as_topk_inline_filter().is_ok()
+    }
+
+    pub(crate) const fn as_str() -> &'static str {
+        "topk + inline filter"
     }
 }
