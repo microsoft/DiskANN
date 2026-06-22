@@ -23,7 +23,7 @@
 //! - This matches C#'s `FilterBitmap` (`ulong[]`) byte layout via `GetBytes()`
 //! - TODO Replace with roaring bitmap for compression
 
-use diskann::graph::index::QueryLabelProvider;
+use diskann::graph::ext::labeled::QueryLabelProvider;
 
 /// A zero-copy bitmap-based label provider for Garnet filtered vector search.
 ///
@@ -36,7 +36,7 @@ use diskann::graph::index::QueryLabelProvider;
 /// this struct. In practice, the struct is created and dropped within a
 /// single FFI search call.
 #[derive(Debug)]
-pub struct GarnetQueryLabelProvider {
+pub(crate) struct GarnetQueryLabelProvider {
     data: *const u8,
     len: usize,
 }
@@ -68,7 +68,7 @@ impl GarnetQueryLabelProvider {
     /// The caller must ensure `data` is valid for reads of `len` bytes
     /// and that the memory remains valid and unmodified for the lifetime
     /// of this struct.
-    pub unsafe fn from_raw(data: *const u8, len: usize) -> Self {
+    pub(crate) unsafe fn from_raw(data: *const u8, len: usize) -> Self {
         if data.is_null() || len == 0 {
             return Self {
                 data: std::ptr::null(),
@@ -80,7 +80,7 @@ impl GarnetQueryLabelProvider {
 
     /// Construct a `GarnetQueryLabelProvider` from a byte slice.
     #[allow(dead_code)]
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
         if bytes.is_empty() {
             Self {
                 data: std::ptr::null(),

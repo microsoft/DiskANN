@@ -3,9 +3,8 @@
 
 //! Block-transposed SIMD kernels for multi-vector distance computation.
 //!
-//! This module provides a SIMD-accelerated implementation that uses block-transposed
-//! memory layout for **query** vectors (instead of documents), with documents remaining
-//! in row-major format.
+//! SIMD-accelerated implementation that uses block-transposed memory layout
+//! for **query** vectors, with documents remaining in row-major format.
 //!
 //! # Memory Layout
 //!

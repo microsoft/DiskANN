@@ -3,10 +3,43 @@
  * Licensed under the MIT license.
  */
 
+//! # Search
+//!
+//! The [`SearchAccessor`] is the primary trait for implementing graph search algorithms.
+//! Graph search begins at [`starting_points`](SearchAccessor::starting_points) and performs
+//! several rounds of "beam expansion" via [`expand_beam`](SearchAccessor::expand_beam).
+//!
+//! The [`SearchAccessor`] has several duties. It must be able to retrieve adjacency list
+//! information from its underlying [`DataProvider`] and can compute distances between a
+//! fixed query and all elements in adjacency lists. See the documentation of
+//! [`expand_beam`](SearchAccessor::expand_beam) for a more detailed description of the
+//! required algorithm.
+//!
+//! Accessors are constructed via [`SearchStrategy::search_accessor`] and
+//! [`InsertStrategy::insert_search_accessor`] where they are provided with the query.
+//!
+//! # Build
+//!
+//! Index building consists of two main parts:
+//!
+//! 1. Adjacency list manipulation.
+//! 2. Neighbor pruning to compute new adjacency lists.
+//!
+//! Like search, there is a primary trait for extending this behavior: [`PruneAccessor`].
+//! Neighbor manipulation is done via [`PruneAccessor::neighbors`] whereas pruning is
+//! facilitated with [`PruneAccessor::fill`].
+//!
+//! A single [`PruneAccessor`] can be used for multiple rounds of pruning during a single
+//! insert or delete operation. As such, implementations may wish to cache a small number
+//! of vectors internally across calls to [`PruneAccessor::fill`] and are encouraged to use
+//! [`Map`](crate::graph::workingset::Map) for this cache.
+//!
+//! # Strategies
+//!
 //! Strategies provide the "glue" between [`DataProvider`]s and index operations like search,
 //! insertion, deletion, etc.
 //!
-//! They do this by tying together [`Accessor`]s, computers, and other operations required
+//! They do this by tying together accessors, computers, and other operations required
 //! by the various indexing algorithms.
 //!
 //! The relationship between between strategies and indexing algorithms can feel like having
@@ -18,16 +51,12 @@
 //! * [`SearchStrategy`]: This is used for default graph-based searches. The flow of a search
 //!   is as follows:
 //!
-//!   1. Create the `SearchAccessor` defined by the strategy. This is the object that will
-//!      be used to actually retrieve data from the [`DataProvider`].
+//!   1. Create the [`SearchAccessor`] defined by the strategy. This is the object that will
+//!      be used to retrieve data from the [`DataProvider`].
 //!
-//!   2. Use the `SearchAccessor` to create the `QueryComputer` from the query object.
-//!      This computer will be used for all distances between elements retrieved from the
-//!      search accessor.
+//!   2. Run greedy-search using the accessor.
 //!
-//!   3. Run greedy-search using the accessor-computer combination.
-//!
-//!   4. After search, post-processing is run, which enables operations like filtering
+//!   3. After search, post-processing is run, which enables operations like filtering
 //!      of start or deleted points, reranking etc.
 //!
 //!      See [`SearchPostProcess`].
@@ -50,23 +79,13 @@
 //!   Most of the [`InsertStrategy`] is dedicated to the initial graph search, delegating
 //!   pruning to an associated [`PruneStrategy`].
 //!
-//!   The graph search portion works by constructing the `InsertAccessor` and then an
-//!   `InsertQueryComputer` from that accessor and the value that was just inserted.
+//!   The graph search portion works by constructing a [`SearchAccessor`] with the value
+//!   that was just inserted.
 //!
-//!   This accessor/computer pair is then used for search, followed by pruning.
+//!   This accessor is then used for search, followed by pruning.
 //!
-//! * [`PruneStrategy`]: The pruning strategy is largely straightforward, consisting of
-//!   an [`Accessor`] and a random access [`DistanceFunction`] for performing distance
-//!   calculations on the retrieve elements.
-//!
-//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with expensive
-//!   vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
-//!
-//!   This is done by using a working set to store the elements retrieved by the
-//!   `PruneAccessor`. To give implementers the ability to perform a hybrid prune
-//!   (consisting of a mix of full-precision and quantized vectors), **without** the index
-//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to delegate
-//!   the responsibility of populating this cache to the [`DataProvider`].
+//! * [`PruneStrategy`]: The pruning strategy is simpler a deferred mechanism of constructing
+//!   a [`PruneAccessor`].
 //!
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
 //!   strategies. One difference for inplace-deletion is that we use an element accessed
@@ -78,57 +97,396 @@
 
 use std::{future::Future, sync::Arc};
 
-use diskann_utils::Reborrow;
-use diskann_utils::future::AssertSend;
-use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
+use diskann_utils::{Reborrow, future::SendFuture};
+use diskann_vector::DistanceFunction;
+use futures_util::FutureExt;
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, StandardError},
-    graph::{AdjacencyList, SearchOutputBuffer, workingset},
+    error::StandardError,
+    graph::{SearchOutputBuffer, workingset},
     neighbor::Neighbor,
-    provider::{
-        Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
-        DataProvider, HasId, NeighborAccessor,
-    },
-    utils::VectorId,
+    provider::{self, DataProvider, HasId},
 };
 
-/// A trait to override search constraints such as early termination based on constraints
-/// by implementer.
-pub trait SearchExt: Accessor {
-    /// Return a `Vec` containing the starting points.
+/// The main extension point for graph search.
+///
+/// Search is a best-first graph traversal beginning at a collection of start points.
+/// Neighbors with lower distances are prioritized over those with higher distances.
+///
+/// [`Self::expand_beam`] is the mechanism by which the graph is explored, expanding several
+/// vertices at a time for efficiency.
+///
+/// **Start Point Coherence**: The various methods regarding start points are expected to
+/// be coherent with one another. This means they agree on the number and IDs of the start
+/// points.
+///
+/// See also: [`FilteredAccessor`].
+pub trait SearchAccessor: HasId + Send + Sync {
+    /// Return the starting points for this search.
     fn starting_points(&self)
     -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send;
 
-    /// Default is to never terminate early.
-    fn terminate_early(&mut self) -> bool {
-        false
-    }
+    /// Compute the distance to all start points, invoking `f` with all results.
+    fn start_point_distances<F>(
+        &mut self,
+        f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(Self::Id, f32) + Send;
+
+    /// A primitive routine used by graph search. This is purposely implemented as a
+    /// coarse-grained operation to enable optimization opportunities by the backend.
+    ///
+    /// # Description
+    ///
+    /// For each `i` in `itr`, fetch the adjacency list `v_i` for `i`. For each `v_i`, then
+    /// for each id `j` in `v_i`, compute the distance `d` to the data associated with `j`
+    /// and invoke the closure `f` with `d` and `j`, provided `pred.eval_mut(j)` evaluates
+    /// to `true`.
+    ///
+    /// No specification is made on the traversal order of `ids`, the computation order of
+    /// the leaf elements, nor the order in which `pred` is evaluated.
+    ///
+    /// Additionally, there is **no** strict requirement that all `j` discovered during the
+    /// traversal need to be processed, though "dropping" too many candidates silently will
+    /// adversely affect the quality of traversal.
+    ///
+    /// ## Implementation Notes
+    ///
+    /// Implementations must observe the following:
+    ///
+    /// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` should be
+    ///   invoked for that item. Algorithms **may** choose to skip invoking `on_neighbors`
+    ///   in exceptional circumstances (e.g. a transient access error occurs), though doing
+    ///   this too often will degrade search quality.
+    ///
+    ///   If an item `i` is already passed to `on_neighbors`, the implementation is not
+    ///   obligated to provide it again, though it **may** do so if `pred.eval_mut()`
+    ///   continues to return `true`.
+    ///
+    /// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
+    ///   invoked for that item.
+    ///
+    /// * `pred.eval()` and `pred.eval_mut()` may be invoked multiple times for the same
+    ///   item `i`.
+    ///
+    /// ## Predicate Requirements
+    ///
+    /// Well behaved predicates must never return `true` (allow an id to be forwarded to
+    /// `on_neighbors`) if it previously returned `false`. Implementations of `expand_beam`
+    /// are allowed to assume this holds.
+    ///
+    /// Additionally, the callback `on_neighbors` and the predicate have to cooperate. If the
+    /// callback requires unique items, the predicate must be structured such that `eval_mut`
+    /// correctly filters out duplicates.
+    ///
+    /// Calling `eval_mut` may change the predicate's state for an item `i`. The following
+    /// hold for any pair of calls on the same `i` with no intervening predicate operations:
+    ///
+    /// * `eval(i) == true` implies a subsequent `eval_mut(i) == true`.
+    /// * `eval(i) == false` implies a subsequent `eval_mut(i) == false`.
+    /// * `eval_mut(i) == false` implies a subsequent `eval(i) == false`.
+    ///
+    /// # Pseudo Code
+    ///
+    /// ```ignore
+    /// for i in ids {
+    ///     // Retrieve the adjacency list IDs for node `i`.
+    ///     let neighbors = self.get_neighbors_for(i);
+    ///
+    ///     // Loop over the adjacency list IDs, skipping IDs according to `pred`.
+    ///     //
+    ///     // Using `eval_mut` allows the predicate to record this visit and potentially
+    ///     // exclude it from future calls.
+    ///     for neighbor in neighbors.filter(|i| pred.eval_mut(i)) {
+    ///         // Accessors are provided the query upon construction and are responsible
+    ///         // for computing distances.
+    ///         let distance = self.compute_distance_to(neighbor);
+    ///         on_neighbors(neighbor, distance);
+    ///     }
+    /// }
+    /// ```
+    fn expand_beam<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Self::Id, f32) + Send;
 
     //////////////////////
     // Provided methods //
     //////////////////////
 
-    /// Return a `'static` closure that returns `true` if a provided `id` is not a start
-    /// point - otherwise returning `false`.
+    /// Indicate that search should terminate as soon as possible.
     ///
-    /// The provided implementation using `self.starting_points()` to obtain the collection
-    /// of start points. Implementations may choose to specialize this if they have a more
-    /// efficient means of providing the filter.
+    /// The provided implementation always returns `false`.
+    fn terminate_early(&mut self) -> bool {
+        false
+    }
+
+    /// Return a closure to evaluate whether or not an ID is associated with a start point.
+    ///
+    /// The closure returned by the provided implementation has complexity `O(1)` and takes
+    /// `O(num_starting_points)` time to construct.
     fn is_not_start_point(
         &self,
     ) -> impl std::future::Future<
         Output = ANNResult<impl Fn(Self::Id) -> bool + Send + Sync + 'static>,
     > + Send {
         async move {
-            let starting_points = self.starting_points().await?;
-            Ok(move |id| !starting_points.contains(&id))
+            let set: std::collections::HashSet<_> =
+                self.starting_points().await?.into_iter().collect();
+
+            Ok(move |id| !set.contains(&id))
         }
+    }
+
+    /// Return the number of starting points.
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send {
+        self.starting_points()
+            .map(|result: ANNResult<_>| result.map(|v: Vec<_>| v.len()))
     }
 }
 
-/// An predicate evaluating `item`.
+/// Mark that an ID has been accepted for purposes of filtering.
+///
+/// See: [`Decision`], [`FilteredAccessor::expand_beam_accept_only`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Accept<T>(T);
+
+impl<T> Accept<T> {
+    /// Construct a new [`Accept`] around `id`.
+    pub fn new(id: T) -> Self {
+        Self(id)
+    }
+
+    /// Get a reference to the internal item.
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+
+    /// Get a mutable reference to the internal item.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    /// Consume `self`, returning the inner item.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+/// Mark that an ID has been rejected for purposes of filtering.
+///
+/// See: [`Decision`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Reject<T>(T);
+
+impl<T> Reject<T> {
+    /// Construct a new [`Reject`] around `id`.
+    pub fn new(id: T) -> Self {
+        Self(id)
+    }
+
+    /// Get a reference to the internal item.
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+
+    /// Get a mutable reference to the internal item.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    /// Consume `self`, returning the inner item.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+/// Filter decision for [`FilteredAccessor`].
+///
+/// Both variants carry the item `T` since rejected items are useful for graph navigation.
+#[derive(Debug, Clone, Copy)]
+pub enum Decision<T> {
+    /// The item satisfies the filter criteria.
+    Accept(Accept<T>),
+    /// The item does not satisfy the filter criteria.
+    Reject(Reject<T>),
+}
+
+impl<T> Decision<T> {
+    /// Construct a new [`Decision`] in the [`Accept`] state.
+    pub fn accept(id: T) -> Self {
+        Self::Accept(Accept::new(id))
+    }
+
+    /// Construct a new [`Decision`] in the [`Reject`] state.
+    pub fn reject(id: T) -> Self {
+        Self::Reject(Reject::new(id))
+    }
+
+    /// Consume `self`, returning the inner item regardless of acceptance.
+    ///
+    /// To view the inner item, use [`Self::as_ref`].
+    /// ```rust
+    /// use diskann::graph::glue::Decision;
+    ///
+    /// let x = Decision::accept(vec![0usize, 1, 2]);
+    ///
+    /// let y: &[usize] = x.as_ref().into_inner();
+    /// assert_eq!(y, &[0, 1, 2]);
+    ///
+    /// let z: Vec<usize> = x.into_inner();
+    /// assert_eq!(z, &[0, 1, 2]);
+    /// ```
+    pub fn into_inner(self) -> T {
+        match self {
+            Self::Accept(i) => i.into_inner(),
+            Self::Reject(i) => i.into_inner(),
+        }
+    }
+
+    /// Apply the closure `f` to the inner item regardless of acceptance.
+    pub fn map<F, R>(self, f: F) -> Decision<R>
+    where
+        F: FnOnce(T) -> R,
+    {
+        match self {
+            Self::Accept(i) => Decision::accept(f(i.into_inner())),
+            Self::Reject(i) => Decision::reject(f(i.into_inner())),
+        }
+    }
+
+    /// Borrow the inner item as a [`Decision`] of references.
+    pub fn as_ref(&self) -> Decision<&T> {
+        match self {
+            Self::Accept(i) => Decision::accept(i.get()),
+            Self::Reject(i) => Decision::reject(i.get()),
+        }
+    }
+
+    /// Mutably borrow the inner item as a [`Decision`] of mutable references.
+    pub fn as_mut(&mut self) -> Decision<&mut T> {
+        match self {
+            Self::Accept(i) => Decision::accept(i.get_mut()),
+            Self::Reject(i) => Decision::reject(i.get_mut()),
+        }
+    }
+
+    /// Return `true` only if `self` is [`Decision::Accept`].
+    #[must_use = "this function is side-effect free"]
+    pub fn is_accept(&self) -> bool {
+        matches!(self, Self::Accept(_))
+    }
+
+    /// Return `true` only if `self` is [`Decision::Reject`].
+    #[must_use = "this function is side-effect free"]
+    pub fn is_reject(&self) -> bool {
+        matches!(self, Self::Reject(_))
+    }
+}
+
+impl<T> From<Accept<T>> for Decision<T> {
+    fn from(accept: Accept<T>) -> Decision<T> {
+        Decision::Accept(accept)
+    }
+}
+
+impl<T> From<Reject<T>> for Decision<T> {
+    fn from(reject: Reject<T>) -> Decision<T> {
+        Decision::Reject(reject)
+    }
+}
+
+/// The main extension point for filtered-graph search.
+///
+/// Filtered search is a best-first graph traversal with heuristics to direct the search
+/// depending on whether items are accepted or rejected.
+///
+/// [`Self::expand_beam_filtered`] and [`Self::expand_beam_accept_only`] are the primary
+/// extension points.
+///
+/// **Start Point Coherence**: The various methods regarding start points are expected to
+/// be coherent with one another. This means they agree on the number and IDs of the start
+/// points.
+///
+/// See also: [`SearchAccessor`].
+pub trait FilteredAccessor: HasId + Send + Sync {
+    /// Compute the distance to all start points, invoking `f` with all results.
+    fn start_point_distances<F>(
+        &mut self,
+        f: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        F: FnMut(Decision<Self::Id>, f32) + Send;
+
+    /// This function has similar semantics to [`SearchAccessor::expand_beam`] except that
+    /// the `on_neighbors` callback receives [`Decision`] rather than raw IDs. This is used
+    /// to indicate whether or not the associated item is accepted or rejected by the
+    /// filtered search.
+    ///
+    /// All traversed IDs should be passed to `pred`.
+    ///
+    /// See also: [`SearchAccessor::expand_beam`], [`Self::expand_beam_accept_only`].
+    fn expand_beam_filtered<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(Decision<Self::Id>, f32) + Send;
+
+    /// This function is nearly identical to [`Self::expand_beam_filtered`], but
+    /// implementors must ensure that only [`Accept`]ed IDs are passed to the callback.
+    ///
+    /// As a consequence, only [`Accept`]ed IDs may be passed to `pred.eval_mut`.
+    /// Constructing `Accept::new(raw_id)` and passing it to `pred.eval_mut` without
+    /// having first classified `raw_id` violates this contract.
+    ///
+    /// The [`Predicate`] bound takes unclassified IDs and is side-effect-free, so it can
+    /// pre-filter IDs before paying the cost of classification. As with [`HybridPredicate`],
+    /// implementors can assume that [`Predicate`] and [`PredicateMut`] "get along" with
+    /// respect to `eval(id)` and `eval_mut(Accept::new(id))`.
+    ///
+    /// See also: [`SearchAccessor::expand_beam`], [`Self::expand_beam_filtered`].
+    fn expand_beam_accept_only<Itr, P, F>(
+        &mut self,
+        ids: Itr,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        Itr: Iterator<Item = Self::Id> + Send,
+        P: Predicate<Self::Id> + PredicateMut<Accept<Self::Id>> + Send + Sync,
+        F: FnMut(Accept<Self::Id>, f32) + Send;
+
+    //////////////////////
+    // Provided methods //
+    //////////////////////
+
+    /// Indicate that search should terminate as soon as possible.
+    ///
+    /// The provided implementation always returns `false`.
+    fn terminate_early(&mut self) -> bool {
+        false
+    }
+
+    /// Return the number of starting points.
+    fn num_starting_points(&self) -> impl std::future::Future<Output = ANNResult<usize>> + Send;
+}
+
+/// A predicate evaluating `item`.
 pub trait Predicate<T> {
     fn eval(&self, item: &T) -> bool;
 }
@@ -190,136 +548,41 @@ where
     }
 }
 
-/// The interfaces `contains` and `insert` agree with each other.
-impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
-
-/// A primitive routine used by graph search. This is purposely implemented as a
-/// coarse-grained operation to enable optimization opportunities by the backend.
-///
-/// # Description
-///
-/// For each `i` in `itr`, fetch the adjacency list `v_i` for `i`. For each `v_i`, then for
-/// each id `j` in `v_i`, compute the distance `d` using `computer` to the data associated with
-/// `j` and invoke the closure `f` with `d` and `j`, provided `pred.eval_mut(j)` evaluates to
-/// `true`.
-///
-/// No specification is made on the traversal order of `ids`, the computation order of the
-/// leaf elements, nor the order in which `pred` is evaluated.
-///
-/// Restriction in the implementation are as follows:
-///
-/// * If `pred.eval_mut()` returns `true` for an id `i`, then `on_neighbors` must be invoked
-///   for that item.
-///
-///   If an item `i` is already passed to `on_neighbors`, the implementation is not obligated
-///   to provided it again, though it **may** do so provided `pred.eval_mut()` continues to
-///   return `true`.
-///
-/// * If `pred.eval_mut()` returns `false` for an item, then `on_neighbors` must not be
-///   invoked for that item.
-///
-/// * `pred.eval()` may be invoked an arbitrary number of times. Proper predicate
-///   implementations  will ensure that
-///
-///   - `pred.eval() == true` implies `pred.eval_mut() == true` if `pred.eval_mut()` is
-///     invoked immediately after `pred.eval()`.
-///
-///   - `pred.eval() == false` implies `pred.eval_mut() == false` and vice-versa.
-///
-/// * `pred.eval_mut()` must be invoked at most once for all transitive items in the beam.
-///
-/// ## Predicate Requirements
-///
-/// Well behaved predicates must never return `true` (allow an id to be forwarded to
-/// `on_neighbors`) if it previously returned `false`. Implementations of `ExpandBeam` are
-/// allowed to assume this holds.
-///
-/// Additionally, the callback `on_neighbors` and the predicate have to cooperate. If the
-/// callback requires unique items, the predicate must be structured such that `eval_mut`
-/// correctly filters out duplicates.
-///
-/// # Provided Implementation
-///
-/// The provided implementation works on each element of `ids` sequentially, pre-filters
-/// the resulting candidate list using `pred.eval()` before invoking
-/// [`BuildQueryComputer::distances_unordered`].
-///
-/// The callback `on_neighbors` is decorated to the uses `pred.eval_mut()`.
-///
-/// This ensures that if `distances_unordered` errors, the predicate is not erroneously
-/// updated.
-///
-/// ## Error Handling
-///
-/// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
-    fn expand_beam<Itr, P, F>(
-        &mut self,
-        ids: Itr,
-        computer: &Self::QueryComputer,
-        mut pred: P,
-        mut on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send,
-        P: HybridPredicate<Self::Id> + Send + Sync,
-        F: FnMut(f32, Self::Id) + Send,
-    {
-        async move {
-            let mut neighbors = AdjacencyList::new();
-            for id in ids {
-                self.get_neighbors(id, &mut neighbors).send().await?;
-                neighbors.retain(|i| pred.eval(i));
-
-                self.distances_unordered(neighbors.iter().copied(), computer, |distance, id| {
-                    if pred.eval_mut(&id) {
-                        on_neighbors(distance, id);
-                    }
-                })
-                .send()
-                .await
-                .allow_transient("allowing transient error in beam expansion")?;
-            }
-
-            Ok(())
-        }
+impl<T> PredicateMut<Accept<T>> for NotInMut<'_, T>
+where
+    T: Clone + Eq + std::hash::Hash,
+{
+    fn eval_mut(&mut self, item: &Accept<T>) -> bool {
+        self.eval_mut(item.get())
     }
 }
+
+/// The interfaces `contains` and `insert` agree with each other.
+impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
 
 /// A search strategy for query objects of type `T`.
 ///
 /// This trait should be overloaded by data providers wishing to extend
 /// (search)[`crate::graph::DiskANNIndex::search`].
-pub trait SearchStrategy<Provider, T>: Send + Sync
+pub trait SearchStrategy<'a, Provider, T>: Send + Sync
 where
     Provider: DataProvider,
 {
-    /// The computer used by the associated accessor.
-    ///
-    /// We could grab this type from the `SearchAccessor` associated type, but it's
-    /// useful enough that we move it up here.
-    type QueryComputer: for<'a, 'b> PreprocessedDistanceFunction<
-            <Self::SearchAccessor<'a> as Accessor>::ElementRef<'b>,
-            f32,
-        > + Send
-        + Sync
-        + 'static;
-
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
 
     /// The concrete type of the accessor that is used to access `Self` during the greedy
     /// graph search. The query will be provided to the accessor exactly once during search
     /// to construct the query computer.
-    type SearchAccessor<'a>: ExpandBeam<T, QueryComputer = Self::QueryComputer, Id = Provider::InternalId>
-        + SearchExt;
+    type SearchAccessor: HasId<Id = Provider::InternalId> + Send + Sync;
 
     /// Construct and return the search accessor.
-    fn search_accessor<'a>(
+    fn search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
+        query: T,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError>;
 }
 
 /// Opt-in trait for strategies that have a default post-processor.
@@ -330,31 +593,31 @@ where
 /// post-processor is specified. The search infrastructure will call
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
-pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T>
+pub trait DefaultPostProcessor<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<'a, Provider, T>
 where
     Provider: DataProvider,
     O: Send,
 {
     /// The default post-processor type.
-    type Processor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
+    type Processor: SearchPostProcess<Self::SearchAccessor, T, O> + Send + Sync;
 
     /// Create the default post-processor.
-    fn default_post_processor(&self) -> Self::Processor;
+    fn default_post_processor(&'a self) -> Self::Processor;
 }
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
-pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>
+pub trait DefaultSearchStrategy<'a, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>
 where
     Provider: DataProvider,
     O: Send,
 {
 }
 
-impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
+impl<'a, S, Provider, T, O> DefaultSearchStrategy<'a, Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>,
+    S: SearchStrategy<'a, Provider, T> + DefaultPostProcessor<'a, Provider, T, O>,
     Provider: DataProvider,
     O: Send,
 {
@@ -386,7 +649,7 @@ macro_rules! default_post_processor {
 /// directly into the output buffer.
 pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     type Error: StandardError;
 
@@ -396,7 +659,6 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -412,14 +674,13 @@ pub struct CopyIds;
 
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
         _query: T,
-        _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -437,7 +698,7 @@ where
 /// using a [`Pipeline`].
 pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
 {
     /// A potentially modified version of the error yielded by the next state in the
     /// processing pipeline.
@@ -446,7 +707,7 @@ where
         NextError: StandardError;
 
     /// The accessor that will be passed to the next processing stage.
-    type NextAccessor: BuildQueryComputer<T, Id = A::Id>;
+    type NextAccessor: HasId<Id = A::Id>;
 
     /// Perform any modification the `input`, `output`, `accessor`, or `computer` objects
     /// and invoke the [`SearchPostProcess`] routine `next` on stage.
@@ -455,7 +716,6 @@ where
         next: &Next,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error<Next::Error>>> + Send
@@ -471,7 +731,7 @@ pub struct FilterStartPoints;
 
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
-    A: BuildQueryComputer<T> + SearchExt,
+    A: SearchAccessor,
     T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
@@ -489,7 +749,6 @@ where
         next: &Next,
         accessor: &mut A,
         query: T,
-        computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> ANNResult<usize>
@@ -499,18 +758,12 @@ where
         Next: SearchPostProcess<A, T, O> + Sync,
     {
         let filter = accessor.is_not_start_point().await?;
-        next.post_process(
-            accessor,
-            query,
-            computer,
-            candidates.filter(|n| filter(n.id)),
-            output,
-        )
-        .await
-        .map_err(|err| {
-            let err = err.into();
-            err.context("after filtering start points")
-        })
+        next.post_process(accessor, query, candidates.filter(|n| filter(n.id)), output)
+            .await
+            .map_err(|err| {
+                let err = err.into();
+                err.context("after filtering start points")
+            })
     }
 }
 
@@ -540,7 +793,7 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
-    A: BuildQueryComputer<T>,
+    A: HasId,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -550,7 +803,6 @@ where
         &self,
         accessor: &mut A,
         query: T,
-        computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
@@ -559,8 +811,95 @@ where
         B: SearchOutputBuffer<O> + Send + ?Sized,
     {
         self.head
-            .post_process_step(&self.tail, accessor, query, computer, candidates, output)
+            .post_process_step(&self.tail, accessor, query, candidates, output)
     }
+}
+
+////////////
+// Insert //
+////////////
+
+/// The customization point for graph index construction.
+///
+/// Index construction consists of adjacency list manipulation and candidate pruning.
+/// Adjacency list manipulation is facilitated by [`neighbors`](Self::neighbors) and provides
+/// an opportunity for implementations to delegate to a common implementation if needed.
+/// If [`provider::NeighborAccessorMut`] is already implemented, then [`provider::Neighbors`]
+/// can be used to return `&mut Self`.
+///
+/// Pruning rounds happen using a sequence where [`fill`](Self::fill) is called on a
+/// collection of IDs to be pruned. Because a [`PruneAccessor`] may be used for multiple
+/// rounds of pruning, implementations can use [`Map`](crate::graph::workingset::Map) as
+/// a bounded cache of elements to avoid traffic to the backing provider.
+pub trait PruneAccessor: HasId + Send + Sync {
+    /// The type of the neighbor-accessor delegate.
+    type Neighbors<'a>: provider::NeighborAccessorMut<Id = Self::Id>
+    where
+        Self: 'a;
+
+    /// The element type yielded from [`Self::View`].
+    type ElementRef<'a>;
+
+    /// The type of the prune-local view over a collection of ids.
+    type View<'a>: for<'x> workingset::View<Self::Id, ElementRef<'x> = Self::ElementRef<'x>>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    /// The computer used to compute distances between elements.
+    type Distance<'a>: for<'x, 'y> DistanceFunction<Self::ElementRef<'x>, Self::ElementRef<'y>, f32>
+        + Send
+        + Sync
+    where
+        Self: 'a;
+
+    /// Return a delegate for performing graph manipulation.
+    ///
+    /// If `Self` implements [`NeighborAccessorMut`], then [`provider::Neighbors`] can be
+    /// used to wrap `&mut self`.
+    fn neighbors(&mut self) -> Self::Neighbors<'_>;
+
+    /// Make the data elements for items in `itr` available in the returned [`View`] and
+    /// provide a means of computing distance between elements in the view.
+    ///
+    /// The input `itr` is `Clone` and is expected that the implementation of `Clone` is cheap
+    /// and without interior mutability. This allows implementers to perform multiple passes
+    /// of `itr` if needed.
+    ///
+    /// ## Missing Entries
+    ///
+    /// While it's a good idea to ensure all items in `itr` are fetched, callers are
+    /// designed to tolerate a small number of missing entries without serious performance
+    /// degradation.
+    ///
+    /// If a ID really needs to be fetched for algorithmic purposes, it will be the first
+    /// item yielded from `itr`.
+    ///
+    /// ## Reuse
+    ///
+    /// This method may be called multiple times throughout the lifetime of `Self`, providing
+    /// an opportunity to cache previously returned results within `Self`.
+    ///
+    /// Trade offs include:
+    ///
+    /// * Without any reuse, more backend vector retrievals are made but the returned
+    ///   [`workingset::View`] is more up-to-date.
+    ///
+    /// * With reuse, the consumed memory increases but the total number of vector
+    ///   retrievals will be lower.
+    ///
+    /// Accessors are alive for a relatively small temporal window, so the risk of stale
+    /// entries in the cache causing incorrect graphs is minimal.
+    ///
+    /// See: [`Map`](crate::graph::workingset::Map) for a flexible data structure that
+    /// can be used to make an implementation.
+    fn fill<Itr>(
+        &mut self,
+        itr: Itr,
+    ) -> impl SendFuture<ANNResult<(Self::View<'_>, Self::Distance<'_>)>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync;
 }
 
 /// A strategy for inserting elements from the data provider.
@@ -568,7 +907,8 @@ where
 /// This strategy is used during the greedy search portion of index construction.
 /// After the candidate list has been retrieved from greedy search, the [`PruneStrategy`]
 /// is used for the rest.
-pub trait InsertStrategy<Provider, T>: SearchStrategy<Provider, T> + 'static
+pub trait InsertStrategy<'a, Provider, T>:
+    SearchStrategy<'a, Provider, T, SearchAccessor: SearchAccessor> + 'static
 where
     Provider: DataProvider,
 {
@@ -585,12 +925,13 @@ where
     /// [`InsertStrategy`] can customize the implementation if the behavior of the search
     /// accessor needs to be slightly different between searches for build and regular
     /// searches.
-    fn insert_search_accessor<'a>(
+    fn insert_search_accessor(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        self.search_accessor(provider, context)
+        vector: T,
+    ) -> Result<Self::SearchAccessor, Self::SearchAccessorError> {
+        self.search_accessor(provider, context, vector)
     }
 }
 
@@ -603,82 +944,48 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
-    /// The [working set](crate::graph::workingset) used during pruning.
-    ///
-    /// For single insert this is typically an empty [`Map`](super::workingset::Map).
-    /// For multi-insert it may be pre-seeded with batch elements.
-    type WorkingSet: Send + Sync;
-
-    /// The distance computer used during pruning.
-    ///
-    /// We could grab this type from the `PruneAccessor` associated type, but it's
-    /// useful enough that we move it up here.
-    type DistanceComputer<'computer>: for<'a, 'b, 'c, 'd> DistanceFunction<
-            <Self::PruneAccessor<'a> as Accessor>::ElementRef<'b>,
-            <Self::PruneAccessor<'c> as Accessor>::ElementRef<'d>,
-            f32,
-        > + Send
-        + Sync;
-
-    /// The concrete type of the accessor that is used to access `Self` during pruning.
-    ///
-    /// The accessor implements [`workingset::Fill`] for the strategy's
-    /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
-    /// cached for distance computations.
-    ///
-    /// Implementations are encouraged to have [`Accessor::get_element`] return the
-    /// highest-precision applicable value for a given element type.
-    type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
-        + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer<'a>>
-        + AsNeighborMut
-        + workingset::Fill<Self::WorkingSet>;
+    /// The concrete type of the [`PruneAccessor`] that is used during index construction.
+    type PruneAccessor<'a>: PruneAccessor<Id = Provider::InternalId>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
 
-    /// Create a fresh working set pre-sized for up to `capacity` elements.
-    ///
-    /// Argument `capacity` is an upper-bound: callers guarantee that no more than
-    /// `capacity` elements will be inserted into the working set during a single
-    /// [fill](workingset::Fill).
-    ///
-    /// Implementations may use this to pre-allocate or panic if exceeded.
-    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet;
-
-    /// Return the prune accessor.
+    /// Return the [`PruneAccessor`]. Argument `capacity` provides an upper bound on the
+    /// length of the iterator passed to [`PruneAccessor::fill`].
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a Provider,
         context: &'a Provider::Context,
+        capacity: usize,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
 }
 
 /// Strategy for bulk insertion via [`multi_insert`](crate::graph::DiskANNIndex::multi_insert).
 ///
-/// This trait delegates to its [`InsertStrategy`] for most selections during insert with
-/// one difference, the [working set](crate::graph::workingset) provided to the insertion
-/// [`PruneStrategy`] is seeded from [`Self::Seed`]. Seeding allows elements of the input
-/// batch `B` to be part of the working set throughout prune, saving on vector retrievals.
-pub trait MultiInsertStrategy<Provider, B>: Send + Sync
+/// Multi-insert bulk-inserts a batch of vectors and provides this batch to
+/// [`MultiInsertStrategy::finish`] to create a seed. This seed is then provided to
+/// multiple calls to [`MultiInsertStrategy::seeded_prune_accessor`] to construct the various
+/// [`PruneAccessors`] needed during build.
+///
+/// This architecture allows implementations to use overlays like
+/// [`Overlay`](crate::graph::workingset::map::Overlay) so accesses to batch elements can
+/// be routed locally rather than all the way back to the underlying provider.
+pub trait MultiInsertStrategy<Provider, B>: Send + Sync + 'static
 where
     Provider: DataProvider,
     B: Batch,
 {
-    /// The working set for the insertion [`PruneStrategy`].
-    type WorkingSet: Send + Sync + 'static;
-
-    /// The working set "seed", potentially containing `B` for faster access.
-    type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
+    /// The prune-accessor "seed", potentially containing `B` for faster access.
+    type Seed: Send + Sync + 'static;
 
     /// Any critical error that occurs during [`finish`](Self::finish).
     type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
+    /// The delegated [`PruneStrategy`] used for pruning.
+    type PruneStrategy: PruneStrategy<Provider>;
+
     /// The delegated [`InsertStrategy`] for most insertion related decisions.
-    type InsertStrategy: for<'a> InsertStrategy<
-            Provider,
-            B::Element<'a>,
-            PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
-        >;
+    type InsertStrategy: for<'a> InsertStrategy<'a, Provider, B::Element<'a>, PruneStrategy = Self::PruneStrategy>;
 
     /// Construct the associated [`InsertStrategy`].
     fn insert_strategy(&self) -> Self::InsertStrategy;
@@ -698,6 +1005,18 @@ where
     ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
         Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
+
+    /// Construct a [`PruneAccessor`] from a seed returned by [`Self::finish`].
+    ///
+    /// Argument `capacity` provides an upper bound on the iterator length for
+    /// [`PruneAccessor::fill`].
+    fn seeded_prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        context: &'a Provider::Context,
+        seed: &'a Self::Seed,
+        capacity: usize,
+    ) -> ANNResult<<Self::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>>;
 }
 
 /// A batch of elements indexed positionally.
@@ -786,8 +1105,7 @@ where
     /// of associated types.
     ///
     /// Lifting the accessor all the way to the trait level makes the caching provider possible.
-    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
-        + SearchExt;
+    type DeleteSearchAccessor<'a>: SearchAccessor<Id = Provider::InternalId>;
 
     /// The processor used during the delete-search phase.
     type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
@@ -796,9 +1114,10 @@ where
 
     /// The type of the search strategy to use for graph traversal.
     type SearchStrategy: for<'a> SearchStrategy<
+            'a,
             Provider,
             Self::DeleteElement<'a>,
-            SearchAccessor<'a> = Self::DeleteSearchAccessor<'a>,
+            SearchAccessor = Self::DeleteSearchAccessor<'a>,
         >;
 
     /// Construct the prune strategy object.
@@ -819,259 +1138,41 @@ where
     ) -> impl Future<Output = Result<Self::DeleteElementGuard, Self::DeleteElementError>> + Send;
 }
 
-/// Provides asynchronous access to an iterator over vector IDs.
-///
-/// This trait defines a method to asynchronously retrieve an iterator over vector IDs.
-///
-/// # Type Parameters
-///
-/// - `I`: The iterator type returned by the accessor. It must implement `Iterator` with items of type implementing `VectorId`.
-///
-/// # Errors
-///
-/// Returns an [`ANNError`] if the iterator cannot be retrieved successfully.
-pub trait IdIterator<I>
-where
-    I: Iterator<Item: VectorId>,
-{
-    fn id_iterator(&mut self) -> impl std::future::Future<Output = Result<I, ANNError>>;
-}
-
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    use diskann_vector::PreprocessedDistanceFunction;
-    use futures_util::future;
-
     use super::*;
-    use crate::{
-        ANNResult, neighbor,
-        provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
-    };
 
-    // A really simple provider that just holds floats and uses the absolute value for its
-    // distances.
-    struct SimpleProvider {
-        items: Vec<f32>,
-    }
+    #[test]
+    fn decision() {
+        // into_inner extracts regardless of variant
+        assert_eq!(Decision::accept(7).into_inner(), 7);
+        assert_eq!(Decision::reject(7).into_inner(), 7);
 
-    #[derive(Default, Clone)]
-    struct CountGetVector {
-        count: Arc<AtomicUsize>,
-    }
-    impl ExecutionContext for CountGetVector {}
+        // is_accept / is_reject
+        assert!(Decision::accept(()).is_accept());
+        assert!(!Decision::accept(()).is_reject());
+        assert!(Decision::reject(()).is_reject());
+        assert!(!Decision::reject(()).is_accept());
 
-    impl CountGetVector {
-        fn count(&self) -> usize {
-            self.count.load(Ordering::Relaxed)
-        }
+        // map preserves variant
+        let a = Decision::accept(3).map(|x| x * 2);
+        assert!(a.is_accept());
+        assert_eq!(a.into_inner(), 6);
+        let r = Decision::reject(3).map(|x| x * 2);
+        assert!(r.is_reject());
+        assert_eq!(r.into_inner(), 6);
 
-        fn clear(&self) {
-            self.count.store(0, Ordering::Relaxed)
-        }
-    }
+        // as_ref borrows without consuming
+        let d = Decision::accept(vec![1, 2, 3]);
+        assert_eq!(d.as_ref().into_inner(), &[1, 2, 3]);
 
-    impl DataProvider for SimpleProvider {
-        type Context = CountGetVector;
-        type InternalId = u32;
-        type ExternalId = u32;
-        type Error = ANNError;
-        type Guard = crate::provider::NoopGuard<u32>;
-
-        /// Translate an external id to its corresponding internal id.
-        fn to_internal_id(
-            &self,
-            _context: &CountGetVector,
-            gid: &Self::ExternalId,
-        ) -> Result<Self::InternalId, Self::Error> {
-            Ok(*gid)
-        }
-
-        /// Translate an internal id to its corresponding external id.
-        fn to_external_id(
-            &self,
-            _context: &CountGetVector,
-            id: Self::InternalId,
-        ) -> Result<Self::ExternalId, Self::Error> {
-            Ok(id)
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct Retriever<'a> {
-        provider: &'a SimpleProvider,
-        count: &'a CountGetVector,
-    }
-
-    impl SearchExt for Retriever<'_> {
-        async fn starting_points(&self) -> ANNResult<Vec<u32>> {
-            Ok(vec![0])
-        }
-    }
-
-    impl<'a> Retriever<'a> {
-        fn new(provider: &'a SimpleProvider, count: &'a CountGetVector) -> Self {
-            Self { provider, count }
-        }
-    }
-
-    impl HasId for Retriever<'_> {
-        type Id = u32;
-    }
-
-    impl Accessor for Retriever<'_> {
-        type Element<'a>
-            = f32
-        where
-            Self: 'a;
-        type ElementRef<'a> = f32;
-
-        type GetError = ANNError;
-        fn get_element(
-            &mut self,
-            id: Self::Id,
-        ) -> impl std::future::Future<Output = Result<Self::Element<'_>, Self::GetError>> + Send
-        {
-            let result = match self.provider.items.get(id as usize) {
-                Some(v) => {
-                    self.count.count.fetch_add(1, Ordering::Relaxed);
-                    Ok(*v)
-                }
-                None => panic!("invalid id: {}", id),
-            };
-            async move { result }
-        }
-    }
-
-    impl NeighborAccessor for Retriever<'_> {
-        fn get_neighbors(
-            self,
-            _id: Self::Id,
-            neighbors: &mut AdjacencyList<Self::Id>,
-        ) -> impl Future<Output = ANNResult<Self>> + Send {
-            neighbors.clear();
-            future::ok(self)
-        }
-    }
-
-    struct QueryComputer;
-    impl PreprocessedDistanceFunction<f32, f32> for QueryComputer {
-        fn evaluate_similarity(&self, _changing: f32) -> f32 {
-            panic!("this method should not be called")
-        }
-    }
-
-    impl BuildQueryComputer<f32> for Retriever<'_> {
-        type QueryComputerError = ANNError;
-        type QueryComputer = QueryComputer;
-        fn build_query_computer(&self, _from: f32) -> Result<QueryComputer, ANNError> {
-            Ok(QueryComputer)
-        }
-    }
-
-    impl ExpandBeam<f32> for Retriever<'_> {}
-
-    // This strategy explicitly does not define `post_process` so we can test the provided
-    // implementation.
-    struct Strategy;
-
-    impl SearchStrategy<SimpleProvider, f32> for Strategy {
-        type QueryComputer = QueryComputer;
-        type SearchAccessorError = ANNError;
-        type SearchAccessor<'a> = Retriever<'a>;
-
-        fn search_accessor<'a>(
-            &'a self,
-            provider: &'a SimpleProvider,
-            context: &'a CountGetVector,
-        ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-            Ok(Retriever::new(provider, context))
-        }
-    }
-
-    impl DefaultPostProcessor<SimpleProvider, f32> for Strategy {
-        default_post_processor!(CopyIds);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_default_post_process() {
-        let ctx = CountGetVector::default();
-        let strategy = Strategy;
-
-        let num_points: usize = 100;
-        let provider = SimpleProvider {
-            items: (0..num_points).map(|i| i as f32).collect(),
-        };
-
-        assert_eq!(provider.to_internal_id(&ctx, &10).unwrap(), 10);
-        assert_eq!(provider.to_external_id(&ctx, 10).unwrap(), 10);
-
-        let mut accessor = strategy.search_accessor(&provider, &ctx).unwrap();
-        assert_eq!(accessor.starting_points().await.unwrap().as_slice(), &[0]);
-        for i in 0..num_points {
-            assert_eq!(accessor.get_element(i as u32).await.unwrap(), i as f32);
-        }
-
-        // Check dummy get_neighbors implmeentation for code coverage
-        let mut neighbors = AdjacencyList::new();
-        accessor
-            .delegate_neighbor()
-            .get_neighbors(0, &mut neighbors)
-            .await
-            .unwrap();
-        assert_eq!(neighbors.len(), 0);
-
-        // Check that the correct number of reads were emitted.
-        assert_eq!(ctx.count(), num_points);
-        ctx.clear();
-
-        let query = 11.5;
-        let computer = accessor.build_query_computer(query).unwrap();
-
-        for input_len in 0..10 {
-            let input: Vec<_> = (0..input_len)
-                .map(|i| Neighbor::<u32>::new(i as u32, i as f32))
-                .collect();
-            for output_len in 0..10 {
-                let mut output = vec![Neighbor::<u32>::default(); output_len];
-
-                let count = strategy
-                    .default_post_processor()
-                    .post_process(
-                        &mut accessor,
-                        query,
-                        &computer,
-                        input.iter().copied(),
-                        &mut neighbor::BackInserter::new(output.as_mut_slice()),
-                    )
-                    .await
-                    .unwrap();
-
-                assert_eq!(count, input_len.min(output_len));
-
-                // Check that the in-range values were properly copied.
-                for (i, n) in output.iter().take(count).enumerate() {
-                    assert_eq!(i, n.id as usize);
-                    assert_eq!(i as f32, n.distance);
-                }
-
-                // Check that out-of-range values were untouched.
-                for n in output.iter().skip(count) {
-                    assert_eq!(n.id, 0);
-                    assert_eq!(n.distance, 0.0);
-                }
-            }
-        }
-
-        // Ensure that no reads were emitted.
-        assert_eq!(ctx.count(), 0);
+        // as_mut allows in-place mutation
+        let mut d = Decision::reject(10);
+        *d.as_mut().into_inner() = 20;
+        assert_eq!(d.into_inner(), 20);
     }
 }

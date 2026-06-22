@@ -37,7 +37,7 @@ jobs:
   # A/A benchmark: run main vs main to detect environment noise.
   aa-benchmark:
     name: A/A - ${{ matrix.dataset }}
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest, "JobId=aa-benchmark-${{ github.run_id }}-${{ github.run_number }}-${{ github.run_attempt }}-${{ strategy.job-index }}" ]
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -51,6 +51,20 @@ jobs:
             archive: openai-100K.tar.gz
 
     steps:
+      # Kept inline because this must run before checkout, but local action.yml
+      # files are only available after checkout.
+      - name: Mount high-speed NVMe SSD
+        shell: bash
+        run: |
+          sudo mkdir -p /mnt/nvme
+          sudo lsblk
+          sudo mkfs.ext4 /dev/nvme0n1
+          sudo mount /dev/nvme0n1 /mnt/nvme
+          sudo chmod 777 /mnt/nvme
+          mkdir -p /mnt/nvme/diskann_rust /mnt/nvme/baseline
+          ln -s /mnt/nvme/diskann_rust diskann_rust
+          ln -s /mnt/nvme/baseline baseline
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:

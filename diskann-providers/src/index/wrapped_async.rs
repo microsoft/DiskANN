@@ -11,15 +11,16 @@ use diskann::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
             Batch, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
-            MultiInsertStrategy, PruneStrategy, SearchStrategy,
+            MultiInsertStrategy, PruneStrategy, SearchAccessor, SearchStrategy,
         },
-        index::{DegreeStats, PagedSearchState, PartitionedNeighbors, SearchState},
+        index::{DegreeStats, PartitionedNeighbors},
         search_output_buffer,
     },
     neighbor::Neighbor,
-    provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
+    provider::{DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement},
     utils::ONE,
 };
+use diskann_utils::Reborrow;
 
 use crate::storage::{LoadWith, StorageReadProvider};
 
@@ -191,15 +192,15 @@ where
         })
     }
 
-    pub fn insert<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    pub fn insert<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         id: &DP::ExternalId,
         vector: T,
     ) -> ANNResult<()>
     where
-        S: InsertStrategy<DP, T>,
+        S: InsertStrategy<'a, DP, T>,
         DP: SetElement<T>,
         T: Copy + Send,
     {
@@ -232,7 +233,7 @@ where
     ) -> ANNResult<bool>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -242,7 +243,7 @@ where
 
     pub fn drop_adj_list<NA>(&self, accessor: &mut NA, vector_id: DP::InternalId) -> ANNResult<()>
     where
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.drop_adj_list(accessor, vector_id))
@@ -257,7 +258,7 @@ where
     ) -> ANNResult<PartitionedNeighbors<DP::InternalId>>
     where
         DP: Delete,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle.block_on(
             self.inner
@@ -295,7 +296,7 @@ where
     ) -> ANNResult<ConsolidateKind>
     where
         DP: Delete,
-        NA: AsNeighborMut<Id = DP::InternalId>,
+        NA: NeighborAccessorMut<Id = DP::InternalId>,
     {
         self.handle.block_on(self.inner.drop_deleted_neighbors(
             context,
@@ -319,17 +320,17 @@ where
             .block_on(self.inner.consolidate_vector(strategy, context, vector_id))
     }
 
-    pub fn search<S, T, O, OB, P>(
-        &self,
+    pub fn search<'a, S, T, O, OB, P>(
+        &'a self,
         search_params: P,
-        strategy: &S,
-        context: &DP::Context,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         output: &mut OB,
     ) -> ANNResult<P::Output>
     where
-        P: graph::search::Search<DP, S, T>,
-        S: DefaultSearchStrategy<DP, T, O>,
+        P: graph::search::Search<'a, DP, S, T>,
+        S: DefaultSearchStrategy<'a, DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
     {
@@ -339,59 +340,148 @@ where
         )
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn start_paged_search<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    /// Begin a paged search over the index (synchronous wrapper).
+    ///
+    /// Returns a [`PagedSearch`] handle. See
+    /// [`PagedSearch::next_page`] for retrieving results.
+    pub fn paged_search<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
+        T: Copy + Send + 'a,
     {
-        self.handle.block_on(
-            self.inner
-                .start_paged_search(strategy, context, query, l_value),
-        )
+        let inner = self
+            .handle
+            .block_on(self.inner.paged_search(strategy, context, query, l_value))?;
+        Ok(PagedSearch {
+            handle: self.handle.clone(),
+            inner,
+        })
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn start_paged_search_with_init_ids<S, T>(
-        &self,
-        strategy: S,
-        context: &DP::Context,
+    /// Begin a paged search with explicit initial seed IDs (synchronous wrapper).
+    pub fn paged_search_with_init_ids<'a, S, T>(
+        &'a self,
+        strategy: &'a S,
+        context: &'a DP::Context,
         query: T,
         l_value: usize,
-        init_ids: Option<&[DP::InternalId]>,
-    ) -> ANNResult<PagedSearchState<DP, S, S::QueryComputer>>
+        init_ids: Option<&'a [DP::InternalId]>,
+    ) -> ANNResult<PagedSearch<'a, DP, S::SearchAccessor>>
     where
-        S: SearchStrategy<DP, T> + 'static,
-        T: Copy + Send,
+        S: SearchStrategy<'a, DP, T, SearchAccessor: SearchAccessor> + 'static,
+        T: Copy + Send + 'a,
     {
-        self.handle.block_on(
+        let inner = self.handle.block_on(
             self.inner
-                .start_paged_search_with_init_ids(strategy, context, query, l_value, init_ids),
-        )
+                .paged_search_with_init_ids(strategy, context, query, l_value, init_ids),
+        )?;
+        Ok(PagedSearch {
+            handle: self.handle.clone(),
+            inner,
+        })
     }
 
-    pub fn next_search_results<S, T>(
+    /// Begin a synchronous paged search over the index.
+    ///
+    /// This will construct a [`noawait::PagedSearch`] and initialize search with the
+    /// providers start points. Pages can be retrieved with [`noawait::PagedSearch::next`].
+    ///
+    /// **Caution**: This method should only be used if is known that all functions reachable
+    /// via the implementation of [`SearchStrategy`] are known to be synchronous and never
+    /// truly await. This allows [`noawait::PagedSearch`] to be much more efficient.
+    pub fn paged_search_no_await<S, T>(
         &self,
-        context: &DP::Context,
-        search_state: &mut SearchState<DP::InternalId, (S, S::QueryComputer)>,
-        k: usize,
-        result_output: &mut [Neighbor<DP::InternalId>],
-    ) -> ANNResult<usize>
+        strategy: S,
+        context: DP::Context,
+        query: T,
+        l_value: usize,
+    ) -> ANNResult<noawait::PagedSearch<DP::InternalId>>
     where
-        S: SearchStrategy<DP, T>,
+        T: for<'a> Reborrow<'a, Target: Copy + Send> + 'static,
+        S: for<'a> SearchStrategy<
+                'a,
+                DP,
+                <T as Reborrow<'a>>::Target,
+                SearchAccessor: SearchAccessor,
+            > + 'static,
     {
-        self.handle.block_on(self.inner.next_search_results(
-            context,
-            search_state,
-            k,
-            result_output,
-        ))
+        // It would be nice if we could simply forward this to a `noawait::PagedSearch::new`
+        // method. However, the trait bound on `SearchStrategy` is *just* complicated enough
+        // that Rust cannot project the necessary bounds.
+        //
+        // Instead, we inline the implementation here.
+        //
+        // Under the assumption that the implementation of [`graph::search::PagedSearch`]'s
+        // implementations are fully synchronous, we can directly poll this task instead
+        // of going through a runtime since we (theoretically) control the only suspension
+        // point.
+        //
+        // Doing so allows stepping the task state machine to be done with a single function
+        // call to `Future::poll`.
+        //
+        // Obviously, if the "noawait" assumption is broken, then the inner async job may
+        // yield before our control point, but we can detect this situation since no output
+        // will be generated on the output channel.
+        //
+        // We rely on `Drop` to clean up the paged search resources.
+
+        let (input, output) = noawait::channel::<DP::InternalId>();
+        let input_clone = input.clone();
+        let output_clone = output.clone();
+
+        let index = self.inner.clone();
+
+        // Create the search task.
+        let mut searcher: std::pin::Pin<Box<dyn Future<Output = ANNError>>> =
+            Box::pin(async move {
+                // The assumption of `noawait` is that this call will always resolve to
+                // `Poll::Ready`.
+                let mut state = match index
+                    .paged_search(&strategy, &context, query.reborrow(), l_value)
+                    .await
+                {
+                    Ok(state) => state,
+                    Err(err) => return err,
+                };
+
+                loop {
+                    // This is the await point that pauses the future.
+                    //
+                    // Under the "noawait" assumption, this should be the only point where
+                    // this future ever yields `Pending` and is where we expect the future
+                    // to stop every time we poll it.
+                    futures_util::pending!();
+
+                    // We control the invocation of poll and should always ensure that
+                    // input is available.
+                    let k_value = match input_clone.take() {
+                        Some(value) => value,
+                        None => return noawait::InternalInvariantViolated::MissingInput.into(),
+                    };
+
+                    // Step paged search and propagate any errors.
+                    let page = match state.next_page(k_value).await {
+                        Ok(page) => page,
+                        Err(err) => return err,
+                    };
+
+                    // Send output to the caller.
+                    output_clone.replace(Some(page));
+                }
+            });
+
+        // Drive the inner future one step to initialize paged search.
+        if let Some(err) = noawait::step(searcher.as_mut()) {
+            return Err(err);
+        }
+
+        Ok(noawait::PagedSearch::from_raw(input, output, searcher))
     }
 
     pub fn count_reachable_nodes<NA>(
@@ -400,7 +490,7 @@ where
         accessor: &mut NA,
     ) -> ANNResult<usize>
     where
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.count_reachable_nodes(start_points, accessor))
@@ -409,10 +499,167 @@ where
     pub fn get_degree_stats<NA, Itr>(&self, accessor: &mut NA, itr: Itr) -> ANNResult<DegreeStats>
     where
         Itr: IntoIterator<Item = DP::InternalId, IntoIter: Send> + Send,
-        NA: AsNeighbor<Id = DP::InternalId>,
+        NA: NeighborAccessor<Id = DP::InternalId>,
     {
         self.handle
             .block_on(self.inner.get_degree_stats(accessor, itr))
+    }
+}
+
+/// Synchronous wrapper around [`graph::search::PagedSearch`] that owns a tokio runtime handle.
+///
+/// Created by [`DiskANNIndex::paged_search`]. Each call to [`next_page`](Self::next_page)
+/// blocks the current thread to drive the underlying async search forward.
+pub struct PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
+    handle: tokio::runtime::Handle,
+    inner: graph::search::PagedSearch<'a, DP, A>,
+}
+
+impl<'a, DP, A> PagedSearch<'a, DP, A>
+where
+    DP: DataProvider,
+    A: SearchAccessor<Id = DP::InternalId> + 'a,
+{
+    /// Returns the next page of at most `k` nearest-neighbor results.
+    ///
+    /// Blocks the current thread. Returns an empty `Vec` when the search is exhausted.
+    pub fn next_page(&mut self, k: usize) -> ANNResult<Vec<Neighbor<DP::InternalId>>> {
+        self.handle.block_on(self.inner.next_page(k))
+    }
+}
+
+pub mod noawait {
+    //! Implementations of a synchronous wrapper around [`diskann::graph::DiskANNIndex`] that
+    //! assume the [`Accessor`] and associated implementations never truly `await` and are
+    //! in fact synchronous.
+    //!
+    //! With this assumption, we can perform lighter-weight communication with the index
+    //! by assuming that each `poll` returns ready.
+    //!
+    //! **Do not use this if your index ever actually await**: Doing so will lead to deadlock!
+
+    use super::*;
+
+    use std::{
+        cell::RefCell,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll, Waker},
+    };
+
+    use diskann::{ANNErrorKind, utils::VectorId};
+    use thiserror::Error;
+
+    type Input = Rc<RefCell<Option<usize>>>;
+    type Output<I> = Rc<RefCell<Option<Vec<Neighbor<I>>>>>;
+
+    pub(super) fn channel<I>() -> (Input, Output<I>)
+    where
+        I: VectorId,
+    {
+        let input = Rc::new(RefCell::new(None));
+        let output = Rc::new(RefCell::new(None));
+        (input, output)
+    }
+
+    pub(super) fn step<I>(fut: Pin<&mut dyn Future<Output = I>>) -> Option<I> {
+        let mut cx = Context::from_waker(Waker::noop());
+        match fut.poll(&mut cx) {
+            Poll::Ready(v) => Some(v),
+            Poll::Pending => None,
+        }
+    }
+
+    /// A synchronous wrapper for [`graph::search::PagedSearch`]
+    ///
+    /// See: [`super::DiskANNIndex::paged_search_no_await`].
+    pub struct PagedSearch<I: VectorId> {
+        // The `input` is wrapped in an `Option` so we can fuse `searcher` if it exits
+        // with an error. Polling a completed future risk panicking.
+        //
+        // We construct `searcher` to pull its next-page size from this input.
+        input: Option<Input>,
+
+        // Output yielded from polling `searcher`.
+        output: Output<I>,
+
+        // We shut down the future by running `Drop`. Thus, the only way it can actually
+        // finish is if it returns with an error.
+        searcher: Pin<Box<dyn Future<Output = ANNError>>>,
+    }
+
+    impl<I> PagedSearch<I>
+    where
+        I: VectorId,
+    {
+        /// Construct a `PagedSearch` from components.
+        ///
+        /// Expects `Input` and `Output` to be properly wired into `searcher`.
+        pub(super) fn from_raw(
+            input: Input,
+            output: Output<I>,
+            searcher: Pin<Box<dyn Future<Output = ANNError>>>,
+        ) -> Self {
+            Self {
+                input: Some(input),
+                output,
+                searcher,
+            }
+        }
+
+        /// Retrieve the next results from paged search, returning any errors.
+        ///
+        /// If [`next`](Self::next) previously returned with an error, it will continue
+        /// to do so.
+        pub fn next(&mut self, k: usize) -> ANNResult<Vec<Neighbor<I>>> {
+            // Prepare input. We use the presence of the input channel to decide whether
+            // or not it is safe to poll search task.
+            match self.input.as_ref() {
+                Some(input) => input.replace(Some(k)),
+                None => {
+                    return Err(ANNError::message(
+                        ANNErrorKind::Opaque,
+                        "paged searcher errored and is no longer runnable",
+                    ));
+                }
+            };
+
+            // Progress the future.
+            //
+            // The only reason to return return `Some` is if the inner future aborts with
+            // an error. Here, we fuse the searcher to prevent panics on re-enters and
+            // forward the error.
+            if let Some(result) = step(self.searcher.as_mut()) {
+                self.input = None;
+                return Err(result);
+            }
+
+            // Profit!
+            match self.output.take() {
+                Some(v) => Ok(v),
+                None => Err(InternalInvariantViolated::MissingOutput.into()),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Error)]
+    pub(super) enum InternalInvariantViolated {
+        #[error("INTERNAL: input channel was not configured")]
+        MissingInput,
+        #[error("noawait contract violated: future suspended before expected yield point")]
+        MissingOutput,
+    }
+
+    impl From<InternalInvariantViolated> for ANNError {
+        #[track_caller]
+        #[cold]
+        fn from(err: InternalInvariantViolated) -> Self {
+            Self::new(ANNErrorKind::Opaque, err)
+        }
     }
 }
 
@@ -485,7 +732,7 @@ mod tests {
         let storage = VirtualStorageProvider::new_memory();
         let ctx = DefaultContext;
         for (i, v) in train_data.row_iter().enumerate() {
-            index.insert(FullPrecision, &ctx, &(i as u32), v).unwrap();
+            index.insert(&FullPrecision, &ctx, &(i as u32), v).unwrap();
         }
 
         let save_metadata = AsyncIndexMetadata::new(save_path.to_string());
@@ -537,5 +784,121 @@ mod tests {
         // The query is itself in the dataset, so the nearest neighbor must be at distance 0.
         assert_eq!(ids[0], 0);
         assert_eq!(distances[0], 0.0);
+    }
+
+    fn wrapped_test_provider() -> DiskANNIndex<graph::test::provider::Provider> {
+        let provider =
+            graph::test::provider::Provider::grid(graph::test::synthetic::Grid::One, 100).unwrap();
+
+        DiskANNIndex::new_with_current_thread_runtime(
+            graph::config::Builder::new(
+                provider.max_degree(),
+                diskann::graph::config::MaxDegree::same(),
+                100,
+                (Metric::L2).into(),
+            )
+            .build()
+            .unwrap(),
+            provider,
+        )
+    }
+
+    // Test the `noawait` paged searcher.
+    //
+    // This relies on the test-provider being no-await.
+    #[test]
+    fn test_paged_search_noawait() {
+        let index = wrapped_test_provider();
+
+        for page_size in [1, 5, 9, 12] {
+            let mut paged = index
+                .paged_search_no_await::<_, Vec<f32>>(
+                    graph::test::provider::Strategy::new(),
+                    graph::test::provider::Context::new(),
+                    vec![0.0],
+                    10.max(page_size),
+                )
+                .unwrap();
+
+            let mut i = 0u32;
+            loop {
+                let v = paged.next(page_size).unwrap();
+                assert!(
+                    v.len() <= page_size,
+                    "candidates returned ({}) exceeded page size ({})",
+                    v.len(),
+                    page_size,
+                );
+
+                if v.is_empty() {
+                    break;
+                }
+
+                for neighbor in v {
+                    assert_ne!(
+                        neighbor.id,
+                        u32::MAX,
+                        "paged search should not return start point",
+                    );
+                    assert_eq!(
+                        neighbor.id, i,
+                        "monotonicity should at least hold for the 1d grid"
+                    );
+                    assert_eq!(
+                        neighbor.distance,
+                        (i as f32) * (i as f32),
+                        "distance was computed incorrectly!",
+                    );
+                    i += 1;
+                }
+            }
+
+            // Search is exhausted - make sure that subsequent searches yield empty vectors.
+            let exhausted = paged.next(5).unwrap();
+            assert!(
+                exhausted.is_empty(),
+                "expected an empty vector when exhausted - instead got {:?}",
+                exhausted
+            );
+        }
+    }
+
+    // Verify that the searcher is properly fused when it returns with an error.
+    #[test]
+    fn test_paged_search_noawait_fuse() {
+        let index = wrapped_test_provider();
+
+        // To do this test, we request more neighbors than the search-L, which triggers
+        // an inner error.
+        let search_l = 10;
+        let bigger_than_search_l = 20;
+
+        let mut paged = index
+            .paged_search_no_await::<_, Vec<f32>>(
+                graph::test::provider::Strategy::new(),
+                graph::test::provider::Context::new(),
+                vec![0.0],
+                search_l,
+            )
+            .unwrap();
+
+        let expected = "search_param_l";
+        let err = paged.next(bigger_than_search_l).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(expected),
+            "expected error message to contain \"{}\" - instead got\n\n{}",
+            expected,
+            msg,
+        );
+
+        // Now that we've yielded an error - the next time we request pages should also error.
+        let err = paged.next(10).unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("paged searcher errored"),
+            "unexpected error message:\n\n{}",
+            err_msg
+        );
     }
 }

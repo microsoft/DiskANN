@@ -53,7 +53,6 @@ impl TableDeleteProviderAsync {
         self.delete_table[slot].fetch_or(mask, Ordering::AcqRel);
     }
 
-    // private method for now, but may need to become public
     pub(crate) fn undelete(&self, vector_id: usize) {
         assert!(vector_id < self.max_size);
         let slot = vector_id / 32;
@@ -66,45 +65,6 @@ impl TableDeleteProviderAsync {
         for i in 0..self.max_size {
             self.undelete(i);
         }
-    }
-
-    /// Serialize the delete bitmap to bytes (little-endian u32 values)
-    #[cfg(feature = "bf_tree")]
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(std::mem::size_of_val(self.delete_table.as_slice()));
-        for atomic_val in &self.delete_table {
-            let val = atomic_val.load(Ordering::Relaxed);
-            bytes.extend_from_slice(&val.to_le_bytes());
-        }
-        bytes
-    }
-
-    /// Create a TableDeleteProviderAsync from serialized bytes
-    #[cfg(feature = "bf_tree")]
-    pub(crate) fn from_bytes(bytes: &[u8], max_size: usize) -> Result<Self, String> {
-        let expected_len = max_size.div_ceil(32);
-
-        let (chunks, remainder) = bytes.as_chunks::<{ std::mem::size_of::<u32>() }>();
-        if chunks.len() != expected_len {
-            return Err(format!(
-                "Delete bitmap size mismatch: expected {} u32 values, got {}",
-                expected_len,
-                chunks.len()
-            ));
-        }
-        if !remainder.is_empty() {
-            return Err("Length of bytes is not a multiple of 4".to_string());
-        }
-
-        let delete_table = chunks
-            .iter()
-            .map(|chunk| AtomicU32::new(u32::from_le_bytes(*chunk)))
-            .collect();
-
-        Ok(TableDeleteProviderAsync {
-            delete_table,
-            max_size,
-        })
     }
 
     #[cfg(test)]
@@ -233,28 +193,5 @@ mod tests {
             delete_provider.delete(*id);
         }
         delete_provider
-    }
-
-    #[cfg(feature = "bf_tree")]
-    #[test]
-    fn test_save_load_roundtrip() {
-        let original = get_test_delete_table_provider(50, &[0, 5, 20, 34, 48]);
-        let bytes = original.to_bytes();
-        let loaded = TableDeleteProviderAsync::from_bytes(&bytes, 50).unwrap();
-
-        assert_eq!(original.count(), loaded.count());
-        for i in 0..50 {
-            assert_eq!(original.is_deleted(i), loaded.is_deleted(i));
-        }
-    }
-
-    #[cfg(feature = "bf_tree")]
-    #[test]
-    fn test_from_bytes_size_mismatch() {
-        // max_size=50 requires ceil(50/32) = 2 u32 values = 8 bytes
-        // Provide wrong number of bytes (e.g., 4 bytes = 1 u32)
-        let bytes = vec![0u8; 4]; // Only 1 u32 worth of bytes
-        let result = TableDeleteProviderAsync::from_bytes(&bytes, 50);
-        assert!(result.is_err());
     }
 }

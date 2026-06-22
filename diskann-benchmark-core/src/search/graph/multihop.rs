@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNResult,
-    graph::{self, glue},
+    graph::{self, ext::labeled, glue},
     provider,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
@@ -32,7 +32,7 @@ where
     index: Arc<graph::DiskANNIndex<DP>>,
     queries: Arc<Matrix<T>>,
     strategy: Strategy<S>,
-    labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+    labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
 }
 
 impl<DP, T, S> MultiHop<DP, T, S>
@@ -62,7 +62,7 @@ where
         index: Arc<graph::DiskANNIndex<DP>>,
         queries: Arc<Matrix<T>>,
         strategy: Strategy<S>,
-        labels: Arc<[Arc<dyn graph::index::QueryLabelProvider<DP::InternalId>>]>,
+        labels: Arc<[Arc<dyn labeled::QueryLabelProvider<DP::InternalId>>]>,
     ) -> anyhow::Result<Arc<Self>> {
         strategy.length_compatible(queries.nrows())?;
 
@@ -86,7 +86,14 @@ where
 impl<DP, T, S> Search for MultiHop<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: for<'a> glue::DefaultSearchStrategy<DP, &'a [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: for<'a> glue::DefaultSearchStrategy<
+            'a,
+            DP,
+            &'a [T],
+            DP::ExternalId,
+            SearchAccessor: glue::SearchAccessor,
+        > + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -111,12 +118,14 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let multihop_search = graph::search::MultihopSearch::new(*parameters, &*self.labels[index]);
+        let multihop_search = graph::search::MultihopFilterSearch::new(*parameters);
+        let strategy =
+            labeled::Filtered::new(self.strategy.get(index)?.clone(), &*self.labels[index]);
         let stats = self
             .index
             .search(
                 multihop_search,
-                self.strategy.get(index)?,
+                &strategy,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -140,13 +149,14 @@ mod tests {
 
     use super::*;
 
-    use diskann::graph::{index::QueryLabelProvider, test::provider};
+    use crate::recall::GroundTruthMode;
+    use diskann::graph::{ext::labeled::QueryLabelProvider, test::provider};
 
     // A simple [`QueryLabelProvider`] that rejects odd indices.
     #[derive(Debug)]
     struct NoOdds;
 
-    impl graph::index::QueryLabelProvider<u32> for NoOdds {
+    impl labeled::QueryLabelProvider<u32> for NoOdds {
         fn is_match(&self, id: u32) -> bool {
             id.is_multiple_of(2)
         }
@@ -224,7 +234,12 @@ mod tests {
         let all = search::search_all(
             multihop,
             parameters,
-            search::graph::knn::Aggregator::new(rows, recall_k, recall_n),
+            search::graph::knn::Aggregator::new(
+                rows,
+                recall_k,
+                recall_n,
+                GroundTruthMode::Flexible,
+            ),
         )
         .unwrap();
 

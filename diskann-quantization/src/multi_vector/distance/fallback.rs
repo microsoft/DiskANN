@@ -225,7 +225,7 @@ mod tests {
             let doc = make_doc(&[1.0, 1.0], 1, 2);
 
             let mut scores = vec![0.0f32; 3]; // Wrong size
-            let r = MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+            let r = MaxSim::new(&mut scores).evaluate(query, doc);
             assert!(r.is_err());
         }
 
@@ -251,7 +251,7 @@ mod tests {
 
                 // Test MaxSim
                 let mut scores = vec![0.0f32; *nq];
-                let r = MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+                let r = MaxSim::new(&mut scores).evaluate(query, doc);
                 assert!(r.is_ok());
 
                 let expected_scores: Vec<f32> = query

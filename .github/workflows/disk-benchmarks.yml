@@ -54,7 +54,7 @@ jobs:
   # Macro benchmark: compare current branch against baseline
   macro-benchmark:
     name: Macro Benchmark - ${{ matrix.dataset }}
-    runs-on: ubuntu-latest
+    runs-on: [ self-hosted, 1ES.Pool=diskann-github, ubuntu-latest, "JobId=macro-benchmark-${{ github.run_id }}-${{ github.run_number }}-${{ github.run_attempt }}-${{ strategy.job-index }}" ]
     # TODO: For production benchmarks, consider using a self-hosted runner with:
     # - NVMe storage for consistent I/O performance
     # - CPU pinning (taskset) for reduced variance
@@ -74,6 +74,20 @@ jobs:
             data_dir: OpenAIArXiv
 
     steps:
+      # Kept inline because this must run before checkout, but local action.yml
+      # files are only available after checkout.
+      - name: Mount high-speed NVMe SSD
+        shell: bash
+        run: |
+          sudo mkdir -p /mnt/nvme
+          sudo lsblk
+          sudo mkfs.ext4 /dev/nvme0n1
+          sudo mount /dev/nvme0n1 /mnt/nvme
+          sudo chmod 777 /mnt/nvme
+          mkdir -p /mnt/nvme/diskann_rust /mnt/nvme/baseline
+          ln -s /mnt/nvme/diskann_rust diskann_rust
+          ln -s /mnt/nvme/baseline baseline
+
       - name: Checkout current branch
         uses: actions/checkout@v4
         with:

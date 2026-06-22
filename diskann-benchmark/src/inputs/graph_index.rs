@@ -11,13 +11,11 @@ use diskann::{
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
-use diskann_benchmark_runner::{
-    files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
-};
+use diskann_benchmark_runner::{files::InputFile, utils::datatype::DataType, Checker};
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
+        graph::provider::{async_::inmem::DefaultProviderParameters, DeterminantDiversityParams},
     },
     utils::load_metadata_from_file,
 };
@@ -25,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    inputs::{self, as_input, save_and_load, Example},
+    inputs::{self, as_input, save_and_load, write_field, Example, PRINT_WIDTH},
     utils::SimilarityMeasure,
 };
 
@@ -39,17 +37,6 @@ as_input!(IndexSQOperation);
 as_input!(SphericalQuantBuild);
 as_input!(DynamicIndexRun);
 
-pub(super) fn register_inputs(
-    registry: &mut diskann_benchmark_runner::registry::Inputs,
-) -> anyhow::Result<()> {
-    registry.register::<IndexOperation>()?;
-    registry.register::<IndexPQOperation>()?;
-    registry.register::<IndexSQOperation>()?;
-    registry.register::<SphericalQuantBuild>()?;
-    registry.register::<DynamicIndexRun>()?;
-    Ok(())
-}
-
 ////////////
 // Search //
 ////////////
@@ -61,8 +48,8 @@ pub(crate) struct GraphSearch {
     pub(crate) recall_k: usize,
 }
 
-impl CheckDeserialization for GraphSearch {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl GraphSearch {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         for (i, l) in self.search_l.iter().enumerate() {
             if *l < self.search_n {
                 return Err(anyhow!(
@@ -108,9 +95,8 @@ impl GraphRangeSearch {
     }
 }
 
-impl CheckDeserialization for GraphRangeSearch {
-    // all necessary checks are carried out when Range is initialized
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl GraphRangeSearch {
+    pub(crate) fn validate(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.construct_params()
             .context("invalid range search params")?;
 
@@ -128,14 +114,16 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl CheckDeserialization for TopkSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
+impl TopkSearchPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
 
-        self.groundtruth.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -180,14 +168,12 @@ pub(crate) struct RangeSearchPhase {
     pub(crate) runs: Vec<GraphRangeSearch>,
 }
 
-impl CheckDeserialization for RangeSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.groundtruth.check_deserialization(checker)?;
+impl RangeSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -208,13 +194,11 @@ pub(crate) struct BetaSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl CheckDeserialization for BetaSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.query_predicates.check_deserialization(checker)?;
-        self.data_labels.check_deserialization(checker)?;
+impl BetaSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
 
         if self.beta <= 0.0 || self.beta > 1.0 {
             return Err(anyhow::anyhow!(
@@ -223,9 +207,9 @@ impl CheckDeserialization for BetaSearchPhase {
             ));
         }
 
-        self.groundtruth.check_deserialization(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
@@ -234,7 +218,7 @@ impl CheckDeserialization for BetaSearchPhase {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct MultiHopSearchPhase {
+pub(crate) struct MultihopFilterSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -245,21 +229,75 @@ pub(crate) struct MultiHopSearchPhase {
     pub(crate) runs: Vec<GraphSearch>,
 }
 
-impl CheckDeserialization for MultiHopSearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.queries.check_deserialization(checker)?;
-
-        self.query_predicates.check_deserialization(checker)?;
-        self.data_labels.check_deserialization(checker)?;
-
-        self.groundtruth.check_deserialization(checker)?;
+impl MultihopFilterSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
         for (i, run) in self.runs.iter_mut().enumerate() {
-            run.check_deserialization(checker)
+            run.validate(checker)
                 .with_context(|| format!("search run {}", i))?;
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct AdaptiveL {
+    pub(crate) sample_count: NonZeroUsize,
+    pub(crate) scale_factor: f64,
+}
+
+impl AdaptiveL {
+    pub(crate) fn validate(&self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        let _ = graph::search::AdaptiveL::new(self.sample_count.into(), self.scale_factor)
+            .map_err(|e| anyhow::anyhow!("failed to create adaptive L: {}", e))?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct InlineFilterSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) query_predicates: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) data_labels: InputFile,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(crate) adaptive_l: Option<AdaptiveL>,
+}
+
+impl InlineFilterSearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.queries.resolve(checker)?;
+        self.query_predicates.resolve(checker)?;
+        self.data_labels.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            adaptive_l.validate(checker)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn adaptive_l(&self) -> Result<Option<graph::search::AdaptiveL>, anyhow::Error> {
+        if let Some(ref adaptive_l) = self.adaptive_l {
+            let adaptive_l = graph::search::AdaptiveL::new(
+                adaptive_l.sample_count.into(),
+                adaptive_l.scale_factor,
+            )?; // Safe to unwrap since we've already validated the input
+            Ok(Some(adaptive_l))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -316,13 +354,50 @@ impl Example for MultiInsert {
     }
 }
 
-// This constant is used to ensure that summaries of graph-index related jobs properly have
-// their field descriptions aligned.
-const PRINT_WIDTH: usize = 18;
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TopkDeterminantDiversityPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    pub(crate) power: f32,
+    pub(crate) eta: f32,
+}
 
-macro_rules! write_field {
-    ($f:ident, $field:tt, $($expr:tt)*) => {
-        writeln!($f, "{:>PRINT_WIDTH$}: {}", $field, $($expr)*)
+impl TopkDeterminantDiversityPhase {
+    pub(crate) fn max_k(&self) -> usize {
+        self.runs.iter().map(|run| run.recall_k).max().unwrap_or(0)
+    }
+
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        DeterminantDiversityParams::new(self.power, self.eta)
+            .map_err(|e| anyhow::anyhow!("invalid determinant-diversity params: {e}"))?;
+        self.queries.resolve(checker)?;
+        self.groundtruth.resolve(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.validate(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+        Ok(())
+    }
+}
+
+impl Example for TopkDeterminantDiversityPhase {
+    fn example() -> Self {
+        Self {
+            queries: InputFile::new("path/to/queries"),
+            groundtruth: InputFile::new("path/to/groundtruth"),
+            reps: NonZeroUsize::new(1).unwrap(),
+            num_threads: vec![NonZeroUsize::new(1).unwrap()],
+            runs: vec![GraphSearch {
+                search_n: 10,
+                search_l: vec![10, 20, 30, 40],
+                recall_k: 10,
+            }],
+            power: 1.0,
+            eta: 0.5,
+        }
     }
 }
 
@@ -332,7 +407,9 @@ pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
-    TopkMultihopFilter(MultiHopSearchPhase),
+    TopkMultihopFilter(MultihopFilterSearchPhase),
+    TopkInlineFilter(InlineFilterSearchPhase),
+    TopkDeterminantDiversity(TopkDeterminantDiversityPhase),
 }
 
 #[derive(Debug, Error)]
@@ -359,6 +436,8 @@ impl SearchPhase {
             Self::Range(_) => SearchPhaseKind::Range,
             Self::TopkBetaFilter(_) => SearchPhaseKind::TopkBetaFilter,
             Self::TopkMultihopFilter(_) => SearchPhaseKind::TopkMultihopFilter,
+            Self::TopkInlineFilter(_) => SearchPhaseKind::TopkInlineFilter,
+            Self::TopkDeterminantDiversity(_) => SearchPhaseKind::TopkDeterminantDiversity,
         }
     }
 
@@ -394,7 +473,7 @@ impl SearchPhase {
 
     pub(crate) fn as_topk_multihop_filter(
         &self,
-    ) -> Result<&MultiHopSearchPhase, WrongSearchPhaseKind> {
+    ) -> Result<&MultihopFilterSearchPhase, WrongSearchPhaseKind> {
         match self {
             Self::TopkMultihopFilter(phase) => Ok(phase),
             _ => Err(WrongSearchPhaseKind::new(
@@ -403,15 +482,41 @@ impl SearchPhase {
             )),
         }
     }
+
+    pub(crate) fn as_topk_inline_filter(
+        &self,
+    ) -> Result<&InlineFilterSearchPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkInlineFilter(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkInlineFilter,
+                self.kind(),
+            )),
+        }
+    }
+
+    pub(crate) fn as_topk_determinant_diversity(
+        &self,
+    ) -> Result<&TopkDeterminantDiversityPhase, WrongSearchPhaseKind> {
+        match self {
+            Self::TopkDeterminantDiversity(phase) => Ok(phase),
+            _ => Err(WrongSearchPhaseKind::new(
+                SearchPhaseKind::TopkDeterminantDiversity,
+                self.kind(),
+            )),
+        }
+    }
 }
 
-impl CheckDeserialization for SearchPhase {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+impl SearchPhase {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
-            SearchPhase::Topk(phase) => phase.check_deserialization(checker),
-            SearchPhase::Range(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
-            SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::Topk(phase) => phase.validate(checker),
+            SearchPhase::Range(phase) => phase.validate(checker),
+            SearchPhase::TopkBetaFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkMultihopFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkInlineFilter(phase) => phase.validate(checker),
+            SearchPhase::TopkDeterminantDiversity(phase) => phase.validate(checker),
         }
     }
 }
@@ -422,6 +527,8 @@ pub(crate) enum SearchPhaseKind {
     Range,
     TopkBetaFilter,
     TopkMultihopFilter,
+    TopkInlineFilter,
+    TopkDeterminantDiversity,
 }
 
 impl SearchPhaseKind {
@@ -431,6 +538,8 @@ impl SearchPhaseKind {
             Self::Range => "range",
             Self::TopkBetaFilter => "topk-beta-filter",
             Self::TopkMultihopFilter => "topk-multihop-filter",
+            Self::TopkInlineFilter => "topk-inline-filter",
+            Self::TopkDeterminantDiversity => "topk-determinant-diversity",
         }
     }
 }
@@ -493,10 +602,8 @@ impl IndexLoad {
         write_field!(f, "Load Path", self.load_path)?;
         Ok(())
     }
-}
 
-impl CheckDeserialization for IndexLoad {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         // Check if the file exists (allowing for relative paths with respect to the current
         // directory.
         //
@@ -560,19 +667,19 @@ pub enum StartPointStrategyRef {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct IndexBuild {
-    pub(crate) data_type: DataType,
-    pub(crate) data: InputFile,
-    pub(crate) distance: SimilarityMeasure,
-    pub(crate) max_degree: usize,
-    pub(crate) l_build: usize,
-    pub(crate) insert_retry: Option<InsertRetry>,
+    data_type: DataType,
+    data: InputFile,
+    distance: SimilarityMeasure,
+    max_degree: usize,
+    l_build: usize,
+    insert_retry: Option<InsertRetry>,
     #[serde(with = "StartPointStrategyRef")]
-    pub(crate) start_point_strategy: StartPointStrategy,
-    pub(crate) alpha: f32,
-    pub(crate) backedge_ratio: f32,
-    pub(crate) num_threads: usize,
-    pub(crate) multi_insert: Option<MultiInsert>,
-    pub(crate) save_path: Option<String>,
+    start_point_strategy: StartPointStrategy,
+    alpha: f32,
+    backedge_ratio: f32,
+    num_threads: usize,
+    multi_insert: Option<MultiInsert>,
+    save_path: Option<String>,
 }
 
 impl IndexBuild {
@@ -580,7 +687,7 @@ impl IndexBuild {
         "graph-index-builder"
     }
 
-    fn exact_max_degree(&self) -> usize {
+    pub(crate) fn exact_max_degree(&self) -> usize {
         (self.max_degree as f32 * 1.3) as usize
     }
 
@@ -639,7 +746,7 @@ impl IndexBuild {
         }
     }
 
-    fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub(crate) fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_field!(f, "file", self.data.display())?;
         write_field!(f, "data_type", self.data_type)?;
         write_field!(f, "max degree", self.max_degree)?;
@@ -663,12 +770,9 @@ impl IndexBuild {
         }
         Ok(())
     }
-}
 
-impl CheckDeserialization for IndexBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.data.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.data.resolve(checker)?;
 
         // We allow overwriting of already existing save paths, since users like to do this
         // The save path must either (1) be an absolute path, in which case we check that its parent directory exists
@@ -685,6 +789,39 @@ impl CheckDeserialization for IndexBuild {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn data_type(&self) -> DataType {
+        self.data_type
+    }
+
+    pub(crate) fn l_build(&self) -> usize {
+        self.l_build
+    }
+
+    pub(crate) fn num_threads(&self) -> usize {
+        self.num_threads
+    }
+
+    #[cfg(any(feature = "spherical-quantization", feature = "bftree"))]
+    pub(crate) fn distance(&self) -> SimilarityMeasure {
+        self.distance
+    }
+
+    pub(crate) fn data(&self) -> &InputFile {
+        &self.data
+    }
+
+    pub(crate) fn start_point_strategy(&self) -> &StartPointStrategy {
+        &self.start_point_strategy
+    }
+
+    pub(crate) fn multi_insert(&self) -> Option<&MultiInsert> {
+        self.multi_insert.as_ref()
+    }
+
+    pub(crate) fn save_path(&self) -> Option<&str> {
+        self.save_path.as_deref()
     }
 }
 
@@ -731,18 +868,14 @@ impl IndexSource {
             IndexSource::Build(build) => &build.data_type,
         }
     }
-}
 
-impl CheckDeserialization for IndexSource {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
-            IndexSource::Load(load) => load.check_deserialization(checker),
-            IndexSource::Build(build) => build.check_deserialization(checker),
+            IndexSource::Load(load) => load.validate(checker),
+            IndexSource::Build(build) => build.validate(checker),
         }
     }
-}
 
-impl IndexSource {
     fn summarize_fields(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IndexSource::Load(load) => load.summarize_fields(f),
@@ -761,13 +894,10 @@ impl IndexOperation {
     pub(crate) const fn tag() -> &'static str {
         "graph-index-build"
     }
-}
 
-impl CheckDeserialization for IndexOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        // Check the validity of the input files.
-        self.source.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.source.validate(checker)?;
+        self.search_phase.validate(checker)?;
 
         Ok(())
     }
@@ -843,11 +973,11 @@ impl IndexPQOperation {
             IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
         }
     }
-}
 
-impl CheckDeserialization for IndexPQOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.index_operation.check_deserialization(checker)
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -922,10 +1052,8 @@ impl IndexSQOperation {
             IndexSource::Build(b) => Ok(b.inmem_parameters(num_points, dim)),
         }
     }
-}
 
-impl CheckDeserialization for IndexSQOperation {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
         if self.standard_deviations <= 0.0 {
             return Err(anyhow::anyhow!(
                 "scalar quantization standard deviations ({}) must be strictly positive",
@@ -933,7 +1061,9 @@ impl CheckDeserialization for IndexSQOperation {
             ));
         }
 
-        self.index_operation.check_deserialization(checker)
+        self.index_operation.validate(checker)?;
+
+        Ok(())
     }
 }
 
@@ -1005,12 +1135,10 @@ impl SphericalQuantBuild {
     ) -> DefaultProviderParameters {
         self.build.inmem_parameters(num_points, dim)
     }
-}
 
-impl CheckDeserialization for SphericalQuantBuild {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.build.validate(checker)?;
+        self.search_phase.validate(checker)?;
 
         if self.build.save_path.is_some() {
             return Err(anyhow::anyhow!(
@@ -1032,7 +1160,7 @@ impl CheckDeserialization for SphericalQuantBuild {
         }
 
         if let Some(pre_scale) = &mut self.pre_scale {
-            pre_scale.check_deserialization(checker)?;
+            pre_scale.validate(checker)?;
         }
 
         Ok(())
@@ -1127,7 +1255,10 @@ pub(crate) struct DynamicRunbookParams {
     pub(crate) gt_directory: String,
     pub(crate) ip_delete_method: InplaceDeleteMethod,
     pub(crate) ip_delete_num_to_replace: usize,
-    pub(crate) consolidate_threshold: f32,
+    /// Threshold for deferred consolidation. Required for soft-delete providers (inmem).
+    /// Hard-delete providers (bf-tree) ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) consolidate_threshold: Option<f32>,
     #[serde(skip)]
     pub(crate) resolved_gt_directory: Option<std::path::PathBuf>,
 }
@@ -1136,16 +1267,18 @@ pub(crate) struct DynamicRunbookParams {
 // 1. The runbook file can be parsed
 // 2. The dataset_name exists in the runbook
 // 3. All required ground truth files exist in gt_directory
-impl CheckDeserialization for DynamicRunbookParams {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.runbook_path.check_deserialization(checker)?;
+impl DynamicRunbookParams {
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.runbook_path.resolve(checker)?;
 
-        // Validate consolidate_threshold is greater than 0
-        if self.consolidate_threshold <= 0.0 {
-            return Err(anyhow::anyhow!(
-                "consolidate_threshold must be greater than 0, but got {}",
-                self.consolidate_threshold
-            ));
+        // Validate consolidate_threshold if provided
+        if let Some(threshold) = self.consolidate_threshold {
+            if threshold <= 0.0 {
+                return Err(anyhow::anyhow!(
+                    "consolidate_threshold must be greater than 0, but got {}",
+                    threshold
+                ));
+            }
         }
 
         // Resolve gt_directory using search directories, similar to InputFile
@@ -1212,8 +1345,19 @@ impl Example for DynamicRunbookParams {
                 l_value: 64,
             },
             ip_delete_num_to_replace: 3,
-            consolidate_threshold: 0.2,
+            consolidate_threshold: Some(0.2),
             resolved_gt_directory: None,
+        }
+    }
+}
+
+impl DynamicRunbookParams {
+    /// Example for hard-delete providers that don't use consolidation.
+    #[cfg(feature = "bftree")]
+    pub(crate) fn example_immediate() -> Self {
+        Self {
+            consolidate_threshold: None,
+            ..Self::example()
         }
     }
 }
@@ -1245,7 +1389,9 @@ impl std::fmt::Display for DynamicRunbookParams {
             }
         }
         write_field!(f, "IP Delete Num to Replace", self.ip_delete_num_to_replace)?;
-        write_field!(f, "Consolidate Threshold", self.consolidate_threshold)?;
+        if let Some(threshold) = self.consolidate_threshold {
+            write_field!(f, "Consolidate Threshold", threshold)?;
+        }
 
         Ok(())
     }
@@ -1267,6 +1413,14 @@ impl DynamicIndexRun {
         "graph-index-dynamic-run"
     }
 
+    pub(crate) fn validate(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
+        self.build.validate(checker)?;
+        self.runbook_params.validate(checker)?;
+        self.search_phase.validate(checker)?;
+
+        Ok(())
+    }
+
     pub(crate) fn try_as_config(&self, insert_l: usize) -> anyhow::Result<config::Builder> {
         let mut builder = self.build.try_as_config()?;
         builder.l_build(insert_l);
@@ -1279,15 +1433,6 @@ impl DynamicIndexRun {
         dim: usize,
     ) -> DefaultProviderParameters {
         self.build.inmem_parameters(num_points, dim)
-    }
-}
-
-impl CheckDeserialization for DynamicIndexRun {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> anyhow::Result<()> {
-        self.build.check_deserialization(checker)?;
-        self.runbook_params.check_deserialization(checker)?;
-        self.search_phase.check_deserialization(checker)?;
-        Ok(())
     }
 }
 

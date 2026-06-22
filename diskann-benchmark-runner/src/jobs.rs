@@ -8,22 +8,22 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{checker::Checker, input, registry, Any};
+use crate::{checker::Checker, input, Registry};
 
 #[derive(Debug)]
 pub(crate) struct Jobs {
     /// The benchmark jobs to execute.
-    jobs: Vec<Any>,
+    jobs: Vec<input::internal::Any>,
 }
 
 impl Jobs {
     /// Return the jobs associated with this benchmark run.
-    pub(crate) fn jobs(&self) -> &[Any] {
+    pub(crate) fn jobs(&self) -> &[input::internal::Any] {
         &self.jobs
     }
 
     /// Consume `self`, returning the contained list of jobs.
-    pub(crate) fn into_inner(self) -> Vec<Any> {
+    pub(crate) fn into_inner(self) -> Vec<input::internal::Any> {
         self.jobs
     }
 
@@ -33,14 +33,14 @@ impl Jobs {
     /// the post-load validation of the requested runs, including:
     ///
     /// * Resolution of input files.
-    pub(crate) fn load(path: &Path, registry: &registry::Inputs) -> anyhow::Result<Self> {
+    pub(crate) fn load(path: &Path, registry: &Registry) -> anyhow::Result<Self> {
         Self::parse(&Partial::load(path)?, registry)
     }
 
     /// Parse `self` from a [`Partial`].
     ///
     /// This method also perform deserialization checks on the parsed inputs.
-    pub(crate) fn parse(partial: &Partial, registry: &registry::Inputs) -> anyhow::Result<Self> {
+    pub(crate) fn parse(partial: &Partial, registry: &Registry) -> anyhow::Result<Self> {
         let mut checker = Checker::new(
             partial
                 .search_directories
@@ -51,7 +51,7 @@ impl Jobs {
         );
 
         let num_jobs = partial.jobs.len();
-        let jobs: anyhow::Result<Vec<Any>> = partial
+        let jobs: anyhow::Result<Vec<input::internal::Any>> = partial
             .jobs
             .iter()
             .enumerate()
@@ -65,13 +65,12 @@ impl Jobs {
                 };
 
                 let input = registry
-                    .get(&unprocessed.tag)
+                    .input(&unprocessed.tag)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Unrecognized input tag: \"{}\"", unprocessed.tag)
                     })
                     .with_context(context)?;
 
-                checker.set_tag(input.tag());
                 input
                     .try_deserialize(&unprocessed.content, &mut checker)
                     .with_context(context)

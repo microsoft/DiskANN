@@ -1,6 +1,6 @@
 [package]
 name = "diskann-garnet"
-version = "1.0.26"
+version = "2.0.4"
 edition = "2024"
 authors.workspace = true
 license.workspace = true
@@ -14,10 +14,14 @@ bytemuck.workspace = true
 crossbeam = "0.8.4"
 dashmap = { workspace = true, features = ["inline"] }
 diskann.workspace = true
-diskann-quantization.workspace = true
+diskann-quantization = { workspace = true, features = ["flatbuffers"] }
 diskann-providers.workspace = true
+diskann-utils.workspace = true
 diskann-vector.workspace = true
 foldhash = "0.2.0"
+rand.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-diskann-utils.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }

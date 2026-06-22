@@ -30,11 +30,15 @@ pub mod glue;
 pub mod search;
 pub mod workingset;
 
+pub mod ext;
+
 // Re-export the Search trait and error/output types only.
 // Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.
 pub use search::{KnnSearchError, RangeSearchError, Search};
 
 mod internal;
+
+pub mod strategy;
 
 // Integration tests and test providers.
 #[cfg(any(test, feature = "testing"))]

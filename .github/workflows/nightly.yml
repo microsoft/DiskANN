@@ -1,0 +1,139 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+on:
+  schedule:
+    # Run nightly at 2 AM UTC.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+name: Nightly
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  DISKANN_FEATURES: "virtual_storage,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  clippy-default-features:
+    name: clippy-default-features (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  clippy-features:
+    name: clippy-features (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup show && rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets --features"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --no-deps \
+            --features ${{ env.DISKANN_FEATURES }} \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
+  test-workspace:
+    needs:
+      - clippy-default-features
+      - clippy-features
+    name: test workspace (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust
+        run: rustup show
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: test workspace with nextest
+        run: |
+          set -euxo pipefail
+          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+
+  test-workspace-features:
+    needs:
+      - clippy-default-features
+      - clippy-features
+    name: test workspace (macos, all features)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust
+        run: rustup show
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: test workspace with nextest
+        run: |
+          set -euxo pipefail
+          cargo nextest run --locked --workspace \
+            --cargo-profile ci \
+            --config "$RUST_CONFIG" \
+            --features ${{ env.DISKANN_FEATURES }}
+
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+
+  miri:
+    name: miri-test
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust nightly with miri
+        run: rustup toolchain install nightly --component miri
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: miri
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

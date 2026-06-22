@@ -20,22 +20,21 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_benchmark_runner::{
-    benchmark::{PassFail, Regression},
-    dispatcher::{Description, DispatchRule, FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     utils::{
-        datatype::{self, DataType},
+        datatype::{AsDataType, DataType},
         num::{relative_change, NonNegativeFinite},
         percentiles, MicroSeconds,
     },
-    Any, Benchmark, CheckDeserialization, Checker, Input,
+    Benchmark, Checker, Input, Registry,
 };
 
 ////////////////
 // Public API //
 ////////////////
 
-pub fn register(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    register_benchmarks_impl(dispatcher)
+pub fn register(registry: &mut Registry) -> anyhow::Result<()> {
+    Ok(register_benchmarks_impl(registry)?)
 }
 
 ///////////
@@ -119,12 +118,6 @@ pub struct SimdOp {
     runs: Vec<Run>,
 }
 
-impl CheckDeserialization for SimdOp {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 macro_rules! write_field {
     ($f:ident, $field:tt, $($expr:tt)*) => {
         writeln!($f, "{:>18}: {}", $field, $($expr)*)
@@ -150,18 +143,21 @@ impl std::fmt::Display for SimdOp {
 }
 
 impl Input for SimdOp {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-op"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self::Raw {
         const DIM: [NonZeroUsize; 2] = [
             NonZeroUsize::new(128).unwrap(),
             NonZeroUsize::new(150).unwrap(),
@@ -192,12 +188,12 @@ impl Input for SimdOp {
             },
         ];
 
-        Ok(serde_json::to_value(&Self {
+        Self {
             query_type: DataType::Float32,
             data_type: DataType::Float32,
             arch: Arch::X86_64_V3,
             runs,
-        })?)
+        }
     }
 }
 
@@ -214,33 +210,30 @@ struct SimdTolerance {
     min_time_regression: NonNegativeFinite,
 }
 
-impl CheckDeserialization for SimdTolerance {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-}
-
 impl Input for SimdTolerance {
+    type Raw = Self;
+
     fn tag() -> &'static str {
         "simd-tolerance"
     }
 
-    fn try_deserialize(
-        serialized: &serde_json::Value,
-        checker: &mut Checker,
-    ) -> anyhow::Result<Any> {
-        checker.any(Self::deserialize(serialized)?)
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
     }
 
-    fn example() -> anyhow::Result<serde_json::Value> {
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
         const EXAMPLE: NonNegativeFinite = match NonNegativeFinite::new(0.10) {
             Ok(v) => v,
             Err(_) => panic!("use a non-negative finite please"),
         };
 
-        Ok(serde_json::to_value(SimdTolerance {
+        SimdTolerance {
             min_time_regression: EXAMPLE,
-        })?)
+        }
     }
 }
 
@@ -302,105 +295,108 @@ impl std::fmt::Display for CheckResult {
 // Benchmark Registration //
 ////////////////////////////
 
-fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry::Benchmarks) {
+fn register_benchmarks_impl(
+    registry: &mut diskann_benchmark_runner::Registry,
+) -> Result<(), diskann_benchmark_runner::RegistryError> {
     // x86-64-v4
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V4",
             Kernel::<diskann_wide::arch::x86_64::V4, i8, i8>::new(),
-        );
+        )?;
     }
 
     // x86-64-v3
     #[cfg(target_arch = "x86_64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-x86_64_V3",
             Kernel::<diskann_wide::arch::x86_64::V3, i8, i8>::new(),
-        );
+        )?;
     }
 
     // aarch64-neon
     #[cfg(target_arch = "aarch64")]
     {
-        dispatcher.register_regression(
+        registry.register_regression(
             "simd-op-f32xf32-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f32, f32>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-f16xf16-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, f16, f16>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-u8xu8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, u8, u8>::new(),
-        );
-        dispatcher.register_regression(
+        )?;
+        registry.register_regression(
             "simd-op-i8xi8-aarch64_neon",
             Kernel::<diskann_wide::arch::aarch64::Neon, i8, i8>::new(),
-        );
+        )?;
     }
 
     // scalar
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-scalar",
         Kernel::<diskann_wide::arch::Scalar, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-scalar",
         Kernel::<diskann_wide::arch::Scalar, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-scalar",
         Kernel::<diskann_wide::arch::Scalar, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-scalar",
         Kernel::<diskann_wide::arch::Scalar, i8, i8>::new(),
-    );
+    )?;
 
     // reference
-    dispatcher.register_regression(
+    registry.register_regression(
         "simd-op-f32xf32-reference",
         Kernel::<Reference, f32, f32>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-f16xf16-reference",
         Kernel::<Reference, f16, f16>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-u8xu8-reference",
         Kernel::<Reference, u8, u8>::new(),
-    );
-    dispatcher.register_regression(
+    )?;
+    registry.register_regression(
         "simd-op-i8xi8-reference",
         Kernel::<Reference, i8, i8>::new(),
-    );
+    )?;
+    Ok(())
 }
 
 //////////////
@@ -409,10 +405,6 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
 
 /// Dispatch receiver for the reference implementations.
 struct Reference;
-
-/// A dispatch mapper for `wide` types.
-#[derive(Debug)]
-struct Identity<T>(T);
 
 struct Kernel<A, Q, D> {
     _type: std::marker::PhantomData<(A, Q, D)>,
@@ -426,112 +418,95 @@ impl<A, Q, D> Kernel<A, Q, D> {
     }
 }
 
-// Map Architectures to the enum.
 #[derive(Debug, Error)]
 #[error("architecture {0} is not supported by this CPU")]
 pub(crate) struct ArchNotSupported(Arch);
 
-impl DispatchRule<Arch> for Identity<Reference> {
-    type Error = ArchNotSupported;
+/// Lifting architecture enum variants into the Rust type domain.
+trait AsArch: Sized + 'static {
+    const ARCH: Arch;
+    const DISPLAY_NAME: &'static str;
 
-    fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
-        if *from == Arch::Reference {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1))
-        }
+    fn is_available() -> bool {
+        true
     }
 
-    fn convert(from: Arch) -> Result<Self, Self::Error> {
-        assert_eq!(from, Arch::Reference);
-        Ok(Identity(Reference))
+    fn try_new() -> Result<Self, ArchNotSupported>;
+
+    fn is_match(arch: Arch) -> bool {
+        arch == Self::ARCH && Self::is_available()
     }
 
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&Arch>) -> std::fmt::Result {
-        match from {
-            None => write!(f, "loop based"),
-            Some(arch) => {
-                if Self::try_match(arch).is_ok() {
-                    write!(f, "matched {}", arch)
-                } else {
-                    write!(f, "expected {}, got {}", Arch::Reference, arch)
-                }
+    fn describe(arch: Arch) -> ArchDescribe {
+        if arch != Self::ARCH {
+            ArchDescribe::Mismatch {
+                expected: Self::ARCH,
+                got: arch,
             }
+        } else if !Self::is_available() {
+            ArchDescribe::Unsupported(Self::ARCH)
+        } else {
+            ArchDescribe::Match(arch)
         }
     }
 }
 
-impl DispatchRule<Arch> for Identity<diskann_wide::arch::Scalar> {
-    type Error = ArchNotSupported;
+#[derive(Debug, Clone, Copy)]
+enum ArchDescribe {
+    Match(Arch),
+    Unsupported(Arch),
+    Mismatch { expected: Arch, got: Arch },
+}
 
-    fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
-        if *from == Arch::Scalar {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1))
-        }
+impl ArchDescribe {
+    fn is_match(&self) -> bool {
+        matches!(self, ArchDescribe::Match(_))
     }
+}
 
-    fn convert(from: Arch) -> Result<Self, Self::Error> {
-        assert_eq!(from, Arch::Scalar);
-        Ok(Identity(diskann_wide::arch::Scalar))
-    }
-
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&Arch>) -> std::fmt::Result {
-        match from {
-            None => write!(f, "scalar (compilation target CPU)"),
-            Some(arch) => {
-                if Self::try_match(arch).is_ok() {
-                    write!(f, "matched {}", arch)
-                } else {
-                    write!(f, "expected {}, got {}", Arch::Scalar, arch)
-                }
+impl std::fmt::Display for ArchDescribe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Match(arch) => write!(f, "matched {}", arch),
+            Self::Unsupported(arch) => {
+                write!(f, "matched {} but unsupported by this CPU", arch)
             }
+            Self::Mismatch { expected, got } => write!(f, "expected {}, got {}", expected, got),
         }
+    }
+}
+
+impl AsArch for Reference {
+    const ARCH: Arch = Arch::Reference;
+    const DISPLAY_NAME: &'static str = "loop based";
+
+    fn try_new() -> Result<Self, ArchNotSupported> {
+        Ok(Reference)
+    }
+}
+
+impl AsArch for diskann_wide::arch::Scalar {
+    const ARCH: Arch = Arch::Scalar;
+    const DISPLAY_NAME: &'static str = "scalar (compilation target CPU)";
+
+    fn try_new() -> Result<Self, ArchNotSupported> {
+        Ok(diskann_wide::arch::Scalar)
     }
 }
 
 macro_rules! match_arch {
     ($target_arch:literal, $arch:path, $enum:ident) => {
         #[cfg(target_arch = $target_arch)]
-        impl DispatchRule<Arch> for Identity<$arch> {
-            type Error = ArchNotSupported;
+        impl AsArch for $arch {
+            const ARCH: Arch = Arch::$enum;
+            const DISPLAY_NAME: &'static str = stringify!($enum);
 
-            fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
-                let available = <$arch>::new_checked().is_some();
-                if available && *from == Arch::$enum {
-                    Ok(MatchScore(0))
-                } else if !available && *from == Arch::$enum {
-                    Err(FailureScore(0))
-                } else {
-                    Err(FailureScore(1))
-                }
+            fn is_available() -> bool {
+                <$arch>::new_checked().is_some()
             }
 
-            fn convert(from: Arch) -> Result<Self, Self::Error> {
-                assert_eq!(from, Arch::$enum);
-                <$arch>::new_checked()
-                    .ok_or(ArchNotSupported(from))
-                    .map(Identity)
-            }
-
-            fn description(
-                f: &mut std::fmt::Formatter<'_>,
-                from: Option<&Arch>,
-            ) -> std::fmt::Result {
-                let available = <$arch>::new_checked().is_some();
-                match from {
-                    None => write!(f, "{}", Arch::$enum),
-                    Some(arch) => {
-                        if Self::try_match(arch).is_ok() {
-                            write!(f, "matched {}", arch)
-                        } else if !available && *arch == Arch::$enum {
-                            write!(f, "matched {} but unsupported by this CPU", Arch::$enum)
-                        } else {
-                            write!(f, "expected {}, got {}", Arch::$enum, arch)
-                        }
-                    }
-                }
+            fn try_new() -> Result<Self, ArchNotSupported> {
+                <$arch>::new_checked().ok_or(ArchNotSupported(Arch::$enum))
             }
         }
     };
@@ -543,13 +518,10 @@ match_arch!("aarch64", diskann_wide::arch::aarch64::Neon, Neon);
 
 impl<A, Q, D> Benchmark for Kernel<A, Q, D>
 where
-    datatype::Type<Q>: DispatchRule<datatype::DataType>,
-    datatype::Type<D>: DispatchRule<datatype::DataType>,
-    Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
+    Q: AsDataType,
+    D: AsDataType,
+    A: AsArch,
     Kernel<A, Q, D>: RunBenchmark<A>,
-    A: 'static,
-    Q: 'static,
-    D: 'static,
 {
     type Input = SimdOp;
     type Output = Vec<RunResult>;
@@ -557,14 +529,15 @@ where
     // Matching simply requires that we match the inner type.
     fn try_match(&self, from: &SimdOp) -> Result<MatchScore, FailureScore> {
         let mut failscore: Option<u32> = None;
-        if datatype::Type::<Q>::try_match(&from.query_type).is_err() {
+        if !Q::is_match(from.query_type) {
             *failscore.get_or_insert(0) += 10;
         }
-        if datatype::Type::<D>::try_match(&from.data_type).is_err() {
+        if !D::is_match(from.data_type) {
             *failscore.get_or_insert(0) += 10;
         }
-        if let Err(FailureScore(score)) = Identity::<A>::try_match(&from.arch) {
-            *failscore.get_or_insert(0) += 2 + score;
+        if !A::is_match(from.arch) {
+            let penalty = if from.arch == A::ARCH { 2 } else { 3 };
+            *failscore.get_or_insert(0) += penalty;
         }
 
         match failscore {
@@ -579,7 +552,15 @@ where
         _: diskann_benchmark_runner::Checkpoint<'_>,
         mut output: &mut dyn diskann_benchmark_runner::Output,
     ) -> anyhow::Result<Self::Output> {
-        let arch = Identity::<A>::convert(input.arch)?.0;
+        if input.arch != A::ARCH {
+            anyhow::bail!(
+                "architecture mismatch: input requested {:?}, but kernel implementation requires {:?}",
+                input.arch,
+                A::ARCH
+            );
+        }
+
+        let arch = A::try_new()?;
         writeln!(output, "{}", input)?;
         let results = self.run_benchmark(input, arch)?;
         writeln!(output, "\n\n{}", DisplayWrapper(&*results))?;
@@ -593,31 +574,24 @@ where
     ) -> std::fmt::Result {
         match input {
             None => {
-                writeln!(
-                    f,
-                    "- Query Type: {}",
-                    Description::<datatype::DataType, datatype::Type<Q>>::new()
-                )?;
-                writeln!(
-                    f,
-                    "- Data Type: {}",
-                    Description::<datatype::DataType, datatype::Type<D>>::new()
-                )?;
-                writeln!(
-                    f,
-                    "- Implementation: {}",
-                    Description::<Arch, Identity<A>>::new()
-                )?;
+                writeln!(f, "- Query Type: {}", Q::DATA_TYPE)?;
+                writeln!(f, "- Data Type: {}", D::DATA_TYPE)?;
+                writeln!(f, "- Implementation: {}", A::DISPLAY_NAME)?;
             }
             Some(input) => {
-                if let Err(err) = datatype::Type::<Q>::try_match_verbose(&input.query_type) {
-                    writeln!(f, "\n    - Mismatched query type: {}", err)?;
+                let desc = Q::describe(input.query_type);
+                if !desc.is_match() {
+                    writeln!(f, "\n    - Mismatched query type: {}", desc)?;
                 }
-                if let Err(err) = datatype::Type::<D>::try_match_verbose(&input.data_type) {
-                    writeln!(f, "\n    - Mismatched data type: {}", err)?;
+
+                let desc = D::describe(input.data_type);
+                if !desc.is_match() {
+                    writeln!(f, "\n    - Mismatched data type: {}", desc)?;
                 }
-                if let Err(err) = Identity::<A>::try_match_verbose(&input.arch) {
-                    writeln!(f, "\n    - Mismatched architecture: {}", err)?;
+
+                let desc = A::describe(input.arch);
+                if !desc.is_match() {
+                    writeln!(f, "\n    - Mismatched architecture: {}", desc)?;
                 }
             }
         }
@@ -627,13 +601,10 @@ where
 
 impl<A, Q, D> Regression for Kernel<A, Q, D>
 where
-    datatype::Type<Q>: DispatchRule<datatype::DataType>,
-    datatype::Type<D>: DispatchRule<datatype::DataType>,
-    Identity<A>: DispatchRule<Arch, Error = ArchNotSupported>,
+    Q: AsDataType,
+    D: AsDataType,
+    A: AsArch,
     Kernel<A, Q, D>: RunBenchmark<A>,
-    A: 'static,
-    Q: 'static,
-    D: 'static,
 {
     type Tolerances = SimdTolerance;
     type Pass = CheckResult;
