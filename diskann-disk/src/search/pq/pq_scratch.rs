@@ -137,8 +137,8 @@ mod tests {
         // Query shorter than dim should fail
         let short_query: Vec<f32> = (1..dim).map(|i| i as f32).collect(); // dim-1 elements
         let err = pq_scratch.set(&short_query).unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
         assert!(err.to_string().contains("expected query of length"));
-    }
 
     #[test]
     fn test_pq_scratch_set_accepts_oversized_query() {
