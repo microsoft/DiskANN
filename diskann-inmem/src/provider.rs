@@ -118,7 +118,7 @@ where
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
         // TODO: These need to actually happen in lock-step.
         let internal = self.mapping.remove(gid).unwrap();
-        assert!(self.store.delete(internal.into_usize()));
+        self.store.retire(internal.into_usize()).unwrap();
         Ok(())
     }
 
@@ -620,10 +620,10 @@ where
 }
 
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<u8>>,
+    x: &'a Provider<layers::Full<f32>>,
     strategy: &'a Strategy,
     context: &'a Context,
-    query: &'a [u8],
+    query: &'a [f32],
 ) -> SearchAccessor<'a> {
     glue::SearchStrategy::search_accessor(strategy, x, context, query).unwrap()
 }

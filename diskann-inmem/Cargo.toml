@@ -18,9 +18,31 @@ diskann-wide = { workspace = true }
 parking_lot = "0.12.5"
 thiserror.workspace = true
 
+# Integration Test Dependencies
+diskann-benchmark-runner = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
 [lints]
 workspace = true
 
 [dev-dependencies]
 rand.workspace = true
 tokio = { workspace = true, features = ["macros"] }
+
+[[bin]]
+name = "integration-tests"
+path = "integration/main.rs"
+required-features = ["integration-test"]
+
+[features]
+default = []
+
+# Enable stress test module
+integration-test = [
+    "dep:diskann-benchmark-runner",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:anyhow",
+]

@@ -811,15 +811,19 @@ dependencies = [
 name = "diskann-inmem"
 version = "0.54.0"
 dependencies = [
+ "anyhow",
  "bytemuck",
  "crossbeam-queue",
  "dashmap",
  "diskann",
+ "diskann-benchmark-runner",
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
  "parking_lot",
  "rand 0.9.4",
+ "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "tokio",
 ]

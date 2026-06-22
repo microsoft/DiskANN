@@ -203,15 +203,32 @@ impl Store {
         None
     }
 
-    pub(crate) fn delete(&self, i: usize) -> bool {
-        let guard = self.registry.guard().unwrap();
-        let tag = self.tags.get(i).unwrap();
+    /// Attempt to retire slot `i`. If successful, this slot will be placed in an internal
+    /// retirement queue for reclamation once we can prove no readers are active that could
+    /// have observed this transition.
+    ///
+    /// Returns `Ok(())` if the slot was successfully retired.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error in any of the following conditions:
+    ///
+    /// * The slot index `i` is out-of-bounds.
+    /// * The slot is not in a state that can be retired (e.g., it is already retired or
+    ///   is owned by a different thread).
+    /// * An [`epoch::Guard`] could not be obtained due to registration slot exhaustion.
+    /// * An attempt to acquire the slot after these checks races with another thread and
+    ///   the race was lost.
+    pub(crate) fn retire(&self, i: usize) -> Result<(), RetireError> {
+        let tag = self.tags.get(i).ok_or(RetireError::OutOfBounds)?;
         let current = tag.load(Ordering::Relaxed);
 
         // We can only perform a deletion if the generation is not in a reserved state.
         if current.is_reserved() {
-            return false;
+            return Err(RetireError::SlotIsReserved { tag: current });
         }
+
+        let guard = self.registry.guard().map_err(RetireError::GuardUnavailable)?;
 
         let retiring = Tag::RETIRING;
 
@@ -223,9 +240,9 @@ impl Store {
                 let (mirror, _) = unsafe { self.data_unchecked(i) };
                 mirror.store(retiring, Ordering::Relaxed);
                 guard.retire(i as u32);
-                true
+                Ok(())
             }
-            Err(_) => false,
+            Err(_) => Err(RetireError::CouldNotClaimSlot),
         }
     }
 
@@ -333,7 +350,7 @@ impl Store {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct StoreError(StoreErrorInner);
+pub(crate) struct StoreError(StoreErrorInner);
 
 impl StoreError {
     fn mismatched_frozen_point_dim(dim: usize, bytes: Bytes) -> Self {
@@ -377,6 +394,23 @@ enum StoreErrorInner {
     TooManyEntries { entries: usize, frozen: usize },
     #[error("number of neighbors ({}) may not exceed `u32::MAX`", neighbors)]
     TooManyNeighbors { neighbors: usize },
+}
+
+/// Error conditions for [`Store::retire`].
+#[derive(Debug, Error)]
+pub(crate) enum RetireError {
+    /// Slot index was out-of-bounds.
+    #[error("index out of bounds")]
+    OutOfBounds,
+    /// The slot cannot be retired because it is in a reserved state.
+    #[error("slot is reserved: {}", tag)]
+    SlotIsReserved { tag: Tag },
+    /// An [`epoch::Guard`] could not be acquired.
+    #[error(transparent)]
+    GuardUnavailable(epoch::Unavailable),
+    /// Another thread won the retirement race.
+    #[error("could not claim slot")]
+    CouldNotClaimSlot,
 }
 
 /// An epoch protect reader into [`Store`].
@@ -520,4 +554,15 @@ impl Drop for Slot<'_> {
         self.mirror.store(Tag::PUBLISHED, Ordering::Release);
         self.tag.store(Tag::PUBLISHED, Ordering::Release);
     }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
 }

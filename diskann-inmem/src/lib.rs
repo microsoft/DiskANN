@@ -23,3 +23,7 @@ pub use provider::{Context, Provider, Strategy};
 
 #[cfg(test)]
 mod test;
+
+#[cfg(feature = "integration-test")]
+#[doc(hidden)]
+pub mod integration;
