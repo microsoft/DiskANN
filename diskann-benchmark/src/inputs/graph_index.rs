@@ -691,7 +691,7 @@ impl schemars::JsonSchema for StartPointStrategyRef {
                             "properties": {
                                 "norm": { "type": "number" },
                                 "nsamples": { "type": "integer", "minimum": 1 },
-                                "seed": { "type": "integer" }
+                                "seed": { "type": "integer", "minimum": 0 }
                             },
                             "required": ["norm", "nsamples", "seed"],
                             "description": "Randomly select vector(s) with given norm."
@@ -707,7 +707,7 @@ impl schemars::JsonSchema for StartPointStrategyRef {
                             "type": "object",
                             "properties": {
                                 "nsamples": { "type": "integer", "minimum": 1 },
-                                "seed": { "type": "integer" }
+                                "seed": { "type": "integer", "minimum": 0 }
                             },
                             "required": ["nsamples", "seed"],
                             "description": "Sample data from the dataset."
@@ -723,7 +723,7 @@ impl schemars::JsonSchema for StartPointStrategyRef {
                             "type": "object",
                             "properties": {
                                 "nsamples": { "type": "integer", "minimum": 1 },
-                                "seed": { "type": "integer" }
+                                "seed": { "type": "integer", "minimum": 0 }
                             },
                             "required": ["nsamples", "seed"],
                             "description": "Use Latin Hypercube sampling."

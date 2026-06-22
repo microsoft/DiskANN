@@ -460,7 +460,20 @@ fn type_summary(node: &Value) -> String {
             }
             s
         }
-        Some("number") => "number".to_string(),
+        Some("number") => {
+            let mut s = "number".to_string();
+            if let Some(min) = node.get("minimum") {
+                let _ = write!(s, " (≥{min})");
+            } else if let Some(emin) = node.get("exclusiveMinimum") {
+                let _ = write!(s, " (>{emin})");
+            }
+            if let Some(max) = node.get("maximum") {
+                let _ = write!(s, " (≤{max})");
+            } else if let Some(emax) = node.get("exclusiveMaximum") {
+                let _ = write!(s, " (<{emax})");
+            }
+            s
+        }
         Some("boolean") => "boolean".to_string(),
         Some("null") => "null".to_string(),
         Some("array") => {

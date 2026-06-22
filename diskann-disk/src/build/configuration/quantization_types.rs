@@ -286,8 +286,13 @@ mod tests {
         }
     }
 
-    /// Ensures the manual `JsonSchema` impl stays in sync with actual variants.
-    /// If a variant is added to `QuantizationType`, this match will fail to compile.
+    /// Ensures the schema proxy stays in sync with actual variants.
+    ///
+    /// The `JsonSchema` impl lives elsewhere (`QuantizationTypeSchema` in
+    /// `diskann-benchmark`) so that this crate doesn't depend on `schemars`. This test
+    /// guards the two invariants that proxy relies on: that every variant is accounted
+    /// for (the exhaustive match fails to compile if a variant is added) and that each
+    /// variant serializes as a string.
     #[test]
     fn schema_covers_all_quantization_variants() {
         fn assert_exhaustive(q: QuantizationType) -> &'static str {

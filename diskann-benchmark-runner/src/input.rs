@@ -201,7 +201,7 @@ pub(crate) mod internal {
         fn schema(&self) -> serde_json::Value {
             let generator = schemars::generate::SchemaSettings::default().into_generator();
             let schema = generator.into_root_schema_for::<T::Raw>();
-            serde_json::to_value(schema).unwrap_or_default()
+            serde_json::to_value(schema).expect("RootSchema should always serialize to JSON")
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
