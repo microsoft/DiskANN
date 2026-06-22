@@ -807,6 +807,14 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
             }
             let nc = candidates.len();
 
+            // RobustPrune is only needed to reduce overfull candidate pools.
+            // If a node already fits the published degree bound, preserve the
+            // candidate list directly; otherwise under-degree nodes lose useful
+            // edges and still pay the full prune cost.
+            if nc <= max_degree {
+                return candidates.iter().map(|&(id, _)| id).collect();
+            }
+
             // Per-thread tier-specialised inline kernel; generic fallback owns
             // the comparer for cross-thread safety (closure is Send/Sync).
             let kernel = match (use_inline_l2, inline_tier) {
@@ -1934,6 +1942,26 @@ mod tests {
         let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
+    }
+
+    #[test]
+    fn test_final_prune_keeps_under_degree_candidates() {
+        let data: Vec<f32> = vec![
+            0.0, 0.0, // node 0
+            0.1, 0.0, // candidate 1, would occlude candidate 2
+            1.0, 0.0, // candidate 2
+            0.0, 1.0, // candidate 3
+        ];
+        let candidates = vec![
+            vec![(1, 0.01f32), (2, 1.0f32), (3, 1.0f32)],
+            vec![],
+            vec![],
+            vec![],
+        ];
+
+        let result = final_prune_from_candidates(&data, 2, &candidates, 4, Metric::L2, 1.2, false);
+
+        assert_eq!(result[0], vec![1, 2, 3]);
     }
 
     #[test]
