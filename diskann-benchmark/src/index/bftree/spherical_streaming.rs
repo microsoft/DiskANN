@@ -19,7 +19,10 @@ use diskann_benchmark_runner::{
     Benchmark, Checkpoint,
 };
 use diskann_bftree::{quant::QuantVectorProvider, BfTreeProvider};
-use diskann_providers::model::graph::provider::async_::common::Quantized;
+use diskann_providers::{
+    model::graph::provider::async_::common::Quantized,
+    storage::{FileStorageProvider, SaveWith},
+};
 use diskann_quantization::alloc::{AllocatorError, GlobalAllocator, Poly};
 use diskann_quantization::spherical::{
     iface::{self as spherical_iface, Quantizer},
@@ -204,18 +207,36 @@ impl Benchmark for StreamingSpherical {
     ) -> anyhow::Result<Self::Output> {
         writeln!(output, "{}", input)?;
 
-        super::streaming_utils::run_streaming::<f32, _>(
+        let mut index_for_save: Option<BfTreeSQIndex> = None;
+
+        let results = super::streaming_utils::run_streaming::<f32, _>(
             input.runbook_params(),
-            |max_points| bftree_sq_streaming_impl(input, max_points),
+            |max_points| {
+                let (streamer, index) = bftree_sq_streaming_impl(input, max_points)?;
+                index_for_save = Some(index);
+                Ok(streamer)
+            },
             output,
-        )
+        )?;
+
+        // save the index if requested
+        if let Some(save_path) = input.build().save_path() {
+            let index = index_for_save.expect("index should have been set by make_streamer");
+            crate::utils::tokio::block_on(
+                index
+                    .provider()
+                    .save_with(&FileStorageProvider, &save_path.to_string()),
+            )?;
+        }
+
+        Ok(results)
     }
 }
 
 fn bftree_sq_streaming_impl(
     input: &BfTreeSphericalDynamicRun,
     max_points: usize,
-) -> anyhow::Result<bigann::WithData<f32, u32, Managed<f32, StreamStats>>> {
+) -> anyhow::Result<(bigann::WithData<f32, u32, Managed<f32, StreamStats>>, BfTreeSQIndex)> {
     let topk = match input.search_phase() {
         SearchPhase::Topk(topk) => topk,
         _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
@@ -257,6 +278,7 @@ fn bftree_sq_streaming_impl(
         .compute(data.as_view())?;
     let provider = BfTreeProvider::new(params, start_points.as_view(), quantizer_poly)?;
     let index = Arc::new(DiskANNIndex::new(config, provider, None));
+    let index_handle = index.clone();
 
     let num_threads_and_tasks = NonZeroUsize::new(input.build().num_threads()).unwrap();
     let managed_stream = BfTreeSQStream {
@@ -283,5 +305,5 @@ fn bftree_sq_streaming_impl(
         )?))
     });
 
-    Ok(layered)
+    Ok((layered, index_handle))
 }
