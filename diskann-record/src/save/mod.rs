@@ -24,8 +24,7 @@
 //! [`Context::write`], which returns a [`Writer`]. The handle returned by
 //! [`Writer::finish`](context::Writer::finish) can be embedded into the record as a
 //! [`Handle`]; it serializes as a `$handle` reference and is rehydrated on the load side.
-mod value;
-pub use value::{Handle, Keys, Record, Value, Versioned};
+pub use crate::value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
 pub use context::{Context, Writer};

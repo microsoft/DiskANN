@@ -86,6 +86,9 @@ pub use number::Number;
 mod version;
 pub use version::Version;
 
+mod value;
+pub use value::{Handle, Keys, Record, Value, Versioned};
+
 pub mod load;
 pub mod save;
 

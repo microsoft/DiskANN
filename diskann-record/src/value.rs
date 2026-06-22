@@ -5,19 +5,25 @@
 
 //! Wire-level value types used in the on-disk manifest.
 //!
-//! Every saveable field is one of:
+//! These types are the shared currency of both halves of the framework:
+//! user value -> [`save`](crate::save) -> [`Value`] in the save path, and the
+//! [`Value`] -> [`load`](crate::load) -> user value in the load path.
+//!
+//! Every field stored in a manifest is one of:
 //!
 //! * [`Value::Null`] / [`Value::Bool`] / [`Value::Number`] / [`Value::String`] /
 //!   [`Value::Bytes`] — primitive scalars.
 //! * [`Value::Array`] — a homogeneous sequence (used by `Vec<T>` and `&[T]`).
 //! * [`Value::Object`] — a [`Versioned`] [`Record`] (the canonical encoding for a
-//!   `T: super::Save`).
+//!   `T: crate::save::Save`).
 //! * [`Value::Handle`] — a reference to a side-car artifact (produced by
-//!   [`super::Context::write`] + [`super::context::Writer::finish`]).
+//!   [`crate::save::Context::write`] + [`crate::save::Writer::finish`]).
 //!
-//! Most user code never touches these enums directly: [`super::Saveable`] impls turn
-//! Rust values into [`Value`]s, and the [`save_fields!`](crate::save_fields) macro
-//! assembles the surrounding [`Record`].
+//! Most user code never touches these enums directly. On the save side,
+//! [`crate::save::Saveable`] impls turn Rust values into [`Value`]s and the
+//! [`save_fields!`](crate::save_fields) macro assembles the surrounding [`Record`]; on
+//! the load side, the [`crate::load`] accessors walk the same [`Value`] tree back into
+//! Rust values.
 
 use std::{borrow::Cow, collections::HashMap};
 
@@ -189,10 +195,11 @@ impl From<Handle> for Value<'_> {
 
 /// A map of named [`Value`]s.
 ///
-/// `Record` is the body of a saved object: each call to [`super::Save::save`] returns
-/// one, and [`Record::into_value`] wraps it as a [`Versioned`] [`Value::Object`] ready
-/// for insertion into another record. Keys beginning with `$` are reserved for
-/// framework metadata (see [`crate::is_reserved`]).
+/// `Record` is the body of an object in the manifest. On the save side each call to
+/// [`crate::save::Save::save`] returns one, and [`Record::into_value`] wraps it as a
+/// [`Versioned`] [`Value::Object`] ready for insertion into another record; on the load
+/// side the same record is read back through [`crate::load::Object`]. Keys beginning
+/// with `$` are reserved for framework metadata (see [`crate::is_reserved`]).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Record<'a> {
@@ -321,7 +328,7 @@ impl<'a> Versioned<'a> {
 
 /// A reference to a side-car artifact in the manifest directory.
 ///
-/// Produced by [`Writer::finish`](super::Writer::finish) after a side-car write completes and
+/// Produced by [`Writer::finish`](crate::save::Writer::finish) after a side-car write completes and
 /// inserted into a [`Record`] like any other value. Serializes as `{"$handle": "<name>"}`
 /// on the wire; the load side rehydrates it through
 /// [`crate::load::Object::read`].
