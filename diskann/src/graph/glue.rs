@@ -454,10 +454,10 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     /// Constructing `Accept::new(raw_id)` and passing it to `pred.eval_mut` without
     /// having first classified `raw_id` violates this contract.
     ///
-    /// Because `pred.eval` is required to be side-effect-free (see [`Predicate`]),
-    /// implementors are free to call `pred.eval` on any ID — including those that have
-    /// not yet been classified — to cheaply pre-filter before paying the cost of
-    /// classification.
+    /// The [`Predicate`] bound takes unclassified IDs and is side-effect-free, so it can
+    /// pre-filter IDs before paying the cost of classification. As with [`HybridPredicate`],
+    /// implementors can assume that [`Predicate`] and [`PredicateMut`] "get along" with
+    /// respect to `eval(id)` and `eval_mut(Accept::new(id))`.
     ///
     /// See also: [`SearchAccessor::expand_beam`], [`Self::expand_beam_filtered`].
     fn expand_beam_accept_only<Itr, P, F>(
@@ -468,7 +468,7 @@ pub trait FilteredAccessor: HasId + Send + Sync {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         Itr: Iterator<Item = Self::Id> + Send,
-        P: HybridPredicate<Accept<Self::Id>> + Send + Sync,
+        P: Predicate<Self::Id> + PredicateMut<Accept<Self::Id>> + Send + Sync,
         F: FnMut(Accept<Self::Id>, f32) + Send;
 
     //////////////////////
@@ -539,15 +539,6 @@ where
     }
 }
 
-impl<T> Predicate<Accept<T>> for NotInMut<'_, T>
-where
-    T: Eq + std::hash::Hash,
-{
-    fn eval(&self, item: &Accept<T>) -> bool {
-        self.eval(item.get())
-    }
-}
-
 impl<T> PredicateMut<T> for NotInMut<'_, T>
 where
     T: Clone + Eq + std::hash::Hash,
@@ -568,7 +559,6 @@ where
 
 /// The interfaces `contains` and `insert` agree with each other.
 impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
-impl<T> HybridPredicate<Accept<T>> for NotInMut<'_, T> where T: Clone + Eq + std::hash::Hash {}
 
 /// A search strategy for query objects of type `T`.
 ///
