@@ -170,7 +170,7 @@ mod tests {
             // We save `x`, `y`, and `inner` directly into the manifest.
             // The raw vector data we instead store in an auxiliary file.
 
-            let mut io = context.write("auxiliary.bin")?;
+            let mut io = context.write(Some("auxiliary.bin"))?;
             io.write_all(&self.vector).map_err(save::Error::new)?;
 
             let mut record = save_fields!(self, context, [x, y, enabled, inner, nickname, absent]);

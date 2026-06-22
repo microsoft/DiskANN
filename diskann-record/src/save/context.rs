@@ -36,13 +36,18 @@ pub trait SaveContext {
     /// [`SaveContext::finish`]. For the disk-backed context this is `()`.
     type Output;
 
-    /// Allocate a new side-car artifact named `key`.
+    /// Allocate a new side-car artifact, optionally tagged with a human-readable `key`.
+    ///
+    /// The artifact's on-disk name (and the value stored in its [`Handle`]) is prefixed
+    /// with the count of artifacts written so far; when `key` is `Some`, it is appended as
+    /// `{count}-{key}` purely to aid debugging. Reusing the same `key` across calls is
+    /// allowed — the count prefix disambiguates the artifacts.
     ///
     /// # Errors
     ///
-    /// Returns [`Error`] if `key` is not a simple relative file name, if it has already
-    /// been registered, or if the underlying artifact cannot be created.
-    fn write(&self, key: &str) -> Result<Writer<'_>>;
+    /// Returns [`Error`] if `key` is `Some` but not a simple relative file name, or if the
+    /// underlying artifact cannot be created.
+    fn write(&self, key: Option<&str>) -> Result<Writer<'_>>;
 
     /// Commit the manifest `value`, consuming the context.
     ///
@@ -59,14 +64,14 @@ pub trait SaveContext {
 /// [`SaveContext::finish`] (which consumes `self` and names an associated type) is not
 /// object safe, so it is deliberately excluded from this trait.
 pub(super) trait GetWrite {
-    fn write(&self, key: &str) -> Result<Writer<'_>>;
+    fn write(&self, key: Option<&str>) -> Result<Writer<'_>>;
 }
 
 impl<T> GetWrite for T
 where
     T: SaveContext,
 {
-    fn write(&self, key: &str) -> Result<Writer<'_>> {
+    fn write(&self, key: Option<&str>) -> Result<Writer<'_>> {
         <T as SaveContext>::write(self, key)
     }
 }
@@ -128,32 +133,43 @@ impl DiskContext {
 impl SaveContext for DiskContext {
     type Output = ();
 
-    fn write(&self, key: &str) -> Result<Writer<'_>> {
-        // Reject absolute paths, parent traversal, and multi-component paths. Handles must be
-        // simple file names relative to the manifest directory.
-        let mut components = std::path::Path::new(key).components();
-        match components.next() {
-            Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
-            _ => {
-                return Err(Error::message(format!(
-                    "artifact file name {:?} must be a relative file name with no path separators",
-                    key,
-                )));
+    fn write(&self, key: Option<&str>) -> Result<Writer<'_>> {
+        // When a human-readable hint is supplied it must be a simple relative file name:
+        // reject absolute paths, parent traversal, and multi-component paths so the prefix
+        // below produces a single, well-formed file name in the manifest directory.
+        if let Some(key) = key {
+            let mut components = std::path::Path::new(key).components();
+            match components.next() {
+                Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
+                _ => {
+                    return Err(Error::message(format!(
+                        "artifact file name hint {:?} must be a relative file name with no path \
+                         separators",
+                        key,
+                    )));
+                }
             }
         }
 
-        // TODO: Proper disambiguation - making UUIDs etc.
         let mut files = self
             .files
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if !files.insert(key.into()) {
+
+        // Prefix each artifact with the count of artifacts written so far, so that reusing
+        // the same `key` (or omitting it) still yields a unique file name.
+        let name = match key {
+            Some(key) => format!("{:03}-{}", files.len(), key),
+            None => format!("{:03}", files.len()),
+        };
+
+        if !files.insert(name.clone()) {
             return Err(Error::message(format!(
-                "file name {:?} has already been registered with this save context",
-                key,
+                "generated artifact name {:?} collides with an existing artifact",
+                name,
             )));
         }
-        let full = self.dir.join(key);
+        let full = self.dir.join(&name);
         if full.exists() {
             return Err(Error::message(format!(
                 "file {} already exists",
@@ -165,7 +181,7 @@ impl SaveContext for DiskContext {
         })?;
         Ok(Writer {
             io: BufWriter::new(file),
-            name: key.into(),
+            name,
             _lifetime: std::marker::PhantomData,
         })
     }
@@ -233,18 +249,20 @@ impl<'a> Context<'a> {
         Self { inner }
     }
 
-    /// Allocate a new side-car artifact named `key` in the manifest directory.
+    /// Allocate a new side-car artifact in the manifest directory, optionally tagging it
+    /// with a human-readable `key`.
     ///
-    /// The returned [`Writer`] is positioned at offset 0 and implements
+    /// The artifact is named with the count of artifacts written so far (with `key`, when
+    /// `Some`, appended as a readability hint), so the same `key` may be passed to
+    /// multiple calls. The returned [`Writer`] is positioned at offset 0 and implements
     /// [`std::io::Write`] / [`std::io::Seek`]. Call [`Writer::finish`] to obtain a
     /// [`Handle`] that may be inserted into a [`Record`](super::Record).
     ///
     /// # Errors
     ///
-    /// Returns [`Error`] if `key` has already been registered with this context (names
-    /// must be unique within a single save), or if the underlying file cannot be created
-    /// (e.g. because the artifact already exists on disk).
-    pub fn write(&self, key: &str) -> Result<Writer<'_>> {
+    /// Returns [`Error`] if `key` is `Some` but not a simple relative file name, or if the
+    /// underlying file cannot be created.
+    pub fn write(&self, key: Option<&str>) -> Result<Writer<'_>> {
         self.inner.write(key)
     }
 }
@@ -337,17 +355,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
         for bad in ["sub/dir.bin", "../escape.bin", "/abs.bin"] {
-            SaveContext::write(&ctx, bad).expect_err("keys with path separators must be rejected");
+            SaveContext::write(&ctx, Some(bad))
+                .expect_err("keys with path separators must be rejected");
         }
     }
 
     #[test]
-    fn write_rejects_duplicate_key() {
+    fn write_allows_duplicate_key() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
-        let _writer = SaveContext::write(&ctx, "artifact.bin").unwrap();
-        let err = SaveContext::write(&ctx, "artifact.bin")
-            .expect_err("a duplicate artifact key must be rejected");
-        assert!(format!("{err}").contains("already been registered"));
+        let first = SaveContext::write(&ctx, Some("artifact.bin"))
+            .unwrap()
+            .finish()
+            .unwrap();
+        let second = SaveContext::write(&ctx, Some("artifact.bin"))
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_ne!(
+            first.as_str(),
+            second.as_str(),
+            "duplicate keys must be disambiguated by the count prefix"
+        );
+        assert_eq!(first.as_str(), "000-artifact.bin");
+        assert_eq!(second.as_str(), "001-artifact.bin");
+    }
+
+    #[test]
+    fn write_allows_anonymous_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        let handle = SaveContext::write(&ctx, None).unwrap().finish().unwrap();
+        assert!(!handle.as_str().is_empty());
     }
 }
