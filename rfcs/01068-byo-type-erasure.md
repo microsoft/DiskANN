@@ -26,9 +26,9 @@ This takes one of several forms:
 
 While this is the right decision to avoid an absolute code explosion, it leads to an unfortunate composability problem.
 Take for example the quantization approach taken in #1050 (adding quantization to `diskann-garnet`).
-Here, an inner distance computations (using one of the type-erasure approaches outlined above) need to be composed with a small unwrapping layer.
+Here, inner distance computationss (using one of the type-erasure approaches outlined above) need to be composed with a small unwrapping layer.
 For `diskann-garnet` specifically, this unwrapping layer reifies the type of raw byte slices (translates from `&[u8]` to the type needed by the inner computer).
-The combination of unwrapping + delegation is used to create another trait object, leading to an unavoidable situations where we have at least two levels of dynamic dispatch.
+The combination of unwrapping + delegation is used to create another trait object, leading to an unavoidable situation where we have at least two levels of dynamic dispatch.
 A small diagram is shown below:
 ```
 Box<dyn QueryDistance>                      // Outer trait object
@@ -46,7 +46,7 @@ How can we redesign our lower level APIs to allow composition of distance comput
 ## Proposal
 
 The solution is relatively simple and is probably a variant of some visitor pattern.
-For the purposes of this demonstration, assume we have two level of distance function factories.
+For the purposes of this demonstration, assume we have two levels of distance function factories.
 Level 1 dispatches between adding or multiplying two numbers `x` and `y`.
 Level 2 first doubles both arguments before calling level 1.
 While this is contrived, it is a close match for the more complicated problem statement outlined in the introduction.
@@ -108,7 +108,7 @@ enum Op {
     Multiply,
 }
 
-// Instead of return a function pointer from level 1, we visit implementations of `Level1`.
+// Instead of returning a function pointer from level 1, we visit implementations of `Level1`.
 trait Level1: 'static {
     fn call(&self, x: f32, y: f32) -> f32;
 }
@@ -177,7 +177,8 @@ core::ops::function::FnOnce::call_once{{vtable.shim}}::he89f81259eb002ea:
         mulss   xmm0, xmm1
         ret
 ```
-Everything is inlined!
+The inner level has been inlined!
+This leave just a single level of dynamic dispatch at the very top.
 Further, `level_1_factory` is free to add more implementations that will automatically be fused by `level_2_factory`.
 
 ### Areas where this can be used
@@ -191,5 +192,5 @@ Further, `level_1_factory` is free to add more implementations that will automat
 The main trade-offs here are API complexity and compile times.
 If the `level_1_factory` dispatches to many possible implementations, like the `DistanceProvider` API which dispatches across micro-architecture, metric, and length specialization, each higher level essentially redoes that work.
 
-However, for distance functions that are called millions or billions of time in a hot loop, the extra complexity to minimize overhead is often worth it.
+However, for distance functions that are called millions or billions of times in a hot loop, the extra complexity to minimize overhead is often worth it.
 
