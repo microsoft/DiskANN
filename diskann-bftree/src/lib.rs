@@ -166,7 +166,7 @@ impl Default for TestCallCount {
 /// This makes it too easy to drop errors.
 ///
 /// We use a `clippy` lint to explicitly disallow `bf_tree::BfTree::insert` and instead
-/// funnel calls through this method instead to get a proper error.
+/// funnel calls through this method to get a proper error.
 #[expect(
     clippy::disallowed_methods,
     reason = "this is the allowed way to call this method"
