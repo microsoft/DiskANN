@@ -236,7 +236,10 @@ impl Benchmark for StreamingSpherical {
 fn bftree_sq_streaming_impl(
     input: &BfTreeSphericalDynamicRun,
     max_points: usize,
-) -> anyhow::Result<(bigann::WithData<f32, u32, Managed<f32, StreamStats>>, BfTreeSQIndex)> {
+) -> anyhow::Result<(
+    bigann::WithData<f32, u32, Managed<f32, StreamStats>>,
+    BfTreeSQIndex,
+)> {
     let topk = match input.search_phase() {
         SearchPhase::Topk(topk) => topk,
         _ => anyhow::bail!("Only TopK is currently supported by the streaming index"),
