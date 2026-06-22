@@ -160,3 +160,38 @@ impl Default for TestCallCount {
         Self::new()
     }
 }
+
+/// `bf_tree::BfTree::insert` can fail, but uses a `LeafInsertResult` that is not `#[must_use]`.
+///
+/// This makes it too easy to drop errors.
+///
+/// We use a `clippy` lint to explicitly disallow `bf_tree::BfTree::insert` and instead
+/// funnel calls through this method instead to get a proper error.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this is the allowed way to call this method"
+)]
+fn bftree_insert(tree: &bf_tree::BfTree, key: &[u8], value: &[u8]) -> Result<(), InsertError> {
+    match tree.insert(key, value) {
+        bf_tree::LeafInsertResult::Success => Ok(()),
+        bf_tree::LeafInsertResult::InvalidKV(s) => Err(InsertError(s)),
+    }
+}
+
+#[derive(Debug)]
+pub struct InsertError(String);
+
+impl std::fmt::Display for InsertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "insert into a `bftree` failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for InsertError {}
+
+impl From<InsertError> for ANNError {
+    #[track_caller]
+    fn from(error: InsertError) -> Self {
+        ANNError::new(diskann::ANNErrorKind::IndexError, error)
+    }
+}

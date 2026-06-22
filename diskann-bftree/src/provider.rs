@@ -862,10 +862,17 @@ where
     }
 
     fn get_distance(&mut self, id: u32) -> Result<f32, AccessError> {
-        self.provider
+        match self
+            .provider
             .quant_vectors
             .get_vector_into(id.into_usize(), &mut self.element)
-            .map(|_: ()| self.computer.evaluate_similarity(&self.element))
+        {
+            Ok(()) => self
+                .computer
+                .evaluate(&self.element)
+                .map_err(RankedError::Error),
+            Err(err) => Err(err),
+        }
     }
 }
 
