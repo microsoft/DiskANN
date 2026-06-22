@@ -34,6 +34,8 @@ where
     Lte(String, f64),
     /// Numeric greater-than-or-equal comparison on a field.
     Gte(String, f64),
+    /// Inclusive numeric range comparison on a field.
+    Between(String, f64, f64),
 }
 
 pub trait ASTIdExprVisitorMut<T>
@@ -51,6 +53,7 @@ where
             ASTIdExpr::Eq(id) => self.visit_eq(id),
             ASTIdExpr::Lte(field, value) => self.visit_lte(field, *value),
             ASTIdExpr::Gte(field, value) => self.visit_gte(field, *value),
+            ASTIdExpr::Between(field, min, max) => self.visit_between(field, *min, *max),
         }
     }
 
@@ -71,6 +74,9 @@ where
 
     /// Visit a greater-than-or-equal comparison.
     fn visit_gte(&mut self, field: &str, value: f64) -> Self::Output;
+
+    /// Visit an inclusive range comparison.
+    fn visit_between(&mut self, field: &str, min: f64, max: f64) -> Self::Output;
 }
 
 pub trait ASTIdExprVisitor<T>
@@ -88,6 +94,7 @@ where
             ASTIdExpr::Eq(id) => self.visit_eq(id),
             ASTIdExpr::Lte(field, value) => self.visit_lte(field, *value),
             ASTIdExpr::Gte(field, value) => self.visit_gte(field, *value),
+            ASTIdExpr::Between(field, min, max) => self.visit_between(field, *min, *max),
         }
     }
 
@@ -108,6 +115,9 @@ where
 
     /// Visit a greater-than-or-equal comparison.
     fn visit_gte(&self, field: &str, value: f64) -> Self::Output;
+
+    /// Visit an inclusive range comparison.
+    fn visit_between(&self, field: &str, min: f64, max: f64) -> Self::Output;
 }
 
 impl<T> ASTIdExpr<T>
@@ -182,6 +192,10 @@ where
 
     fn visit_gte(&mut self, field: &str, value: f64) -> Self::Output {
         format!("{}>={}", field, value)
+    }
+
+    fn visit_between(&mut self, field: &str, min: f64, max: f64) -> Self::Output {
+        format!("{} BETWEEN {} AND {}", field, min, max)
     }
 }
 
@@ -362,5 +376,11 @@ mod tests {
     fn test_print_visitor_gte() {
         let expr: ASTIdExpr<u64> = ASTIdExpr::Gte("price".to_string(), 125.5);
         assert_eq!(expr.to_string(), "price>=125.5");
+    }
+
+    #[test]
+    fn test_print_visitor_between() {
+        let expr: ASTIdExpr<u64> = ASTIdExpr::Between("price".to_string(), 100.0, 200.0);
+        assert_eq!(expr.to_string(), "price BETWEEN 100 AND 200");
     }
 }

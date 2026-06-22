@@ -100,6 +100,20 @@ where
                          Rewrite query using complemented AND/OR logic.",
                     ))
                 }
+                CompareOp::Between(min, max) => {
+                    let lower_expr = ASTExpr::Compare {
+                        field: field.clone(),
+                        op: CompareOp::Gte(*min),
+                    };
+                    let upper_expr = ASTExpr::Compare {
+                        field: field.clone(),
+                        op: CompareOp::Lte(*max),
+                    };
+
+                    let lower = self.evaluate_query(&lower_expr)?;
+                    let upper = self.evaluate_query(&upper_expr)?;
+                    Ok(lower.intersect(&upper))
+                }
                 CompareOp::Gte(_) | CompareOp::Gt(_) | CompareOp::Lte(_) | CompareOp::Lt(_) => {
                     // Range query - scan both integer and float ranges
                     let mut result = PL::empty();

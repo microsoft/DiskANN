@@ -472,6 +472,11 @@ mod reference_impl {
                     crate::CompareOp::Lte(num) => self.range_query_lte(field, *num),
                     crate::CompareOp::Gt(num) => self.range_query_gt(field, *num),
                     crate::CompareOp::Gte(num) => self.range_query_gte(field, *num),
+                    crate::CompareOp::Between(min, max) => {
+                        let lower = self.range_query_gte(field, *min)?;
+                        let upper = self.range_query_lte(field, *max)?;
+                        Ok(lower.intersect(&upper))
+                    }
                 },
             }
         }

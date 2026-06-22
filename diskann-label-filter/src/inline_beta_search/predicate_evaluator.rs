@@ -51,6 +51,13 @@ where
             None => false,
         }
     }
+
+    fn matches_between(attr_value: &AttributeValue, min: f64, max: f64) -> bool {
+        match attr_value.as_numeric_f64() {
+            Some(value) => value >= min && value <= max,
+            None => false,
+        }
+    }
 }
 
 impl<'a, ST> ASTIdExprVisitor<u64> for PredicateEvaluator<'a, ST>
@@ -136,6 +143,27 @@ where
             if let Some(attribute) = encoder.get_by_id(attr_id) {
                 if attribute.field_name() == field
                     && Self::matches_numeric_bound(attribute.attr_value(), value, false)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn visit_between(&self, field: &str, min: f64, max: f64) -> Self::Output {
+        let encoder = self.attribute_map.read().map_err(|_| {
+            ANNError::message(
+                ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on attribute map",
+            )
+        })?;
+
+        for attr_id in self.labels_of_point.clone() {
+            if let Some(attribute) = encoder.get_by_id(attr_id) {
+                if attribute.field_name() == field
+                    && Self::matches_between(attribute.attr_value(), min, max)
                 {
                     return Ok(true);
                 }

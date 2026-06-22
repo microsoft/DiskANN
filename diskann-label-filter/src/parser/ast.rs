@@ -35,6 +35,8 @@ pub enum CompareOp {
     Gt(f64), // $gt
     /// Greater than or equal comparison, only valid for numeric values
     Gte(f64), // $gte
+    /// Inclusive numeric range comparison, only valid for numeric values
+    Between(f64, f64), // $between
 }
 
 impl fmt::Display for CompareOp {
@@ -46,6 +48,7 @@ impl fmt::Display for CompareOp {
             CompareOp::Lte(_) => write!(f, "<="),
             CompareOp::Gt(_) => write!(f, ">"),
             CompareOp::Gte(_) => write!(f, ">="),
+            CompareOp::Between(_, _) => write!(f, " BETWEEN "),
         }
     }
 }
@@ -189,6 +192,7 @@ impl ASTVisitor for PrintVisitor {
             CompareOp::Lte(num) => num.to_string(),
             CompareOp::Gt(num) => num.to_string(),
             CompareOp::Gte(num) => num.to_string(),
+            CompareOp::Between(min, max) => format!("{} AND {}", min, max),
         };
 
         format!("{}{}{}", field, op, value_str)
@@ -286,5 +290,12 @@ mod tests {
 
         let expected_nested = "AND(\n OR(\n  age>30,\n  age<20\n ),\n NOT(name==\"Admin\")\n)";
         assert_eq!(nested_expr.to_string(), expected_nested);
+
+        // Test between expression
+        let between_expr = ASTExpr::Compare {
+            field: "price".to_string(),
+            op: CompareOp::Between(100.0, 200.0),
+        };
+        assert_eq!(between_expr.to_string(), "price BETWEEN 100 AND 200");
     }
 }

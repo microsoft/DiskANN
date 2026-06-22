@@ -205,6 +205,7 @@ where
         match op {
             CompareOp::Eq(v) | CompareOp::Ne(v) => v.as_f64(),
             CompareOp::Lt(v) | CompareOp::Lte(v) | CompareOp::Gt(v) | CompareOp::Gte(v) => Some(*v),
+            CompareOp::Between(_, _) => None,
         }
     }
 

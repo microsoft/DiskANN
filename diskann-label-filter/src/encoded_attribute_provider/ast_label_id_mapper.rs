@@ -104,6 +104,9 @@ impl ASTVisitor for ASTLabelIdMapper {
             CompareOp::Gte(num) => {
                 return Ok(ASTIdExpr::Gte(field.to_string(), *num));
             }
+            CompareOp::Between(min, max) => {
+                return Ok(ASTIdExpr::Between(field.to_string(), *min, *max));
+            }
         };
 
         if let Some(attribute) = label_or_none {
@@ -282,6 +285,15 @@ mod tests {
 
         let result = mapper.visit(&expr).unwrap();
         assert_eq!(result, ASTIdExpr::Gte("price".to_string(), 250.0));
+
+        // Test Between operation (supported)
+        let expr = ASTExpr::Compare {
+            field: "price".to_string(),
+            op: CompareOp::Between(200.0, 300.0),
+        };
+
+        let result = mapper.visit(&expr).unwrap();
+        assert_eq!(result, ASTIdExpr::Between("price".to_string(), 200.0, 300.0));
     }
 
     #[test]

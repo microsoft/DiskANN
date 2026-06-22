@@ -46,6 +46,7 @@ use diskann_label_filter::{
     filtered_query_label_provider::FilteredQueryLabelProvider,
     inline_beta_search::inline_beta_filter::InlineBetaStrategy,
     inline_beta_search::inverted_bitmap_evaluator::InvertedBitmapEvaluator,
+    parser::canonicalizer::AstCanonicalizer,
     parser::format::Document as LabelDocument,
     query::FilteredQuery,
     read_and_parse_queries, read_baselabels,
@@ -318,6 +319,12 @@ where
     writeln!(output, "Loading query predicates...")?;
     let predicate_path: &Path = search_input.query_predicates.as_ref();
     let parsed_predicates = read_and_parse_queries(predicate_path)?;
+    let canonicalizer = AstCanonicalizer::default();
+    let parsed_predicates = parsed_predicates
+        .into_iter()
+        .map(|(id, expr)| (id, canonicalizer.canonicalize(&expr)))
+        .collect::<Vec<_>>();
+
     writeln!(output, "  Loaded {} predicates", parsed_predicates.len())?;
 
     if num_queries != parsed_predicates.len() {
@@ -938,15 +945,19 @@ where
             } => {
                 #[cfg(not(feature = "precompute-query-bitmaps"))]
                 {
+                    // let start_time = std::time::Instant::now();
                     let (_, ref expr) = predicates[index];
-                    Arc::new(
+                    let res = Arc::new(
                         BitmapQueryLabelProvider::from_ast(
                             expr,
                             attribute_store.as_ref(),
                             label_universe.as_ref(),
                         )
                         .map_err(ANNError::log_async_error)?,
-                    )
+                    );
+                    // let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+                    // eprintln!("Search took: {:.2} ms", elapsed_ms);
+                    res
                 }
                 #[cfg(feature = "precompute-query-bitmaps")]
                 {
@@ -1278,18 +1289,48 @@ where
 
     #[cfg(feature = "precompute-query-bitmaps")]
     let precomputed_bitmaps: Arc<[RoaringTreemap]> = {
+        // Precompute all query bitmaps at searcher creation time
+        let thread_pool = ThreadPoolBuilder::new()
+            .num_threads(num_threads.get())
+            .build()
+            .context("Failed to create Rayon thread pool for query bitmap precomputation")?;
+
         let evaluator = InvertedBitmapEvaluator::new(&attribute_store, universe.as_ref());
-        let bitmaps = predicates
-            .iter()
-            .map(|(_, expr)| -> anyhow::Result<RoaringTreemap> {
-                let encoded = EncodedFilterExpr::from_attribute_store(expr, &attribute_store)
-                    .context("failed to encode filter expression")?;
-                evaluator
-                    .evaluate(&encoded)
-                    .context("failed to evaluate encoded expression")
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Arc::from(bitmaps.into_boxed_slice())
+        let precompute_start = std::time::Instant::now();
+        let precomputed_bitmaps: Vec<RoaringTreemap> = thread_pool.install(|| {
+            predicates
+                .par_iter()
+                .enumerate()
+                .map(|(query_index, (_, expr))| -> anyhow::Result<RoaringTreemap> {
+                    let encoded_filter =
+                        EncodedFilterExpr::from_attribute_store(expr, &attribute_store).with_context(
+                            || {
+                                format!(
+                                    "Failed to encode filter expression for precomputation at query index {}",
+                                    query_index
+                                )
+                            },
+                        )?;
+
+                    evaluator.evaluate(&encoded_filter).with_context(|| {
+                        format!(
+                            "Failed to evaluate encoded expression during precomputation at query index {}",
+                            query_index
+                        )
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })?;
+
+        let precompute_elapsed = precompute_start.elapsed();
+        eprintln!(
+            "Precomputed {} query bitmaps in {:.3}s using {} Rayon threads",
+            precomputed_bitmaps.len(),
+            precompute_elapsed.as_secs_f64(),
+            num_threads.get()
+        );
+
+        Arc::from(precomputed_bitmaps.into_boxed_slice())
     };
 
     let searcher = Arc::new(InlineLabelProviderSearcher {

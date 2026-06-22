@@ -5,6 +5,7 @@
 
 use bit_set::BitSet;
 use diskann_label_filter::attribute::AttributeValue;
+use diskann_label_filter::parser::canonicalizer::AstCanonicalizer;
 use diskann_label_filter::parser::format::Document;
 use diskann_label_filter::utils::flatten_utils::{
     flatten_json_pointers_with_config, FlattenConfig,
@@ -183,6 +184,16 @@ impl QueryAccelerator for BTreeAccelerator {
                 let fval = OrderedFloat::new(*num)
                     .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
                 let iter = self.map.range((Included(fval), Unbounded));
+                Ok(insert_into_bitset(
+                    iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+                ))
+            }
+            CompareOp::Between(min, max) => {
+                let min = OrderedFloat::new(*min)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let max = OrderedFloat::new(*max)
+                    .map_err(|e| anyhow::anyhow!("Failed to create OrderedFloat: {e}"))?;
+                let iter = self.map.range((Included(min), Included(max)));
                 Ok(insert_into_bitset(
                     iter.flat_map(|(_, ids)| ids.iter().cloned()).collect(),
                 ))
@@ -437,16 +448,27 @@ pub fn compute_query_bitmaps(
         })
         .collect::<Result<_, _>>()?;
 
-    // Evaluate each query using the precomputed accelerators
-    #[allow(clippy::disallowed_methods)]
-    let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = query_labels
-        .par_iter()
+    let canon_exprs = query_labels
+        .iter()
         .map(|(_query_id, query_expr)| {
+            let canon = AstCanonicalizer::default();
+            canon.canonicalize(query_expr)
+        })
+        .collect::<Vec<_>>();
+
+    // Evaluate each query using the precomputed accelerators
+    let start = std::time::Instant::now();
+    #[allow(clippy::disallowed_methods)]
+    let query_bitmaps: Result<Vec<BitSet>, anyhow::Error> = canon_exprs
+        .par_iter()
+        .map(|query_expr| {
             eval_query_using_accelerators(query_expr, &query_accelerators)
         })
         .collect();
 
     let query_bitmaps = query_bitmaps?;
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("Time taken to compute query bitmaps: {:.2} seconds", elapsed);
 
     Ok(query_bitmaps)
 }

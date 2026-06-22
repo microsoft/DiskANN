@@ -50,6 +50,13 @@ pub fn eval_query_expr(expr: &ASTExpr, label: &Value) -> bool {
                             false
                         }
                     }
+                    CompareOp::Between(min, max) => {
+                        if let Some(f1) = field_val.as_f64() {
+                            f1 >= *min && f1 <= *max
+                        } else {
+                            false
+                        }
+                    }
                 }
             } else {
                 false // Field not found
@@ -180,6 +187,10 @@ mod tests {
         assert!(eval_query_expr(&ast, &label));
         // $gte
         let filter = json!({"int": {"$gte": 5}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse filter");
+        assert!(eval_query_expr(&ast, &label));
+        // $between
+        let filter = json!({"flt": {"$between": [3.0, 4.0]}});
         let ast = parse_query_filter(&filter).expect("Failed to parse filter");
         assert!(eval_query_expr(&ast, &label));
         // NOTE: $in and $nin operators removed - using $eq instead

@@ -49,6 +49,7 @@ impl<'a> InvertedBitmapEvaluator<'a> {
             ASTIdExpr::Eq(attr_id) => self.attribute_store.posting_bitmap_for_attr_id(*attr_id),
             ASTIdExpr::Lte(field, value) => self.evaluate_numeric_range(field, *value, true),
             ASTIdExpr::Gte(field, value) => self.evaluate_numeric_range(field, *value, false),
+            ASTIdExpr::Between(field, min, max) => self.evaluate_numeric_between(field, *min, *max),
             ASTIdExpr::And(exprs) => {
                 if exprs.is_empty() {
                     return Ok(self.universe.clone());
@@ -136,6 +137,9 @@ impl<'a> InvertedBitmapEvaluator<'a> {
             ASTIdExpr::Eq(attr_id) => self.attribute_store.posting_bitmap_read_inplace_for_attr_id(*attr_id, func),
             ASTIdExpr::Lte(field, value) => self.evaluate_numeric_range_inplace(field, *value, true, func),
             ASTIdExpr::Gte(field, value) => self.evaluate_numeric_range_inplace(field, *value, false, func),
+            ASTIdExpr::Between(field, min, max) => {
+                self.evaluate_numeric_between_inplace(field, *min, *max, func)
+            }
             ASTIdExpr::And(exprs) => {
                 if exprs.is_empty() {
                     func(self.universe);
@@ -229,6 +233,57 @@ impl<'a> InvertedBitmapEvaluator<'a> {
                     .posting_bitmap_read_inplace_for_attr_id(attr_id, &mut merge_postings)?;
             }
         }
+        func(&bitmap);
+        Ok(())
+    }
+
+    fn evaluate_numeric_between(
+        &self,
+        field: &str,
+        min: f64,
+        max: f64,
+    ) -> diskann::ANNResult<RoaringTreemap> {
+        let field_attr_ids = self.attribute_store.attribute_ids_for_field(field)?;
+        if field_attr_ids.is_empty() {
+            return Ok(RoaringTreemap::new());
+        }
+
+        let attribute_map = self.attribute_store.attribute_map();
+        let encoder = attribute_map.read().map_err(|_| {
+            diskann::ANNError::message(
+                diskann::ANNErrorKind::LockPoisonError,
+                "Failed to acquire read lock on attribute map",
+            )
+        })?;
+
+        let mut bitmap = RoaringTreemap::new();
+        for attr_id in field_attr_ids {
+            let matches = encoder
+                .get_by_id(attr_id)
+                .and_then(|attribute| attribute.attr_value().as_numeric_f64())
+                .map(|attr_value| { attr_value >= min && attr_value <= max })
+                .unwrap_or(false);
+
+            if matches {
+                let mut merge_postings = |postings: &RoaringTreemap| {
+                    bitmap |= postings;
+                };
+                self.attribute_store
+                    .posting_bitmap_read_inplace_for_attr_id(attr_id, &mut merge_postings)?;
+            }
+        }
+
+        Ok(bitmap)
+    }
+
+    fn evaluate_numeric_between_inplace(
+        &self,
+        field: &str,
+        min: f64,
+        max: f64,
+        func: &mut dyn FnMut(&RoaringTreemap),
+    ) -> diskann::ANNResult<()> {
+        let bitmap = self.evaluate_numeric_between(field, min, max)?;
         func(&bitmap);
         Ok(())
     }
@@ -344,6 +399,18 @@ mod tests {
         };
 
         assert_same_modes(&expr, &store, &universe, &[1, 2]);
+    }
+
+    #[test]
+    fn test_evaluate_between_same_for_inplace_and_non_inplace() {
+        let store = build_store();
+        let universe = build_universe(&[1, 2, 3]);
+        let expr = ASTExpr::Compare {
+            field: "price".to_string(),
+            op: CompareOp::Between(150.0, 300.0),
+        };
+
+        assert_same_modes(&expr, &store, &universe, &[2, 3]);
     }
 
     #[test]

@@ -173,6 +173,36 @@ fn parse_query_filter_with_depth(
                                 ));
                             }
                         }
+                        "$between" => {
+                            if let Some(bounds) = val.as_array() {
+                                if bounds.len() != 2 {
+                                    return Err(QueryFilterError::InvalidValueType(
+                                        "array with two numeric values".to_string(),
+                                        val.to_string(),
+                                    ));
+                                }
+
+                                let min = bounds[0].as_f64().ok_or_else(|| {
+                                    QueryFilterError::InvalidValueType(
+                                        "numeric".to_string(),
+                                        bounds[0].to_string(),
+                                    )
+                                })?;
+                                let max = bounds[1].as_f64().ok_or_else(|| {
+                                    QueryFilterError::InvalidValueType(
+                                        "numeric".to_string(),
+                                        bounds[1].to_string(),
+                                    )
+                                })?;
+
+                                CompareOp::Between(min, max)
+                            } else {
+                                return Err(QueryFilterError::InvalidValueType(
+                                    "array with two numeric values".to_string(),
+                                    val.to_string(),
+                                ));
+                            }
+                        }
                         "$in" | "$nin" => {
                             return Err(QueryFilterError::UnsupportedComparisonOperator(op.clone()))
                         }
@@ -381,6 +411,26 @@ mod tests {
         } else {
             panic!("Expected implicit AND, got {:?}", ast);
         }
+    }
+
+    #[test]
+    fn test_parse_between_operator() {
+        let filter = json!({"price": {"$between": [100.0, 200.0]}});
+        let ast = parse_query_filter(&filter).expect("Failed to parse $between");
+        assert!(matches!(
+            ast,
+            ASTExpr::Compare {
+                field,
+                op: CompareOp::Between(min, max)
+            } if field == "price" && min == 100.0 && max == 200.0
+        ));
+    }
+
+    #[test]
+    fn test_parse_between_invalid_shape() {
+        let filter = json!({"price": {"$between": [100.0]}});
+        let result = parse_query_filter(&filter);
+        assert!(matches!(result, Err(QueryFilterError::InvalidValueType(_, _))));
     }
 
     #[test]

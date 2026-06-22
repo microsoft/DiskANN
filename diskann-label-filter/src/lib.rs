@@ -6,6 +6,7 @@
 // Parser modules
 pub mod parser {
     pub mod ast;
+    pub mod canonicalizer;
     pub mod evaluator;
     pub mod format;
     pub mod query_parser;
