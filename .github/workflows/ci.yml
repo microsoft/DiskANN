@@ -237,129 +237,133 @@ jobs:
   #         RUSTDOCFLAGS: -Dwarnings
 
 
-  # # Test micro-architecture detection and dispatching.
-  # #
-  # # The crate `diskann-wide` is the primary driver for this mechanism.
-  # #
-  # # Verify that code compiled for the `x86-64` baseline does not accidentally emit
-  # # AVX/AVX2 instructions. We compile with `-Ctarget-cpu=x86-64` and run the full
-  # # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
-  # # Intel SDE configured as a Nehalem CPU.
-  # #
-  # # SDE will abort if any unrecognised instruction (e.g. AVX) is executed.
-  # #
-  # # EXCLUDED TESTS
-  # #
-  # # * compile-tests: These don't behave well under SDE.
-  # # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
-  # #   architecture make this test take too long.
-  # baseline:
-  #   needs: basics
-  #   name: sde-baseline-tests
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     # Compile for the x86-64 baseline — no AVX, no AVX2.
-  #     RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
-  #     # Run every test binary through SDE emulating a Nehalem CPU.
-  #     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
+  # Test micro-architecture detection and dispatching.
+  #
+  # The crate `diskann-wide` is the primary driver for this mechanism.
+  #
+  # Verify that code compiled for the `x86-64` baseline does not accidentally emit
+  # AVX/AVX2 instructions. We compile with `-Ctarget-cpu=x86-64` and run the full
+  # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
+  # Intel SDE configured as a Nehalem CPU.
+  #
+  # SDE will abort if any unrecognised instruction (e.g. AVX) is executed.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
+  # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
+  #   architecture make this test take too long.
+  baseline:
+    needs: basics
+    name: sde-baseline-tests
+    runs-on: ubuntu-latest
+    if:
+      false # Disabled until we can resolve SDE binary downloads.
+    env:
+      # Compile for the x86-64 baseline — no AVX, no AVX2.
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+      # Run every test binary through SDE emulating a Nehalem CPU.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -nhm --"
 
-  #   steps:
-  #     - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Install Rust
-  #       run: rustup show
+      - name: Install Rust
+        run: rustup show
 
-  #     - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-  #     - name: Cache Intel SDE
-  #       id: cache-sde
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: intel-sde
-  #         key: intel-${{ env.SDE_VERSION }}
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
 
-  #     - name: Download Intel SDE
-  #       if: steps.cache-sde.outputs.cache-hit != 'true'
-  #       run: |
-  #         set -euxo pipefail
-  #         SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
-  #         wget -qO intel-sde.tar.xz "$SDE_URL"
-  #         mkdir -p intel-sde
-  #         tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
-  #         rm intel-sde.tar.xz
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
 
-  #     - name: Verify SDE installation
-  #       run: ./intel-sde/sde64 --version
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
 
-  #     - name: "SDE Baseline Tests (Nehalem)"
-  #       run: |
-  #         set -euxo pipefail
-  #         cargo test --locked --profile ci \
-  #             --package diskann-wide \
-  #             --package diskann-vector \
-  #             --package diskann-quantization \
-  #             -- --skip compile_tests \
-  #                --skip pivots::tests::run_test_happy_path
+      - name: "SDE Baseline Tests (Nehalem)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+              --package diskann-wide \
+              --package diskann-vector \
+              --package diskann-quantization \
+              -- --skip compile_tests \
+                 --skip pivots::tests::run_test_happy_path
 
 
-  # # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
-  # #
-  # # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
-  # # the diskann-wide V4 backend.
-  # #
-  # # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
-  # # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
-  # # special RUSTFLAGS are needed beyond the defaults.
-  # #
-  # # EXCLUDED TESTS
-  # #
-  # # * compile-tests: These don't behave well under SDE.
-  # sde:
-  #   needs: basics
-  #   name: sde-avx512-tests
-  #   runs-on: ubuntu-latest
-  #   env:
-  #     # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
-  #     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
-  #     # Force diskann-wide tests to require V4 architecture.
-  #     WIDE_TEST_MIN_ARCH: "x86-64-v4"
+  # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
+  #
+  # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
+  # the diskann-wide V4 backend.
+  #
+  # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
+  # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
+  # special RUSTFLAGS are needed beyond the defaults.
+  #
+  # EXCLUDED TESTS
+  #
+  # * compile-tests: These don't behave well under SDE.
+  sde:
+    needs: basics
+    name: sde-avx512-tests
+    runs-on: ubuntu-latest
+    if:
+      false # Disabled until we can resolve SDE binary downloads.
+    env:
+      # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
+      # Force diskann-wide tests to require V4 architecture.
+      WIDE_TEST_MIN_ARCH: "x86-64-v4"
 
-  #   steps:
-  #     - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Install Rust
-  #       run: rustup show
+      - name: Install Rust
+        run: rustup show
 
-  #     - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-  #     - name: Cache Intel SDE
-  #       id: cache-sde
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: intel-sde
-  #         key: intel-${{ env.SDE_VERSION }}
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
 
-  #     - name: Download Intel SDE
-  #       if: steps.cache-sde.outputs.cache-hit != 'true'
-  #       run: |
-  #         set -euxo pipefail
-  #         SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
-  #         wget -qO intel-sde.tar.xz "$SDE_URL"
-  #         mkdir -p intel-sde
-  #         tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
-  #         rm intel-sde.tar.xz
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
 
-  #     - name: Verify SDE installation
-  #       run: ./intel-sde/sde64 --version
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
 
-  #     - name: "SDE Tests (AVX-512)"
-  #       run: |
-  #         set -euxo pipefail
-  #         cargo test --locked --profile ci \
-  #           --package diskann-wide \
-  #           --package diskann-vector \
-  #           --package diskann-quantization \
-  #           -- --skip compile_tests
+      - name: "SDE Tests (AVX-512)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked --profile ci \
+            --package diskann-wide \
+            --package diskann-vector \
+            --package diskann-quantization \
+            -- --skip compile_tests
 
   test-workspace:
     needs: basics
