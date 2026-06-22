@@ -435,3 +435,41 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 impl ExactSizeIterator for Iter<'_> {}
+
+#[cfg(all(test, feature = "disk"))]
+mod tests {
+    use super::*;
+
+    fn write_manifest(dir: &Path, files: &[&str]) -> PathBuf {
+        let manifest = serde_json::json!({
+            "files": files,
+            "value": { "$version": "0.0.0" },
+        });
+        let metadata = dir.join("metadata.json");
+        std::fs::write(&metadata, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        metadata
+    }
+
+    #[test]
+    fn read_rejects_unregistered_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = write_manifest(dir.path(), &[]);
+        let ctx = DiskContext::new(&metadata, dir.path()).unwrap();
+        let Err(err) = ctx.read("artifact.bin") else {
+            panic!("an unregistered file must be rejected");
+        };
+        assert!(format!("{err}").contains("not registered in the manifest"));
+    }
+
+    #[test]
+    fn read_rejects_escaping_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        // Register the escaping name so only the path-shape check can reject it.
+        let metadata = write_manifest(dir.path(), &["../escape.bin"]);
+        let ctx = DiskContext::new(&metadata, dir.path()).unwrap();
+        let Err(err) = ctx.read("../escape.bin") else {
+            panic!("a handle escaping the manifest directory must be rejected");
+        };
+        assert!(format!("{err}").contains("escapes the manifest directory"));
+    }
+}

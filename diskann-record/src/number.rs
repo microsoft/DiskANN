@@ -178,3 +178,31 @@ try_from!(
     f32 => as_f32,
     f64 => as_f64,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integer_accessors_range_check() {
+        assert_eq!(Number::U64(255).as_u8(), Some(255));
+        assert_eq!(Number::U64(256).as_u8(), None);
+        assert_eq!(Number::I64(-1).as_u8(), None);
+        assert_eq!(Number::I64(-5).as_i8(), Some(-5));
+        assert_eq!(Number::I64(-129).as_i8(), None);
+    }
+
+    #[test]
+    fn float_to_integer_requires_integral_value() {
+        assert_eq!(Number::F64(2.0).as_u32(), Some(2));
+        assert_eq!(Number::F64(2.5).as_u32(), None);
+        assert_eq!(Number::F64(-1.0).as_u32(), None);
+    }
+
+    #[test]
+    fn try_from_surfaces_out_of_range() {
+        assert!(u8::try_from(Number::U64(300)).is_err());
+        assert_eq!(u16::try_from(Number::U64(300)).unwrap(), 300);
+        assert!(usize::try_from(Number::I64(-1)).is_err());
+    }
+}

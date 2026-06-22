@@ -93,13 +93,34 @@ struct Final<'a> {
 
 #[cfg(feature = "disk")]
 impl DiskContext {
-    // TODO: Error if the directory looks bad?
-    pub(super) fn new(dir: PathBuf, metadata: PathBuf) -> Self {
-        Self {
+    /// Create a disk-backed save context targeting `dir` for side-car artifacts and
+    /// `metadata` for the manifest. Validates that `dir` is an actual directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if `dir` does not exist, cannot be inspected, or exists but is
+    /// not a directory.
+    pub(super) fn new(dir: PathBuf, metadata: PathBuf) -> Result<Self> {
+        match std::fs::metadata(&dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => {
+                return Err(Error::message(format!(
+                    "path {} exists but is not a directory",
+                    dir.display()
+                )));
+            }
+            Err(err) => {
+                return Err(
+                    Error::new(err).context(format!("while validating path {}", dir.display()))
+                );
+            }
+        }
+
+        Ok(Self {
             dir,
             metadata,
             files: Mutex::new(HashSet::new()),
-        }
+        })
     }
 }
 
@@ -286,5 +307,47 @@ impl std::io::Seek for Writer<'_> {
     }
     fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
         self.io.seek_relative(offset)
+    }
+}
+
+#[cfg(all(test, feature = "disk"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_rejects_nonexistent_directory() {
+        let missing = PathBuf::from("does/not/exist/anywhere/at/all");
+        let err = DiskContext::new(missing, "meta.json".into())
+            .expect_err("a nonexistent directory must be rejected");
+        assert!(format!("{err}").contains("while validating path"));
+    }
+
+    #[test]
+    fn new_rejects_file_as_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not_a_dir");
+        std::fs::write(&file, b"hi").unwrap();
+        let err = DiskContext::new(file, dir.path().join("meta.json"))
+            .expect_err("a file path must be rejected as a directory");
+        assert!(format!("{err}").contains("is not a directory"));
+    }
+
+    #[test]
+    fn write_rejects_path_separators_and_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        for bad in ["sub/dir.bin", "../escape.bin", "/abs.bin"] {
+            SaveContext::write(&ctx, bad).expect_err("keys with path separators must be rejected");
+        }
+    }
+
+    #[test]
+    fn write_rejects_duplicate_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
+        let _writer = SaveContext::write(&ctx, "artifact.bin").unwrap();
+        let err = SaveContext::write(&ctx, "artifact.bin")
+            .expect_err("a duplicate artifact key must be rejected");
+        assert!(format!("{err}").contains("already been registered"));
     }
 }

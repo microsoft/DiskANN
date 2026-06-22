@@ -74,7 +74,7 @@ pub fn save_to_disk<T>(
 where
     T: Saveable,
 {
-    let context = context::DiskContext::new(dir.as_ref().into(), metadata.as_ref().into());
+    let context = context::DiskContext::new(dir.as_ref().into(), metadata.as_ref().into())?;
     save(x, context)
 }
 

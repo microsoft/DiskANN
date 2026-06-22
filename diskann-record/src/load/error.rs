@@ -198,3 +198,22 @@ impl From<Kind> for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_preserves_recoverable_flag() {
+        assert!(
+            Error::from(Kind::TypeMismatch)
+                .context("extra")
+                .is_recoverable()
+        );
+        assert!(
+            !Error::from(Kind::MissingFile)
+                .context("extra")
+                .is_recoverable()
+        );
+    }
+}

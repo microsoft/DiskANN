@@ -83,3 +83,29 @@ impl<'de> Deserialize<'de> for Version {
         de.deserialize_str(VersionVisitor)
     }
 }
+
+#[cfg(all(test, feature = "disk"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_as_dotted_string() {
+        let json = serde_json::to_string(&Version::new(1, 2, 3)).unwrap();
+        assert_eq!(json, "\"1.2.3\"");
+    }
+
+    #[test]
+    fn round_trips_through_json() {
+        let v = Version::new(4, 5, 6);
+        let back: Version = serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn rejects_malformed_strings() {
+        for bad in ["\"1.2\"", "\"1.2.3.4\"", "\"1.x.3\"", "\"abc\""] {
+            serde_json::from_str::<Version>(bad)
+                .expect_err("malformed version string must be rejected");
+        }
+    }
+}

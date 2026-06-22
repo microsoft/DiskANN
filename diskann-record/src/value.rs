@@ -374,3 +374,37 @@ impl<'de> Deserialize<'de> for Handle {
         Ok(Handle(helper.handle))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_rejects_reserved_key() {
+        let mut record = Record::empty();
+        record
+            .insert("$version", Value::Null)
+            .expect_err("reserved key must be rejected");
+        record
+            .insert("ok", Value::Bool(true))
+            .expect("normal key must be accepted");
+        assert!(record.contains_key("ok"));
+        assert_eq!(record.len(), 1);
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn deserialize_rejects_handle_with_extra_fields() {
+        let json = r#"{ "$handle": "a.bin", "$version": "0.0.0" }"#;
+        serde_json::from_str::<Value<'static>>(json)
+            .expect_err("handle object with extra fields must be rejected");
+    }
+
+    #[cfg(feature = "disk")]
+    #[test]
+    fn deserialize_rejects_object_without_version_or_handle() {
+        let json = r#"{ "field": 1 }"#;
+        serde_json::from_str::<Value<'static>>(json)
+            .expect_err("object without $version or $handle must be rejected");
+    }
+}
