@@ -627,11 +627,11 @@ mod generator_tests {
         )
         .unwrap();
 
-        let err = generator.validate_params(num_points, &storage_provider);
-        assert!(err.is_err());
-        let err_msg = format!("{:?}", err.unwrap_err());
-        assert!(err_msg.contains("expected compressed file"));
-
+        let err = generator
+            .validate_params(num_points, &storage_provider)
+            .unwrap_err();
+        assert_eq!(err.kind(), diskann::ANNErrorKind::FileNotFoundError);
+        assert!(err.to_string().contains("expected compressed file"));
         Ok(())
     }
 }

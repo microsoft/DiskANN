@@ -208,7 +208,7 @@ mod tests {
             let mut yielded = self.yielded.lock().unwrap();
             if !*yielded {
                 *yielded = true;
-                ContinuationGrant::Yield(std::time::Duration::from_millis(1))
+                ContinuationGrant::Yield(std::time::Duration::ZERO)
             } else {
                 // After yielding once, always continue
                 ContinuationGrant::Continue
