@@ -139,6 +139,7 @@ mod tests {
         let err = pq_scratch.set(&short_query).unwrap_err();
         assert_eq!(err.kind(), diskann::ANNErrorKind::DimensionMismatchError);
         assert!(err.to_string().contains("expected query of length"));
+    }
 
     #[test]
     fn test_pq_scratch_set_accepts_oversized_query() {
