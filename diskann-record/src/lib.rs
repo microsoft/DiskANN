@@ -23,8 +23,10 @@
 //!
 //! # Entry Points
 //!
-//! - [`save::save_to_disk`]: Save a value to a directory plus a manifest path.
-//! - [`load::load_from_disk`]: Reload a value from a manifest and its artifact directory.
+//! - `save::save_to_disk` (requires the `disk` feature): Save a value to a directory
+//!   plus a manifest path.
+//! - `load::load_from_disk` (requires the `disk` feature): Reload a value from a
+//!   manifest and its artifact directory.
 //!
 //! # Defining Save / Load
 //!
@@ -122,7 +124,7 @@ pub const fn is_reserved(s: &str) -> bool {
 // Tests //
 ///////////
 
-#[cfg(test)]
+#[cfg(all(test, feature = "disk"))]
 mod tests {
     use super::*;
 

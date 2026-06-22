@@ -18,7 +18,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 ///
 /// Wraps [`anyhow::Error`] for rich context chains (see [`Error::context`]) and is
 /// returned from every fallible save-side operation, including [`super::Save::save`]
-/// impls and [`super::save_to_disk`].
+/// impls and `save_to_disk`.
 #[derive(Debug)]
 pub struct Error {
     inner: anyhow::Error,

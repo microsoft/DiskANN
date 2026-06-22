@@ -9,7 +9,8 @@
 //! primitive-like leaves, [`Loadable`]) and obtain an [`Object`] / [`Context`] from which
 //! they extract individual fields and side-car artifacts.
 //!
-//! The top-level entry point is [`load_from_disk`], which reads a manifest and dispatches
+//! The generic entry point is [`load`]; `load_from_disk` (available under the `disk`
+//! feature) is the disk-backed convenience wrapper that reads a manifest and dispatches
 //! into the user type's [`Load`] impl.
 //!
 //! # Reading Records
@@ -36,11 +37,31 @@ pub mod error;
 pub use error::{Error, Result};
 
 mod context;
-pub use context::{Context, Object};
+pub use context::{Context, LoadContext, Object};
 
+#[cfg(feature = "disk")]
 use std::path::Path;
 
 use crate::{Version, save};
+
+/// Deserialize a `T` from `context`.
+///
+/// This is the generic entry point: it asks `context` for its root value and threads a
+/// [`Context`] borrowing `context` through `T`'s [`Loadable::load`] impl.
+/// `load_from_disk` is the disk-backed convenience wrapper available under the `disk`
+/// feature.
+///
+/// # Errors
+///
+/// Returns [`Error`] if the context cannot produce a root value or if `T`'s loader fails.
+pub fn load<'a, T, C>(context: &'a C) -> Result<T>
+where
+    T: Loadable<'a>,
+    C: LoadContext,
+{
+    let value = context.value()?;
+    T::load(Context::new(context, value))
+}
 
 /// Reload a value previously written by [`save::save_to_disk`].
 ///
@@ -52,12 +73,13 @@ use crate::{Version, save};
 /// Returns [`Error`] if the manifest is missing or malformed, if a referenced artifact is
 /// missing, or if a user [`Load`] impl fails (e.g. due to a version mismatch with no
 /// upgrade path).
+#[cfg(feature = "disk")]
 pub fn load_from_disk<T>(metadata: &Path, dir: &Path) -> Result<T>
 where
     T: for<'a> Loadable<'a>,
 {
-    let inner = context::ContextInner::new(metadata, dir)?;
-    inner.context().load()
+    let context = context::DiskContext::new(metadata, dir)?;
+    load(&context)
 }
 
 /// Implemented by user types that can be reloaded from a versioned [`Object`].

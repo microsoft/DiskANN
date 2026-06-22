@@ -5,6 +5,7 @@
 
 //! Semver-style version stamps embedded in every saved object.
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// A semver-style schema version attached to every saved record.
@@ -38,6 +39,7 @@ impl Version {
     }
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for Version {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         ser.collect_str(&format_args!(
@@ -47,6 +49,7 @@ impl Serialize for Version {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for Version {
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         struct VersionVisitor;

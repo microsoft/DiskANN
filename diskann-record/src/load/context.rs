@@ -17,33 +17,67 @@
 //!
 //! [`Reader`] implements [`std::io::Read`] and [`std::io::Seek`] over the artifact file.
 
+use std::{fs::File, io::BufReader};
+
+#[cfg(feature = "disk")]
 use std::{
     collections::HashSet,
-    fs::File,
-    io::BufReader,
     path::{Path, PathBuf},
 };
 
+#[cfg(feature = "disk")]
+use crate::load::Error;
 use crate::{
     Number, Version,
-    load::{Error, Loadable, Result, error},
+    load::{Loadable, Result, error},
     save,
 };
 
+/// The backing store for a load operation.
+///
+/// A `LoadContext` supplies the root manifest [`save::Value`] ([`LoadContext::value`])
+/// and resolves side-car artifacts referenced by handles ([`LoadContext::read`]). The
+/// default, disk-backed implementation (`DiskContext`) lives in this module under the
+/// `disk` feature; alternative implementations (e.g. a virtual filesystem or a purely
+/// in-memory store) can be supplied for testing.
+///
+/// The generic [`load`](super::load) entry point is parameterized over this trait, and
+/// [`Context`] / [`Object`] / `Array` borrow it as an object-safe `&dyn LoadContext`
+/// so the load tree is agnostic to the concrete context type.
+pub trait LoadContext {
+    /// The root value of the manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`](crate::load::Error) if the root value cannot be produced.
+    fn value(&self) -> Result<&save::Value<'_>>;
+
+    /// Open the side-car artifact identified by `key` for reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::Kind::MissingFile`] if the file is not registered with this
+    /// context or if `key` escapes the manifest directory.
+    fn read(&self, key: &str) -> Result<Reader<'_>>;
+}
+
+#[cfg(feature = "disk")]
 #[derive(Debug, serde::Deserialize)]
-pub(super) struct ContextInner {
+pub(super) struct DiskContext {
     dir: PathBuf,
     files: HashSet<PathBuf>,
     value: save::Value<'static>,
 }
 
+#[cfg(feature = "disk")]
 #[derive(Debug, serde::Deserialize)]
 struct FileRepr {
     files: HashSet<PathBuf>,
     value: save::Value<'static>,
 }
 
-impl ContextInner {
+#[cfg(feature = "disk")]
+impl DiskContext {
     pub(super) fn new(metadata: &Path, dir: &Path) -> Result<Self> {
         let file = std::fs::File::open(metadata).map_err(|e| {
             Error::new(e).context(format!("while trying to open {}", metadata.display()))
@@ -60,8 +94,15 @@ impl ContextInner {
         };
         Ok(this)
     }
+}
 
-    pub(super) fn read(&self, key: &str) -> Result<Reader<'_>> {
+#[cfg(feature = "disk")]
+impl LoadContext for DiskContext {
+    fn value(&self) -> Result<&save::Value<'_>> {
+        Ok(&self.value)
+    }
+
+    fn read(&self, key: &str) -> Result<Reader<'_>> {
         let key_as_path: &Path = key.as_ref();
         let mut components = key_as_path.components();
         match components.next() {
@@ -90,10 +131,6 @@ impl ContextInner {
         };
 
         Ok(reader)
-    }
-
-    pub(super) fn context(&self) -> Context<'_> {
-        Context::new(self, &self.value)
     }
 }
 
@@ -151,18 +188,18 @@ impl std::io::Seek for Reader<'_> {
 /// Loaders use the `as_*` accessors to peek at the underlying [`save::Value`] kind
 /// (e.g. [`Context::as_object`], [`Context::as_array`], [`Context::as_str`]) and
 /// [`Context::load`] to recursively deserialize a nested value into a concrete type.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Context<'a> {
-    inner: &'a ContextInner,
+    inner: &'a dyn LoadContext,
     value: &'a save::Value<'a>,
 }
 
 impl<'a> Context<'a> {
-    fn new(inner: &'a ContextInner, value: &'a save::Value<'a>) -> Self {
+    pub(super) fn new(inner: &'a dyn LoadContext, value: &'a save::Value<'a>) -> Self {
         Self { inner, value }
     }
 
-    fn context(&self) -> &'a ContextInner {
+    fn context(&self) -> &'a dyn LoadContext {
         self.inner
     }
 
@@ -249,9 +286,8 @@ impl<'a> Context<'a> {
 /// version via [`Object::version`], the user keys via [`Object::keys`], typed field
 /// extraction via [`Object::field`] (and the [`load_fields!`](crate::load_fields)
 /// macro), and side-car artifact access via [`Object::read`].
-#[derive(Debug)]
 pub struct Object<'a> {
-    inner: &'a ContextInner,
+    inner: &'a dyn LoadContext,
     record: &'a save::Record<'a>,
     version: Version,
 }
@@ -333,7 +369,7 @@ impl<'a> Object<'a> {
         self.inner.read(handle.as_str())
     }
 
-    fn context(&self) -> &'a ContextInner {
+    fn context(&self) -> &'a dyn LoadContext {
         self.inner
     }
 }
@@ -343,14 +379,13 @@ impl<'a> Object<'a> {
 /// Backed by a borrowed `&[Value]`. Use [`Array::iter`] to walk the elements; each
 /// item is yielded as a [`Context`] that can be further deserialized via
 /// [`Context::load`].
-#[derive(Debug)]
 pub struct Array<'a> {
-    inner: &'a ContextInner,
+    inner: &'a dyn LoadContext,
     array: &'a [save::Value<'a>],
 }
 
 impl<'a> Array<'a> {
-    fn new(inner: &'a ContextInner, array: &'a [save::Value<'a>]) -> Self {
+    fn new(inner: &'a dyn LoadContext, array: &'a [save::Value<'a>]) -> Self {
         Self { inner, array }
     }
 
@@ -369,19 +404,19 @@ impl<'a> Array<'a> {
         Iter::new(self.context(), self.array.iter())
     }
 
-    fn context(&self) -> &'a ContextInner {
+    fn context(&self) -> &'a dyn LoadContext {
         self.inner
     }
 }
 
 /// Iterator returned by [`Array::iter`].
 pub struct Iter<'a> {
-    inner: &'a ContextInner,
+    inner: &'a dyn LoadContext,
     iter: std::slice::Iter<'a, save::Value<'a>>,
 }
 
 impl<'a> Iter<'a> {
-    fn new(inner: &'a ContextInner, iter: std::slice::Iter<'a, save::Value<'a>>) -> Self {
+    fn new(inner: &'a dyn LoadContext, iter: std::slice::Iter<'a, save::Value<'a>>) -> Self {
         Self { inner, iter }
     }
 }

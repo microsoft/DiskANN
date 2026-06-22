@@ -10,7 +10,9 @@
 //! target Rust type and return `None` when the value is out of range or would lose
 //! precision; loaders surface this as [`crate::load::error::Kind::NumberOutOfRange`].
 
+#[cfg(feature = "serde")]
 use serde::de::{self, Visitor};
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A numeric value carried in a manifest, preserving the kind the writer chose.
@@ -26,6 +28,7 @@ pub enum Number {
     F64(f64),
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for Number {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match *self {
@@ -36,6 +39,7 @@ impl Serialize for Number {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for Number {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct NumberVisitor;

@@ -14,29 +14,85 @@
 //! [`Writer::finish`] flushes the buffer and yields a [`Handle`] that can be inserted
 //! into a [`super::Record`].
 
-use std::{collections::HashSet, fs::File, io::BufWriter, path::PathBuf, sync::Mutex};
+use std::{fs::File, io::BufWriter};
+
+#[cfg(feature = "disk")]
+use std::{collections::HashSet, path::PathBuf, sync::Mutex};
 
 use crate::save::{Error, Handle, Result, Value};
 
-/// The owned context behind a [`Context`].
+/// The backing store for a save operation.
+///
+/// A `SaveContext` decides where side-car artifacts are written ([`SaveContext::write`])
+/// and how the final manifest is committed ([`SaveContext::finish`]). The default,
+/// disk-backed implementation (`DiskContext`) lives in this module under the `disk`
+/// feature; alternative implementations (e.g. a virtual filesystem or a purely in-memory
+/// store) can be supplied for testing or to avoid touching the filesystem.
+///
+/// The generic [`save`](super::save) entry point is parameterized over this trait so
+/// that the base crate carries no hard dependency on any particular implementation.
+pub trait SaveContext {
+    /// The value produced once the manifest has been committed by
+    /// [`SaveContext::finish`]. For the disk-backed context this is `()`.
+    type Output;
+
+    /// Allocate a new side-car artifact named `key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if `key` is not a simple relative file name, if it has already
+    /// been registered, or if the underlying artifact cannot be created.
+    fn write(&self, key: &str) -> Result<Writer<'_>>;
+
+    /// Commit the manifest `value`, consuming the context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if the manifest cannot be serialized or committed.
+    fn finish(self, value: Value<'_>) -> Result<Self::Output>;
+}
+
+/// Object-safe view of the artifact-allocating half of a [`SaveContext`].
+///
+/// [`Context`] holds a `&dyn GetWrite` so that the same handle can be threaded through
+/// every [`Save::save`](super::Save) impl regardless of the concrete context type.
+/// [`SaveContext::finish`] (which consumes `self` and names an associated type) is not
+/// object safe, so it is deliberately excluded from this trait.
+pub(super) trait GetWrite {
+    fn write(&self, key: &str) -> Result<Writer<'_>>;
+}
+
+impl<T> GetWrite for T
+where
+    T: SaveContext,
+{
+    fn write(&self, key: &str) -> Result<Writer<'_>> {
+        <T as SaveContext>::write(self, key)
+    }
+}
+
+/// The disk-backed [`SaveContext`].
 ///
 /// Holds the manifest directory, the manifest path, and the set of artifact file names
 /// registered so far. Lookup and insertion go through a [`Mutex`] so that concurrent
 /// [`Save`](super::Save) impls cannot accidentally hand out the same artifact name twice.
+#[cfg(feature = "disk")]
 #[derive(Debug)]
-pub(super) struct ContextInner {
+pub(super) struct DiskContext {
     dir: PathBuf,
     metadata: PathBuf,
     files: Mutex<HashSet<String>>,
 }
 
+#[cfg(feature = "disk")]
 #[derive(serde::Serialize)]
 struct Final<'a> {
     files: Vec<&'a str>,
     value: &'a Value<'a>,
 }
 
-impl ContextInner {
+#[cfg(feature = "disk")]
+impl DiskContext {
     // TODO: Error if the directory looks bad?
     pub(super) fn new(dir: PathBuf, metadata: PathBuf) -> Self {
         Self {
@@ -45,12 +101,13 @@ impl ContextInner {
             files: Mutex::new(HashSet::new()),
         }
     }
+}
 
-    pub(super) fn context(&self) -> Context<'_> {
-        Context { inner: self }
-    }
+#[cfg(feature = "disk")]
+impl SaveContext for DiskContext {
+    type Output = ();
 
-    pub(super) fn write(&self, key: &str) -> Result<Writer<'_>> {
+    fn write(&self, key: &str) -> Result<Writer<'_>> {
         // Reject absolute paths, parent traversal, and multi-component paths. Handles must be
         // simple file names relative to the manifest directory.
         let mut components = std::path::Path::new(key).components();
@@ -97,7 +154,7 @@ impl ContextInner {
     /// Writes the manifest JSON atomically: serializes to a `<metadata>.temp` file first,
     /// then renames it into place. Fails if the temp file already exists (an in-flight
     /// save is in progress, or a previous run aborted between rename steps).
-    pub fn finish(self, value: Value<'_>) -> Result<()> {
+    fn finish(self, value: Value<'_>) -> Result<()> {
         let files = self
             .files
             .into_inner()
@@ -143,13 +200,18 @@ impl ContextInner {
 /// `Context` exposes one operation — [`Context::write`] — for allocating a side-car
 /// artifact. The same context is passed to nested [`Save`](super::Save) impls (typically
 /// via the [`save_fields!`](crate::save_fields) macro), so a single save tree shares
-/// artifact-name bookkeeping.
-#[derive(Debug, Clone)]
+/// artifact-name bookkeeping. It borrows the backing [`SaveContext`] as an object-safe
+/// `GetWrite` so that the save tree is agnostic to the concrete context type.
+#[derive(Clone)]
 pub struct Context<'a> {
-    inner: &'a ContextInner,
+    inner: &'a dyn GetWrite,
 }
 
 impl<'a> Context<'a> {
+    pub(super) fn new(inner: &'a dyn GetWrite) -> Self {
+        Self { inner }
+    }
+
     /// Allocate a new side-car artifact named `key` in the manifest directory.
     ///
     /// The returned [`Writer`] is positioned at offset 0 and implements

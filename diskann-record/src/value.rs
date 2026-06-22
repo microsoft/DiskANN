@@ -27,6 +27,7 @@
 
 use std::{borrow::Cow, collections::HashMap};
 
+#[cfg(feature = "serde")]
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, MapAccess, SeqAccess, Visitor},
@@ -52,6 +53,7 @@ pub enum Value<'a> {
     Handle(Handle),
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for Value<'_> {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -67,6 +69,7 @@ impl Serialize for Value<'_> {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for Value<'static> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -200,8 +203,9 @@ impl From<Handle> for Value<'_> {
 /// [`Versioned`] [`Value::Object`] ready for insertion into another record; on the load
 /// side the same record is read back through [`crate::load::Object`]. Keys beginning
 /// with `$` are reserved for framework metadata (see [`crate::is_reserved`]).
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Record<'a> {
     record: HashMap<Cow<'a, str>, Value<'a>>,
 }
@@ -304,11 +308,12 @@ impl<'a> FromIterator<(Cow<'a, str>, Value<'a>)> for Record<'a> {
 ///
 /// Serialized as a normal object plus a `$version` field on the wire. Constructed by
 /// [`Record::into_value`].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Versioned<'a> {
-    #[serde(flatten)]
+    #[cfg_attr(feature = "serde", serde(flatten))]
     record: Record<'a>,
-    #[serde(rename = "$version")]
+    #[cfg_attr(feature = "serde", serde(rename = "$version"))]
     version: Version,
 }
 
@@ -345,6 +350,7 @@ impl Handle {
     }
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for Handle {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         let mut handle = ser.serialize_struct("Handle", 1)?;
@@ -353,6 +359,7 @@ impl Serialize for Handle {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for Handle {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

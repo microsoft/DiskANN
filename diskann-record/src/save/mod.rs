@@ -9,7 +9,8 @@
 //! (or, for primitive-like leaves, [`Saveable`]) and obtain a [`Context`] from which they
 //! request side-car artifact writers and assemble a [`Record`] of named fields.
 //!
-//! The top-level entry point is [`save_to_disk`], which serializes a value into a
+//! The generic entry point is [`save`]; `save_to_disk` (available under the `disk`
+//! feature) is the disk-backed convenience wrapper that serializes a value into a
 //! caller-chosen directory plus a manifest path.
 //!
 //! # Building Records
@@ -27,12 +28,32 @@
 pub use crate::value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
-pub use context::{Context, Writer};
+pub use context::{Context, SaveContext, Writer};
 
 mod error;
 pub use error::{Error, Result};
 
 use crate::Version;
+
+/// Serialize `x` into `context`, returning the context's committed output.
+///
+/// This is the generic entry point: it threads a [`Context`] borrowing `context` through
+/// the value's [`Saveable::save`] impl, then commits the resulting manifest via
+/// [`SaveContext::finish`]. `save_to_disk` is the disk-backed convenience wrapper
+/// available under the `disk` feature.
+///
+/// # Errors
+///
+/// Returns [`Error`] if a user impl returns an error or if the context fails to commit
+/// the manifest.
+pub fn save<T, C>(x: &T, context: C) -> Result<C::Output>
+where
+    T: Saveable,
+    C: SaveContext,
+{
+    let value = x.save(Context::new(&context))?;
+    context.finish(value)
+}
 
 /// Serialize `x` to disk.
 ///
@@ -44,6 +65,7 @@ use crate::Version;
 ///
 /// Returns [`Error`] if the directory cannot be written to, if the manifest cannot be
 /// serialized, or if a user impl returns an error.
+#[cfg(feature = "disk")]
 pub fn save_to_disk<T>(
     x: &T,
     dir: impl AsRef<std::path::Path>,
@@ -52,9 +74,8 @@ pub fn save_to_disk<T>(
 where
     T: Saveable,
 {
-    let inner = context::ContextInner::new(dir.as_ref().into(), metadata.as_ref().into());
-    let value = x.save(inner.context())?;
-    inner.finish(value)
+    let context = context::DiskContext::new(dir.as_ref().into(), metadata.as_ref().into());
+    save(x, context)
 }
 
 /// Implemented by user types that map to a versioned [`Record`].
