@@ -16,7 +16,7 @@ pub struct Store;
 
 impl Store {
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks::new(test_read, test_write, test_delete, test_rmw)
+        Callbacks::new(test_read, test_write, test_delete, test_rmw, test_filter)
     }
 
     pub fn clear(&self) {
@@ -130,6 +130,10 @@ unsafe extern "C" fn test_rmw(
 
     store.set(ctx, id, &val);
 
+    true
+}
+
+unsafe extern "C" fn test_filter(_context: u64, _internal_id: u32) -> bool {
     true
 }
 
