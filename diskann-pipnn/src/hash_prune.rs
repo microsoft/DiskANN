@@ -369,6 +369,33 @@ unsafe fn relative_hash_local_avx512(src: *const f32, dst: *const f32, m: usize)
 
 // ─── Per-reservoir mutation helpers (caller holds lock) ───────────────────────
 
+/// Map a bf16-rounded `f32` to an order-preserving `u16` so raw integer
+/// comparison matches float ordering for ALL signs. Raw bf16-bit compares are
+/// monotonic only for non-negative values; InnerProduct distances are `-dot`
+/// (negative), which otherwise sort inverted and make the reservoir evict its
+/// best edges. For non-negative inputs this only sets the top bit on every
+/// value, so L2/Cosine orderings — and the resulting graphs — are unchanged.
+/// Inverse: [`key_to_bf16`].
+#[inline(always)]
+fn ordered_key(distance: f32) -> u16 {
+    let b = f32_to_bf16(distance);
+    if b & 0x8000 != 0 {
+        !b
+    } else {
+        b | 0x8000
+    }
+}
+
+/// Inverse of [`ordered_key`]: recover the bf16 bits for distance readback.
+#[inline(always)]
+fn key_to_bf16(key: u16) -> u16 {
+    if key & 0x8000 != 0 {
+        key & 0x7FFF
+    } else {
+        !key
+    }
+}
+
 /// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
 /// `scan_lanes` elements each.
 #[inline]
@@ -402,17 +429,17 @@ unsafe fn insert_locked(
     distance: f32,
     l_max: u8,
 ) -> bool {
-    let dist_bf16 = f32_to_bf16(distance);
+    let dist_key = ordered_key(distance);
 
-    if hot.len >= l_max && dist_bf16 >= hot.farthest_dist {
+    if hot.len >= l_max && dist_key >= hot.farthest_dist {
         return false;
     }
 
     if let Some(idx) = find_hash_simd(cold.hashes, cold.scan_lanes, hot.len, hash) {
-        if dist_bf16 < *cold.distances.add(idx) {
+        if dist_key < *cold.distances.add(idx) {
             let was_farthest = idx == hot.farthest_idx as usize;
             *cold.neighbors.add(idx) = neighbor;
-            *cold.distances.add(idx) = dist_bf16;
+            *cold.distances.add(idx) = dist_key;
             if was_farthest {
                 update_farthest(hot, cold);
             }
@@ -424,20 +451,20 @@ unsafe fn insert_locked(
     if hot.len < l_max {
         let new_idx = hot.len as usize;
         *cold.hashes.add(new_idx) = hash;
-        *cold.distances.add(new_idx) = dist_bf16;
+        *cold.distances.add(new_idx) = dist_key;
         *cold.neighbors.add(new_idx) = neighbor;
         hot.len += 1;
-        if dist_bf16 >= hot.farthest_dist {
-            hot.farthest_dist = dist_bf16;
+        if dist_key >= hot.farthest_dist {
+            hot.farthest_dist = dist_key;
             hot.farthest_idx = new_idx as u8;
         }
         return true;
     }
 
-    if dist_bf16 < hot.farthest_dist {
+    if dist_key < hot.farthest_dist {
         let idx = hot.farthest_idx as usize;
         *cold.hashes.add(idx) = hash;
-        *cold.distances.add(idx) = dist_bf16;
+        *cold.distances.add(idx) = dist_key;
         *cold.neighbors.add(idx) = neighbor;
         update_farthest(hot, cold);
         return true;
@@ -468,7 +495,7 @@ unsafe fn get_neighbors_saturated(
     let out_len = n.min(max_degree);
     let mut out = Vec::with_capacity(out_len);
     for &(id, d) in &scratch[..out_len] {
-        out.push((id, bf16_to_f32(d)));
+        out.push((id, bf16_to_f32(key_to_bf16(d))));
     }
     out
 }
