@@ -140,7 +140,7 @@ where
     }
 
     fn bytes(&self) -> usize {
-        self.dim * std::mem::size_of::<T>()
+        self.dim * std::mem::size_of::<U>()
     }
 }
 

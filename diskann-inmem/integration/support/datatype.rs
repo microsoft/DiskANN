@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::views::{Matrix, MatrixView};
+use diskann_utils::{sampling::medoid::ComputeMedoid, views::{Matrix, MatrixView}};
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -249,6 +249,10 @@ impl Dataset {
             Self::I8(m) => m.as_slice().into(),
         }
     }
+
+    pub(crate) fn medoid(&self) -> Dataset {
+        self.as_view().medoid()
+    }
 }
 
 /////////////////
@@ -264,6 +268,15 @@ pub(crate) enum DatasetView<'a> {
 }
 
 impl<'a> DatasetView<'a> {
+    pub(crate) fn data_type(&self) -> DataType {
+        match self {
+            Self::F32(_) => DataType::F32,
+            Self::F16(_) => DataType::F16,
+            Self::U8(_) => DataType::U8,
+            Self::I8(_) => DataType::I8,
+        }
+    }
+
     pub(crate) fn nrows(&self) -> usize {
         match self {
             Self::F32(m) => m.nrows(),
@@ -288,6 +301,15 @@ impl<'a> DatasetView<'a> {
             Self::F16(m) => m.get_row(i).map(Slice::from),
             Self::U8(m) => m.get_row(i).map(Slice::from),
             Self::I8(m) => m.get_row(i).map(Slice::from),
+        }
+    }
+
+    pub(crate) fn medoid(&self) -> Dataset {
+        match self {
+            Self::F32(v) => Matrix::row_vector(Box::from(f32::compute_medoid(*v))).into(),
+            Self::F16(v) => Matrix::row_vector(Box::from(f16::compute_medoid(*v))).into(),
+            Self::U8(v) => Matrix::row_vector(Box::from(u8::compute_medoid(*v))).into(),
+            Self::I8(v) => Matrix::row_vector(Box::from(i8::compute_medoid(*v))).into(),
         }
     }
 }

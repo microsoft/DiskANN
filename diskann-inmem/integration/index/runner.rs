@@ -12,15 +12,18 @@ use diskann_benchmark_runner::{
     benchmark::{FailureScore, MatchScore},
     files::InputFile,
 };
-use diskann_vector::distance::Metric;
 use diskann_utils::views::Matrix;
+use diskann_vector::distance::Metric;
 use half::f16;
 
 use diskann_inmem::{Provider, layers};
 
 use crate::{
     index::Index,
-    support::{datatype::DataType, io::load_and_convert},
+    support::{
+        datatype::{DataType, DatasetView},
+        io::load_and_convert,
+    },
 };
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -111,9 +114,11 @@ impl Data {
             metric,
             data_type,
         } = raw;
+
         data.resolve(checker)?;
         queries.resolve(checker)?;
         groundtruth.resolve(checker)?;
+
         Ok(Self {
             data,
             queries,
@@ -168,6 +173,7 @@ impl Build {
             l_build,
             alpha,
         } = raw;
+
         let config = diskann::graph::config::Builder::new_with(
             pruned_degree,
             diskann::graph::config::MaxDegree::new(max_degree),
@@ -215,6 +221,62 @@ impl Test {
             build: self.build.as_raw(),
         })
     }
+
+    fn index(
+        &self,
+        capacity: usize,
+        start_points: DatasetView<'_>,
+    ) -> anyhow::Result<Arc<dyn Index>> {
+        match self.layer {
+            Layer::FullPrecision { data_type } => {
+                if start_points.data_type() != data_type {
+                    anyhow::bail!(
+                        "mismatched data types for start point - expected {}, got {}",
+                        data_type,
+                        start_points.data_type(),
+                    );
+                }
+
+                let dim = start_points.ncols();
+                let metric = self.data.metric;
+                let config = diskann_inmem::provider::Config::new(
+                    capacity,
+                    self.build.config.max_degree().get(),
+                );
+
+                let index_config = self.build.config.clone();
+
+                let index = match start_points {
+                    DatasetView::F32(v) => finish(
+                        Provider::new(layers::Full::<f32>::new(dim, metric), config, v.row_iter()),
+                        index_config,
+                    ),
+                    DatasetView::F16(v) => finish(
+                        Provider::new(layers::Full::<f16>::new(dim, metric), config, v.row_iter()),
+                        index_config,
+                    ),
+                    DatasetView::U8(v) => finish(
+                        Provider::new(layers::Full::<u8>::new(dim, metric), config, v.row_iter()),
+                        index_config,
+                    ),
+                    DatasetView::I8(v) => finish(
+                        Provider::new(layers::Full::<i8>::new(dim, metric), config, v.row_iter()),
+                        index_config,
+                    ),
+                };
+
+                Ok(index)
+            }
+        }
+    }
+}
+
+fn finish<DP>(provider: DP, config: diskann::graph::Config) -> Arc<dyn Index>
+where
+    DP: diskann::provider::DataProvider,
+    DiskANNIndex<DP>: Index,
+{
+    Arc::new(DiskANNIndex::new(config, provider, None))
 }
 
 ///////////////
@@ -259,6 +321,10 @@ impl diskann_benchmark_runner::Input for Test {
     }
 }
 
+////////////////
+// Benchmarks //
+////////////////
+
 #[derive(Debug)]
 struct FullPrecision;
 
@@ -289,7 +355,7 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         output: &mut dyn Output,
     ) -> anyhow::Result<()> {
         let Layer::FullPrecision { data_type } = input.layer else {
-            anyhow::bail!("oops");
+            anyhow::bail!("expected full-precision");
         };
 
         // Load the data and perform any necessary data conversions.
@@ -300,71 +366,9 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
             load_and_convert(&mut io, input.data.data_type, data_type)?
         };
 
-        let dim = data.nrows();
-
-        let config = diskann_inmem::provider::Config::new(
-            data.nrows(),
-            input.build.config.max_degree().get()
-        );
-
-        fn finish<DP>(provider: DP, config: diskann::graph::Config) -> Arc<dyn Index>
-        where
-            DP: diskann::provider::DataProvider,
-            DiskANNIndex<DP>: Index,
-        {
-            Arc::new(DiskANNIndex::new(config, provider, None))
-        }
-
-        let index_config = input.build.config.clone();
-        let index: Arc<dyn Index> = match data_type {
-            DataType::F32 => {
-                let start = Matrix::new(0.0f32, dim, 1);
-                let provider = Provider::new(
-                    layers::Full::<f32>::new(dim, input.data.metric),
-                    config,
-                    start.row_iter(),
-                );
-
-                finish(provider, index_config)
-            },
-            DataType::F16 => {
-                let start = Matrix::new(f16::from_f32(0.0f32), dim, 1);
-                let provider = Provider::new(
-                    layers::Full::<f16>::new(dim, input.data.metric),
-                    config,
-                    start.row_iter(),
-                );
-
-                finish(provider, index_config)
-            },
-            DataType::U8 => {
-                let start = Matrix::new(0u8, dim, 1);
-                let provider = Provider::new(
-                    layers::Full::<u8>::new(dim, input.data.metric),
-                    config,
-                    start.row_iter(),
-                );
-                finish(provider, index_config)
-            },
-            DataType::I8 => {
-                let start = Matrix::new(0i8, dim, 1);
-                let provider = Provider::new(
-                    layers::Full::<i8>::new(dim, input.data.metric),
-                    config,
-                    start.row_iter(),
-                );
-
-                finish(provider, index_config)
-            },
-        };
-
+        let index = input.index(data.nrows(), data.medoid().as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-
-        super::tests::insert(
-            &*index,
-            data.as_view(),
-            rt.handle(),
-        )?;
+        super::tests::insert(&*index, data.as_view(), rt.handle())?;
 
         Ok(())
     }
