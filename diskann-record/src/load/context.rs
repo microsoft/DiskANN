@@ -15,18 +15,11 @@
 //! * [`Object::read`] for side-car artifacts referenced by a
 //!   [`save::Handle`](super::save::Handle).
 //!
-//! [`Reader`] implements [`std::io::Read`] and [`std::io::Seek`] over the artifact file.
+//! [`Reader`] implements [`std::io::Read`] over a side-car artifact, regardless of the
+//! provider's backing store.
 
-use std::{fs::File, io::BufReader};
+use std::io::BufReader;
 
-#[cfg(feature = "disk")]
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
-
-#[cfg(feature = "disk")]
-use crate::load::Error;
 use crate::{
     Number, Version,
     load::{Loadable, Result, error},
@@ -37,9 +30,9 @@ use crate::{
 ///
 /// A `LoadContext` supplies the root manifest [`save::Value`] ([`LoadContext::value`])
 /// and resolves side-car artifacts referenced by handles ([`LoadContext::read`]). The
-/// default, disk-backed implementation (`DiskContext`) lives in this module under the
-/// `disk` feature; alternative implementations (e.g. a virtual filesystem or a purely
-/// in-memory store) can be supplied for testing.
+/// concrete implementations live under [`crate::backend`]: a disk-backed context (under
+/// the `disk` feature) and an in-memory context. Alternative implementations (e.g. a
+/// virtual filesystem) can be supplied for testing.
 ///
 /// The generic [`load`](super::load) entry point is parameterized over this trait, and
 /// [`Context`] / [`Object`] / `Array` borrow it as an object-safe `&dyn LoadContext`
@@ -61,85 +54,25 @@ pub trait LoadContext {
     fn read(&self, key: &str) -> Result<Reader<'_>>;
 }
 
-#[cfg(feature = "disk")]
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct DiskContext {
-    dir: PathBuf,
-    files: HashSet<PathBuf>,
-    value: save::Value<'static>,
-}
-
-#[cfg(feature = "disk")]
-#[derive(Debug, serde::Deserialize)]
-struct FileRepr {
-    files: HashSet<PathBuf>,
-    value: save::Value<'static>,
-}
-
-#[cfg(feature = "disk")]
-impl DiskContext {
-    pub(super) fn new(metadata: &Path, dir: &Path) -> Result<Self> {
-        let file = std::fs::File::open(metadata).map_err(|e| {
-            Error::new(e).context(format!("while trying to open {}", metadata.display()))
-        })?;
-
-        let reader = std::io::BufReader::new(file);
-        let repr: FileRepr = serde_json::from_reader(reader)
-            .map_err(|e| Error::new(e).context("could not deserialize manifest"))?;
-
-        let this = Self {
-            dir: dir.into(),
-            files: repr.files,
-            value: repr.value,
-        };
-        Ok(this)
-    }
-}
-
-#[cfg(feature = "disk")]
-impl LoadContext for DiskContext {
-    fn value(&self) -> Result<&save::Value<'_>> {
-        Ok(&self.value)
-    }
-
-    fn read(&self, key: &str) -> Result<Reader<'_>> {
-        let key_as_path: &Path = key.as_ref();
-        let mut components = key_as_path.components();
-        match components.next() {
-            Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
-            _ => {
-                return Err(Error::from(error::Kind::MissingFile).context(format!(
-                    "handle references file {:?} which escapes the manifest directory",
-                    key,
-                )));
-            }
-        }
-        if !self.files.contains(key_as_path) {
-            return Err(Error::from(error::Kind::MissingFile).context(format!(
-                "handle references file {:?} which is not registered in the manifest",
-                key,
-            )));
-        }
-
-        let full = self.dir.join(key);
-        let file = std::fs::File::open(&full).map_err(|err| {
-            Error::new(err).context(format!("while opening artifact file {}", full.display()))
-        })?;
-        let reader = Reader {
-            io: BufReader::new(file),
-            _lifetime: std::marker::PhantomData,
-        };
-
-        Ok(reader)
-    }
-}
-
 /// A borrowed reader over a side-car artifact.
 ///
-/// Produced by [`Object::read`]. Implements [`std::io::Read`] and [`std::io::Seek`].
+/// Produced by [`Object::read`]. Implements [`std::io::Read`] over whatever backing
+/// store the [`LoadContext`] provides, so non-file-backed providers (like an in-memory byte buffer) can supply an
+/// arbitrary [`std::io::Read`].
 pub struct Reader<'a> {
-    io: BufReader<File>,
-    _lifetime: std::marker::PhantomData<&'a ()>,
+    io: BufReader<Box<dyn std::io::Read + 'a>>,
+}
+
+impl<'a> Reader<'a> {
+    /// Build a reader over an arbitrary borrowed [`std::io::Read`] source.
+    ///
+    /// Used by non-file-backed [`LoadContext`] implementations (e.g. the in-memory
+    /// context) to expose a side-car artifact backed by a [`std::io::Cursor`].
+    pub(crate) fn new(io: Box<dyn std::io::Read + 'a>) -> Self {
+        Self {
+            io: BufReader::new(io),
+        }
+    }
 }
 
 impl std::io::Read for Reader<'_> {
@@ -160,22 +93,6 @@ impl std::io::Read for Reader<'_> {
     }
     fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
         self.io.read_exact(buf)
-    }
-}
-
-impl std::io::Seek for Reader<'_> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.io.seek(pos)
-    }
-
-    fn rewind(&mut self) -> std::io::Result<()> {
-        self.io.rewind()
-    }
-    fn stream_position(&mut self) -> std::io::Result<u64> {
-        self.io.stream_position()
-    }
-    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
-        self.io.seek_relative(offset)
     }
 }
 
@@ -435,41 +352,3 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 impl ExactSizeIterator for Iter<'_> {}
-
-#[cfg(all(test, feature = "disk"))]
-mod tests {
-    use super::*;
-
-    fn write_manifest(dir: &Path, files: &[&str]) -> PathBuf {
-        let manifest = serde_json::json!({
-            "files": files,
-            "value": { "$version": "0.0.0" },
-        });
-        let metadata = dir.join("metadata.json");
-        std::fs::write(&metadata, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        metadata
-    }
-
-    #[test]
-    fn read_rejects_unregistered_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let metadata = write_manifest(dir.path(), &[]);
-        let ctx = DiskContext::new(&metadata, dir.path()).unwrap();
-        let Err(err) = ctx.read("artifact.bin") else {
-            panic!("an unregistered file must be rejected");
-        };
-        assert!(format!("{err}").contains("not registered in the manifest"));
-    }
-
-    #[test]
-    fn read_rejects_escaping_handle() {
-        let dir = tempfile::tempdir().unwrap();
-        // Register the escaping name so only the path-shape check can reject it.
-        let metadata = write_manifest(dir.path(), &["../escape.bin"]);
-        let ctx = DiskContext::new(&metadata, dir.path()).unwrap();
-        let Err(err) = ctx.read("../escape.bin") else {
-            panic!("a handle escaping the manifest directory must be rejected");
-        };
-        assert!(format!("{err}").contains("escapes the manifest directory"));
-    }
-}

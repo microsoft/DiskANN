@@ -37,7 +37,7 @@ pub mod error;
 pub use error::{Error, Result};
 
 mod context;
-pub use context::{Context, LoadContext, Object};
+pub use context::{Context, LoadContext, Object, Reader};
 
 #[cfg(feature = "disk")]
 use std::path::Path;
@@ -78,7 +78,7 @@ pub fn load_from_disk<T>(metadata: &Path, dir: &Path) -> Result<T>
 where
     T: for<'a> Loadable<'a>,
 {
-    let context = context::DiskContext::new(metadata, dir)?;
+    let context = crate::backend::disk::DiskLoadContext::new(metadata, dir)?;
     load(&context)
 }
 

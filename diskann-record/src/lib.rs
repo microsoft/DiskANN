@@ -94,6 +94,9 @@ pub use value::{Handle, Keys, Record, Value, Versioned};
 pub mod load;
 pub mod save;
 
+mod backend;
+pub use backend::memory::{InMemoryContext, InMemorySaveContext};
+
 // Canonical wire width for `usize` and `isize` in manifests is 64 bits. Saving a value
 // on a 64-bit platform and loading it on a 32-bit platform (or vice versa) could silently
 // truncate values that exceed `u32::MAX` / `i32::MAX`. We therefore require a 64-bit

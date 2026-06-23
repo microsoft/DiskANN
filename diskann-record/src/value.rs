@@ -196,6 +196,30 @@ impl From<Handle> for Value<'_> {
     }
 }
 
+impl Value<'_> {
+    /// Convert this value into a fully owned [`Value<'static>`], deep-copying any borrowed
+    /// string or byte data.
+    ///
+    /// This is the allocation-based equivalent of round-tripping through the wire format:
+    /// it severs every borrow from the originating data so the result can be stored
+    /// independently of its source (for example inside an in-memory
+    /// [`crate::InMemoryContext`]).
+    pub fn into_owned(self) -> Value<'static> {
+        match self {
+            Self::Null => Value::Null,
+            Self::Bool(b) => Value::Bool(b),
+            Self::Number(n) => Value::Number(n),
+            Self::String(s) => Value::String(Cow::Owned(s.into_owned())),
+            Self::Bytes(b) => Value::Bytes(Cow::Owned(b.into_owned())),
+            Self::Array(values) => {
+                Value::Array(values.into_iter().map(Value::into_owned).collect())
+            }
+            Self::Object(versioned) => Value::Object(versioned.into_owned()),
+            Self::Handle(handle) => Value::Handle(handle),
+        }
+    }
+}
+
 /// A map of named [`Value`]s.
 ///
 /// `Record` is the body of an object in the manifest. On the save side each call to
@@ -275,6 +299,18 @@ impl<'a> Record<'a> {
     pub fn into_value(self, version: Version) -> Value<'a> {
         Value::Object(Versioned::new(self, version))
     }
+
+    /// Convert this record into a fully owned [`Record<'static>`], deep-copying borrowed
+    /// keys and values. See [`Value::into_owned`].
+    pub fn into_owned(self) -> Record<'static> {
+        Record {
+            record: self
+                .record
+                .into_iter()
+                .map(|(key, value)| (Cow::Owned(key.into_owned()), value.into_owned()))
+                .collect(),
+        }
+    }
 }
 
 /// Iterator over the keys of a [`Record`].
@@ -328,6 +364,13 @@ impl<'a> Versioned<'a> {
 
     pub(crate) fn record(&self) -> &Record<'a> {
         &self.record
+    }
+
+    pub(crate) fn into_owned(self) -> Versioned<'static> {
+        Versioned {
+            record: self.record.into_owned(),
+            version: self.version,
+        }
     }
 }
 

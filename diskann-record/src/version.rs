@@ -39,13 +39,51 @@ impl Version {
     }
 }
 
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl std::str::FromStr for Version {
+    type Err = ParseVersionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split('.');
+        let major = parts.next().and_then(|s| s.parse::<u32>().ok());
+        let minor = parts.next().and_then(|s| s.parse::<u32>().ok());
+        let patch = parts.next().and_then(|s| s.parse::<u32>().ok());
+        match (major, minor, patch, parts.next()) {
+            (Some(major), Some(minor), Some(patch), None) => Ok(Version {
+                major,
+                minor,
+                patch,
+            }),
+            _ => Err(ParseVersionError(s.to_owned())),
+        }
+    }
+}
+
+/// Error returned when a string cannot be parsed as a [`Version`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseVersionError(String);
+
+impl std::fmt::Display for ParseVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown version {:?}: expected three `.`-separated u32 components",
+            self.0,
+        )
+    }
+}
+
+impl std::error::Error for ParseVersionError {}
+
 #[cfg(feature = "serde")]
 impl Serialize for Version {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        ser.collect_str(&format_args!(
-            "{}.{}.{}",
-            self.major, self.minor, self.patch
-        ))
+        ser.collect_str(self)
     }
 }
 
@@ -62,21 +100,7 @@ impl<'de> Deserialize<'de> for Version {
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Version, E> {
-                let mut parts = v.split('.');
-                let major = parts.next().and_then(|s| s.parse::<u32>().ok());
-                let minor = parts.next().and_then(|s| s.parse::<u32>().ok());
-                let patch = parts.next().and_then(|s| s.parse::<u32>().ok());
-                match (major, minor, patch, parts.next()) {
-                    (Some(major), Some(minor), Some(patch), None) => Ok(Version {
-                        major,
-                        minor,
-                        patch,
-                    }),
-                    _ => Err(E::custom(format!(
-                        "unknown version {:?}: expected three `.`-separated u32 components",
-                        v,
-                    ))),
-                }
+                v.parse().map_err(E::custom)
             }
         }
 

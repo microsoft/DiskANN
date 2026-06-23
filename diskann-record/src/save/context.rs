@@ -14,20 +14,22 @@
 //! [`Writer::finish`] flushes the buffer and yields a [`Handle`] that can be inserted
 //! into a [`super::Record`].
 
-use std::{fs::File, io::BufWriter};
-
-#[cfg(feature = "disk")]
-use std::{collections::HashSet, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufWriter, Cursor},
+    sync::Mutex,
+};
 
 use crate::save::{Error, Handle, Result, Value};
 
 /// The backing store for a save operation.
 ///
 /// A `SaveContext` decides where side-car artifacts are written ([`SaveContext::write`])
-/// and how the final manifest is committed ([`SaveContext::finish`]). The default,
-/// disk-backed implementation (`DiskContext`) lives in this module under the `disk`
-/// feature; alternative implementations (e.g. a virtual filesystem or a purely in-memory
-/// store) can be supplied for testing or to avoid touching the filesystem.
+/// and how the final manifest is committed ([`SaveContext::finish`]). The concrete
+/// implementations live under [`crate::backend`]: a disk-backed context (under the `disk`
+/// feature) and an in-memory context. Alternative implementations (e.g. a virtual
+/// filesystem) can be supplied for testing or to avoid touching the filesystem.
 ///
 /// The generic [`save`](super::save) entry point is parameterized over this trait so
 /// that the base crate carries no hard dependency on any particular implementation.
@@ -76,162 +78,6 @@ where
     }
 }
 
-/// The disk-backed [`SaveContext`].
-///
-/// Holds the manifest directory, the manifest path, and the set of artifact file names
-/// registered so far. Lookup and insertion go through a [`Mutex`] so that concurrent
-/// [`Save`](super::Save) impls cannot accidentally hand out the same artifact name twice.
-#[cfg(feature = "disk")]
-#[derive(Debug)]
-pub(super) struct DiskContext {
-    dir: PathBuf,
-    metadata: PathBuf,
-    files: Mutex<HashSet<String>>,
-}
-
-#[cfg(feature = "disk")]
-#[derive(serde::Serialize)]
-struct Final<'a> {
-    files: Vec<&'a str>,
-    value: &'a Value<'a>,
-}
-
-#[cfg(feature = "disk")]
-impl DiskContext {
-    /// Create a disk-backed save context targeting `dir` for side-car artifacts and
-    /// `metadata` for the manifest. Validates that `dir` is an actual directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error`] if `dir` does not exist, cannot be inspected, or exists but is
-    /// not a directory.
-    pub(super) fn new(dir: PathBuf, metadata: PathBuf) -> Result<Self> {
-        match std::fs::metadata(&dir) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => {
-                return Err(Error::message(format!(
-                    "path {} exists but is not a directory",
-                    dir.display()
-                )));
-            }
-            Err(err) => {
-                return Err(
-                    Error::new(err).context(format!("while validating path {}", dir.display()))
-                );
-            }
-        }
-
-        Ok(Self {
-            dir,
-            metadata,
-            files: Mutex::new(HashSet::new()),
-        })
-    }
-}
-
-#[cfg(feature = "disk")]
-impl SaveContext for DiskContext {
-    type Output = ();
-
-    fn write(&self, key: Option<&str>) -> Result<Writer<'_>> {
-        // When a human-readable hint is supplied it must be a simple relative file name:
-        // reject absolute paths, parent traversal, and multi-component paths so the prefix
-        // below produces a single, well-formed file name in the manifest directory.
-        if let Some(key) = key {
-            let mut components = std::path::Path::new(key).components();
-            match components.next() {
-                Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
-                _ => {
-                    return Err(Error::message(format!(
-                        "artifact file name hint {:?} must be a relative file name with no path \
-                         separators",
-                        key,
-                    )));
-                }
-            }
-        }
-
-        let mut files = self
-            .files
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-
-        // Prefix each artifact with the count of artifacts written so far, so that reusing
-        // the same `key` (or omitting it) still yields a unique file name.
-        let name = match key {
-            Some(key) => format!("{:03}-{}", files.len(), key),
-            None => format!("{:03}", files.len()),
-        };
-
-        if !files.insert(name.clone()) {
-            return Err(Error::message(format!(
-                "generated artifact name {:?} collides with an existing artifact",
-                name,
-            )));
-        }
-        let full = self.dir.join(&name);
-        if full.exists() {
-            return Err(Error::message(format!(
-                "file {} already exists",
-                full.display()
-            )));
-        }
-        let file = std::fs::File::create_new(&full).map_err(|err| {
-            Error::new(err).context(format!("while creating new file {}", full.display()))
-        })?;
-        Ok(Writer {
-            io: BufWriter::new(file),
-            name,
-            _lifetime: std::marker::PhantomData,
-        })
-    }
-
-    /// Finalize the manifest.
-    ///
-    /// Writes the manifest JSON atomically: serializes to a `<metadata>.temp` file first,
-    /// then renames it into place. Fails if the temp file already exists (an in-flight
-    /// save is in progress, or a previous run aborted between rename steps).
-    fn finish(self, value: Value<'_>) -> Result<()> {
-        let files = self
-            .files
-            .into_inner()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let f = Final {
-            files: files.iter().map(|k| &**k).collect(),
-            value: &value,
-        };
-
-        // Fail if the temp file already exists
-        let mut temp = self.metadata.clone().into_os_string();
-        temp.push(".temp");
-        let temp = PathBuf::from(temp);
-        let buffer = std::fs::File::create_new(&temp).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                Error::message(format!(
-                    "Temporary file {} already exists. Aborting!",
-                    temp.display()
-                ))
-            } else {
-                Error::new(err).context(format!(
-                    "while creating temp manifest file {}",
-                    temp.display()
-                ))
-            }
-        })?;
-
-        serde_json::to_writer_pretty(buffer, &f)
-            .map_err(|err| Error::new(err).context("while serializing manifest to JSON"))?;
-        std::fs::rename(&temp, &self.metadata).map_err(|err| {
-            Error::new(err).context(format!(
-                "while renaming temp manifest {} to final path {}",
-                temp.display(),
-                self.metadata.display()
-            ))
-        })?;
-        Ok(())
-    }
-}
-
 /// A cheap, clonable handle threaded through every [`Save::save`](super::Save) impl.
 ///
 /// `Context` exposes one operation — [`Context::write`] — for allocating a side-car
@@ -270,12 +116,48 @@ impl<'a> Context<'a> {
 /// A borrowed side-car artifact writer produced by [`Context::write`].
 ///
 /// Implements [`std::io::Write`] and [`std::io::Seek`]. Writes are buffered; calling
-/// [`Writer::finish`] flushes the buffer, closes the file, and returns a [`Handle`].
+/// [`Writer::finish`] flushes the buffer (or, for an in-memory context, deposits the
+/// completed buffer into the store) and returns a [`Handle`].
 #[derive(Debug)]
 pub struct Writer<'a> {
-    io: BufWriter<File>,
+    inner: Backend<'a>,
     name: String,
-    _lifetime: std::marker::PhantomData<&'a ()>,
+}
+
+/// The backing store a [`Writer`] writes into.
+#[derive(Debug)]
+enum Backend<'a> {
+    /// A file on disk; the bytes are persisted as they are written.
+    #[cfg_attr(not(feature = "disk"), allow(dead_code))]
+    File(BufWriter<File>),
+    /// An in-memory buffer; on [`Writer::finish`] the completed buffer is inserted into
+    /// `store` under the writer's name.
+    Memory {
+        buffer: Cursor<Vec<u8>>,
+        store: &'a Mutex<HashMap<String, Vec<u8>>>,
+    },
+}
+
+impl<'a> Writer<'a> {
+    /// Construct an in-memory writer that deposits its buffer into `store` on finish.
+    pub(crate) fn memory(name: String, store: &'a Mutex<HashMap<String, Vec<u8>>>) -> Self {
+        Self {
+            inner: Backend::Memory {
+                buffer: Cursor::new(Vec::new()),
+                store,
+            },
+            name,
+        }
+    }
+
+    /// Construct a file-backed writer that streams bytes straight to `file`.
+    #[cfg(feature = "disk")]
+    pub(crate) fn file(name: String, file: File) -> Self {
+        Self {
+            inner: Backend::File(BufWriter::new(file)),
+            name,
+        }
+    }
 }
 
 impl Writer<'_> {
@@ -285,107 +167,81 @@ impl Writer<'_> {
     /// [`Record::insert`](super::Record::insert)) so that load-side code can locate the
     /// artifact through the manifest.
     pub fn finish(self) -> Result<Handle> {
-        // NOTE: self.io.into_inner() will flush the buffer and close the file.
-        self.io
-            .into_inner()
-            .map_err(|err| Error::new(err.into_error()))?;
+        match self.inner {
+            // NOTE: into_inner() will flush the buffer and close the file.
+            Backend::File(io) => {
+                io.into_inner()
+                    .map_err(|err| Error::new(err.into_error()))?;
+            }
+            Backend::Memory { buffer, store } => {
+                store
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .insert(self.name.clone(), buffer.into_inner());
+            }
+        }
         Ok(Handle::new(self.name))
     }
 }
 
 impl std::io::Write for Writer<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.io.write(buf)
+        match &mut self.inner {
+            Backend::File(io) => io.write(buf),
+            Backend::Memory { buffer, .. } => buffer.write(buf),
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.io.flush()
+        match &mut self.inner {
+            Backend::File(io) => io.flush(),
+            Backend::Memory { buffer, .. } => buffer.flush(),
+        }
     }
     fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
-        self.io.write_vectored(bufs)
+        match &mut self.inner {
+            Backend::File(io) => io.write_vectored(bufs),
+            Backend::Memory { buffer, .. } => buffer.write_vectored(bufs),
+        }
     }
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.io.write_all(buf)
+        match &mut self.inner {
+            Backend::File(io) => io.write_all(buf),
+            Backend::Memory { buffer, .. } => buffer.write_all(buf),
+        }
     }
     fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
-        self.io.write_fmt(args)
+        match &mut self.inner {
+            Backend::File(io) => io.write_fmt(args),
+            Backend::Memory { buffer, .. } => buffer.write_fmt(args),
+        }
     }
 }
 
 impl std::io::Seek for Writer<'_> {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.io.seek(pos)
-    }
-
-    fn rewind(&mut self) -> std::io::Result<()> {
-        self.io.rewind()
-    }
-    fn stream_position(&mut self) -> std::io::Result<u64> {
-        self.io.stream_position()
-    }
-    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
-        self.io.seek_relative(offset)
-    }
-}
-
-#[cfg(all(test, feature = "disk"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_rejects_nonexistent_directory() {
-        let missing = PathBuf::from("does/not/exist/anywhere/at/all");
-        let err = DiskContext::new(missing, "meta.json".into())
-            .expect_err("a nonexistent directory must be rejected");
-        assert!(format!("{err}").contains("while validating path"));
-    }
-
-    #[test]
-    fn new_rejects_file_as_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("not_a_dir");
-        std::fs::write(&file, b"hi").unwrap();
-        let err = DiskContext::new(file, dir.path().join("meta.json"))
-            .expect_err("a file path must be rejected as a directory");
-        assert!(format!("{err}").contains("is not a directory"));
-    }
-
-    #[test]
-    fn write_rejects_path_separators_and_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
-        for bad in ["sub/dir.bin", "../escape.bin", "/abs.bin"] {
-            SaveContext::write(&ctx, Some(bad))
-                .expect_err("keys with path separators must be rejected");
+        match &mut self.inner {
+            Backend::File(io) => io.seek(pos),
+            Backend::Memory { buffer, .. } => buffer.seek(pos),
         }
     }
 
-    #[test]
-    fn write_allows_duplicate_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
-        let first = SaveContext::write(&ctx, Some("artifact.bin"))
-            .unwrap()
-            .finish()
-            .unwrap();
-        let second = SaveContext::write(&ctx, Some("artifact.bin"))
-            .unwrap()
-            .finish()
-            .unwrap();
-        assert_ne!(
-            first.as_str(),
-            second.as_str(),
-            "duplicate keys must be disambiguated by the count prefix"
-        );
-        assert_eq!(first.as_str(), "000-artifact.bin");
-        assert_eq!(second.as_str(), "001-artifact.bin");
+    fn rewind(&mut self) -> std::io::Result<()> {
+        match &mut self.inner {
+            Backend::File(io) => io.rewind(),
+            Backend::Memory { buffer, .. } => buffer.rewind(),
+        }
     }
-
-    #[test]
-    fn write_allows_anonymous_artifact() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = DiskContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
-        let handle = SaveContext::write(&ctx, None).unwrap().finish().unwrap();
-        assert!(!handle.as_str().is_empty());
+    fn stream_position(&mut self) -> std::io::Result<u64> {
+        match &mut self.inner {
+            Backend::File(io) => io.stream_position(),
+            Backend::Memory { buffer, .. } => buffer.stream_position(),
+        }
+    }
+    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
+        match &mut self.inner {
+            Backend::File(io) => io.seek_relative(offset),
+            Backend::Memory { buffer, .. } => buffer.seek_relative(offset),
+        }
     }
 }
