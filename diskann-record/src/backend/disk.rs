@@ -75,22 +75,15 @@ impl SaveContext for DiskSaveContext {
     type Output = ();
 
     fn write(&self, key: Option<&str>) -> save::Result<Writer<'_>> {
-        // When a human-readable hint is supplied it must be a simple relative file name:
-        // reject absolute paths, parent traversal, and multi-component paths so the prefix
-        // below produces a single, well-formed file name in the manifest directory.
-        if let Some(key) = key {
+        // When a human-readable hint is supplied it must be a simple relative file name.
+        // NOTE:: Absolute paths, parent traversal, and multi-component paths cannot produce a
+        // single, well-formed file name in the manifest directory, so they are ignored and
+        // treated as if no hint had been supplied.
+        let key = key.filter(|key| {
             let mut components = std::path::Path::new(key).components();
-            match components.next() {
-                Some(std::path::Component::Normal(_)) if components.next().is_none() => {}
-                _ => {
-                    return Err(save::Error::message(format!(
-                        "artifact file name hint {:?} must be a relative file name with no path \
-                         separators",
-                        key,
-                    )));
-                }
-            }
-        }
+            matches!(components.next(), Some(std::path::Component::Normal(_)))
+                && components.next().is_none()
+        });
 
         let mut files = self
             .files
@@ -266,12 +259,21 @@ mod tests {
     }
 
     #[test]
-    fn write_rejects_path_separators_and_traversal() {
+    fn write_ignores_path_separators_and_traversal() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = DiskSaveContext::new(dir.path().into(), dir.path().join("meta.json")).unwrap();
         for bad in ["sub/dir.bin", "../escape.bin", "/abs.bin"] {
-            SaveContext::write(&ctx, Some(bad))
-                .expect_err("keys with path separators must be rejected");
+            let handle = SaveContext::write(&ctx, Some(bad))
+                .expect("keys with path separators are treated as anonymous")
+                .finish()
+                .unwrap();
+            let mut components = std::path::Path::new(handle.as_str()).components();
+            assert!(
+                matches!(components.next(), Some(std::path::Component::Normal(_)))
+                    && components.next().is_none(),
+                "generated name {:?} must be a single relative file name",
+                handle.as_str(),
+            );
         }
     }
 
