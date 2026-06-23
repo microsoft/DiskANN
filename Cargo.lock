@@ -816,6 +816,7 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "diskann",
+ "diskann-benchmark-core",
  "diskann-benchmark-runner",
  "diskann-utils",
  "diskann-vector",

@@ -5,9 +5,12 @@
 
 use std::hash::Hash;
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::{
+    DashMap,
+    mapref::entry::{self, OccupiedEntry},
+};
 use diskann::utils::IntoUsize;
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
 const SHARD_SIZE: usize = 1024;
@@ -69,8 +72,8 @@ where
         // on the dashmap shard, and another thread racing on the same `internal` will
         // block on the backward shard's write lock.
         let forward = match self.forward.entry(external.clone()) {
-            Entry::Occupied(_) => return Err(InsertError::ExternalExists),
-            Entry::Vacant(vacant) => vacant,
+            entry::Entry::Occupied(_) => return Err(InsertError::ExternalExists),
+            entry::Entry::Vacant(vacant) => vacant,
         };
 
         let mut shard = self.backward[outer].write();
@@ -113,24 +116,33 @@ where
         self.backward[outer].read()[inner].clone()
     }
 
-    /// Remove the mapping for `external`. Returns the freed internal id, or `None` if
-    /// no such mapping existed.
-    pub(crate) fn remove<Q>(&self, external: &Q) -> Option<u32>
+    /// Validate that a mapping exists for `external` and return an [`Entry`] if successful.
+    ///
+    /// The [`Entry`] provides a means of error-free deferred deletion to enable coordinated
+    /// deletion of slots among multiple stores.
+    pub(crate) fn occupied_entry(&self, external: I) -> Option<Entry<'_, I>>
     where
-        I: Eq + Hash + std::borrow::Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
+        I: Eq + Hash,
     {
-        let (_, internal) = self.forward.remove(external)?;
-        let Shard { outer, inner } = self.shard(internal);
+        match self.forward.entry(external) {
+            entry::Entry::Vacant(_) => None,
+            entry::Entry::Occupied(forward) => {
+                let internal = *forward.get();
+                let Shard { outer, inner } = self.shard(internal);
+                let backward = self.backward[outer].write();
+                assert!(
+                    backward[inner].is_some(),
+                    "id {} removed improperly",
+                    internal
+                );
 
-        // The backward slot should be populated by the `insert` invariant.
-        //
-        // If not - this is a program bug.
-        let mut shard = self.backward[outer].write();
-        assert!(shard[inner].is_some(), "id {} removed improperly", internal);
-        shard[inner] = None;
-
-        Some(internal)
+                Some(Entry {
+                    forward,
+                    backward,
+                    entry: inner,
+                })
+            }
+        }
     }
 
     fn shard(&self, i: u32) -> Shard {
@@ -155,4 +167,35 @@ pub(crate) enum InsertError {
     ExternalExists,
     #[error("the internal id is already mapped")]
     InternalExists,
+}
+
+/// A handle to a valid entry in a [`Sharded`].
+///
+/// This can be used to guarantee the presence of an entry prior to deletion to support
+/// atomic deletes.
+pub(crate) struct Entry<'a, I>
+where
+    I: Eq + Hash,
+{
+    forward: OccupiedEntry<'a, I, u32>,
+    backward: RwLockWriteGuard<'a, Box<[Option<I>]>>,
+    entry: usize,
+}
+
+impl<'a, I> Entry<'a, I>
+where
+    I: Eq + Hash,
+{
+    pub(crate) fn internal(&self) -> u32 {
+        *self.forward.get()
+    }
+
+    pub(crate) fn external(&self) -> &I {
+        self.forward.key()
+    }
+
+    pub(crate) fn delete(mut self) {
+        self.forward.remove();
+        self.backward[self.entry] = None;
+    }
 }

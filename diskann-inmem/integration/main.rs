@@ -5,6 +5,7 @@
 
 mod index;
 mod store;
+mod support;
 
 use diskann_benchmark_runner::{App, Registry, output};
 
@@ -12,6 +13,7 @@ use diskann_benchmark_runner::{App, Registry, output};
 fn registry() -> anyhow::Result<Registry> {
     let mut registry = Registry::new();
     registry.register("store-stress", store::StoreStress)?;
+    index::register(&mut registry)?;
     Ok(registry)
 }
 

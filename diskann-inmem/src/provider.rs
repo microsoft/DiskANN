@@ -42,7 +42,7 @@ impl<L, M> Provider<L, M>
 where
     M: Id,
 {
-    pub fn new<I, T>(layer: L, capacity: usize, start_points: I) -> Self
+    pub fn new<I, T>(layer: L, config: Config, start_points: I) -> Self
     where
         I: IntoIterator<Item = T>,
         L: layers::Set<T>,
@@ -55,13 +55,44 @@ where
             layers::Set::into_bytes(&layer, point, row).unwrap();
         }
 
-        let store = Store::new(capacity, bytes, 32, data.as_view()).unwrap();
-        let mapping = Sharded::new(capacity);
+        let store = Store::new(
+            config.capacity(),
+            bytes,
+            config.max_degree(),
+            data.as_view(),
+        )
+        .unwrap();
+
+        let mapping = Sharded::new(config.capacity());
+
         Self {
             store,
             layer,
             mapping,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Config {
+    capacity: usize,
+    max_degree: usize,
+}
+
+impl Config {
+    pub fn new(capacity: usize, max_degree: usize) -> Self {
+        Self {
+            capacity,
+            max_degree,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    pub fn max_degree(&self) -> usize {
+        self.max_degree
     }
 }
 
@@ -117,9 +148,24 @@ where
 {
     async fn delete(&self, _context: &Context, gid: &M) -> ANNResult<()> {
         // TODO: These need to actually happen in lock-step.
-        let internal = self.mapping.remove(gid).unwrap();
-        self.store.retire(internal.into_usize()).unwrap();
-        Ok(())
+        let entry = match self.mapping.occupied_entry(gid.clone()) {
+            None => {
+                return Err(ANNError::message(
+                    ANNErrorKind::Opaque,
+                    "id already deleted",
+                ));
+            }
+            Some(e) => e,
+        };
+
+        match self.store.retire(entry.internal().into_usize()) {
+            Ok(()) => {
+                // Successfully retired the internal slot. We can safely release the ID mapping.
+                entry.delete();
+                Ok(())
+            }
+            Err(err) => Err(ANNError::opaque(err)),
+        }
     }
 
     async fn release(&self, _context: &Context, _id: Self::InternalId) -> ANNResult<()> {
@@ -777,7 +823,9 @@ mod tests {
         let full = Full::<f32>::new(1, Metric::L2);
         let start_points: [&[f32]; _] = [&[1.0], &[2.0]];
 
-        let provider = Provider::new(full, 10, start_points);
+        let config = Config::new(10, 16);
+
+        let provider = Provider::new(full, config, start_points);
 
         let config = diskann::graph::config::Builder::new(
             10,

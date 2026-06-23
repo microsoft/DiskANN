@@ -299,7 +299,7 @@ impl layers::Search for Full<f32> {
             self,
             query,
             visitor,
-            (f32, f16),
+            (f32, f32),
             (L2, 100, SquaredL2),
             (InnerProduct, 768, InnerProduct),
         );

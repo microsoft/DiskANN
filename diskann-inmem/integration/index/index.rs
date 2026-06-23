@@ -13,7 +13,7 @@ use half::f16;
 
 use diskann_inmem::{Context, Provider, Strategy, layers};
 
-use super::datatype::{AsDataType, DataType, FromSlice, Slice};
+use crate::support::datatype::{AsDataType, DataType, FromSlice, Slice};
 
 pub(crate) trait Index {
     fn data_type(&self) -> DataType;
