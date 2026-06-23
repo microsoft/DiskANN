@@ -82,25 +82,33 @@ pub(crate) struct Registry {
     // hand out overlapping `Drain`s referring to the same retiring queue.
     drain: Mutex<()>,
 
-    // We use three queues for storing retiring items.
+    // We use four queues for storing retiring items. The rationale is documented below.
     //
-    // 1. Belongs to the current generation and is getting filled.
-    // 2. Ready for the next generation that will be populated on the next `try_advance`.
-    //    Note that after a `try_advance` call, both 1 and 2 can be receiving retired items.
-    // 3. The queue returned from `try_advance` to be drained. Items drained are safe to
-    //    reclaim.
+    // ```text
+    //
+    //                                1. Safe to drain
+    //                           +--------------------------
+    //  Items retired at N-1 can |    2. Epoch N-1
+    //  be observed by guards at |  +-----------------------
+    //  N. If we transition to   |  | 3. Epoch N
+    //  N+1, guards at N can be  +--------------------------
+    //  active still. This it is    | 4. Epoch N+1
+    //  not safe to reclaim items   +-----------------------
+    //  from this queue until all     5. Epoch N+2 (reuse #1 queue)
+    //  guards are at least N+1.
+    // ```
     //
     // We cycle among the queues in a round-robin manner.
-    retiring: [SegQueue<u32>; 3],
+    retiring: [SegQueue<u32>; 4],
 }
 
 // Return the queue index for the `epoch`.
 fn queue(epoch: u64) -> usize {
-    epoch.into_usize() % 3
+    epoch.into_usize() % 4
 }
 
 fn last_queue(epoch: u64) -> usize {
-    queue(epoch.wrapping_sub(1))
+    queue(epoch.wrapping_sub(2))
 }
 
 impl Registry {
@@ -587,7 +595,12 @@ mod tests {
 
         // Verify that we reclaim the ID flushed by the registering thread.
         //
-        // This requires two epoch advancements.
+        // This requires three epoch advancements.
+        {
+            let drain = registry.try_advance().unwrap();
+            assert!(drain.is_empty());
+        }
+
         {
             let drain = registry.try_advance().unwrap();
             assert!(drain.is_empty());
@@ -752,22 +765,31 @@ mod tests {
         let gen_b = retire_at(200);
         assert_eq!(gen_b, gen_a + 1);
 
-        // 2nd advance after A (1st after B): drains A's queue → [100].
+        // 2st advance after A: must NOT drain item 100.
         {
-            let drained: Vec<_> = registry.try_advance().unwrap().collect();
-            assert_eq!(drained, &[100]);
+            let drain = registry.try_advance().unwrap();
+            assert!(
+                drain.is_empty(),
+                "100 must not drain on 2nd advance after A"
+            );
         }
 
         // Retire 300 at generation C.
         let _gen_c = retire_at(300);
 
-        // 2nd advance after B: drains B's queue → [200].
+        // 3rd advance after A (1st after B): drains A's queue → [100].
+        {
+            let drained: Vec<_> = registry.try_advance().unwrap().collect();
+            assert_eq!(drained, &[100]);
+        }
+
+        // 3rd advance after B: drains B's queue → [200].
         {
             let drained: Vec<_> = registry.try_advance().unwrap().collect();
             assert_eq!(drained, &[200]);
         }
 
-        // 2nd advance after C: drains C's queue → [300].
+        // 3rd advance after C: drains C's queue → [300].
         {
             let drained: Vec<_> = registry.try_advance().unwrap().collect();
             assert_eq!(drained, &[300]);

@@ -8,12 +8,14 @@ use std::{fmt::Debug, marker::PhantomData};
 use diskann::{ANNError, ANNResult};
 use diskann_vector::{
     UnalignedSlice,
-    distance::{self, DistanceProvider, Metric},
+    conversion::SliceCast,
+    distance::{self, DistanceProvider, InnerProduct, Metric, Specialize, SquaredL2},
 };
 use diskann_wide::{
     ARCH,
     arch::{Current, FTarget2},
 };
+use half::f16;
 use thiserror::Error;
 
 use crate::{layers, num::Bytes};
@@ -99,25 +101,27 @@ where
 //////////////
 
 #[derive(Debug)]
-struct Distance<T>
+struct Distance<T, U = T>
 where
     T: 'static,
+    U: 'static,
 {
-    f: distance::Distance<T, T>,
+    f: distance::Distance<T, U>,
     dim: usize,
 }
 
-impl<T> Clone for Distance<T> {
+impl<T, U> Clone for Distance<T, U> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for Distance<T> {}
+impl<T, U> Copy for Distance<T, U> {}
 
-impl<T> Distance<T>
+impl<T, U> Distance<T, U>
 where
     T: 'static,
+    U: 'static,
 {
     #[cold]
     #[inline(never)]
@@ -174,20 +178,51 @@ struct DistanceError {
 // QueryDistance //
 ///////////////////
 
+// A baby [`std::borrow::Cow`].
 #[derive(Debug)]
-struct QueryDistance<'a, T>
-where
-    T: 'static,
-{
-    distance: Distance<T>,
-    query: &'a [T],
+enum Calf<'a, T> {
+    Borrowed(&'a [T]),
+    Owned(Box<[T]>),
 }
 
-impl<'a, T> QueryDistance<'a, T>
+impl<T> std::ops::Deref for Calf<'_, T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(slice) => slice,
+            Self::Owned(boxed) => boxed,
+        }
+    }
+}
+
+impl<'a, T> From<&'a [T]> for Calf<'a, T> {
+    fn from(slice: &'a [T]) -> Self {
+        Self::Borrowed(slice)
+    }
+}
+
+impl<T> From<Box<[T]>> for Calf<'_, T> {
+    fn from(boxed: Box<[T]>) -> Self {
+        Self::Owned(boxed)
+    }
+}
+
+#[derive(Debug)]
+struct QueryDistance<'a, T, U>
 where
     T: 'static,
+    U: 'static,
 {
-    fn new(distance: Distance<T>, query: &'a [T]) -> Self {
+    distance: Distance<T, U>,
+    query: Calf<'a, T>,
+}
+
+impl<'a, T, U> QueryDistance<'a, T, U>
+where
+    T: 'static,
+    U: 'static,
+{
+    fn new(distance: Distance<T, U>, query: Calf<'a, T>) -> Self {
         if query.len() != distance.dim() {
             panic!("oops");
         }
@@ -207,9 +242,10 @@ where
     }
 }
 
-impl<T> layers::QueryDistance for QueryDistance<'_, T>
+impl<T, U> layers::QueryDistance for QueryDistance<'_, T, U>
 where
-    T: Debug + Sync + 'static,
+    T: Debug + Sync + Send + 'static,
+    U: Debug + Sync + Send + 'static,
 {
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
         if x.len() != self.distance.bytes() {
@@ -217,7 +253,7 @@ where
         } else {
             Ok(self.distance.f.call_unaligned(
                 unsafe { UnalignedSlice::new(self.query.as_ptr().cast::<T>(), self.distance.dim) },
-                unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.distance.dim) },
+                unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.distance.dim) },
             ))
         }
     }
@@ -234,18 +270,14 @@ struct QueryDistanceError {
     xlen: usize,
 }
 
-//-----------//
-// Version 2 //
-//-----------//
-
 macro_rules! specialize {
-    ($me:ident, $query:ident, $visitor:ident, $T:ty, $(($var:ident, $N:literal, $f:ty)),* $(,)?) => {
+    ($me:ident, $query:ident, $visitor:ident, ($T:ty, $U:ty), $(($var:ident, $N:literal, $f:ty)),* $(,)?) => {
         match ($me.metric, $me.dim()) {
             $(
                 (Metric::$var, $N) => {
-                    let wrapped = Wrap::<Specialize<$N, $f>, _>::new($query);
+                    let wrapped = Wrap::<Specialize<$N, $f>, $T, $U>::new($query);
                     return Ok(unsafe {
-                        $visitor.visit_sized::<{ $N * std::mem::size_of::<$T>() }, _>(wrapped)
+                        $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(wrapped)
                     })
                 },
             )*
@@ -261,11 +293,49 @@ impl layers::Search for Full<f32> {
     where
         V: layers::QueryVisitor<'a>,
     {
-        use diskann_vector::distance::{Specialize, SquaredL2};
+        let query = Calf::Borrowed(query);
 
-        specialize!(self, query, visitor, f32, (L2, 100, SquaredL2));
+        specialize!(
+            self,
+            query,
+            visitor,
+            (f32, f16),
+            (L2, 100, SquaredL2),
+            (InnerProduct, 768, InnerProduct),
+        );
 
+        // Fallback
         Ok(visitor.visit(QueryDistance::new(self.distance, query)))
+    }
+}
+
+impl layers::Search for Full<f16> {
+    type Query<'a> = &'a [f16];
+
+    fn query_distance<'a, V>(&'a self, query: &'a [f16], visitor: V) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>,
+    {
+        let mut as_f32: Box<[f32]> = std::iter::repeat_n(0.0, self.dim()).collect();
+        diskann_wide::arch::dispatch2(SliceCast::new(), &mut *as_f32, query);
+        let query = Calf::Owned(as_f32);
+
+        specialize!(
+            self,
+            query,
+            visitor,
+            (f32, f16),
+            (L2, 100, SquaredL2),
+            (InnerProduct, 768, InnerProduct),
+        );
+
+        // Fallback
+        let distance = Distance {
+            f: <f32 as DistanceProvider<f16>>::distance_comparer(self.metric, Some(self.dim())),
+            dim: self.dim(),
+        };
+
+        Ok(visitor.visit(QueryDistance::new(distance, query)))
     }
 }
 
@@ -276,41 +346,64 @@ impl layers::Search for Full<u8> {
     where
         V: layers::QueryVisitor<'a>,
     {
-        use diskann_vector::distance::{Specialize, SquaredL2};
+        let query = Calf::Borrowed(query);
 
-        specialize!(self, query, visitor, u8, (L2, 128, SquaredL2));
+        specialize!(self, query, visitor, (u8, u8), (L2, 128, SquaredL2));
 
+        // Fallback
+        Ok(visitor.visit(QueryDistance::new(self.distance, query)))
+    }
+}
+
+impl layers::Search for Full<i8> {
+    type Query<'a> = &'a [i8];
+
+    fn query_distance<'a, V>(&'a self, query: &'a [i8], visitor: V) -> ANNResult<V::Output>
+    where
+        V: layers::QueryVisitor<'a>,
+    {
+        let query = Calf::Borrowed(query);
         Ok(visitor.visit(QueryDistance::new(self.distance, query)))
     }
 }
 
 #[derive(Debug)]
-struct Wrap<'a, I, T> {
-    query: &'a [T],
-    inner: PhantomData<I>,
+struct Wrap<'a, I, T, U> {
+    query: Calf<'a, T>,
+    ps: PhantomData<(I, U)>,
 }
 
-impl<'a, I, T> Wrap<'a, I, T> {
-    fn new(query: &'a [T]) -> Self {
+impl<'a, I, T, U> Wrap<'a, I, T, U> {
+    fn new(query: Calf<'a, T>) -> Self {
         Self {
             query,
-            inner: PhantomData,
+            ps: PhantomData,
         }
     }
 }
 
-impl<I, T> layers::QueryDistance for Wrap<'_, I, T>
+impl<I, T, U> layers::QueryDistance for Wrap<'_, I, T, U>
 where
-    I: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, T>>
+    I: for<'a> FTarget2<Current, f32, UnalignedSlice<'a, T>, UnalignedSlice<'a, U>>
         + Send
         + Sync
         + Debug,
     T: Send + Sync + 'static + Debug,
+    U: Send + Sync + 'static + Debug,
 {
     #[inline(always)]
     fn evaluate(&self, x: &[u8]) -> ANNResult<f32> {
         // TODO: This is not fully valid - we need to check.
-        let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<T>(), self.query.len()) };
-        Ok(I::run(ARCH, self.query.into(), x))
+        let x = unsafe { UnalignedSlice::new(x.as_ptr().cast::<U>(), self.query.len()) };
+        Ok(I::run(ARCH, (*self.query).into(), x))
     }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }

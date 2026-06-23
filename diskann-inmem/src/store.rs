@@ -228,7 +228,10 @@ impl Store {
             return Err(RetireError::SlotIsReserved { tag: current });
         }
 
-        let guard = self.registry.guard().map_err(RetireError::GuardUnavailable)?;
+        let guard = self
+            .registry
+            .guard()
+            .map_err(RetireError::GuardUnavailable)?;
 
         let retiring = Tag::RETIRING;
 
@@ -563,6 +566,4 @@ impl Drop for Slot<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 }

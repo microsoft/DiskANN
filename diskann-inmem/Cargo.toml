@@ -16,20 +16,23 @@ diskann-utils = { workspace = true, default-features = false }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
 parking_lot = "0.12.5"
-thiserror.workspace = true
+thiserror = { workspace = true }
+half = { workspace = true }
 
 # Integration Test Dependencies
 diskann-benchmark-runner = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-rand.workspace = true
+rand = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
+tempfile = { workspace = true }
 
 [[bin]]
 name = "integration-tests"
@@ -45,4 +48,5 @@ integration-test = [
     "dep:serde",
     "dep:serde_json",
     "dep:anyhow",
+    "dep:rand",
 ]

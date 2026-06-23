@@ -369,6 +369,59 @@ where
     }
 }
 
+//////////////
+// KeyValue //
+//////////////
+
+/// Display a dynamic list of key-value pairs such that the keys are right-aligned.
+///
+/// # Examples
+///
+/// ```
+/// use diskann_benchmark_runner::utils::fmt::KeyValue;
+///
+/// let mut kv = KeyValue::new();
+/// kv.push("a", &1);
+/// kv.push("hello", &"world");
+///
+/// let expected =
+/// "    a: 1
+/// hello: world
+/// ";
+///
+/// assert_eq!(kv.to_string(), expected);
+/// ```
+pub struct KeyValue<'a> {
+    kv: Vec<(&'a str, &'a dyn std::fmt::Display)>,
+    max_key_length: usize,
+}
+
+impl<'a> KeyValue<'a> {
+    /// Create a new empty [`KeyValue`] formatter.
+    pub fn new() -> Self {
+        Self {
+            kv: Vec::new(),
+            max_key_length: 0,
+        }
+    }
+
+    /// Push the key-value pair to `self` for formatting.
+    pub fn push(&mut self, key: &'a str, value: &'a dyn std::fmt::Display) {
+        self.max_key_length = self.max_key_length.max(key.len());
+        self.kv.push((key, value))
+    }
+}
+
+impl std::fmt::Display for KeyValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let width = self.max_key_length;
+        for (k, v) in self.kv.iter() {
+            writeln!(f, "{:>width$}: {v}", k)?;
+        }
+        Ok(())
+    }
+}
+
 ///////////
 // Tests //
 ///////////

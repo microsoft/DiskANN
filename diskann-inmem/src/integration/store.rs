@@ -3,7 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use crate::store;
+use diskann_utils::views::Matrix;
+
+use crate::{num::Bytes, store};
 
 #[derive(Debug)]
 pub struct Store {
@@ -11,6 +13,38 @@ pub struct Store {
 }
 
 impl Store {
+    /// Construct a store with `capacity` writable slots, each holding `entry_bytes` bytes.
+    ///
+    /// A single zeroed frozen point is created internally to satisfy the underlying
+    /// store's requirement of at least one frozen entry; it occupies the highest slot
+    /// index and is always readable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying store could not be constructed (e.g. `capacity` plus the
+    /// frozen point exceeds `u32::MAX`).
+    pub fn new(capacity: usize, entry_bytes: usize) -> Self {
+        let data = Matrix::new(0u8, 1, entry_bytes);
+        let store = store::Store::new(capacity, Bytes::new(entry_bytes), 0, data.as_view())
+            .expect("failed to construct store");
+        Self { store }
+    }
+
+    /// Return the total number of slots, including the frozen point.
+    pub fn slots(&self) -> usize {
+        self.store.frozen().end as usize
+    }
+
+    /// Return the range of writable (non-frozen) slot indices.
+    pub fn writable(&self) -> std::ops::Range<usize> {
+        0..(self.store.frozen().start as usize)
+    }
+
+    /// Attempt to reclaim retired slots, returning the number reclaimed if any.
+    pub fn reclaim(&self) -> Option<usize> {
+        self.store.try_drain()
+    }
+
     pub fn acquire(&self) -> Option<Writer<'_>> {
         self.store.acquire().map(Writer::new)
     }

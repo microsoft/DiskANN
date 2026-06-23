@@ -820,10 +820,12 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
+ "half",
  "parking_lot",
  "rand 0.9.4",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
 ]

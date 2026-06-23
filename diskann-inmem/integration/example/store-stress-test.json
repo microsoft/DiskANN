@@ -1,0 +1,19 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "store-stress",
+      "content": {
+        "readers": 4,
+        "writers": 2,
+        "retirers": 1,
+        "capacity": 512,
+        "entry_bytes": 64,
+        "low_watermark": 128,
+        "duration_secs": 2,
+        "max_ops": 2000000,
+        "seed": 11939873485092837375
+      }
+    }
+  ]
+}
