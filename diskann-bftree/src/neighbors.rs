@@ -17,7 +17,7 @@ use diskann::{
 };
 
 use super::ConfigError;
-use crate::TestCallCount;
+use crate::{bftree_insert, TestCallCount};
 
 pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
@@ -142,10 +142,10 @@ impl<I: VectorId> NeighborProvider<I> {
     ///
     /// Each key is a `VectorId`, written in bytes. The value is a
     /// neighbor list of length exactly `self.dim`. Specifically,
-    /// an array of exactly `n` neighbors is written as :  
+    /// an array of exactly `n` neighbors is written as :
     /// ```text
     /// |  I0  | ... |  In  | padding |  ...  | [n; 0] |
-    ///     
+    ///
     /// -----------------------------------------------
     ///                     |
     ///                 self.dim
@@ -177,7 +177,7 @@ impl<I: VectorId> NeighborProvider<I> {
         let key = bytemuck::bytes_of(&vector_id);
         let value = cast_slice::<I, u8>(&buf[..self.dim]);
 
-        self.adjacency_list_index.insert(key, value);
+        bftree_insert(&self.adjacency_list_index, key, value)?;
 
         Ok(())
     }
@@ -189,7 +189,7 @@ impl<I: VectorId> NeighborProvider<I> {
     /// bytes of it into the bf-tree.
     ///
     /// # Errors
-    ///  
+    ///
     ///  - Neighbor length is larger than `self.max_degree()`
     ///  - Buffer length (in `I` cells) is smaller than `max_degree() + 1`
     pub fn set_neighbors(&self, vector_id: I, neighbors: &[I], buf: &mut [I]) -> ANNResult<()> {
