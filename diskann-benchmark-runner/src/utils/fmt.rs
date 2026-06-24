@@ -203,7 +203,7 @@ impl std::fmt::Display for Banner<'_> {
 /// use diskann_benchmark_runner::utils::fmt::Indent;
 ///
 /// let indented = Indent::new("hello\nworld", 4).to_string();
-/// assert_eq!(indented, "    hello\n    world\n");
+/// assert_eq!(indented, "    hello\n    world");
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Indent<'a> {
@@ -221,9 +221,15 @@ impl<'a> Indent<'a> {
 impl std::fmt::Display for Indent<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let spaces = self.spaces;
-        self.string
-            .lines()
-            .try_for_each(|ln| writeln!(f, "{: >spaces$}{}", "", ln))
+        let mut first = true;
+        for ln in self.string.lines() {
+            if !first {
+                writeln!(f)?;
+            }
+            write!(f, "{: >spaces$}{}", "", ln)?;
+            first = false;
+        }
+        Ok(())
     }
 }
 
@@ -384,10 +390,7 @@ where
 /// kv.push("a", &1);
 /// kv.push("hello", &"world");
 ///
-/// let expected =
-/// "    a: 1
-/// hello: world
-/// ";
+/// let expected = "    a: 1\nhello: world";
 ///
 /// assert_eq!(kv.to_string(), expected);
 /// ```
@@ -575,19 +578,19 @@ string,        ,   string
     #[test]
     fn test_indent_single_line() {
         let s = Indent::new("hello", 4).to_string();
-        assert_eq!(s, "    hello\n");
+        assert_eq!(s, "    hello");
     }
 
     #[test]
     fn test_indent_multi_line() {
         let s = Indent::new("hello\nworld\nfoo", 2).to_string();
-        assert_eq!(s, "  hello\n  world\n  foo\n");
+        assert_eq!(s, "  hello\n  world\n  foo");
     }
 
     #[test]
     fn test_indent_zero_spaces() {
         let s = Indent::new("hello\nworld", 0).to_string();
-        assert_eq!(s, "hello\nworld\n");
+        assert_eq!(s, "hello\nworld");
     }
 
     #[test]

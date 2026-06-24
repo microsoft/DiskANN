@@ -521,7 +521,7 @@ impl std::fmt::Display for BuildAndSearch {
         writeln!(f, "{}", Indent::new(&self.build.to_string(), 4))?;
         writeln!(f, "knn stats")?;
         for k in self.knn.iter() {
-            writeln!(f, "{}", k)?;
+            writeln!(f, "{}\n", k)?;
         }
 
         Ok(())

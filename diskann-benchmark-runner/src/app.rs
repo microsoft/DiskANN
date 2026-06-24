@@ -228,7 +228,7 @@ impl App {
                         writeln!(output)?;
                     } else {
                         writeln!(output)?;
-                        write!(output, "{}", Indent::new(&description, 8))?;
+                        writeln!(output, "{}", Indent::new(&description, 8))?;
                     }
                 }
             }
@@ -258,8 +258,8 @@ impl App {
                         )?;
                         writeln!(output, "Closest matches:\n")?;
                         for (i, mismatch) in mismatches.into_iter().enumerate() {
-                            writeln!(output, "    {}. \"{}\":", i + 1, mismatch.method(),)?;
-                            writeln!(output, "{}", Indent::new(mismatch.reason(), 8),)?;
+                            writeln!(output, "    {}. \"{}\":", i + 1, mismatch.method())?;
+                            writeln!(output, "{}\n", Indent::new(mismatch.reason(), 8))?;
                         }
                         writeln!(output)?;
 
