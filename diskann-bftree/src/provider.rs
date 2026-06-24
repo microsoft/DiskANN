@@ -205,6 +205,22 @@ where
     pub(crate) use_snapshot: bool,
     // Striped locks for per-vertex synchronization across all stores.
     //
+    // # Locking protocol
+    //
+    // Each mutating operation (`set_element`, `delete`, `write_neighbors`,
+    // `set_neighbors`, `append_vector`) acquires exactly **one** stripe lock
+    // for the target vertex ID, performs its work, and drops the guard at
+    // scope exit. No operation acquires a second lock while holding the first,
+    // so **deadlock is structurally impossible** — there is no ordering
+    // concern.
+    //
+    // Reads (`get_neighbors`, `get_vector`) do **not** acquire the stripe
+    // lock. They rely on bf-tree's internal thread safety for reads. A reader
+    // may therefore observe a partially-updated neighbor list (e.g.,
+    // mid-append), but bf-tree guarantees the read will not crash or return
+    // corrupt memory. The DiskANN search algorithm tolerates stale neighbor
+    // reads — it is approximate by design, and momentary inconsistency
+    // affects quality briefly rather than correctness.
     pub(crate) locks: StripedLocks,
 }
 
