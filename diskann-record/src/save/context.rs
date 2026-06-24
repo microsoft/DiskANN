@@ -63,7 +63,7 @@ pub(crate) use delegate_write_and_seek;
 ///
 /// A `SaveContext` decides where side-car artifacts are written ([`SaveContext::write`])
 /// and how the final manifest is committed ([`SaveContext::finish`]). The concrete
-/// implementations live under [`crate::backend`]: a disk-backed context (under the `disk`
+/// implementations live under `crate::backend`: a disk-backed context (under the `disk`
 /// feature) and an in-memory context. Alternative implementations (e.g. a virtual
 /// filesystem) can be supplied for testing or to avoid touching the filesystem.
 ///
@@ -165,7 +165,7 @@ pub(crate) trait WriterInner: std::io::Write + std::io::Seek + std::fmt::Debug {
 ///
 /// Implements [`std::io::Write`] and [`std::io::Seek`]. Writes are buffered; calling
 /// [`Writer::finish`] flushes the buffer, commits the artifact through the backing
-/// [`WriterInner`], and returns a [`Handle`].
+/// writer, and returns a [`Handle`].
 #[derive(Debug)]
 pub struct Writer<'a> {
     inner: BufWriter<Box<dyn WriterInner + 'a>>,

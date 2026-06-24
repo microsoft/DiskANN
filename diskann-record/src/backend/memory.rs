@@ -144,7 +144,7 @@ impl LoadContext for MemoryContext {
 
     fn read(&self, key: &str) -> load::Result<Reader<'_>> {
         match self.files.get(key) {
-            Some(bytes) => Ok(Reader::new(Box::new(Cursor::new(bytes.as_slice())))),
+            Some(bytes) => Ok(Reader::new(Cursor::new(bytes.as_slice()))),
             None => Err(
                 load::Error::from(load::error::Kind::MissingFile).context(format!(
                     "handle references artifact {:?} which is not registered in this context",

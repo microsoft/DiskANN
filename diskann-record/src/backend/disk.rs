@@ -249,7 +249,7 @@ impl LoadContext for DiskLoadContext {
             load::Error::new(err).context(format!("while opening artifact file {}", full.display()))
         })?;
 
-        Ok(Reader::new(Box::new(file)))
+        Ok(Reader::new(file))
     }
 }
 

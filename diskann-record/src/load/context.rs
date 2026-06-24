@@ -15,8 +15,8 @@
 //! * [`Object::read`] for side-car artifacts referenced by a
 //!   [`save::Handle`](super::save::Handle).
 //!
-//! [`Reader`] implements [`std::io::Read`] over a side-car artifact, regardless of the
-//! provider's backing store.
+//! [`Reader`] implements [`std::io::Read`] and [`std::io::Seek`] over a side-car
+//! artifact, regardless of the provider's backing store.
 
 use std::io::BufReader;
 
@@ -30,7 +30,7 @@ use crate::{
 ///
 /// A `LoadContext` supplies the root manifest [`save::Value`] ([`LoadContext::value`])
 /// and resolves side-car artifacts referenced by handles ([`LoadContext::read`]). The
-/// concrete implementations live under [`crate::backend`]: a disk-backed context (under
+/// concrete implementations live under `crate::backend`: a disk-backed context (under
 /// the `disk` feature) and an in-memory context. Alternative implementations (e.g. a
 /// virtual filesystem) can be supplied for testing.
 ///
@@ -54,23 +54,35 @@ pub trait LoadContext {
     fn read(&self, key: &str) -> Result<Reader<'_>>;
 }
 
+/// The backend-specific half of a [`Reader`].
+///
+/// Each [`LoadContext`] implementation supplies its own `ReaderInner` (e.g. an in-memory
+/// cursor or an on-disk file). The blanket impl covers any type that is both
+/// [`std::io::Read`] and [`std::io::Seek`].
+pub(crate) trait ReaderInner: std::io::Read + std::io::Seek {}
+
+impl<T> ReaderInner for T where T: std::io::Read + std::io::Seek {}
+
 /// A borrowed reader over a side-car artifact.
 ///
-/// Produced by [`Object::read`]. Implements [`std::io::Read`] over whatever backing
-/// store the [`LoadContext`] provides, so non-file-backed providers (like an in-memory byte buffer) can supply an
-/// arbitrary [`std::io::Read`].
+/// Produced by [`Object::read`]. Implements [`std::io::Read`] and [`std::io::Seek`] over
+/// whatever backing store the [`LoadContext`] provides, so non-file-backed providers
+/// (like an in-memory byte buffer) can supply an arbitrary seekable reader.
 pub struct Reader<'a> {
-    io: BufReader<Box<dyn std::io::Read + 'a>>,
+    io: BufReader<Box<dyn ReaderInner + 'a>>,
 }
 
 impl<'a> Reader<'a> {
-    /// Build a reader over an arbitrary borrowed [`std::io::Read`] source.
+    /// Build a reader over an arbitrary borrowed [`ReaderInner`] source.
     ///
-    /// Used by non-file-backed [`LoadContext`] implementations (e.g. the in-memory
-    /// context) to expose a side-car artifact backed by a [`std::io::Cursor`].
-    pub(crate) fn new(io: Box<dyn std::io::Read + 'a>) -> Self {
+    /// Used by [`LoadContext`] implementations to expose a side-car artifact backed by a
+    /// file or an in-memory [`std::io::Cursor`].
+    pub(crate) fn new<T>(io: T) -> Self
+    where
+        T: ReaderInner + 'a,
+    {
         Self {
-            io: BufReader::new(io),
+            io: BufReader::new(Box::new(io)),
         }
     }
 }
@@ -93,6 +105,21 @@ impl std::io::Read for Reader<'_> {
     }
     fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
         self.io.read_exact(buf)
+    }
+}
+
+impl std::io::Seek for Reader<'_> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.io.seek(pos)
+    }
+    fn rewind(&mut self) -> std::io::Result<()> {
+        self.io.rewind()
+    }
+    fn stream_position(&mut self) -> std::io::Result<u64> {
+        self.io.stream_position()
+    }
+    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
+        self.io.seek_relative(offset)
     }
 }
 
