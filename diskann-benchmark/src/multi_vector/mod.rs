@@ -25,9 +25,15 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "multi-vector")] {
         mod driver;
         mod kernels;
+        // The quantized A/B op drives the V3-only staged integer kernel.
+        #[cfg(target_arch = "x86_64")]
+        mod quant;
 
         pub(super) fn register_benchmarks(registry: &mut Registry) -> anyhow::Result<()> {
-            kernels::register(registry)
+            kernels::register(registry)?;
+            #[cfg(target_arch = "x86_64")]
+            quant::register(registry)?;
+            Ok(())
         }
     } else {
         crate::utils::stub_impl!("multi-vector", inputs::multi_vector::MultiVectorOp);

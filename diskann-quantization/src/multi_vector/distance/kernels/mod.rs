@@ -16,7 +16,15 @@ pub(super) mod f16;
 pub(super) mod f32;
 mod layouts;
 mod reduce;
+// The staged kernel is V3 (x86_64) only; gate the whole module so its support
+// code isn't dead on other architectures.
+#[cfg(target_arch = "x86_64")]
+pub(super) mod staged;
 mod tiled_reduce;
+
+// Re-export the quantized staged kernel's public POC entry (x86_64 only).
+#[cfg(target_arch = "x86_64")]
+pub use staged::{QuantStagedDocs, QuantStagedQuery};
 
 // ── Tile budget ──────────────────────────────────────────────────
 

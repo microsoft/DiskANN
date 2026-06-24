@@ -53,3 +53,8 @@ pub use fallback::QueryMatRef;
 pub use isa::{MaxSimIsa, NotSupported};
 pub use kernel::{BoxErase, Erase, MaxSimKernel};
 pub use max_sim::{Chamfer, MaxSim, MaxSimError};
+
+/// Standalone POC entry for the 4-bit MinMax *staged* multi-vector MaxSim kernel
+/// (V3/AVX2 only) — not yet unified into [`MaxSimIsa`]/[`build_max_sim`].
+#[cfg(target_arch = "x86_64")]
+pub use kernels::{QuantStagedDocs, QuantStagedQuery};

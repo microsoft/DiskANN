@@ -26,6 +26,9 @@ pub(crate) enum BenchIsa {
     #[serde(rename = "x86-64-v3")]
     #[allow(non_camel_case_types)]
     X86_64_V3,
+    #[serde(rename = "x86-64-v3-staged")]
+    #[allow(non_camel_case_types)]
+    X86_64_V3_Staged,
     Neon,
     Scalar,
     Reference,
@@ -37,6 +40,7 @@ impl std::fmt::Display for BenchIsa {
         let st = match self {
             Self::X86_64_V4 => "x86-64-v4",
             Self::X86_64_V3 => "x86-64-v3",
+            Self::X86_64_V3_Staged => "x86-64-v3-staged",
             Self::Neon => "neon",
             Self::Scalar => "scalar",
             Self::Reference => "reference",
@@ -51,6 +55,7 @@ impl From<BenchIsa> for MaxSimIsa {
         match b {
             BenchIsa::X86_64_V4 => MaxSimIsa::X86_64_V4,
             BenchIsa::X86_64_V3 => MaxSimIsa::X86_64_V3,
+            BenchIsa::X86_64_V3_Staged => MaxSimIsa::X86_64_V3_Staged,
             BenchIsa::Neon => MaxSimIsa::Neon,
             BenchIsa::Scalar => MaxSimIsa::Scalar,
             BenchIsa::Reference => MaxSimIsa::Reference,
@@ -145,6 +150,83 @@ impl std::fmt::Display for MultiVectorOp {
         write_field!(f, "tag", Self::tag())?;
         write_field!(f, "element type", self.element_type)?;
         write_field!(f, "isa", self.isa)?;
+        write_field!(f, "number of runs", self.runs.len())?;
+        Ok(())
+    }
+}
+
+///////////////////////////////
+// Multi-Vector Quantized Op  //
+///////////////////////////////
+
+/// A 4-bit MinMax **quantized** multi-vector MaxSim A/B benchmark job: the
+/// experimental staged integer kernel vs the scalar `MinMaxKernel` reference,
+/// at identical shapes and quantization.
+///
+/// The element type is implicitly f32 input → 4-bit MinMax codes, and the ISA is
+/// fixed to V3/AVX2 (the only quantized staged kernel), so neither is a JSON
+/// field. x86_64-only, like the kernel it drives.
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MultiVectorQuantOp {
+    pub(crate) runs: Vec<Run>,
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl MultiVectorQuantOp {
+    pub(crate) const fn tag() -> &'static str {
+        "multi-vector-quant-op"
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl Input for MultiVectorQuantOp {
+    type Raw = Self;
+
+    fn tag() -> &'static str {
+        Self::tag()
+    }
+
+    fn from_raw(raw: Self::Raw, _checker: &mut Checker) -> anyhow::Result<Self> {
+        Ok(raw)
+    }
+
+    fn serialize(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self)?)
+    }
+
+    fn example() -> Self {
+        const NUM_DOC_VECTORS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+        const DIM: NonZeroUsize = NonZeroUsize::new(128).unwrap();
+        const LOOPS_PER_MEASUREMENT: NonZeroUsize = NonZeroUsize::new(50).unwrap();
+        const NUM_MEASUREMENTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
+
+        let runs = vec![
+            Run {
+                num_query_vectors: NonZeroUsize::new(32).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+            Run {
+                num_query_vectors: NonZeroUsize::new(64).unwrap(),
+                num_doc_vectors: NUM_DOC_VECTORS,
+                dim: DIM,
+                loops_per_measurement: LOOPS_PER_MEASUREMENT,
+                num_measurements: NUM_MEASUREMENTS,
+            },
+        ];
+
+        Self { runs }
+    }
+}
+
+#[cfg(all(feature = "multi-vector", target_arch = "x86_64"))]
+impl std::fmt::Display for MultiVectorQuantOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Multi-Vector Quantized Operation (4-bit MinMax)\n")?;
+        write_field!(f, "tag", Self::tag())?;
         write_field!(f, "number of runs", self.runs.len())?;
         Ok(())
     }
