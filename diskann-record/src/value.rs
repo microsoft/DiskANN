@@ -203,7 +203,7 @@ impl Value<'_> {
     /// This is the allocation-based equivalent of round-tripping through the wire format:
     /// it severs every borrow from the originating data so the result can be stored
     /// independently of its source (for example inside an in-memory
-    /// [`crate::InMemoryContext`]).
+    /// [`crate::MemoryContext`]).
     pub fn into_owned(self) -> Value<'static> {
         match self {
             Self::Null => Value::Null,

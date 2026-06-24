@@ -14,14 +14,50 @@
 //! [`Writer::finish`] flushes the buffer and yields a [`Handle`] that can be inserted
 //! into a [`super::Record`].
 
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufWriter, Cursor},
-    sync::Mutex,
-};
+use std::io::BufWriter;
 
 use crate::save::{Error, Handle, Result, Value};
+
+/// Generate forwarding [`std::io::Write`] and [`std::io::Seek`] impls for `$T` that
+/// delegate every method to its `$field` member.
+macro_rules! delegate_write_and_seek {
+    ($field:ident, $T:ty) => {
+        impl std::io::Write for $T {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.$field.write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.$field.flush()
+            }
+            fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
+                self.$field.write_vectored(bufs)
+            }
+            fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+                self.$field.write_all(buf)
+            }
+            fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+                self.$field.write_fmt(args)
+            }
+        }
+
+        impl std::io::Seek for $T {
+            fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+                self.$field.seek(pos)
+            }
+            fn rewind(&mut self) -> std::io::Result<()> {
+                self.$field.rewind()
+            }
+            fn stream_position(&mut self) -> std::io::Result<u64> {
+                self.$field.stream_position()
+            }
+            fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
+                self.$field.seek_relative(offset)
+            }
+        }
+    };
+}
+
+pub(crate) use delegate_write_and_seek;
 
 /// The backing store for a save operation.
 ///
@@ -113,135 +149,54 @@ impl<'a> Context<'a> {
     }
 }
 
+/// The backend-specific half of a [`Writer`].
+///
+/// Each [`SaveContext`](super::SaveContext) implementation supplies its own
+/// `WriterInner` (e.g. an in-memory cursor or an on-disk file). [`Writer`] wraps it in a
+/// [`BufWriter`] and forwards [`std::io::Write`] / [`std::io::Seek`] to it; on
+/// [`Writer::finish`] the (flushed) inner is consumed to commit the artifact and yield a
+/// [`Handle`].
+pub(crate) trait WriterInner: std::io::Write + std::io::Seek + std::fmt::Debug {
+    /// Commit the completed artifact under `name`, returning its [`Handle`].
+    fn finish(self: Box<Self>, name: String) -> Result<Handle>;
+}
+
 /// A borrowed side-car artifact writer produced by [`Context::write`].
 ///
 /// Implements [`std::io::Write`] and [`std::io::Seek`]. Writes are buffered; calling
-/// [`Writer::finish`] flushes the buffer (or, for an in-memory context, deposits the
-/// completed buffer into the store) and returns a [`Handle`].
+/// [`Writer::finish`] flushes the buffer, commits the artifact through the backing
+/// [`WriterInner`], and returns a [`Handle`].
 #[derive(Debug)]
 pub struct Writer<'a> {
-    inner: Backend<'a>,
+    inner: BufWriter<Box<dyn WriterInner + 'a>>,
     name: String,
 }
 
-/// The backing store a [`Writer`] writes into.
-#[derive(Debug)]
-enum Backend<'a> {
-    /// A file on disk; the bytes are persisted as they are written.
-    #[cfg_attr(not(feature = "disk"), allow(dead_code))]
-    File(BufWriter<File>),
-    /// An in-memory buffer; on [`Writer::finish`] the completed buffer is inserted into
-    /// `store` under the writer's name.
-    Memory {
-        buffer: Cursor<Vec<u8>>,
-        store: &'a Mutex<HashMap<String, Vec<u8>>>,
-    },
-}
-
 impl<'a> Writer<'a> {
-    /// Construct an in-memory writer that deposits its buffer into `store` on finish.
-    pub(crate) fn memory(name: String, store: &'a Mutex<HashMap<String, Vec<u8>>>) -> Self {
+    /// Wrap a backend-specific [`WriterInner`] into a buffered [`Writer`] named `name`.
+    pub(crate) fn new<T>(inner: T, name: String) -> Self
+    where
+        T: WriterInner + 'a,
+    {
         Self {
-            inner: Backend::Memory {
-                buffer: Cursor::new(Vec::new()),
-                store,
-            },
+            inner: BufWriter::new(Box::new(inner)),
             name,
         }
     }
 
-    /// Construct a file-backed writer that streams bytes straight to `file`.
-    #[cfg(feature = "disk")]
-    pub(crate) fn file(name: String, file: File) -> Self {
-        Self {
-            inner: Backend::File(BufWriter::new(file)),
-            name,
-        }
-    }
-}
-
-impl Writer<'_> {
     /// Flush and close the writer, returning a [`Handle`] for the artifact.
     ///
     /// Insert the returned handle into a [`Record`](super::Record) (typically via
     /// [`Record::insert`](super::Record::insert)) so that load-side code can locate the
     /// artifact through the manifest.
     pub fn finish(self) -> Result<Handle> {
-        match self.inner {
-            // NOTE: into_inner() will flush the buffer and close the file.
-            Backend::File(io) => {
-                io.into_inner()
-                    .map_err(|err| Error::new(err.into_error()))?;
-            }
-            Backend::Memory { buffer, store } => {
-                store
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .insert(self.name.clone(), buffer.into_inner());
-            }
-        }
-        Ok(Handle::new(self.name))
+        // into_inner() flushes the buffered bytes into the backend before we commit it.
+        let inner = self
+            .inner
+            .into_inner()
+            .map_err(|err| Error::new(err.into_error()))?;
+        inner.finish(self.name)
     }
 }
 
-impl std::io::Write for Writer<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match &mut self.inner {
-            Backend::File(io) => io.write(buf),
-            Backend::Memory { buffer, .. } => buffer.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match &mut self.inner {
-            Backend::File(io) => io.flush(),
-            Backend::Memory { buffer, .. } => buffer.flush(),
-        }
-    }
-    fn write_vectored(&mut self, bufs: &[std::io::IoSlice<'_>]) -> std::io::Result<usize> {
-        match &mut self.inner {
-            Backend::File(io) => io.write_vectored(bufs),
-            Backend::Memory { buffer, .. } => buffer.write_vectored(bufs),
-        }
-    }
-    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        match &mut self.inner {
-            Backend::File(io) => io.write_all(buf),
-            Backend::Memory { buffer, .. } => buffer.write_all(buf),
-        }
-    }
-    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
-        match &mut self.inner {
-            Backend::File(io) => io.write_fmt(args),
-            Backend::Memory { buffer, .. } => buffer.write_fmt(args),
-        }
-    }
-}
-
-impl std::io::Seek for Writer<'_> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        match &mut self.inner {
-            Backend::File(io) => io.seek(pos),
-            Backend::Memory { buffer, .. } => buffer.seek(pos),
-        }
-    }
-
-    fn rewind(&mut self) -> std::io::Result<()> {
-        match &mut self.inner {
-            Backend::File(io) => io.rewind(),
-            Backend::Memory { buffer, .. } => buffer.rewind(),
-        }
-    }
-    fn stream_position(&mut self) -> std::io::Result<u64> {
-        match &mut self.inner {
-            Backend::File(io) => io.stream_position(),
-            Backend::Memory { buffer, .. } => buffer.stream_position(),
-        }
-    }
-    fn seek_relative(&mut self, offset: i64) -> std::io::Result<()> {
-        match &mut self.inner {
-            Backend::File(io) => io.seek_relative(offset),
-            Backend::Memory { buffer, .. } => buffer.seek_relative(offset),
-        }
-    }
-}
+delegate_write_and_seek!(inner, Writer<'_>);

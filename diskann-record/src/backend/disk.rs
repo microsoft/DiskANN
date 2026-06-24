@@ -11,6 +11,7 @@
 
 use std::{
     collections::HashSet,
+    fs::File,
     io::BufReader,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -18,7 +19,7 @@ use std::{
 
 use crate::{
     load::{self, LoadContext, Reader},
-    save::{self, SaveContext, Value, Writer},
+    save::{self, Handle, SaveContext, Value, Writer, delegate_write_and_seek},
 };
 
 /// The disk-backed [`SaveContext`].
@@ -113,7 +114,7 @@ impl SaveContext for DiskSaveContext {
         let file = std::fs::File::create_new(&full).map_err(|err| {
             save::Error::new(err).context(format!("while creating new file {}", full.display()))
         })?;
-        Ok(Writer::file(name, file))
+        Ok(Writer::new(FileWriter { file }, name))
     }
 
     /// Finalize the manifest.
@@ -161,6 +162,24 @@ impl SaveContext for DiskSaveContext {
         Ok(())
     }
 }
+
+/// A file-backed [`WriterInner`](save::WriterInner) that streams bytes straight to disk.
+///
+/// The bytes are persisted as they are written; [`WriterInner::finish`](save::WriterInner::finish)
+/// only needs to mint the [`Handle`] (the buffered bytes are already flushed into the file
+/// by [`Writer::finish`]).
+#[derive(Debug)]
+struct FileWriter {
+    file: File,
+}
+
+impl save::WriterInner for FileWriter {
+    fn finish(self: Box<Self>, name: String) -> save::Result<Handle> {
+        Ok(Handle::new(name))
+    }
+}
+
+delegate_write_and_seek!(file, FileWriter);
 
 /// The disk-backed [`LoadContext`].
 ///

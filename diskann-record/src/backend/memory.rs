@@ -5,9 +5,9 @@
 
 //! In-memory save/load contexts.
 //!
-//! [`InMemorySaveContext`] and [`InMemoryContext`] mirror the disk-backed contexts but
+//! [`MemorySaveContext`] and [`MemoryContext`] mirror the disk-backed contexts but
 //! keep the manifest value and every side-car artifact in memory. Saving through an
-//! [`InMemorySaveContext`] yields an [`InMemoryContext`] (its
+//! [`MemorySaveContext`] yields an [`MemoryContext`] (its
 //! [`SaveContext::Output`](crate::save::SaveContext::Output)) that can be loaded directly
 //! via [`crate::load::load`].
 //!
@@ -21,28 +21,28 @@ use std::{collections::HashMap, io::Cursor, sync::Mutex};
 use crate::{
     Value,
     load::{self, LoadContext, Reader},
-    save::{self, SaveContext, Writer},
+    save::{self, Handle, SaveContext, Writer, delegate_write_and_seek},
 };
 
 /// A save-side [`SaveContext`] that keeps every side-car artifact and the committed
 /// manifest value in memory.
 ///
-/// [`SaveContext::finish`] consumes the context and returns an [`InMemoryContext`] ready
+/// [`SaveContext::finish`] consumes the context and returns an [`MemoryContext`] ready
 /// to be loaded with [`crate::load::load`].
 #[derive(Debug, Default)]
-pub struct InMemorySaveContext {
+pub struct MemorySaveContext {
     files: Mutex<HashMap<String, Vec<u8>>>,
 }
 
-impl InMemorySaveContext {
+impl MemorySaveContext {
     /// Create an empty in-memory save context.
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl SaveContext for InMemorySaveContext {
-    type Output = InMemoryContext;
+impl SaveContext for MemorySaveContext {
+    type Output = MemoryContext;
 
     fn write(&self, key: Option<&str>) -> save::Result<Writer<'_>> {
         // Mirror the disk context: a human-readable hint must be a simple relative file
@@ -84,33 +84,60 @@ impl SaveContext for InMemorySaveContext {
         files.insert(name.clone(), Vec::new());
         drop(files);
 
-        Ok(Writer::memory(name, &self.files))
+        Ok(Writer::new(
+            MemoryWriter {
+                cursor: Cursor::new(Vec::new()),
+                parent: self,
+            },
+            name,
+        ))
     }
 
-    fn finish(self, value: Value<'_>) -> save::Result<InMemoryContext> {
+    fn finish(self, value: Value<'_>) -> save::Result<MemoryContext> {
         let files = self
             .files
             .into_inner()
             .unwrap_or_else(|poison| poison.into_inner());
-        Ok(InMemoryContext {
+        Ok(MemoryContext {
             files,
             value: value.into_owned(),
         })
     }
 }
 
+/// An in-memory [`WriterInner`](save::WriterInner) that buffers bytes in a [`Cursor`] and,
+/// on finish, deposits the completed buffer into its parent context's file store.
+#[derive(Debug)]
+struct MemoryWriter<'a> {
+    cursor: Cursor<Vec<u8>>,
+    parent: &'a MemorySaveContext,
+}
+
+impl save::WriterInner for MemoryWriter<'_> {
+    fn finish(self: Box<Self>, name: String) -> save::Result<Handle> {
+        self.parent
+            .files
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(name.clone(), self.cursor.into_inner());
+        Ok(Handle::new(name))
+    }
+}
+
+delegate_write_and_seek!(cursor, MemoryWriter<'_>);
+
 /// A load-side [`LoadContext`] backed entirely by in-memory buffers.
 ///
-/// Produced by [`InMemorySaveContext`] via [`SaveContext::finish`]. Holds the committed
+/// Produced by [`MemorySaveContext`] via [`SaveContext::finish`]. Holds the committed
 /// manifest [`Value`] and every side-car artifact as an in-memory byte buffer, so loading
 /// never serializes through JSON or touches the filesystem.
 #[derive(Debug)]
-pub struct InMemoryContext {
+pub struct MemoryContext {
     files: HashMap<String, Vec<u8>>,
     value: Value<'static>,
 }
 
-impl LoadContext for InMemoryContext {
+impl LoadContext for MemoryContext {
     fn value(&self) -> load::Result<&Value<'_>> {
         Ok(&self.value)
     }
@@ -173,7 +200,7 @@ mod tests {
             blob: vec![1, 2, 3, 4, 5],
         };
 
-        let context = save::save(&doc, InMemorySaveContext::new()).unwrap();
+        let context = save::save(&doc, MemorySaveContext::new()).unwrap();
         let restored: Doc = load::load(&context).unwrap();
 
         assert_eq!(doc, restored);
@@ -181,7 +208,7 @@ mod tests {
 
     #[test]
     fn read_rejects_unregistered_artifact() {
-        let context = InMemoryContext {
+        let context = MemoryContext {
             files: HashMap::new(),
             value: Value::Null,
         };

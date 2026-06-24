@@ -29,6 +29,7 @@ pub use crate::value::{Handle, Keys, Record, Value, Versioned};
 
 mod context;
 pub use context::{Context, SaveContext, Writer};
+pub(crate) use context::{WriterInner, delegate_write_and_seek};
 
 mod error;
 pub use error::{Error, Result};
