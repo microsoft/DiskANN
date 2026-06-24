@@ -29,12 +29,6 @@ The output is a standard DiskANN graph file that can be loaded and searched by t
 
 Speedup scales with dataset size and is highest on lower-dimensional data where GEMM throughput dominates. Hardware: AMD EPYC 7763, 16 cores.
 
-### Prerequisites
-
-```bash
-sudo apt install libopenblas-dev  # Required for GEMM acceleration
-```
-
 ## Build
 
 ```bash

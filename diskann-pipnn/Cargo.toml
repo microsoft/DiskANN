@@ -22,11 +22,7 @@ parking_lot = "0.12"
 libc = "0.2"
 
 [features]
-# OpenBLAS routes sgemm_aat_lower → cblas_ssyrk for the triangular leaf GEMM.
-# Off by default so downstream consumers choose their BLAS backend; the
-# benchmark crate opts in explicitly.
 default = []
-openblas = ["diskann-linalg/openblas"]
 # Exposes `bench_leaf_hp_phase` and similar isolation entry points used by
 # microbench harnesses. Not part of the production API.
 bench = []

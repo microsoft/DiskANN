@@ -10,9 +10,6 @@ mod faer;
 use faer::{random_distance_preserving_matrix_impl, sgemm_impl, svd_into_impl};
 use rand::Rng;
 
-#[cfg(feature = "openblas")]
-mod openblas_raw;
-
 // Make the reference implementation available for internal testing.
 #[cfg(test)]
 mod reference;
@@ -211,25 +208,15 @@ pub fn sgemm_aat(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
 /// Upper triangle is left untouched. Caller is expected to symmetrize C
 /// (or read only the lower triangle).
 ///
-/// FLOP savings vs [`sgemm_aat`]: theoretically ~50% (skip upper-triangle
-/// FMAs). The `openblas` feature routes through OpenBLAS `cblas_ssyrk` which
-/// actually delivers this. Without `openblas`, the faer fallback path's
-/// `triangular::matmul` masks stores rather than skipping FMAs and was
-/// measured ~60% SLOWER than the full GEMM in our microbench — so the
-/// default build prefers full GEMM via [`sgemm_aat`] when no BLAS is linked.
+/// Uses faer's `triangular::matmul` (single-threaded; called per-leaf inside
+/// rayon). Microbenchmarked faster than OpenBLAS `cblas_ssyrk` on every leaf
+/// shape (+33% at 128×128 down to +6–7% at 512×1536), so faer is the only
+/// backend — no external BLAS dependency.
 #[inline]
 pub fn sgemm_aat_lower(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
     debug_assert_eq!(a.len(), m * k);
     debug_assert_eq!(c.len(), m * m);
-    #[cfg(feature = "openblas")]
-    {
-        crate::openblas_raw::sgemm_aat_lower_openblas(a, m, k, c);
-        return;
-    }
-    #[cfg(not(feature = "openblas"))]
-    {
-        crate::faer::sgemm_aat_lower_impl(m, k, a, c);
-    }
+    crate::faer::sgemm_aat_lower_impl(m, k, a, c);
 }
 
 #[cfg(test)]
