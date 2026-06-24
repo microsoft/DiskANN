@@ -19,7 +19,8 @@ use diskann::{
 use diskann_utils::views::Matrix;
 
 use crate::{
-    layers::{self, Distance, QueryDistance},
+    counters::{Counters, LocalCounters},
+    layers::{self, QueryDistance},
     num::Bytes,
     sharded::Sharded,
     store::{self, Store},
@@ -36,6 +37,10 @@ where
     store: Store,
     layer: L,
     mapping: Sharded<M>,
+
+    // `Counters` is only non-trivial under the `integration-test` feature flag. Otherwise,
+    // all counter related operations are no-ops.
+    counters: Counters,
 }
 
 impl<L, M> Provider<L, M>
@@ -69,7 +74,18 @@ where
             store,
             layer,
             mapping,
+            counters: Counters::new(),
         }
+    }
+
+    fn local_counters(&self) -> LocalCounters<'_> {
+        self.counters.local()
+    }
+
+    /// Return a snapshot of the current event counters.
+    #[cfg(feature = "integration-test")]
+    pub fn counters(&self) -> crate::integration::counters::CounterSnapshot {
+        self.counters.snapshot()
     }
 }
 
@@ -228,6 +244,12 @@ where
             <L as layers::Set<T>>::into_bytes(&self.layer, element, slot.as_mut_slice())?;
             self.mapping.insert(id.clone(), slot.slot()).unwrap();
 
+            // This is a rather expensive update.
+            //
+            // However, counters are only active with the `integration-test` feature, which
+            // is not expected to be enabled for general use.
+            self.local_counters().set_vector(1);
+
             Ok(diskann::provider::NoopGuard::new(slot.slot()))
         };
 
@@ -248,6 +270,7 @@ pub struct SearchAccessor<'a> {
     // The parent provider for the accessor.
     provider: &'a (dyn std::any::Any + Send + Sync),
     start_points: std::ops::Range<u32>,
+    counters: LocalCounters<'a>,
 }
 
 impl diskann::provider::HasId for SearchAccessor<'_> {
@@ -272,6 +295,10 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
             for p in self.start_points.clone() {
                 match self.reader.read(p.into_usize()) {
                     Some(point) => {
+                        // Counters are no-ops without `integration-test`.
+                        self.counters.get_vector(1);
+                        self.counters.query_distance(1);
+
                         f(p, self.expand_beam.evaluate(point)?);
                     }
                     None => {
@@ -302,10 +329,20 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
         let work = move || -> ANNResult<()> {
             for i in ids {
                 self.reader.neighbors().get(i, &mut self.ids).unwrap();
+                self.counters.get_neighbors(1);
 
                 // Filter out unvisited IDs and ensure that all the IDs we are about
                 self.ids
                     .retain(|i| pred.eval_mut(i) && self.reader.is_in_bounds(i.into_usize()));
+
+                // TODO: Move to an external buffer to avoid any dynamic dispatcn in
+                // `expand_beam_inner` - then we can do a bulk-update on the counters.
+                let mut on_neighbors = |id, distance| {
+                    self.counters.get_vector(1);
+                    self.counters.query_distance(1);
+
+                    on_neighbors(id, distance);
+                };
 
                 unsafe {
                     self.expand_beam
@@ -533,7 +570,28 @@ where
 #[derive(Debug)]
 pub struct PruneAccessor<'a> {
     reader: store::Reader<'a>,
-    distance: &'a dyn Distance,
+    distance: &'a dyn layers::Distance,
+    counters: LocalCounters<'a>,
+}
+
+#[derive(Debug)]
+pub struct Distance<'a> {
+    distance: &'a dyn layers::Distance,
+    counters: LocalCounters<'a>,
+}
+
+impl<'a> Distance<'a> {
+    fn new(distance: &'a dyn layers::Distance, counters: LocalCounters<'a>) -> Self {
+        Self { distance, counters }
+    }
+}
+
+impl diskann_vector::DistanceFunction<&[u8], &[u8], f32> for Distance<'_> {
+    #[inline]
+    fn evaluate_similarity(&self, x: &[u8], y: &[u8]) -> f32 {
+        self.counters.distance_ref(1);
+        self.distance.evaluate(x, y).unwrap()
+    }
 }
 
 impl diskann::provider::HasId for PruneAccessor<'_> {
@@ -554,7 +612,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
         Self: 'a;
 
     type Distance<'a>
-        = &'a dyn Distance
+        = Distance<'a>
     where
         Self: 'a;
 
@@ -569,7 +627,7 @@ impl glue::PruneAccessor for PruneAccessor<'_> {
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
     {
-        Ok((self, &*self.distance))
+        Ok((self, Distance::new(self.distance, self.counters.fork())))
     }
 }
 
@@ -579,7 +637,10 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let work = move || Ok(self.reader.neighbors().get(id, neighbors).unwrap());
+        let work = move || {
+            self.counters.get_neighbors(1);
+            Ok(self.reader.neighbors().get(id, neighbors).unwrap())
+        };
         ready(work)
     }
 }
@@ -590,7 +651,10 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         id: Self::Id,
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
-        let work = move || Ok(self.reader.neighbors().set(id, neighbors).unwrap());
+        let work = move || {
+            self.counters.set_neighbors(1);
+            Ok(self.reader.neighbors().set(id, neighbors).unwrap())
+        };
         ready(work)
     }
 
@@ -600,6 +664,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
         neighbors: &[Self::Id],
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
+            self.counters.append_vector(1);
             self.reader
                 .neighbors()
                 .lock(id)
@@ -620,7 +685,13 @@ impl workingset::View<u32> for &PruneAccessor<'_> {
     where
         Self: 'a;
     fn get(&self, id: u32) -> Option<&[u8]> {
-        self.reader.read(id.into_usize())
+        match self.reader.read(id.into_usize()) {
+            Some(data) => {
+                self.counters.get_vector_ref(1);
+                Some(data)
+            }
+            None => None,
+        }
     }
 }
 
@@ -660,6 +731,7 @@ where
             expand_beam,
             provider,
             start_points: provider.store.frozen(),
+            counters: provider.local_counters(),
         };
         Ok(accessor)
     }
@@ -746,6 +818,7 @@ where
         Ok(PruneAccessor {
             reader: provider.store.reader()?,
             distance: <L as layers::AsDistance>::as_distance(&provider.layer),
+            counters: provider.local_counters(),
         })
     }
 }

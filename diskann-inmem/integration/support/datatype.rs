@@ -3,7 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{sampling::medoid::ComputeMedoid, views::{Matrix, MatrixView}};
+use diskann_utils::{
+    sampling::medoid::ComputeMedoid,
+    views::{Matrix, MatrixView},
+};
 use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

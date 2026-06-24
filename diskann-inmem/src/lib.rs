@@ -8,6 +8,7 @@
 pub mod num;
 
 mod buffer;
+mod counters;
 mod epoch;
 mod freelist;
 mod neighbors;

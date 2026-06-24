@@ -410,13 +410,24 @@ impl<'a> KeyValue<'a> {
         self.max_key_length = self.max_key_length.max(key.len());
         self.kv.push((key, value))
     }
+
+    pub fn render(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
 }
 
 impl std::fmt::Display for KeyValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let width = self.max_key_length;
+        let mut prefix = "";
         for (k, v) in self.kv.iter() {
-            writeln!(f, "{:>width$}: {v}", k)?;
+            let rendered = v.to_string();
+            if rendered.contains('\n') {
+                write!(f, "{}{:>width$}:\n{}", prefix, k, Indent::new(&rendered, 2))?
+            } else {
+                write!(f, "{}{:>width$}: {rendered}", prefix, k)?;
+            }
+            prefix = "\n";
         }
         Ok(())
     }

@@ -7,7 +7,7 @@ mod index;
 mod runner;
 mod tests;
 
-use index::Index;
+use index::{Counters, Index, KnnSearch};
 
 use diskann_benchmark_runner::{Registry, RegistryError};
 

@@ -3,25 +3,27 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::Arc;
+use std::{io::Write, sync::Arc};
 
 use anyhow::Context;
-use diskann::graph::DiskANNIndex;
+use diskann::graph::{DiskANNIndex, search::Knn};
 use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
     benchmark::{FailureScore, MatchScore},
     files::InputFile,
+    utils::fmt::Indent,
 };
 use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 use half::f16;
+use serde::{Deserialize, Serialize};
 
 use diskann_inmem::{Provider, layers};
 
 use crate::{
-    index::Index,
+    index::{Counters, Index},
     support::{
-        datatype::{DataType, DatasetView},
+        datatype::{DataType, Dataset, DatasetView},
         io::load_and_convert,
     },
 };
@@ -89,10 +91,24 @@ mod dto {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct KnnSearch {
+        pub(super) knn: usize,
+        pub(super) search_l: usize,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        pub(super) beam_width: Option<usize>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(super) struct Search {
+        pub(super) knn: Vec<KnnSearch>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     pub(super) struct Test {
         pub(super) data: Data,
         pub(super) layer: Layer,
         pub(super) build: Build,
+        pub(super) search: Search,
     }
 }
 
@@ -137,6 +153,43 @@ impl Data {
             data_type: self.data_type,
         })
     }
+
+    fn load_as(&self, data_type: DataType) -> anyhow::Result<Bundle> {
+        let data = {
+            let mut io = std::fs::File::open(&*self.data)
+                .with_context(|| format!("could not open {}", self.data.display()))?;
+
+            load_and_convert(&mut io, self.data_type, data_type)?
+        };
+
+        let queries = {
+            let mut io = std::fs::File::open(&*self.queries)
+                .with_context(|| format!("could not open {}", self.queries.display()))?;
+
+            load_and_convert(&mut io, self.data_type, data_type)?
+        };
+
+        let groundtruth = {
+            let mut io = std::fs::File::open(&*self.groundtruth)
+                .with_context(|| format!("could not open {}", self.queries.display()))?;
+
+            let raw = diskann_utils::io::read_bin::<u32>(&mut io)?;
+            raw.map(|&x| u64::from(x))
+        };
+
+        Ok(Bundle {
+            data,
+            queries,
+            groundtruth,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Bundle {
+    data: Dataset,
+    queries: Dataset,
+    groundtruth: Matrix<u64>,
 }
 
 #[derive(Debug)]
@@ -199,10 +252,46 @@ impl Build {
 }
 
 #[derive(Debug)]
+struct Search {
+    knn: Vec<Knn>,
+}
+
+impl Search {
+    fn from_raw(raw: dto::Search) -> anyhow::Result<Self> {
+        fn make_knn(raw: &dto::KnnSearch) -> anyhow::Result<Knn> {
+            Ok(Knn::new(raw.knn, raw.search_l, raw.beam_width)?)
+        }
+
+        Ok(Self {
+            knn: raw
+                .knn
+                .iter()
+                .map(make_knn)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        })
+    }
+
+    fn as_raw(&self) -> dto::Search {
+        fn make_knn(knn: &Knn) -> dto::KnnSearch {
+            dto::KnnSearch {
+                knn: knn.k_value().get(),
+                search_l: knn.l_value().get(),
+                beam_width: Some(knn.beam_width().get()),
+            }
+        }
+
+        dto::Search {
+            knn: self.knn.iter().map(make_knn).collect(),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Test {
     data: Data,
     layer: Layer,
     build: Build,
+    search: Search,
 }
 
 impl Test {
@@ -210,8 +299,14 @@ impl Test {
         let data = Data::from_raw(raw.data, checker)?;
         let layer = Layer::from_raw(raw.layer);
         let build = Build::from_raw(raw.build, data.metric)?;
+        let search = Search::from_raw(raw.search)?;
 
-        Ok(Self { data, layer, build })
+        Ok(Self {
+            data,
+            layer,
+            build,
+            search,
+        })
     }
 
     fn as_raw(&self) -> anyhow::Result<dto::Test> {
@@ -219,6 +314,7 @@ impl Test {
             data: self.data.as_raw()?,
             layer: self.layer.as_raw(),
             build: self.build.as_raw(),
+            search: self.search.as_raw(),
         })
     }
 
@@ -317,6 +413,25 @@ impl diskann_benchmark_runner::Input for Test {
                 l_build: 50,
                 alpha: 1.2,
             },
+            search: dto::Search {
+                knn: vec![
+                    dto::KnnSearch {
+                        knn: 10,
+                        search_l: 50,
+                        beam_width: None,
+                    },
+                    dto::KnnSearch {
+                        knn: 10,
+                        search_l: 50,
+                        beam_width: Some(3),
+                    },
+                    dto::KnnSearch {
+                        knn: 20,
+                        search_l: 100,
+                        beam_width: Some(3),
+                    },
+                ],
+            },
         }
     }
 }
@@ -330,7 +445,7 @@ struct FullPrecision;
 
 impl diskann_benchmark_runner::Benchmark for FullPrecision {
     type Input = Test;
-    type Output = ();
+    type Output = BuildAndSearch;
 
     fn try_match(&self, input: &Test) -> Result<MatchScore, FailureScore> {
         if let Layer::FullPrecision { .. } = input.layer {
@@ -352,23 +467,62 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
         &self,
         input: &Test,
         checkpoint: Checkpoint<'_>,
-        output: &mut dyn Output,
-    ) -> anyhow::Result<()> {
+        mut output: &mut dyn Output,
+    ) -> anyhow::Result<Self::Output> {
         let Layer::FullPrecision { data_type } = input.layer else {
             anyhow::bail!("expected full-precision");
         };
 
         // Load the data and perform any necessary data conversions.
-        let data = {
-            let mut io = std::fs::File::open(&*input.data.data)
-                .with_context(|| format!("could not open {}", input.data.data.display()))?;
-
-            load_and_convert(&mut io, input.data.data_type, data_type)?
-        };
+        let Bundle {
+            data,
+            queries,
+            groundtruth,
+        } = input.data.load_as(data_type)?;
 
         let index = input.index(data.nrows(), data.medoid().as_view())?;
         let rt = diskann_benchmark_core::tokio::runtime(1)?;
-        super::tests::insert(&*index, data.as_view(), rt.handle())?;
+        let build = super::tests::insert(&*index, data.as_view(), rt.handle())?;
+
+        let mut knn = Vec::new();
+        for param in input.search.knn.iter() {
+            let stats = super::tests::knn(
+                &*index,
+                param.clone(),
+                queries.as_view(),
+                &groundtruth.as_view(),
+                rt.handle(),
+            )?;
+
+            knn.push(stats);
+        }
+
+        let build_and_search = BuildAndSearch { build, knn };
+
+        writeln!(output, "{}", build_and_search)?;
+
+        Ok(build_and_search)
+    }
+}
+
+////////////
+// Output //
+////////////
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BuildAndSearch {
+    build: Counters,
+    knn: Vec<super::tests::KnnStats>,
+}
+
+impl std::fmt::Display for BuildAndSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "build stats")?;
+        writeln!(f, "{}", Indent::new(&self.build.to_string(), 4))?;
+        writeln!(f, "knn stats")?;
+        for k in self.knn.iter() {
+            writeln!(f, "{}", k)?;
+        }
 
         Ok(())
     }
