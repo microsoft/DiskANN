@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     index::{Counters, Index, KnnSearch},
-    support::datatype::DatasetView,
+    support::{
+        check::{CheckMatch, Match, MatchBuilder, check_all_fields},
+        datatype::DatasetView,
+    },
 };
 
 pub(super) fn insert(
@@ -90,6 +93,17 @@ impl From<RecallMetrics> for KnnRecall {
     }
 }
 
+impl CheckMatch for KnnRecall {
+    fn check_match(&self, previous: &Self) -> Match {
+        let builder = check_all_fields!(
+            self,
+            previous,
+            { recall_k, recall_n, num_queries, average }
+        );
+        builder.finish()
+    }
+}
+
 impl std::fmt::Display for KnnRecall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -114,5 +128,16 @@ impl std::fmt::Display for KnnStats {
         kv.push("recall", &self.recall);
         kv.push("misc", &self.misc);
         kv.render(f)
+    }
+}
+
+impl CheckMatch for KnnStats {
+    fn check_match(&self, previous: &Self) -> Match {
+        let builder = check_all_fields!(
+            self,
+            previous,
+            { recall, counters, misc }
+        );
+        builder.finish()
     }
 }

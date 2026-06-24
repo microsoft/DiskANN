@@ -17,7 +17,10 @@ use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, layers};
 
-use crate::support::datatype::{AsDataType, DataType, FromSlice, Slice};
+use crate::support::{
+    check::{CheckMatch, Match, MatchBuilder, check_all_fields},
+    datatype::{AsDataType, DataType, FromSlice, Slice},
+};
 
 pub(crate) trait Index {
     fn data_type(&self) -> DataType;
@@ -36,7 +39,6 @@ pub(crate) trait Index {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + 'a>>;
 
     fn counters(&self) -> Counters;
-    // fn retire(&self, id: u64) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,20 @@ impl std::ops::AddAssign for KnnSearch {
 impl std::fmt::Display for KnnSearch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "hops = {}, cmps = {}", self.hops, self.cmps)
+    }
+}
+
+impl CheckMatch for KnnSearch {
+    fn check_match(&self, previous: &Self) -> Match {
+        let builder = check_all_fields!(
+            self,
+            previous,
+            { hops, cmps },
+        );
+
+        builder.finish_with_remark(Some(
+            "check assumes deterministic (usually single-threaded) execution".into(),
+        ))
     }
 }
 
@@ -144,6 +160,28 @@ impl From<integration::counters::CounterSnapshot> for Counters {
             set_neighbors: snapshot.set_neighbors,
             append_neighbors: snapshot.append_neighbors,
         }
+    }
+}
+
+impl CheckMatch for Counters {
+    fn check_match(&self, previous: &Self) -> Match {
+        let builder = check_all_fields!(
+            self,
+            previous,
+            {
+                query_distance,
+                distance,
+                get_vector,
+                set_vector,
+                get_neighbors,
+                set_neighbors,
+                append_neighbors
+            }
+        );
+
+        builder.finish_with_remark(Some(
+            "check assumes deterministic (usually single-threaded) execution".into(),
+        ))
     }
 }
 

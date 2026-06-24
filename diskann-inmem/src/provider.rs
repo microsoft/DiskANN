@@ -738,10 +738,10 @@ where
 }
 
 pub fn test_function<'a>(
-    x: &'a Provider<layers::Full<f32>>,
+    x: &'a Provider<layers::Full<u8>>,
     strategy: &'a Strategy,
     context: &'a Context,
-    query: &'a [f32],
+    query: &'a [u8],
 ) -> SearchAccessor<'a> {
     glue::SearchStrategy::search_accessor(strategy, x, context, query).unwrap()
 }

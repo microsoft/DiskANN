@@ -53,4 +53,5 @@ integration-test = [
     "dep:serde_json",
     "dep:anyhow",
     "dep:rand",
+    "diskann-utils/testing",
 ]

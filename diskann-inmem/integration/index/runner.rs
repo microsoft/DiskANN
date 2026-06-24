@@ -9,7 +9,7 @@ use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
 use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
-    benchmark::{FailureScore, MatchScore},
+    benchmark::{FailureScore, MatchScore, Regression, PassFail},
     files::InputFile,
     utils::fmt::Indent,
 };
@@ -23,13 +23,15 @@ use diskann_inmem::{Provider, layers};
 use crate::{
     index::{Counters, Index},
     support::{
+        check::{CheckMatch, Match, MatchBuilder, check_all_fields},
         datatype::{DataType, Dataset, DatasetView},
         io::load_and_convert,
+        tolerance,
     },
 };
 
 pub(super) fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.register("full-precision-integration-test", FullPrecision)?;
+    registry.register_regression("full-precision-integration-test", FullPrecision)?;
     Ok(())
 }
 
@@ -505,6 +507,22 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     }
 }
 
+impl Regression for FullPrecision {
+    type Tolerances = tolerance::Empty;
+    type Pass = Match;
+    type Fail = Match;
+
+    fn check(
+        &self,
+        _tolerances: &Self::Tolerances,
+        _input: &Self::Input,
+        before: &Self::Output,
+        after: &Self::Output,
+    ) -> anyhow::Result<PassFail<Self::Pass, Self::Fail>> {
+        Ok(before.check_match(after).pass_fail())
+    }
+}
+
 ////////////
 // Output //
 ////////////
@@ -525,5 +543,16 @@ impl std::fmt::Display for BuildAndSearch {
         }
 
         Ok(())
+    }
+}
+
+impl CheckMatch for BuildAndSearch {
+    fn check_match(&self, previous: &Self) -> Match {
+        let builder = check_all_fields!(
+            self,
+            previous,
+            { build, knn },
+        );
+        builder.finish()
     }
 }
