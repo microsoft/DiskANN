@@ -192,7 +192,8 @@ fn bftree_parameters_from(
 ) -> BfTreeProviderParameters {
     BfTreeProviderParameters {
         max_points: num_points,
-        max_degree: build.exact_max_degree() as u32,
+        max_degree: build.max_degree(),
+        graph_slack_factor: build.graph_slack_factor(),
         num_start_points: NonZero::new(build.start_point_strategy().count()).unwrap(),
         dim,
         metric: build.distance().into(),
@@ -227,9 +228,6 @@ impl BfTreeFullPrecisionBuild {
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        // Delegate to IndexBuild's try_as_config which uses the default
-        // MaxDegree::Value(exact_max_degree) with 1.3x slack. The bf_tree
-        // neighbor pages are sized to exact_max_degree to accommodate this.
         self.build.try_as_config()
     }
 
@@ -330,8 +328,6 @@ impl BfTreeDynamicRun {
     }
 
     pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        // Delegate to IndexBuild's try_as_config which uses the default
-        // MaxDegree::Value(exact_max_degree) with 1.3x slack.
         self.build.try_as_config()
     }
 
