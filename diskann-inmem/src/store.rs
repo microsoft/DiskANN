@@ -3,6 +3,54 @@
  * Licensed under the MIT license.
  */
 
+//! A concurrent in-memory data store for uniformly sized data.
+//!
+//! This supports concurrent data access, deletes, and inserts through a safe interface.
+//! Data is stored internally in slots indexed from `[0..N)` with `K` points reserved at the
+//! end at positions `[N..N+K)`.
+//!
+//! ## Reading
+//!
+//! Read access requires a [`Reader`] produced by [`Store::reader`]. [`Reader::read`]
+//! provides read-only access to data at slot `i` if the data is valid for reads.
+//!
+//! ## Writing
+//!
+//! [`Store::acquire`] is used to find and claim an unused internal [`Slot`]. A [`Slot`]
+//! provides write access to its coresponding data which is published when the [`Slot`] is
+//! dropped.
+//!
+//! The index of the slot chosen may be obtained via [`Slot::slot`].k
+//!
+//! ## Deleting
+//!
+//! Data is deleted via [`Store::retire`]. This immediately marks the corresponding slot as
+//! unavailable for future readers. However, the retired slot will not be reused until the
+//! [`Store`] can guarantee that no [`Reader`]s that could be using the data are active.
+//!
+//! Slots are automatically reclaimed as part of slot acquisition in the "writing" phase.
+//!
+//! ## Neighbor Access
+//!
+//! The [`Store`] also contains a [`Neighbors`] instance to store adjacency lists. Since
+//! neighbors are generally accessed less frequently than data with a higher volume of write
+//! traffic, fine-grained locks are used for this data structure.
+//!
+//! # Details
+//!
+//! This uses an implementation of the epoch-based reclamation (EBR) provided by [`Registry`].
+//! Concurrency tags are mirrored inline with the stored data (just after the data payload)
+//! to keep memory access localized. As such, high-performance implementations will want to
+//! fetch the last cache line of data first to ensure the tag is resident in cache for faster
+//! data checks.
+//!
+//! The EBR scheme allows readers to safely access data while only generating read traffic to
+//! the CPU caches. The cost is that there is a delay between when slots are retired and when
+//! they can be reused, with a long lived [`Reader`] blocking this reclamation. As such,
+//! users of this data structure should ensure that [`Reader`]s are reasonably short lived.
+//!
+//! Internally, the data belongs to a single allocation.
+
 use std::{
     iter::repeat_n,
     num::{NonZeroU32, NonZeroUsize},
@@ -22,20 +70,32 @@ use crate::{
     tag::{AtomicTag, Tag},
 };
 
+/// A concurrent data and graph store.
 #[derive(Debug)]
 pub(crate) struct Store {
     // The invasive store where concurrency tags are stored inline with the data.
     //
     // These tags are mirrored from `tags` - with the latter being used for secondary scans
     // offering slightly better locality.
+    //
+    // The inline tags are stored after the data.
     buffer: Buffer,
+
+    // The unpadded size of each row in `buffer`. This includes both the data **and** the
+    // 1-byte tag. Tags are located at byte `unpadded - 1`.
     unpadded: Bytes,
 
     // The number of unfrozen points. This is guaranteed to be less than `buffer`.
     unfrozen: usize,
+
+    // The authoritative source of truth for the state of each slot.
     tags: Vec<AtomicTag>,
     freelist: Freelist,
+
+    // EBR registry.
     registry: Registry,
+
+    // Graph.
     neighbors: Neighbors,
 }
 
@@ -46,6 +106,8 @@ const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const RETRY_LIMIT: usize = 20;
 
 impl Store {
+    /// Create a new [`Store`] capable of holding [`entries`] non-frozen slots each of
+    /// length `bytes`.
     pub(crate) fn new(
         entries: usize,
         bytes: Bytes,
@@ -349,9 +411,9 @@ impl Store {
     fn writable(&self) -> std::ops::Range<u32> {
         0..self.unfrozen as u32
     }
-
 }
 
+/// Errors occurring during [`Store::new`].
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub(crate) struct StoreError(StoreErrorInner);
@@ -411,7 +473,7 @@ pub(crate) enum RetireError {
     CouldNotClaimSlot,
 }
 
-/// An epoch protect reader into [`Store`].
+/// An epoch protected reader into a [`Store`].
 ///
 /// Created via [`Store::reader`].
 #[derive(Debug)]
@@ -749,11 +811,7 @@ mod tests {
 
     #[test]
     fn test_recycling() {
-        let entries = if cfg!(miri) {
-            16
-        } else {
-            2048
-        };
+        let entries = if cfg!(miri) { 16 } else { 2048 };
 
         let s = store(entries, 4, 2).unwrap();
 

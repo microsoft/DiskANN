@@ -239,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn graph_index() {
         run_regression_example(
             "integration.json",

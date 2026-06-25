@@ -357,6 +357,11 @@ impl glue::SearchAccessor for SearchAccessor<'_> {
     }
 }
 
+// trait ExpandBeam2: Send + Sync + Debug {
+//     fn evaluate(&self, x: &[u8]) -> ANNResult<f32>;
+//
+// }
+
 type FExpandBeam = unsafe fn(
     *const (),
     &[u32],
