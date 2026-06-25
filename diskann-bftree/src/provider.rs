@@ -106,7 +106,6 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     dim: 4,
 ///     metric: Metric::L2,
 ///     max_degree: 32,
-///     graph_slack_factor: 1.3,
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
@@ -161,7 +160,6 @@ use diskann_providers::storage::{LoadWith, SaveWith, StorageReadProvider, Storag
 ///     dim: 4,
 ///     metric: Metric::L2,
 ///     max_degree: 32,
-///     graph_slack_factor: 1.3,
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
@@ -215,14 +213,10 @@ pub struct BfTreeProviderParameters {
     // The metric to use for distance computations
     pub metric: Metric,
 
-    // The logical maximum degree (target neighbor count per vertex).
-    // The physical neighbor list capacity is computed internally as
-    // `(max_degree * graph_slack_factor) as u32`.
+    // The physical maximum degree (maximum neighbor list capacity per vertex).
+    // Callers are responsible for applying any slack factor externally before
+    // passing this value.
     pub max_degree: u32,
-
-    // Slack factor applied to `max_degree` to determine the physical neighbor
-    // list capacity. Matches the graph construction convention (default: 1.3).
-    pub graph_slack_factor: f32,
 
     // bf-tree config for vector provider.
     // bf-tree requires a minimum circular buffer size relative to leaf_page_size:
@@ -265,8 +259,6 @@ where
         Self: StartPoint<T>,
         TQ: CreateQuantProvider<Target = Q>,
     {
-        let physical_max_degree = (params.max_degree as f32 * params.graph_slack_factor) as u32;
-
         Ok(Self {
             quant_vectors: quant_precursor.create(params.quant_vector_provider_config)?,
             full_vectors: VectorProvider::new_with_config(
@@ -276,7 +268,7 @@ where
                 params.vector_provider_config,
             )?,
             neighbor_provider: NeighborProvider::new_with_config(
-                physical_max_degree,
+                params.max_degree,
                 params.neighbor_list_provider_config,
             )?,
             metric: params.metric,
@@ -2005,7 +1997,8 @@ mod tests {
     fn create_quant_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, QuantVectorProvider>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
         let dim = 5;
-        let max_degree = 6;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -2014,8 +2007,7 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim,
                 metric,
-                max_degree,
-                graph_slack_factor: 1.3,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2026,10 +2018,9 @@ mod tests {
         )
         .unwrap();
 
-        let physical_max_degree = (max_degree as f32 * 1.3) as usize;
         let index_config = graph::config::Builder::new_with(
-            max_degree as usize,
-            graph::config::MaxDegree::new(physical_max_degree),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2177,7 +2168,8 @@ mod tests {
 
     fn create_full_precision_index() -> Arc<DiskANNIndex<BfTreeProvider<f32, NoStore>>> {
         let start_point = Matrix::new(Init(|| 0.0f32), 1, 5);
-        let max_degree = 6;
+        let logical_max_degree = 6;
+        let physical_max_degree = (logical_max_degree as f32 * 1.3) as u32;
         let metric = Metric::L2;
 
         let provider = BfTreeProvider::new(
@@ -2186,8 +2178,7 @@ mod tests {
                 num_start_points: NonZeroUsize::new(1).unwrap(),
                 dim: 5,
                 metric,
-                max_degree,
-                graph_slack_factor: 1.3,
+                max_degree: physical_max_degree,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2198,10 +2189,9 @@ mod tests {
         )
         .unwrap();
 
-        let physical_max_degree = (max_degree as f32 * 1.3) as usize;
         let index_config = graph::config::Builder::new_with(
-            max_degree as usize,
-            graph::config::MaxDegree::new(physical_max_degree),
+            logical_max_degree as usize,
+            graph::config::MaxDegree::new(physical_max_degree as usize),
             10,
             metric.into(),
             |_| {},
@@ -2324,7 +2314,6 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree: 64,
-                graph_slack_factor: 1.3,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2411,7 +2400,6 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree: 64,
-                graph_slack_factor: 1.3,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2529,7 +2517,6 @@ mod tests {
             dim,
             metric: Metric::L2,
             max_degree,
-            graph_slack_factor: 1.3,
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: Config::default(),
             neighbor_list_provider_config: neighbor_config.clone(),
@@ -2658,7 +2645,6 @@ mod tests {
             dim,
             metric: Metric::L2,
             max_degree,
-            graph_slack_factor: 1.3,
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: quant_config.clone(),
             neighbor_list_provider_config: neighbor_config.clone(),
@@ -2788,7 +2774,6 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree,
-                graph_slack_factor: 1.3,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
@@ -2896,7 +2881,6 @@ mod tests {
                 dim,
                 metric: Metric::L2,
                 max_degree,
-                graph_slack_factor: 1.3,
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),

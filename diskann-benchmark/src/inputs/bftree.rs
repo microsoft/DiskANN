@@ -190,10 +190,10 @@ fn bftree_parameters_from(
     neighbor_store_config: &Option<BfTreeStoreConfig>,
     quant_store_config: &Option<BfTreeStoreConfig>,
 ) -> BfTreeProviderParameters {
+    let physical_max_degree = (build.max_degree() as f32 * build.graph_slack_factor()) as u32;
     BfTreeProviderParameters {
         max_points: num_points,
-        max_degree: build.max_degree(),
-        graph_slack_factor: build.graph_slack_factor(),
+        max_degree: physical_max_degree,
         num_start_points: NonZero::new(build.start_point_strategy().count()).unwrap(),
         dim,
         metric: build.distance().into(),
