@@ -545,9 +545,7 @@ fn process_row_ip_scalar(dot_row: &[f32], top: &mut TopBuf, threshold_idx: usize
 }
 
 /// Detect the CPU's private L2 cache size in bytes. Cached on first call.
-/// Falls back to 512 KB (Zen 3 default). Callers may override via
-/// `PartitionConfig.l2_size_override` — this auto-detected value is used when
-/// no override is set.
+/// Falls back to 512 KB (Zen 3 default).
 pub(crate) fn l2_size_bytes() -> usize {
     use std::sync::OnceLock;
     static L2_SIZE: OnceLock<usize> = OnceLock::new();
@@ -580,7 +578,7 @@ pub(crate) fn l2_size_bytes() -> usize {
 /// read by the per-row top-K scan. The leader matrix and point gather are
 /// streamed (read once per chunk), so they don't compete for the same residency
 /// budget. Matches the `mb_sweep` bench optima: nl=1000→128, nl=500→256, etc.
-pub(crate) fn compute_mb(nl: usize, _k: usize, l2_bytes: usize) -> usize {
+pub(crate) fn compute_mb(nl: usize, l2_bytes: usize) -> usize {
     let mb_max = (l2_bytes / (nl.max(1) * 4)).max(32);
     let pow2 = if mb_max.is_power_of_two() {
         mb_max

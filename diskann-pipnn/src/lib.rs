@@ -92,32 +92,6 @@ pub struct PiPNNConfig {
     /// Higher values yield sparser graphs. Default: 1.2 (matches DiskANN default).
     #[serde(alias = "final_prune_alpha")]
     pub alpha: f32,
-    /// Maximum leaders per partition level. Default: 1000 (paper recommendation).
-    pub leader_cap: usize,
-    /// Whether to saturate the result after final prune by filling occluded
-    /// candidates until max_degree is reached. Default: false (paper-faithful).
-    /// DiskANN-style sets true.
-    #[serde(default)]
-    pub saturate_after_prune: bool,
-    /// Max iterations of the partition loop before remaining oversized clusters
-    /// are accepted as leaves. Guards against pathological hub geometries where
-    /// argmin assignment fails to crack a dense cluster. Default: 30.
-    #[serde(default = "default_max_partition_iter")]
-    pub max_partition_iter: usize,
-    /// When recursion depth exceeds `fanout.len()`, reuse the last fanout entry
-    /// (true) instead of collapsing to 1 (false). Trades wider overlap at deep
-    /// levels for fewer leaf shards. Default: false.
-    #[serde(default)]
-    pub deep_fanout_last: bool,
-    /// Override the auto-detected per-core L2 cache size (bytes) used to size
-    /// the partition GEMM stripe. `None` means auto-detect (falls back to 512
-    /// KB on unknown CPUs).
-    #[serde(default)]
-    pub l2_size_override: Option<usize>,
-}
-
-fn default_max_partition_iter() -> usize {
-    30
 }
 
 impl PiPNNConfig {
@@ -129,7 +103,7 @@ impl PiPNNConfig {
             self.c_min,
             self.p_samp,
             &self.fanout,
-            self.leader_cap,
+            crate::partition::LEADER_CAP,
         )?;
         if self.k == 0 {
             return Err(PiPNNError::Config("k must be > 0".into()));
@@ -140,12 +114,12 @@ impl PiPNNConfig {
         if self.l_max == 0 {
             return Err(PiPNNError::Config("l_max must be > 0".into()));
         }
-        if self.l_max > hash_prune::L_MAX_MAX {
+        if self.l_max > hash_prune::MAX_RESERVOIR_LEN {
             return Err(PiPNNError::Config(format!(
-                "l_max ({}) exceeds compile-time bound L_MAX_MAX = {}; \
-                 raise the constant in diskann-pipnn::hash_prune to support larger reservoirs",
+                "l_max ({}) exceeds the structural bound {} (HotSlot.len / \
+                 farthest_idx are u8)",
                 self.l_max,
-                hash_prune::L_MAX_MAX,
+                hash_prune::MAX_RESERVOIR_LEN,
             )));
         }
         if self.num_hash_planes == 0 || self.num_hash_planes > 16 {
@@ -185,11 +159,6 @@ impl Default for PiPNNConfig {
             l_max: 64,
             final_prune: true,
             alpha: 1.2,
-            leader_cap: 1000,
-            saturate_after_prune: false,
-            max_partition_iter: 30,
-            deep_fanout_last: false,
-            l2_size_override: None,
         }
     }
 }

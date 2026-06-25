@@ -82,8 +82,6 @@ mod tests {
                 num_hash_planes: 12,
                 final_prune: false,
                 alpha: 1.2,
-                leader_cap: 1000,
-                saturate_after_prune: false,
             }
         }
 
@@ -93,7 +91,6 @@ mod tests {
             let s = format!("{}", algo);
             assert!(s.starts_with("PiPNN("));
             assert!(s.contains("c_max: 2048"));
-            assert!(s.contains("leader_cap: 1000"));
         }
 
         #[test]

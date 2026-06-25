@@ -356,103 +356,8 @@ unsafe fn insert_topk_linear(
                 d
             }
         }
-        4 => {
-            let e0 = *knn_result.get_unchecked(base);
-            let e1 = *knn_result.get_unchecked(base + 1);
-            let e2 = *knn_result.get_unchecked(base + 2);
-            if d < e0.1 {
-                *knn_result.get_unchecked_mut(base) = new_e;
-                *knn_result.get_unchecked_mut(base + 1) = e0;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                e2.1
-            } else if d < e1.1 {
-                *knn_result.get_unchecked_mut(base + 1) = new_e;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                e2.1
-            } else if d < e2.1 {
-                *knn_result.get_unchecked_mut(base + 2) = new_e;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                e2.1
-            } else {
-                *knn_result.get_unchecked_mut(base + 3) = new_e;
-                d
-            }
-        }
-        5 => {
-            let e0 = *knn_result.get_unchecked(base);
-            let e1 = *knn_result.get_unchecked(base + 1);
-            let e2 = *knn_result.get_unchecked(base + 2);
-            let e3 = *knn_result.get_unchecked(base + 3);
-            if d < e0.1 {
-                *knn_result.get_unchecked_mut(base) = new_e;
-                *knn_result.get_unchecked_mut(base + 1) = e0;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                e3.1
-            } else if d < e1.1 {
-                *knn_result.get_unchecked_mut(base + 1) = new_e;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                e3.1
-            } else if d < e2.1 {
-                *knn_result.get_unchecked_mut(base + 2) = new_e;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                e3.1
-            } else if d < e3.1 {
-                *knn_result.get_unchecked_mut(base + 3) = new_e;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                e3.1
-            } else {
-                *knn_result.get_unchecked_mut(base + 4) = new_e;
-                d
-            }
-        }
-        6 => {
-            let e0 = *knn_result.get_unchecked(base);
-            let e1 = *knn_result.get_unchecked(base + 1);
-            let e2 = *knn_result.get_unchecked(base + 2);
-            let e3 = *knn_result.get_unchecked(base + 3);
-            let e4 = *knn_result.get_unchecked(base + 4);
-            if d < e0.1 {
-                *knn_result.get_unchecked_mut(base) = new_e;
-                *knn_result.get_unchecked_mut(base + 1) = e0;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                *knn_result.get_unchecked_mut(base + 5) = e4;
-                e4.1
-            } else if d < e1.1 {
-                *knn_result.get_unchecked_mut(base + 1) = new_e;
-                *knn_result.get_unchecked_mut(base + 2) = e1;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                *knn_result.get_unchecked_mut(base + 5) = e4;
-                e4.1
-            } else if d < e2.1 {
-                *knn_result.get_unchecked_mut(base + 2) = new_e;
-                *knn_result.get_unchecked_mut(base + 3) = e2;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                *knn_result.get_unchecked_mut(base + 5) = e4;
-                e4.1
-            } else if d < e3.1 {
-                *knn_result.get_unchecked_mut(base + 3) = new_e;
-                *knn_result.get_unchecked_mut(base + 4) = e3;
-                *knn_result.get_unchecked_mut(base + 5) = e4;
-                e4.1
-            } else if d < e4.1 {
-                *knn_result.get_unchecked_mut(base + 4) = new_e;
-                *knn_result.get_unchecked_mut(base + 5) = e4;
-                e4.1
-            } else {
-                *knn_result.get_unchecked_mut(base + 5) = new_e;
-                d
-            }
-        }
+        // k >= 4 (not a production leaf_k; correctness fallback): branchless
+        // insertion-sort bubble-up, identical result to the specialized arms.
         _ => {
             *knn_result.get_unchecked_mut(base + k - 1) = new_e;
             let mut pos = base + k - 1;
@@ -757,10 +662,6 @@ pub fn build_leaf<T: VectorRepr + 'static>(
         build_leaf_with_buffers(data, ndims, indices, k, metric, &mut bufs)
     })
 }
-
-/// Fused per-row top-k for k<=3. Dispatches to the AVX-512, AVX-2, or scalar
-/// implementation based on the runtime CPU tier. Writes `actual_k` entries
-/// into `out[..actual_k]`.
 
 /// Materialize `bufs.edges` from the CSR (`group_starts`, `group_data`) layout.
 /// Called from `build_leaf_with_buffers` for back-compat — the public `Vec<Edge>`

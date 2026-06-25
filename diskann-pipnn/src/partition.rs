@@ -41,10 +41,15 @@ pub struct PartitionConfig {
     pub(crate) fanout: Vec<usize>,
     pub(crate) metric: diskann_vector::distance::Metric,
     pub(crate) leader_cap: usize,
-    pub(crate) max_partition_iter: usize,
-    pub(crate) deep_fanout_last: bool,
-    pub(crate) l2_size_override: Option<usize>,
 }
+
+/// Max iterations of the partition loop before remaining oversized clusters
+/// are accepted as leaves. Guards against pathological hub geometries.
+const MAX_PARTITION_ITER: usize = 30;
+
+/// Per-partition-level leader hardcap (paper recommendation). Static — there is
+/// no runtime override.
+pub(crate) const LEADER_CAP: usize = 1000;
 
 impl PartitionConfig {
     /// Construct a validated [`PartitionConfig`]. Returns an error if any
@@ -65,9 +70,6 @@ impl PartitionConfig {
             fanout,
             metric,
             leader_cap,
-            max_partition_iter: 30,
-            deep_fanout_last: false,
-            l2_size_override: None,
         })
     }
 
@@ -178,7 +180,7 @@ pub fn partition<T: VectorRepr + Send + Sync>(
     // where sampled leaders are themselves bunched in the dense region and
     // argmin assignment degenerates), accept them as oversized leaves and
     // hand off to the leaf builder.
-    let max_iter: usize = config.max_partition_iter;
+    let max_iter: usize = MAX_PARTITION_ITER;
     let mut iteration = 0;
     while !work.is_empty() {
         iteration += 1;
@@ -243,20 +245,8 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
     let n = item.indices.len();
     debug_assert!(n > config.c_max);
 
-    // When recursion depth exceeds fanout.len(), `deep_fanout_last` decides
-    // whether to reuse the last fanout entry (wider overlap, fewer leaves) or
-    // collapse to 1.
-    let fanout = if config.deep_fanout_last {
-        config
-            .fanout
-            .get(item.level)
-            .copied()
-            .or_else(|| config.fanout.last().copied())
-            .unwrap_or(1)
-            .min(n)
-    } else {
-        config.fanout.get(item.level).copied().unwrap_or(1).min(n)
-    };
+    // When recursion depth exceeds fanout.len(), collapse to a fanout of 1.
+    let fanout = config.fanout.get(item.level).copied().unwrap_or(1).min(n);
     let num_leaders = sample_num_leaders(n, config.p_samp, config.leader_cap);
 
     // Deterministic seed derived from parent: no syscall, reproducible.
@@ -282,7 +272,6 @@ fn partition_one_level<T: VectorRepr + Send + Sync>(
         &leaders,
         fanout,
         config.metric,
-        config.l2_size_override,
     );
     let assign_us = t_assign.elapsed().as_micros() as u64;
 
@@ -368,7 +357,7 @@ pub(crate) fn release_thread_buffers() {
 /// codegen as the previous compile-time `#[cfg(target_feature)]` paths
 /// without requiring `target-cpu=native`. Hot-path call sites in
 /// `assign_to_leaders` hoist the tier check to a fn pointer once per
-/// closure invocation (see `gather_f16_dispatch_fn`).
+/// closure invocation.
 #[inline]
 pub(crate) fn gather_f16_to_f32_simd<T: VectorRepr>(
     src: &[T], gi: usize, ndims: usize, dst: &mut [f32],
@@ -555,13 +544,11 @@ unsafe fn compute_p_norm_sq_avx2_fma(p_data: &[f32], np: usize, ndims: usize, ou
             acc0 = _mm256_fmadd_ps(v0, v0, acc0);
             acc1 = _mm256_fmadd_ps(v1, v1, acc1);
         }
-        let mut leftover_chunk = pair_chunks * 2;
+        let leftover_chunk = pair_chunks * 2;
         if leftover_chunk < chunks {
             let v = _mm256_loadu_ps(p.add(leftover_chunk * 8));
             acc0 = _mm256_fmadd_ps(v, v, acc0);
-            leftover_chunk += 1;
         }
-        let _ = leftover_chunk;
         let acc = _mm256_add_ps(acc0, acc1);
         // Horizontal reduce: 8 → 4 → 2 → 1.
         let lo = _mm256_castps256_ps128(acc);
@@ -593,7 +580,6 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     leaders: &[u32],
     fanout: usize,
     metric: diskann_vector::distance::Metric,
-    l2_size_override: Option<usize>,
 ) -> Vec<Vec<u32>> {
     let np = points.len();
     let nl = leaders.len();
@@ -630,8 +616,8 @@ fn assign_to_leaders<T: VectorRepr + Send + Sync + 'static>(
     // the old stripe+inner-MB structure is equivalent at the same closure
     // body size — keeping the simpler single-layer form to avoid the dead
     // codegen bloat that previously bound v1 to its specific chunk grain.
-    let l2 = l2_size_override.unwrap_or_else(crate::partition_inner::l2_size_bytes);
-    let mb = crate::partition_inner::compute_mb(nl, ndims, l2);
+    let l2 = crate::partition_inner::l2_size_bytes();
+    let mb = crate::partition_inner::compute_mb(nl, l2);
 
     // Skip-MB path: whole problem comfortably fits L2 → one sequential GEMM.
     if crate::partition_inner::should_skip_mb(np, nl, l2) {
@@ -828,9 +814,6 @@ mod tests {
             fanout: vec![4, 2],
             metric: diskann_vector::distance::Metric::L2,
             leader_cap: 1000,
-            max_partition_iter: 30,
-            deep_fanout_last: false,
-            l2_size_override: None,
         };
         let leaves = partition(&data, ndims, npoints, &config, 123);
 
@@ -857,9 +840,6 @@ mod tests {
             fanout: vec![3],
             metric: diskann_vector::distance::Metric::L2,
             leader_cap: 1000,
-            max_partition_iter: 30,
-            deep_fanout_last: false,
-            l2_size_override: None,
         };
         let leaves = partition(&data, ndims, npoints, &config, 0);
         assert_eq!(leaves.len(), 1);

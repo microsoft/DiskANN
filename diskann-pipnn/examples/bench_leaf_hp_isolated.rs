@@ -78,7 +78,7 @@ fn main() {
     let num_hash_planes: usize = std::env::var("PIPNN_HP").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
     let l_max: usize = std::env::var("PIPNN_L_MAX").ok().and_then(|s| s.parse().ok()).unwrap_or(64);
     let max_degree: usize = std::env::var("PIPNN_R").ok().and_then(|s| s.parse().ok()).unwrap_or(64);
-    let leader_cap: usize = std::env::var("PIPNN_LEADER_CAP").ok().and_then(|s| s.parse().ok()).unwrap_or(1000);
+    let leader_cap: usize = 1000; // static; no env override
 
     println!(
         "config: c_max={} c_min={} p_samp={} fanout={:?} k={} hp={} l_max={} R={} T={}",

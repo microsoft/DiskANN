@@ -16,9 +16,11 @@
 //! Both slabs are one Vec each (contiguous in VA), so `madvise(HUGEPAGE)` is
 //! effective when the kernel actually backs THP.
 //!
-//! `L_MAX_MAX` is hard-coded at 128 to match `PiPNNConfig` default.
-//! Configs with `l_max > 128` are rejected at construction time.
-//! `find_hash_simd` scans `L_MAX_MAX / 32 = 4` AVX-512 chunks (128 lanes)
+//! `l_max` is dynamic user input; the cold slab stride (`scan_lanes`) and the
+//! `find_hash_simd` scan width both scale with it at runtime. The only fixed
+//! bound is `MAX_RESERVOIR_LEN = 255`, the structural limit of the `u8`
+//! `HotSlot.len` / `farthest_idx` fields; a larger `l_max` is rejected at
+//! construction time. `find_hash_simd` scans `scan_lanes / 32` AVX-512 chunks
 //! with a u128 mask accumulator.
 
 use parking_lot::lock_api::RawMutex as RawMutexTrait;
@@ -126,12 +128,8 @@ impl<T: Copy + Default> MmapSlab<T> {
         self.0.as_ptr()
     }
     #[inline]
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    #[inline]
     fn bytes(&self) -> usize {
-        self.len() * std::mem::size_of::<T>()
+        self.0.len() * std::mem::size_of::<T>()
     }
 }
 
@@ -143,9 +141,13 @@ impl<T> std::ops::Deref for MmapSlab<T> {
     }
 }
 
-/// Compile-time bound on reservoir size. Equals `PiPNNConfig` default
-/// (l_max = 128). `find_hash_simd` scans L_MAX_MAX/32 = 4 AVX-512 chunks.
-pub(crate) const L_MAX_MAX: usize = 128;
+/// Structural upper bound on per-node reservoir length: `HotSlot.len` and
+/// `farthest_idx` are `u8`, so a reservoir can hold at most 255 entries. This
+/// is an overflow guard, NOT the reservoir size — the cold slab stride
+/// (`scan_lanes`) is sized to the runtime `l_max`, so the list scales with the
+/// user's `l_max` up to this bound. `find_hash_simd` scans `scan_lanes / 32`
+/// chunks, also runtime-sized.
+pub(crate) const MAX_RESERVOIR_LEN: usize = u8::MAX as usize;
 
 /// Compute LSH sketches over `data` (row-major `npoints × ndims` of `T`).
 fn sketches_from_data<T: VectorRepr + Send + Sync>(
@@ -195,7 +197,7 @@ const _: () = assert!(std::mem::size_of::<HotSlot>() == 16);
 // rounded up to a multiple of 32 so the AVX-512 / AVX-2 find_hash scan can
 // stay aligned). At l_max=64 the stride is 64 and the per-point cold cost is
 // 64 * 8 = 512 B; at l_max=128 the stride is 128 and the per-point cost is
-// 1024 B. No more fixed [u16; L_MAX_MAX] padding.
+// 1024 B. No fixed-size padding — the stride is the runtime l_max.
 //
 // `ColdSlotPtrs` is the lightweight view passed into `insert_locked` and the
 // scan/update helpers — three raw pointers + the stride. Mutation safety is
@@ -472,32 +474,38 @@ unsafe fn insert_locked(
     false
 }
 
-/// Collect the reservoir's entries sorted by distance, truncated to
-/// `max_degree`. Uses a stack-allocated `[(u32, u16); L_MAX_MAX]` scratch
-/// instead of two heap Vec allocs per call — at 10M points this saves 20M
-/// short-lived heap allocations on the extract path.
+/// Collect the reservoir's entries sorted by distance, truncated to `cap`.
+/// A thread-local scratch `Vec` (reused across calls, sized to the reservoir's
+/// runtime fill) replaces two heap allocs per call — at 10M points this saves
+/// 20M short-lived allocations on the extract path, with no fixed-size cap.
 ///
 /// SAFETY: caller holds the slot lock; pointers in `cold` are valid for
 /// `scan_lanes` elements each.
-unsafe fn get_neighbors_saturated(
+unsafe fn collect_sorted_neighbors(
     hot: &HotSlot,
     cold: ColdSlotPtrs,
-    max_degree: usize,
+    cap: usize,
 ) -> Vec<(u32, f32)> {
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<(u32, u16)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
     let n = hot.len as usize;
-    debug_assert!(n <= L_MAX_MAX);
-
-    let mut scratch = [(0u32, 0u16); L_MAX_MAX];
-    for i in 0..n {
-        scratch[i] = (*cold.neighbors.add(i), *cold.distances.add(i));
-    }
-    scratch[..n].sort_unstable_by_key(|&(_, d)| d);
-    let out_len = n.min(max_degree);
-    let mut out = Vec::with_capacity(out_len);
-    for &(id, d) in &scratch[..out_len] {
-        out.push((id, bf16_to_f32(key_to_bf16(d))));
-    }
-    out
+    SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        scratch.clear();
+        scratch.reserve(n);
+        for i in 0..n {
+            scratch.push((*cold.neighbors.add(i), *cold.distances.add(i)));
+        }
+        scratch.sort_unstable_by_key(|&(_, d)| d);
+        let out_len = n.min(cap);
+        let mut out = Vec::with_capacity(out_len);
+        for &(id, d) in &scratch[..out_len] {
+            out.push((id, bf16_to_f32(key_to_bf16(d))));
+        }
+        out
+    })
 }
 
 // ─── Test-only thin wrapper preserving the old HashPruneReservoir API ─────────
@@ -515,7 +523,7 @@ pub(crate) struct HashPruneReservoir {
 #[cfg(test)]
 impl HashPruneReservoir {
     pub(crate) fn new(l_max: usize) -> Self {
-        assert!(l_max <= L_MAX_MAX);
+        assert!(l_max <= MAX_RESERVOIR_LEN);
         let scan_lanes = round_up_to_32(l_max).max(32);
         Self {
             hot: HotSlot::new_empty(),
@@ -525,10 +533,6 @@ impl HashPruneReservoir {
             scan_lanes,
             l_max: l_max as u8,
         }
-    }
-
-    pub(crate) fn new_lazy(l_max: usize) -> Self {
-        Self::new(l_max)
     }
 
     fn cold(&self) -> ColdSlotPtrs {
@@ -548,16 +552,10 @@ impl HashPruneReservoir {
         unsafe { insert_locked(&mut self.hot, cold, hash, neighbor, distance, self.l_max) }
     }
 
-    pub fn get_neighbors_saturated(&self, max_degree: usize) -> Vec<(u32, f32)> {
-        let cold = self.cold();
-        // SAFETY: single-threaded test wrapper; ptrs are valid for scan_lanes.
-        unsafe { get_neighbors_saturated(&self.hot, cold, max_degree) }
-    }
-
     pub(crate) fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
         let cold = self.cold();
         // SAFETY: single-threaded test wrapper.
-        unsafe { get_neighbors_saturated(&self.hot, cold, L_MAX_MAX) }
+        unsafe { collect_sorted_neighbors(&self.hot, cold, usize::MAX) }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -619,9 +617,9 @@ impl HashPrune {
         max_degree: usize,
     ) -> Self {
         assert!(
-            l_max <= L_MAX_MAX,
+            l_max <= MAX_RESERVOIR_LEN,
             "HashPrune requires l_max ≤ {}, got {}",
-            L_MAX_MAX,
+            MAX_RESERVOIR_LEN,
             l_max
         );
 
@@ -686,54 +684,35 @@ impl HashPrune {
         }
     }
 
-    /// SAFETY: idx must be in bounds for `self.hot` and `idx * scan_lanes +
-    /// scan_lanes <= cold slab capacity`.
-    #[inline]
-    unsafe fn slot_ptrs(&self, idx: usize) -> (*mut HotSlot, ColdSlotPtrs) {
-        let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
-        let off = idx * self.scan_lanes;
-        let cold = ColdSlotPtrs {
-            hashes: (self.cold_hashes.as_ptr() as *mut u16).add(off),
-            distances: (self.cold_distances.as_ptr() as *mut u16).add(off),
-            neighbors: (self.cold_neighbors.as_ptr() as *mut u32).add(off),
-            scan_lanes: self.scan_lanes,
-        };
-        (hot_ptr, cold)
-    }
-
-    /// SAFETY: idx must be in bounds for `self.hot`.
-    #[inline]
-    unsafe fn lock_slot(&self, idx: usize) -> (*mut HotSlot, ColdSlotPtrs) {
-        let (hot_ptr, cold) = self.slot_ptrs(idx);
-        (*hot_ptr).lock.lock();
-        (hot_ptr, cold)
-    }
-
-    /// SAFETY: caller must hold the lock at idx.
-    #[inline]
-    unsafe fn unlock_slot(&self, idx: usize) {
-        let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
-        (*hot_ptr).lock.unlock();
-    }
-
+    /// Locks the per-slot mutex at `idx`, runs `f` with mutable access to the
+    /// hot slot and its cold-slab pointers, and unlocks on return or panic.
     #[inline(always)]
     fn with_locked<R>(&self, idx: usize, f: impl FnOnce(&mut HotSlot, ColdSlotPtrs) -> R) -> R {
-        struct UnlockOnDrop<'a> {
-            hp: &'a HashPrune,
-            idx: usize,
+        struct UnlockOnDrop {
+            hot_ptr: *mut HotSlot,
         }
-        impl<'a> Drop for UnlockOnDrop<'a> {
+        impl Drop for UnlockOnDrop {
             fn drop(&mut self) {
-                unsafe {
-                    self.hp.unlock_slot(self.idx);
-                }
+                // SAFETY: only constructed after locking this slot's mutex.
+                unsafe { (*self.hot_ptr).lock.unlock() };
             }
         }
         debug_assert!(idx < self.hot.len());
-        // SAFETY: bounds-checked above; UnlockOnDrop unlocks on panic.
-        let (hot_ptr, cold) = unsafe { self.lock_slot(idx) };
-        let _guard = UnlockOnDrop { hp: self, idx };
-        unsafe { f(&mut *hot_ptr, cold) }
+        // SAFETY: idx bounds-checked above, so `idx * scan_lanes + scan_lanes`
+        // is within each cold slab's capacity. UnlockOnDrop unlocks on panic.
+        unsafe {
+            let hot_ptr = (self.hot.as_ptr() as *mut HotSlot).add(idx);
+            let off = idx * self.scan_lanes;
+            let cold = ColdSlotPtrs {
+                hashes: (self.cold_hashes.as_ptr() as *mut u16).add(off),
+                distances: (self.cold_distances.as_ptr() as *mut u16).add(off),
+                neighbors: (self.cold_neighbors.as_ptr() as *mut u32).add(off),
+                scan_lanes: self.scan_lanes,
+            };
+            (*hot_ptr).lock.lock();
+            let _guard = UnlockOnDrop { hot_ptr };
+            f(&mut *hot_ptr, cold)
+        }
     }
 
     #[cfg(test)]
@@ -770,39 +749,6 @@ impl HashPrune {
                 }
             });
             i = j;
-        }
-    }
-
-    pub fn add_edges_grouped(
-        &self,
-        group_starts: &[u32],
-        group_data: &[(u32, f32)],
-        local_indices: &[u32],
-    ) {
-        if group_data.is_empty() {
-            return;
-        }
-        let n = local_indices.len();
-        let l_max = self.l_max as u8;
-        debug_assert!(group_starts.len() >= n + 1);
-
-        for local_src in 0..n {
-            let start = group_starts[local_src] as usize;
-            let end = group_starts[local_src + 1] as usize;
-            if start == end {
-                continue;
-            }
-            let global_src = local_indices[local_src] as usize;
-            self.with_locked(global_src, |hot, cold| {
-                for &(dst_local, dist) in &group_data[start..end] {
-                    let global_dst = local_indices[dst_local as usize];
-                    let hash = self
-                        .sketches
-                        .relative_hash(global_src, global_dst as usize);
-                    // SAFETY: cold ptrs from with_locked are valid for scan_lanes.
-                    unsafe { insert_locked(hot, cold, hash, global_dst, dist, l_max) };
-                }
-            });
         }
     }
 
@@ -921,7 +867,7 @@ impl HashPrune {
                     scan_lanes,
                 };
                 // SAFETY: i < hot.len() == npoints; off + scan_lanes within slab.
-                let nbrs = unsafe { get_neighbors_saturated(&hot[i], cold, cap) };
+                let nbrs = unsafe { collect_sorted_neighbors(&hot[i], cold, cap) };
                 nbrs.into_iter().map(&project).collect()
             })
             .collect_installed()
@@ -1019,7 +965,7 @@ mod tests {
 
     #[test]
     fn test_reservoir_lazy_allocation() {
-        let mut res = HashPruneReservoir::new_lazy(5);
+        let mut res = HashPruneReservoir::new(5);
         assert!(res.is_empty());
         assert!(res.insert(0, 1, 1.0));
         assert_eq!(res.len(), 1);

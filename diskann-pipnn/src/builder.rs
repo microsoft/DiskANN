@@ -290,7 +290,6 @@ fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> PiPNN
     }
 
     // Parallel argmin: each thread converts its slice + finds local best, then reduce.
-    use rayon::prelude::*;
     // Fold init owns the per-thread buf; reuses across all items in that
     // thread's chunk. Without this, every fold iteration allocates a fresh
     // `vec![0.0f32; ndims]` — 10M allocs on BigANN.
@@ -423,11 +422,8 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
             config.p_samp,
             config.fanout.clone(),
             metric,
-            config.leader_cap,
+            crate::partition::LEADER_CAP,
         )?;
-        partition_config.max_partition_iter = config.max_partition_iter;
-        partition_config.deep_fanout_last = config.deep_fanout_last;
-        partition_config.l2_size_override = config.l2_size_override;
 
         let leaves = crate::partition::partition(data, ndims, npoints, &partition_config, seed);
         partition_secs += t1.elapsed().as_secs_f64();
@@ -571,7 +567,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 
         let adj = final_prune_from_candidates(
             data, ndims, &candidates, max_degree, metric, config.alpha,
-            config.saturate_after_prune,
         );
 
         // Log output stats after pruning.
@@ -639,8 +634,6 @@ fn build_internal_impl<T: VectorRepr + Send + Sync>(
 }
 
 /// occludes it (dist_to_selected < alpha * dist_to_query), else mark occluded.
-/// Optionally saturate the result with occluded candidates until `max_degree`
-/// is filled (controlled by `saturate`).
 ///
 /// Candidates are pre-sorted ascending by HashPrune output.
 // ───── Inline distance kernels for final_prune's inner pair-loop ─────
@@ -767,7 +760,6 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
     max_degree: usize,
     metric: Metric,
     alpha: f32,
-    saturate: bool,
 ) -> Vec<Vec<u32>> {
     // Per-node thread-local scratch buffers eliminate ~30M Vec allocations
     // (cand_f32, state, selected). The allocator (mimalloc + glibc arenas) is
@@ -929,20 +921,6 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
                                     }
                                 }
 
-                                if saturate && sel.len() < max_degree {
-                                    // Pad with the closest not-yet-admitted
-                                    // candidates, still in fresh-distance order.
-                                    for &(_, oi) in order.iter() {
-                                        if sel.len() >= max_degree {
-                                            break;
-                                        }
-                                        let i = oi as usize;
-                                        if !sel_local.iter().any(|&l| l as usize == i) {
-                                            sel.push(candidates[i].0);
-                                        }
-                                    }
-                                }
-
                                 sel.clone()
                             })
                         })
@@ -961,21 +939,6 @@ pub(crate) fn final_prune_from_candidates<T: VectorRepr + Send + Sync>(
 ///
 /// Gated behind the `bench` feature so it is not part of the production API
 /// surface; callers exercising it must opt in.
-#[cfg(any(test, feature = "bench"))]
-#[derive(Debug, Clone, Copy)]
-pub struct BenchLeafHpStats {
-    pub wall_secs: f64,
-    pub leaf_build_cpu_secs: f64,
-    pub leaf_gather_cpu_secs: f64,
-    pub leaf_gemm_cpu_secs: f64,
-    pub leaf_norms_cpu_secs: f64,
-    pub leaf_topk_cpu_secs: f64,
-    pub leaf_csr_cpu_secs: f64,
-    pub sketch_gather_cpu_secs: f64,
-    pub hp_insert_cpu_secs: f64,
-    pub total_edges: usize,
-}
-
 #[cfg(any(test, feature = "bench"))]
 pub fn bench_leaf_hp_phase<T: VectorRepr + Send + Sync + 'static>(
     data: &[T],
@@ -1913,7 +1876,7 @@ mod tests {
             vec![],
         ];
 
-        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 2, Metric::L2, 1.2);
         let node0 = &result[0];
         // With alpha=1.2, point 3 should be selected first (closest).
         // Point 1 might be pruned because dist(3,1) * 1.2 < dist(0,1).
@@ -1931,7 +1894,7 @@ mod tests {
     fn test_final_prune_from_candidates_empty() {
         let data: Vec<f32> = vec![0.0; 8];
         let candidates: Vec<Vec<(u32, f32)>> = vec![vec![], vec![], vec![], vec![]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert!(result.iter().all(|adj| adj.is_empty()));
     }
 
@@ -1939,7 +1902,7 @@ mod tests {
     fn test_final_prune_from_candidates_single_candidate() {
         let data: Vec<f32> = vec![0.0, 0.0, 1.0, 0.0];
         let candidates = vec![vec![(1, 1.0f32)], vec![(0, 1.0f32)]];
-        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2, true);
+        let result = final_prune_from_candidates(&data, 2, &candidates, 10, Metric::L2, 1.2);
         assert_eq!(result[0], vec![1]);
         assert_eq!(result[1], vec![0]);
     }
