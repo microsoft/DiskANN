@@ -25,6 +25,7 @@ members = [
     "diskann-tools",
     "vectorset",
     "diskann-bftree",
+    "diskann-graphivf",
 ]
 
 default-members = [
@@ -60,6 +61,7 @@ diskann = { path = "diskann", version = "0.53.0" }
 # Providers
 diskann-providers = { path = "diskann-providers", default-features = false, version = "0.53.0" }
 diskann-disk = { path = "diskann-disk", version = "0.53.0" }
+diskann-graphivf = { path = "diskann-graphivf", version = "0.53.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.53.0" }
 # Infra
 diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.53.0" }

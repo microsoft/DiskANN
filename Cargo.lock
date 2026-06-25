@@ -658,6 +658,7 @@ dependencies = [
  "diskann-benchmark-runner",
  "diskann-bftree",
  "diskann-disk",
+ "diskann-graphivf",
  "diskann-label-filter",
  "diskann-providers",
  "diskann-quantization",
@@ -802,6 +803,28 @@ dependencies = [
  "diskann-vector",
  "foldhash 0.2.0",
  "rand 0.9.4",
+ "thiserror 2.0.17",
+ "tokio",
+]
+
+[[package]]
+name = "diskann-graphivf"
+version = "0.53.0"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+ "diskann",
+ "diskann-disk",
+ "diskann-providers",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "half",
+ "rand 0.9.4",
+ "rayon",
+ "rstest",
+ "serde",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
 ]

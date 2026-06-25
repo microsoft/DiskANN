@@ -1,0 +1,45 @@
+{
+    "search_directories": [
+        "C:/Users/adkrishnan/Projects/data/enron-email-1M-fbv4"
+    ],
+    "jobs": [
+        {
+            "type": "graph-ivf",
+            "content": {
+                "source": {
+                    "graph-ivf-source": "Build",
+                    "data_type": "float16",
+                    "data": "normalized_dim_384_vector_fp16_1087932_vectors.bin",
+                    "distance": "squared_l2",
+                    "dim": 384,
+                    "num_clusters": 16384,
+                    "sample_size": 100000,
+                    "kmeans_iters": 5,
+                    "assign_l": 32,
+                    "graph_degree": 32,
+                    "graph_slack": 1.2,
+                    "graph_l_build": 64,
+                    "graph_alpha": 1.2,
+                    "num_threads": 8,
+                    "seed": 0,
+                    "save_path": "C:/Users/adkrishnan/Projects/data/enron-email-1M-fbv4/graphivf_index_16384"
+                },
+                "search_phase": {
+                    "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+                    "groundtruth": "groundtruth_recall_1000_query_1000.bin",
+                    "num_threads": 8,
+                    "nlist": [
+                        64,
+                        128,
+                        256,
+                        512,
+                        1024
+                    ],
+                    "centroid_search_l": 1024,
+                    "recall_at": 10,
+                    "distance": "squared_l2"
+                }
+            }
+        }
+    ]
+}

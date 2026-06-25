@@ -32,6 +32,7 @@ diskann-label-filter.workspace = true
 diskann-tools = { workspace = true }
 diskann-disk = { workspace = true, optional = true }
 diskann-bftree = { workspace = true, optional = true }
+diskann-graphivf = { workspace = true, optional = true }
 cfg-if.workspace = true
 diskann-benchmark-runner = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
@@ -69,8 +70,6 @@ multi-vector = []
 
 # Enable bftree backend
 bftree = ["dep:diskann-bftree"]
-
-# Enable Disk Index benchmarks
 disk-index = [
     "diskann-disk/perf_test",
     "diskann-providers/perf_test",
@@ -79,4 +78,10 @@ disk-index = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
     "dep:scopeguard",
+]
+
+# Enable graph-IVF benchmarks
+graph-ivf = [
+    "diskann-tools/perf_test",
+    "dep:diskann-graphivf",
 ]

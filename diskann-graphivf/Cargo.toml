@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+[package]
+name = "diskann-graphivf"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+diskann.workspace = true
+diskann-disk.workspace = true
+diskann-providers.workspace = true
+diskann-quantization.workspace = true
+diskann-utils.workspace = true
+diskann-vector.workspace = true
+bytemuck.workspace = true
+byteorder.workspace = true
+half = { workspace = true, features = ["bytemuck", "num-traits"] }
+rand.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+
+[dev-dependencies]
+diskann = { workspace = true, features = ["testing"] }
+diskann-utils = { workspace = true, features = ["testing"] }
+rstest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
