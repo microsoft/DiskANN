@@ -9,7 +9,7 @@ use anyhow::Context;
 use diskann::graph::{DiskANNIndex, search::Knn};
 use diskann_benchmark_runner::{
     Checker, Checkpoint, Output, Registry, RegistryError,
-    benchmark::{FailureScore, MatchScore, Regression, PassFail},
+    benchmark::{FailureScore, MatchScore, PassFail, Regression},
     files::InputFile,
     utils::fmt::Indent,
 };
@@ -23,7 +23,7 @@ use diskann_inmem::{Provider, layers};
 use crate::{
     index::{Counters, Index},
     support::{
-        check::{CheckMatch, Match, MatchBuilder, check_all_fields},
+        check::{CheckMatch, Match, check_all_fields},
         datatype::{DataType, Dataset, DatasetView},
         io::load_and_convert,
         tolerance,
@@ -124,7 +124,7 @@ struct Data {
 }
 
 impl Data {
-    fn from_raw(mut raw: dto::Data, checker: &mut Checker) -> anyhow::Result<Self> {
+    fn from_raw(raw: dto::Data, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
         let dto::Data {
             mut data,
             mut queries,
@@ -133,9 +133,11 @@ impl Data {
             data_type,
         } = raw;
 
-        data.resolve(checker)?;
-        queries.resolve(checker)?;
-        groundtruth.resolve(checker)?;
+        if let Some(checker) = checker {
+            data.resolve(checker)?;
+            queries.resolve(checker)?;
+            groundtruth.resolve(checker)?;
+        }
 
         Ok(Self {
             data,
@@ -297,7 +299,7 @@ struct Test {
 }
 
 impl Test {
-    fn from_raw(raw: dto::Test, checker: &mut Checker) -> anyhow::Result<Self> {
+    fn from_raw(raw: dto::Test, checker: Option<&mut Checker>) -> anyhow::Result<Self> {
         let data = Data::from_raw(raw.data, checker)?;
         let layer = Layer::from_raw(raw.layer);
         let build = Build::from_raw(raw.build, data.metric)?;
@@ -389,7 +391,7 @@ impl diskann_benchmark_runner::Input for Test {
     }
 
     fn from_raw(raw: dto::Test, checker: &mut Checker) -> anyhow::Result<Self> {
-        <Test>::from_raw(raw, checker)
+        <Test>::from_raw(raw, Some(checker))
     }
 
     fn serialize(&self) -> anyhow::Result<serde_json::Value> {
@@ -450,17 +452,14 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     type Output = BuildAndSearch;
 
     fn try_match(&self, input: &Test) -> Result<MatchScore, FailureScore> {
-        if let Layer::FullPrecision { .. } = input.layer {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(1))
-        }
+        let Layer::FullPrecision { .. } = input.layer;
+        Ok(MatchScore(0))
     }
 
     fn description(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        input: Option<&Test>,
+        _input: Option<&Test>,
     ) -> std::fmt::Result {
         write!(f, "nop")
     }
@@ -468,12 +467,10 @@ impl diskann_benchmark_runner::Benchmark for FullPrecision {
     fn run(
         &self,
         input: &Test,
-        checkpoint: Checkpoint<'_>,
+        _checkpoint: Checkpoint<'_>,
         mut output: &mut dyn Output,
     ) -> anyhow::Result<Self::Output> {
-        let Layer::FullPrecision { data_type } = input.layer else {
-            anyhow::bail!("expected full-precision");
-        };
+        let Layer::FullPrecision { data_type } = input.layer;
 
         // Load the data and perform any necessary data conversions.
         let Bundle {
@@ -554,5 +551,19 @@ impl CheckMatch for BuildAndSearch {
             { build, knn },
         );
         builder.finish()
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn example_parses() {
+        let _ = Test::from_raw(<Test as diskann_benchmark_runner::Input>::example(), None).unwrap();
     }
 }

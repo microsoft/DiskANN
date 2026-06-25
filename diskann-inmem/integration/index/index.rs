@@ -11,14 +11,13 @@ use diskann::{
     utils::IntoUsize,
 };
 use diskann_benchmark_runner::utils::fmt::KeyValue;
-use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use diskann_inmem::{Context, Provider, Strategy, integration, layers};
 
 use crate::support::{
-    check::{CheckMatch, Match, MatchBuilder, check_all_fields},
+    check::{CheckMatch, Match, check_all_fields},
     datatype::{AsDataType, DataType, FromSlice, Slice},
 };
 

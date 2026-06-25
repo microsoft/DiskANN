@@ -121,11 +121,6 @@ impl Store {
         (self.unfrozen as u32)..(self.buffer.len() as u32)
     }
 
-    /// Return the number of unfrozen slots managed by `self`.
-    pub(crate) fn capacity(&self) -> usize {
-        self.buffer.len() - self.unfrozen
-    }
-
     /// Return the number of bytes occupied by each entry.
     pub(crate) fn bytes(&self) -> Bytes {
         self.unpadded
@@ -349,6 +344,12 @@ impl Store {
             .get(i)
             .map(|tag| tag.load(Ordering::Relaxed).can_read())
     }
+
+    #[cfg(test)]
+    fn writable(&self) -> std::ops::Range<u32> {
+        0..self.unfrozen as u32
+    }
+
 }
 
 #[derive(Debug, Error)]
@@ -370,12 +371,6 @@ impl StoreError {
 
     fn too_many_neighbors(neighbors: usize) -> Self {
         Self(StoreErrorInner::TooManyNeighbors { neighbors })
-    }
-}
-
-impl From<StoreErrorInner> for StoreError {
-    fn from(inner: StoreErrorInner) -> Self {
-        Self(inner)
     }
 }
 
@@ -563,7 +558,224 @@ impl Drop for Slot<'_> {
 // Tests //
 ///////////
 
+/// These tests are basic functionality tests for the store.
+///
+/// Longer running conurrency tests are in the integration test suite.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use diskann_utils::views::Matrix;
+
+    // Build a store with `entries` writable slots of `entry_bytes` each, backed by `frozen`
+    // zeroed frozen points. The frozen points occupy the highest slot indices.
+    fn store(entries: usize, entry_bytes: usize, frozen: usize) -> Result<Store, StoreError> {
+        let mut data = Matrix::new(0u8, frozen, entry_bytes);
+        let mut base = 0u8;
+        for row in data.row_iter_mut() {
+            row.fill(base);
+            base = base.wrapping_add(1);
+        }
+
+        Store::new(entries, Bytes::new(entry_bytes), 0, data.as_view())
+    }
+
+    //------------------------//
+    // Constructor validation //
+    //------------------------//
+
+    #[test]
+    fn new_rejects_mismatched_frozen_dim() {
+        // Frozen point has 8 columns but the store is asked for 16-byte entries.
+        let data = Matrix::new(0u8, 1, 8);
+        let err = Store::new(4, Bytes::new(16), 0, data.as_view()).unwrap_err();
+        assert!(matches!(
+            err.0,
+            StoreErrorInner::MismatchedFrozenPointDim { dim: 8, .. }
+        ));
+    }
+
+    #[test]
+    fn new_requires_a_frozen_point() {
+        let err = store(4, 8, 0).unwrap_err();
+        assert!(matches!(err.0, StoreErrorInner::NeedFrozenPoint));
+    }
+
+    #[test]
+    fn new_rejects_total_slot_overflow() {
+        // `entries` alone fits in u32, but `entries + frozen` overflows it.
+        let data = Matrix::new(0u8, 1, 8);
+        let err = Store::new(u32::MAX as usize, Bytes::new(8), 0, data.as_view()).unwrap_err();
+        assert!(matches!(err.0, StoreErrorInner::TooManyEntries { .. }));
+    }
+
+    #[test]
+    fn new_rejects_too_many_neighbors() {
+        let data = Matrix::new(0u8, 1, 8);
+        let err =
+            Store::new(4, Bytes::new(8), u32::MAX.into_usize() + 1, data.as_view()).unwrap_err();
+        assert!(matches!(err.0, StoreErrorInner::TooManyNeighbors { .. }));
+    }
+
+    //--------//
+    // Layout //
+    //--------//
+
+    #[test]
+    fn frozen_range_follows_writable_slots() {
+        let s = store(4, 8, 2).unwrap();
+
+        // Writable slots are [0, 4); frozen points occupy [4, 6).
+        assert_eq!(s.frozen(), 4..6);
+
+        let reader = s.reader().unwrap();
+        for i in 0..4 {
+            assert!(!s.can_read_approximate(i).unwrap());
+            assert!(!reader.can_read(i).unwrap());
+            assert!(reader.read(i).is_none());
+        }
+
+        assert!(s.can_read_approximate(4).unwrap());
+        assert!(reader.can_read(4).unwrap());
+        assert_eq!(reader.read(4).unwrap(), &[0, 0, 0, 0, 0, 0, 0, 0]);
+
+        assert!(s.can_read_approximate(5).unwrap());
+        assert!(reader.can_read(5).unwrap());
+        assert_eq!(reader.read(5).unwrap(), &[1, 1, 1, 1, 1, 1, 1, 1]);
+
+        assert!(s.can_read_approximate(6).is_none());
+        assert!(reader.can_read(6).is_none());
+        assert!(reader.read(6).is_none());
+    }
+
+    ///////////////
+    // Lifecycle //
+    ///////////////
+
+    #[test]
+    fn acquire_write_publish_read_roundtrip() {
+        let s = store(4, 8, 1).unwrap();
+
+        let reader = s.reader().expect("reader guard available");
+
+        let idx = {
+            let mut slot = s.acquire().expect("a fresh store has free slots");
+            let idx = slot.slot() as usize;
+            slot.as_mut_slice()
+                .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+            // Before the slot is dropped - we should not be able to read it.
+            assert!(reader.read(idx).is_none());
+            assert!(!s.can_read_approximate(idx).unwrap());
+
+            idx
+        };
+
+        assert_eq!(reader.read(idx), Some([1, 2, 3, 4, 5, 6, 7, 8].as_slice()));
+        assert!(s.can_read_approximate(idx).unwrap());
+    }
+
+    #[test]
+    fn acquire_exhausts_then_reports_none() {
+        let s = store(2, 8, 1).unwrap();
+        // Hold the guards so the slots stay owned.
+        let _a = s.acquire().expect("first writable slot");
+        let _b = s.acquire().expect("second writable slot");
+        assert!(
+            s.acquire().is_none(),
+            "all writable slots are owned, so acquire must fail"
+        );
+    }
+
+    //--------//
+    // Retire //
+    //--------//
+
+    #[test]
+    fn retire_out_of_bounds() {
+        let s = store(4, 8, 1).unwrap();
+        assert!(matches!(s.retire(999), Err(RetireError::OutOfBounds)));
+    }
+
+    #[test]
+    fn retire_rejects_reserved_slots() {
+        let s = store(4, 8, 1).unwrap();
+        // An untouched writable slot is AVAILABLE, which is a reserved state.
+        assert!(matches!(
+            s.retire(0),
+            Err(RetireError::SlotIsReserved { .. })
+        ));
+        // A frozen slot is likewise reserved.
+        let frozen = s.frozen().start as usize;
+        assert!(matches!(
+            s.retire(frozen),
+            Err(RetireError::SlotIsReserved { .. })
+        ));
+        // An owned slot is not retirable.
+        let slot = s.acquire().unwrap();
+        assert!(matches!(
+            s.retire(slot.slot() as usize),
+            Err(RetireError::SlotIsReserved { .. })
+        ));
+    }
+
+    #[test]
+    fn retire_published_slot_then_unreadable() {
+        let s = store(4, 8, 1).unwrap();
+
+        let idx = {
+            let slot = s.acquire().unwrap();
+            slot.slot() as usize
+            // Publish
+        };
+
+        assert!(s.retire(idx).is_ok());
+
+        // A reader opened after retirement must not observe the retired slot.
+        let reader = s.reader().unwrap();
+        assert_eq!(reader.read(idx), None);
+        assert_eq!(reader.can_read(idx), Some(false));
+
+        // The slot can also not be retired again.
+        assert!(matches!(
+            s.retire(idx),
+            Err(RetireError::SlotIsReserved { .. })
+        ));
+    }
+
+    //---------//
+    // Recycle //
+    //---------//
+
+    #[test]
+    fn test_recycling() {
+        let entries = if cfg!(miri) {
+            16
+        } else {
+            2048
+        };
+
+        let s = store(entries, 4, 2).unwrap();
+
+        // Claim all slots.
+        let mut count = 0;
+        while let Some(slot) = s.acquire() {
+            count += 1;
+        }
+
+        assert_eq!(count, s.writable().len());
+
+        // Now that all slots are claimed - retire all slots.
+        for i in s.writable() {
+            s.retire(i.into_usize()).unwrap();
+        }
+
+        // Verify that we can claim all slots again.
+        let mut count = 0;
+        while let Some(slot) = s.acquire() {
+            count += 1;
+        }
+
+        assert_eq!(count, s.writable().len());
+    }
 }

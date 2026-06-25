@@ -84,7 +84,7 @@ pub trait QueryVisitor<'a>: Sized {
     where
         T: QueryDistance + 'a;
 
-    unsafe fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+    fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
     where
         T: QueryDistance + 'a,
     {

@@ -122,7 +122,7 @@ where
     std::iter::zip(dst.iter_mut(), src.iter()).try_for_each(|(d, s)| {
         let converted = match f(*s) {
             Ok(c) => c,
-            Err(e) => anyhow::bail!(
+            Err(_) => anyhow::bail!(
                 "could not losslessly convert {} {} to {}",
                 U::DATA_TYPE,
                 s,

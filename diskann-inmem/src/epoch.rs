@@ -322,14 +322,6 @@ impl Registry {
     }
 
     #[cfg(test)]
-    fn snapshot(&self) -> Vec<u64> {
-        self.guards
-            .iter()
-            .map(|s| s.load(Ordering::Relaxed))
-            .collect()
-    }
-
-    #[cfg(test)]
     fn waiting(&self) -> u64 {
         self.can_advance(&mut NoDelay).1
     }
@@ -428,12 +420,7 @@ impl std::fmt::Display for Unavailable {
 
 impl std::error::Error for Unavailable {}
 
-impl From<Unavailable> for diskann::ANNError {
-    #[track_caller]
-    fn from(unavailable: Unavailable) -> Self {
-        diskann::ANNError::opaque(unavailable)
-    }
-}
+crate::opaque!(Unavailable);
 
 // Delays
 //

@@ -3,28 +3,46 @@
  * Licensed under the MIT license.
  */
 
+//! # Baseline Checking
+//!
+//! The [`Regression`](diskann_benchmark_runner::benchmark::Regression) provides a means
+//! of performing before/after comparisons against previously generated results. However,
+//! presentation of these results is largely left to the devices of the implementors.
+//!
+//! This module provides a means of aggregating all match failures (if any) and presenting
+//! all failures as a single unit.
+
 use std::{
     borrow::Cow,
     fmt::{Display, Write},
 };
 
-use diskann_benchmark_runner::{utils::fmt::Table, benchmark::PassFail};
+use diskann_benchmark_runner::{benchmark::PassFail, utils::fmt::Table};
 use serde::{Serialize, Serializer};
 
+/// Perform a basline check on `self` and a `previous`ly saved result.
 pub(crate) trait CheckMatch {
     fn check_match(&self, previous: &Self) -> Match;
 }
 
+/// The result of a basline.
 #[must_use = "this is a result type"]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Match {
+    /// Successful match.
     Ok,
+
+    /// A mismatch on a specific field.
     Mismatch {
         got: String,
         expected: String,
         remark: Option<Cow<'static, str>>,
     },
+
+    /// A collection of mismatches for an aggregate data type or collection.
+    ///
+    /// Use [`MatchBuilder`] to easier construction.
     Nested {
         children: Vec<(Key, Match)>,
         remark: Option<Cow<'static, str>>,
@@ -32,15 +50,22 @@ pub(crate) enum Match {
 }
 
 impl Match {
+    /// Return `true` if `self` is [`Match::Ok`].
     #[must_use = "this has no side-effects"]
     pub(crate) fn is_ok(&self) -> bool {
         matches!(self, Self::Ok)
     }
 
+    /// Record a single mismatch between the retrieved value `got` and the `expected` result.
     pub(crate) fn mismatch(got: &dyn Display, expected: &dyn Display) -> Self {
         Self::mismatch_with_remark(got, expected, None)
     }
 
+    /// Record a single mismatch between the retrieved value `got` and the `expected` result
+    /// with an additional optional remark.
+    ///
+    /// The remark can be used for contexts where matches are more complex than simple
+    /// equality.
     pub(crate) fn mismatch_with_remark(
         got: &dyn Display,
         expected: &dyn Display,
@@ -53,6 +78,9 @@ impl Match {
         }
     }
 
+    /// Convert `self` into a [`PassFail`] for regression checks.
+    ///
+    /// Returns `PassFail::Pass` only if `self.is_ok`.
     pub(crate) fn pass_fail(self) -> PassFail<Self, Self> {
         if self.is_ok() {
             PassFail::Pass(self)
@@ -196,20 +224,15 @@ struct Record<'a> {
 // Key //
 /////////
 
+/// A key to develop the full hierarchical path for a match.
+///
+/// Keys can either be strings or positional indices. The latter are used when traversing
+/// arrays.
 #[derive(Debug, Clone)]
 pub(crate) enum Key {
     Str(&'static str),
     Position(usize),
     String(String),
-}
-
-impl Key {
-    pub(crate) fn display<D>(key: &D) -> Self
-    where
-        D: std::fmt::Display,
-    {
-        Key::String(key.to_string())
-    }
 }
 
 impl std::fmt::Display for Key {
@@ -252,7 +275,6 @@ impl From<String> for Key {
         Key::String(s)
     }
 }
-
 
 /////////////
 // Builder //

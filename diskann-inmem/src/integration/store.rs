@@ -88,8 +88,4 @@ impl<'a> Writer<'a> {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         self.slot.as_mut_slice()
     }
-
-    pub fn slot(&self) -> u32 {
-        self.slot.slot()
-    }
 }

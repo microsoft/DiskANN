@@ -276,9 +276,9 @@ macro_rules! specialize {
             $(
                 (Metric::$var, $N) => {
                     let wrapped = Wrap::<Specialize<$N, $f>, $T, $U>::new($query);
-                    return Ok(unsafe {
+                    return Ok(
                         $visitor.visit_sized::<{ $N * std::mem::size_of::<$U>() }, _>(wrapped)
-                    })
+                    )
                 },
             )*
             _ => {},

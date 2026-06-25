@@ -240,6 +240,8 @@ pub(crate) enum NeighborsError {
 #[error("index {} is out-of-bounds", self.0)]
 pub(crate) struct OutOfBounds(u32);
 
+crate::opaque!(OutOfBounds);
+
 /// A neighbor list was longer than the configured per-list capacity.
 ///
 /// `got` is the caller-supplied length (any `usize`); `max` is the per-list capacity,
@@ -250,6 +252,8 @@ pub(crate) struct TooLong {
     got: usize,
     max: u32,
 }
+
+crate::opaque!(TooLong);
 
 /// Errors during [`Neighbors::set`].
 #[derive(Debug, Clone, Copy, Error)]
@@ -262,6 +266,8 @@ pub(crate) enum SetError {
     #[error(transparent)]
     TooLong(TooLong),
 }
+
+crate::opaque!(SetError);
 
 /// A locked adjacency list to implement atomic read-modify-write operations.
 ///

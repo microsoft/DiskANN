@@ -373,7 +373,7 @@ struct ExpandBeamVisitor {
 impl<'a> layers::QueryVisitor<'a> for ExpandBeamVisitor {
     type Output = ExpandBeam<'a>;
 
-    unsafe fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
+    fn visit_sized<const BYTES: usize, T>(self, distance: T) -> Self::Output
     where
         T: QueryDistance + 'a,
     {
@@ -421,9 +421,14 @@ impl<'a> ExpandBeam<'a> {
             drop: drop::<T>,
         };
 
-        let ptr: *const T = Box::leak(Box::new(x));
+        // NOTE: It's really important that we coerce the leaked `&mut` to a `*mut` rather
+        // than going straight to `*const` as the latter converts `&mut` to `&` first
+        // and then Miri gets upset when we try to drop it, thinking it's a shared reference
+        // rather than unique one.
+        let ptr: *mut T = Box::leak(Box::new(x));
+
         Self {
-            ptr: ptr.cast(),
+            ptr: ptr.cast_const().cast(),
             expand_beam,
             vtable: &vtable,
             lifetime: PhantomData,
@@ -639,7 +644,7 @@ impl provider::NeighborAccessor for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.get_neighbors(1);
-            Ok(self.reader.neighbors().get(id, neighbors).unwrap())
+            Ok(self.reader.neighbors().get(id, neighbors)?)
         };
         ready(work)
     }
@@ -653,7 +658,7 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || {
             self.counters.set_neighbors(1);
-            Ok(self.reader.neighbors().set(id, neighbors).unwrap())
+            Ok(self.reader.neighbors().set(id, neighbors)?)
         };
         ready(work)
     }
@@ -665,12 +670,22 @@ impl provider::NeighborAccessorMut for PruneAccessor<'_> {
     ) -> impl std::future::Future<Output = ANNResult<()>> + Send {
         let work = move || -> ANNResult<()> {
             self.counters.append_vector(1);
-            self.reader
-                .neighbors()
-                .lock(id)
-                .unwrap()
-                .append(neighbors)
-                .unwrap();
+            let lock = self.reader.neighbors().lock(id)?;
+
+            // Due to race conditions between calls to `get_neighbors` and `append_vector`
+            // in `diskann` - it's possible that the state of the adjacency list has changed
+            // and we're now trying to add too many neighbors.
+            //
+            // We take care of that here by simply truncating.
+            //
+            // TODO: Introduce proper atomicity in the core algorithm.
+            if lock.len() + neighbors.len() > lock.capacity() {
+                let slack = lock.capacity() - lock.len();
+                lock.append(&neighbors[..slack])?;
+            } else {
+                lock.append(neighbors)?;
+            }
+
             Ok(())
         };
 

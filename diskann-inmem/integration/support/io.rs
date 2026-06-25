@@ -6,7 +6,7 @@
 use diskann_utils::{io::read_bin, views::Matrix};
 use half::f16;
 
-use super::datatype::{DataType, Dataset, Slice, SliceMut};
+use super::datatype::{DataType, Dataset, SliceMut};
 
 pub(crate) fn load_and_convert<IO>(
     io: &mut IO,

@@ -15,7 +15,6 @@
 use std::{
     collections::HashMap,
     io::Write,
-    ops::Range,
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed},

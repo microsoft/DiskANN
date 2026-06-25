@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     index::{Counters, Index, KnnSearch},
     support::{
-        check::{CheckMatch, Match, MatchBuilder, check_all_fields},
+        check::{CheckMatch, Match, check_all_fields},
         datatype::DatasetView,
     },
 };
